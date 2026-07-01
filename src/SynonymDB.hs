@@ -82,17 +82,18 @@ buildFromPairs :: [(Text, Text)] -> SynonymDB
 buildFromPairs raws =
     let normd = normalizePairs raws
      in (fromClasses (equivalenceClasses normd)){synEdges = normd}
-  where
-    normalizePairs :: [(Text, Text)] -> [(Text, Text)]
-    normalizePairs rs =
-        [ (n1, n2)
-        | (raw1, raw2) <- rs
-        , let n1 = normalizeName raw1
-        , let n2 = normalizeName raw2
-        , not (T.null n1)
-        , not (T.null n2)
-        , n1 /= n2
-        ]
+
+-- | Normalize both ends of each pair, dropping empty names and self-pairs.
+normalizePairs :: [(Text, Text)] -> [(Text, Text)]
+normalizePairs rs =
+    [ (n1, n2)
+    | (raw1, raw2) <- rs
+    , let n1 = normalizeName raw1
+    , let n2 = normalizeName raw2
+    , not (T.null n1)
+    , not (T.null n2)
+    , n1 /= n2
+    ]
 
 -- | Number a list of name classes into the bidirectional SynonymDB lookup tables.
 fromClasses :: [[Text]] -> SynonymDB
@@ -178,14 +179,15 @@ mergeSynonymDBs dbs = (fromClasses (equivalenceClasses edges)){synEdges = edges}
 synonymCount :: SynonymDB -> Int
 synonymCount = M.size . synNameToId
 
-{- | Synonym classes with more than @maxSize@ members. Transitive closure has no
-degree cap (a hub no longer silently truncates at 50), so an implausibly large
-class — a junk hub that fused unrelated substances through one bad pair — must be
-surfaced rather than silently polluting the synonym fan-out. The loader warns on
-whatever this returns; an empty result means the closure stayed plausible.
+{- | Synonym classes with more than @maxSize@ members, computed straight from
+the raw pairs. Transitive closure has no degree cap (a hub no longer silently
+truncates at 50), so an implausibly large class — a junk hub that fused
+unrelated substances through one bad pair — must be surfaced rather than
+silently polluting the synonym fan-out. The loader warns on whatever this
+returns; an empty result means the closure stayed plausible.
 -}
-oversizedClasses :: Int -> SynonymDB -> [[Text]]
-oversizedClasses maxSize = filter ((> maxSize) . length) . M.elems . synIdToNames
+oversizedClasses :: Int -> [(Text, Text)] -> [[Text]]
+oversizedClasses maxSize = filter ((> maxSize) . length) . equivalenceClasses . normalizePairs
 
 {- | Drop synonym pairs whose synonym (the second element) is carried by more
 than @maxFlows@ distinct base names (the first element). An over-frequent

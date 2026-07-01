@@ -34,13 +34,13 @@ spec = do
 
     describe "oversizedClasses" $ do
         -- A junk hub fuses everything it touches into one transitive class.
-        let hub = buildFromPairs [("hub", "s" <> pack (show i)) | i <- [1 :: Int .. 12]]
+        let hub = [("hub", "s" <> pack (show i)) | i <- [1 :: Int .. 12]]
 
         it "flags a class larger than the bound (a closure that fused a junk hub)" $
             map length (oversizedClasses 10 hub) `shouldBe` [13]
 
         it "stays silent when every class is within the bound" $
-            oversizedClasses 10 (buildFromPairs [("alpha", "beta"), ("beta", "gamma")])
+            oversizedClasses 10 [("alpha", "beta"), ("beta", "gamma")]
                 `shouldBe` []
 
     describe "excludeOverFrequentSynonyms" $ do

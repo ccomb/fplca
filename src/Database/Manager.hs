@@ -185,7 +185,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
+import SynonymDB (SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -3612,8 +3612,7 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             -- class means the transitive closure fused unrelated substances
             -- through an ambiguous bridge (a junk hub) — surface it so the
             -- curator sees it before ever activating the source.
-            let !synDB = buildFromPairs keptPairs
-            forM_ (oversizedClasses 100 synDB) $ \cls ->
+            forM_ (oversizedClasses 100 keptPairs) $ \cls ->
                 reportProgress Warning $
                     "  [AUTO] "
                         <> T.unpack slug
