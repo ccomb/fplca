@@ -158,7 +158,7 @@ synonymMapper =
         , mhMatch = \ctx query -> pure $ case query of
             MatchCF cf ->
                 (\f -> MapResult (bfId f) "synonym" 0.8)
-                    <$> Mapping.findFlowBySynonymMemo (mcfDirection cf) (mcSynonymDB ctx) (mcSynGroupFlows ctx) (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf)
+                    <$> Mapping.findFlowBySynonymMemo ctx cf
             _ -> Nothing
         }
 

@@ -302,22 +302,21 @@ is a single map lookup plus the compartment pick; otherwise it falls back to
 inline @concatMap@ (same elements, same order), so the pick — and the flow it
 returns — is identical: a pure speedup. The group is resolved in the CF's
 direction view, and the memo is keyed by @(direction, group id)@ because the two
-views number their groups independently.
+views number their groups independently. Takes the CF and context whole so
+direction, name and compartment can never be mixed from different CFs.
 -}
-findFlowBySynonymMemo ::
-    FlowDirection ->
-    SynonymDB ->
-    M.Map (FlowDirection, Int) [BiosphereFlow] ->
-    M.Map Text [BiosphereFlow] ->
-    Text ->
-    Maybe Compartment ->
-    Maybe BiosphereFlow
-findFlowBySynonymMemo dir synDB memo flowsByName name mComp =
-    case lookupSynonymGroup (viewFor dir synDB) name of
+findFlowBySynonymMemo :: MapContext -> MethodCF -> Maybe BiosphereFlow
+findFlowBySynonymMemo ctx cf =
+    case lookupSynonymGroup dirDB name of
         Nothing -> Nothing
-        Just gid -> case M.lookup (dir, gid) memo of
+        Just gid -> case M.lookup (dir, gid) (mcSynGroupFlows ctx) of
             Just flows -> pickByCompartment flows mComp
-            Nothing -> findFlowBySynonymComp (viewFor dir synDB) flowsByName name mComp
+            Nothing -> findFlowBySynonymComp dirDB (mcBioFlowsByName ctx) name mComp
+  where
+    dir = mcfDirection cf
+    dirDB = viewFor dir (mcSynonymDB ctx)
+    name = mcfFlowName cf
+    mComp = mcfCompartment cf
 
 {- | Expand, once per @(direction, synonym group)@, the candidate flows reachable
 from that group's names — for exactly the groups the given CFs reference.
