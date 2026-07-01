@@ -212,6 +212,7 @@ test-suite lca-tests
                      , DetectFormatSpec
                      , AmountSpec
                      , AutoRelinkSpec
+                     , AutoSynonymsSpec
                      , RelinkMappingSpec
                      , MatrixConstructionSpec
                      , WasteTreatmentSignSpec
@@ -245,6 +246,7 @@ test-suite lca-tests
                      , CrossDBRegionalLCIASubsSpec
                      , CrossDBRegionalLCIASensitivitySpec
                      , RegionalLCIASpec
+                     , ProjectRegionalSpec
                      , SharedCASCoverageSpec
                      , EnergyDensityCFSpec
                      , SharedSolverSpec
