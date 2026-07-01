@@ -215,6 +215,27 @@ spec = do
             fid <- nextRandom
             fannedIds outputCF fid `shouldBe` []
 
+    describe "directionExcludedCFs" $ do
+        -- An unmapped CF whose name matches through the UNION synonym tables but
+        -- not through its own direction's view was excluded by the direction
+        -- restriction alone — e.g. a parser defaulted the direction when the
+        -- method carried none. The loader surfaces these so the loss is
+        -- distinguishable from a genuinely uncharacterized flow.
+        let synDB = buildFromEdges [SynEdge "freshwater" "Water, unspecified natural origin" BridgeInput]
+            flowsByName fid = M.singleton "water unspecified natural origin" [mkFlow fid "Water, unspecified natural origin" "natural resource" Nothing]
+            inputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Input}
+            outputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Output}
+
+        it "flags an unmapped CF whose synonym match exists only outside its direction view" $ do
+            fid <- nextRandom
+            map mcfFlowName (directionExcludedCFs synDB (flowsByName fid) [(outputCF, Nothing)])
+                `shouldBe` ["freshwater"]
+
+        it "does not flag a CF its own direction view still matches, nor a genuinely unmatched one" $ do
+            fid <- nextRandom
+            directionExcludedCFs synDB (flowsByName fid) [(inputCF, Nothing)] `shouldSatisfy` null
+            directionExcludedCFs synDB (flowsByName fid) [(mkCF "unrelated" Nothing 1.0, Nothing)] `shouldSatisfy` null
+
     describe "computeMappingStats" $ do
         it "counts totals and strategies correctly" $ do
             fid1 <- nextRandom

@@ -157,6 +157,7 @@ import Method.Mapping (
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
+    directionExcludedCFs,
     expandProxyEdges,
     expandSynonymMappings,
     fillBroadcastVector,
@@ -170,7 +171,7 @@ import Method.Types (
     CompartmentMap,
     EnergyDensityMap,
     Method (..),
-    MethodCF,
+    MethodCF (..),
     MethodCollection (..),
     ScoringSet (..),
     buildCompartmentMapFromCSV,
@@ -647,6 +648,22 @@ buildMethodTablesFor ::
     DatabaseManager -> Text -> Text -> Database -> M.Map Text [Text] -> Method -> IO MethodTables
 buildMethodTablesFor manager dbName collection db hier method = do
     expanded <- effectiveMethodMappings manager dbName collection db method
+    -- A CF matchable through the union synonym tables but not through its own
+    -- direction's view was excluded by the direction restriction alone — the
+    -- usual cause is a method whose parser defaulted the direction (no
+    -- metadata). Warn so the loss is distinguishable from a genuinely
+    -- uncharacterized flow.
+    let dirExcluded =
+            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (dbFlowsByName db) expanded
+    unless (null dirExcluded) $
+        reportProgress Warning $
+            "[LCIA "
+                <> T.unpack (methodName method)
+                <> "] "
+                <> show (length dirExcluded)
+                <> " CF(s) match a synonym bridge only outside their flow direction "
+                <> "(direction metadata may be missing from the method). Samples: "
+                <> show (take 3 (map mcfFlowName dirExcluded))
     cmap <- getMergedCompartmentMap manager
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager

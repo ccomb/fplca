@@ -45,6 +45,7 @@ module Method.Mapping (
     lookupCFForFlow,
     convertForCharacterization,
     expandSynonymMappings,
+    directionExcludedCFs,
     projectRegionalResourceFlows,
     ProxyTargets (..),
     expandProxyEdges,
@@ -84,7 +85,7 @@ import Data.List (find, nub, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -717,6 +718,28 @@ expandSynonymMappings synDB flowsByName mappings =
             | syn <- peers
             , flow <- M.findWithDefault [] syn flowsByName
             ]
+
+{- | Unmapped CFs whose name matches through the UNION synonym tables but not
+through their own direction's view: the direction restriction alone stands
+between them and a synonym match. Empty on untyped data, where the views
+coincide. The typical cause is a parser that defaulted 'mcfDirection' (the
+method carried no direction metadata), making a one-way bridge unreachable —
+the loader surfaces these so the loss is distinguishable from a genuinely
+uncharacterized flow, per the no-silent-misbehaviour rule.
+-}
+directionExcludedCFs ::
+    SynonymDB ->
+    M.Map Text [BiosphereFlow] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [MethodCF]
+directionExcludedCFs synDB flowsByName mappings =
+    [ cf
+    | (cf, Nothing) <- mappings
+    , isJust (matchIn synDB cf)
+    , isNothing (matchIn (viewFor (mcfDirection cf) synDB) cf)
+    ]
+  where
+    matchIn db cf = findFlowBySynonymComp db flowsByName (mcfFlowName cf) (mcfCompartment cf)
 
 {- | Project a region-tagged resource (withdrawal) flow onto its region's located
 CF, in the GLOBAL name tables. An ILCD method whose CFs carry a consumer location
