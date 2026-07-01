@@ -9,7 +9,7 @@
 
 Maps characterization factor flows from LCIA methods to database flows
 using a configurable cascade of MapperHandles (plugin architecture).
-Default cascade: UUID → CAS → Name → Synonym.
+Default cascade: UUID → Name → Synonym → CAS.
 -}
 module Method.Mapping (
     -- * Mapping functions

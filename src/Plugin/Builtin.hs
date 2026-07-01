@@ -90,7 +90,7 @@ defaultRegistry =
                 ]
         }
 
--- | The default mapper cascade: UUID → CAS → Name → Synonym
+-- | The default mapper cascade: UUID → Name → Synonym → CAS
 defaultMappers :: [MapperHandle]
 -- Specific identity (UUID, then name, then synonym) before the generic CAS
 -- bridge. A CF whose flow name/synonym pins a specific DB flow (e.g. EF's
