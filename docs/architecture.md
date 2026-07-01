@@ -72,8 +72,8 @@ of the system; the CLI and REPL are just thin HTTP clients.
 | `volca server`            | Launches the HTTP server (Warp + Servant), loads databases into memory |
 | `volca repl`              | Interactive REPL — auto-starts the server if needed               |
 | `volca <command>`         | Thin CLI client: queries the server over HTTP (~0.2 s/command)    |
-| `volca --dump-openapi`    | Emits the OpenAPI specification on stdout                         |
-| `volca --dump-mcp-tools`  | Emits the MCP tool definitions on stdout                         |
+| `volca dump-openapi`      | Emits the OpenAPI specification on stdout                         |
+| `volca dump-mcp-tools`    | Emits the MCP tool definitions on stdout                         |
 | `volca stop`              | Stops the running server                                         |
 
 ## Two key flows
