@@ -11,6 +11,8 @@ Loaded at runtime from CSV files (pairs of synonym names).
 module SynonymDB (
     -- * Building
     buildFromCSV,
+    parseRegistryCSV,
+    RegistryRow (..),
     buildFromPairs,
     buildFromEdges,
     buildFromNormalizedEdges,
@@ -72,20 +74,42 @@ import SynonymDB.Types (
     emptySynonymDB,
  )
 
-{- | One CSV row of the synonym registry: two @SameAs@ names and an optional
-direction. Accepts arity 2 (@name1,name2@ — direction 'BridgeBoth') or arity 3
-(@name1,name2,direction@ where direction is @input@, @output@, or empty). Any
-other direction token is a parse error (surfaced, never silently coerced), and
-any other arity is rejected.
--}
-data SynRow = SynRow !Text !Text !BridgeDirection
+{- | One CSV row of the curated synonym registry: two @SameAs@ names, an
+optional direction, and optional curation metadata. Accepted arities:
 
-instance FromRecord SynRow where
-    parseRecord v = case V.length v of
-        2 -> SynRow <$> v .! 0 <*> v .! 1 <*> pure BridgeBoth
-        3 -> SynRow <$> v .! 0 <*> v .! 1 <*> (v .! 2 >>= parseDir)
-        n -> fail $ "expected 2 or 3 columns (name1,name2[,direction]), got " <> show n
+@
+name1,name2                     -- bidirectional bridge
+name1,name2,direction           -- input | output | empty (= both)
+name1,name2,direction,cas       -- + CAS number of the bridged substance
+name1,name2,direction,cas,note  -- + free-form curation note
+@
+
+An invalid direction token is a parse error (surfaced, never silently
+coerced), as is any other arity. @cas@ and @note@ document WHY a bridge is
+legitimate: they are audited by the offline registry lint (RegistryLintSpec),
+never consulted by the matcher.
+-}
+data RegistryRow = RegistryRow
+    { rrEdge :: !SynEdge
+    , rrCas :: !(Maybe Text)
+    , rrNote :: !(Maybe Text)
+    }
+
+instance FromRecord RegistryRow where
+    parseRecord v
+        | n >= 2 && n <= 5 = RegistryRow <$> edge <*> meta 3 <*> meta 4
+        | otherwise =
+            fail $ "expected 2-5 columns (name1,name2[,direction[,cas[,note]]]), got " <> show n
       where
+        n = V.length v
+        edge = SynEdge <$> v .! 0 <*> v .! 1 <*> direction
+        direction
+            | n >= 3 = v .! 2 >>= parseDir
+            | otherwise = pure BridgeBoth
+        meta i
+            | n > i = blankToNothing <$> v .! i
+            | otherwise = pure Nothing
+        blankToNothing t = let s = T.strip t in if T.null s then Nothing else Just s
         parseDir :: Text -> Parser BridgeDirection
         parseDir t = case T.toLower (T.strip t) of
             "" -> pure BridgeBoth
@@ -93,15 +117,22 @@ instance FromRecord SynRow where
             "output" -> pure BridgeOutput
             other -> fail $ "invalid direction " <> show other <> " (expected input|output|empty)"
 
-{- | Build a SynonymDB from CSV content. Columns: @name1,name2[,direction]@.
-Each row declares two names as @SameAs@ (see 'buildFromPairs'/'buildFromEdges');
-the optional third column restricts the bridge to one flow direction.
+{- | Parse the registry CSV into rows, keeping curation metadata. Columns:
+@name1,name2[,direction[,cas[,note]]]@ (see 'RegistryRow').
 -}
-buildFromCSV :: BL.ByteString -> Either String SynonymDB
-buildFromCSV csvData =
+parseRegistryCSV :: BL.ByteString -> Either String [RegistryRow]
+parseRegistryCSV csvData =
     case decode HasHeader csvData of
         Left err -> Left $ "CSV parse error: " <> err
-        Right rows -> Right $ buildFromEdges [SynEdge a b d | SynRow a b d <- V.toList rows]
+        Right rows -> Right (V.toList rows)
+
+{- | Build a SynonymDB from CSV content. Each row declares two names as
+@SameAs@ (see 'buildFromPairs'/'buildFromEdges'); the optional third column
+restricts the bridge to one flow direction. Curation metadata is dropped —
+it constrains what the registry may assert, not how matching behaves.
+-}
+buildFromCSV :: BL.ByteString -> Either String SynonymDB
+buildFromCSV = fmap (buildFromEdges . map rrEdge) . parseRegistryCSV
 
 {- | Build a SynonymDB from untyped @SameAs@ name pairs (all 'BridgeBoth').
 The direction-agnostic entry point kept for callers that do not carry direction
