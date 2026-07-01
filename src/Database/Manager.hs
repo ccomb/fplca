@@ -3558,7 +3558,8 @@ maxSynonymFlowFrequency = 25
 {- | Persist auto-extracted synonym pairs as an opt-in candidate set.
 Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv and registers it
 inactive. The pairs never enter the matching: flow matching trusts only the
-curated registry (data/flows.csv) plus sources the user explicitly activates —
+curated registry (data/flows.csv) plus sources the user explicitly activates
+(activation lasts for the session and only reaches databases loaded after it) —
 DB-embedded synonyms are a bootstrap input for offline curation, not a runtime
 one. To regenerate a stale candidate, remove the source and reload.
 -}
