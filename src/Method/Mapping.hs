@@ -701,12 +701,14 @@ expandSynonymMappings synDB flowsByName mappings =
             (S.fromList (M.keys flowsByName))
             mappings
 
-    -- Re-close the direction tags survive: 'buildFromEdges' keeps 'SynEdge's, so
-    -- the induced DB carries the same directional views as the source. A CF then
-    -- fans out only through bridges valid for its direction.
+    -- Re-close so the direction tags survive: the induced DB is rebuilt from
+    -- 'SynEdge's, so it carries the same directional views as the source. A CF
+    -- then fans out only through bridges valid for its direction. The stored
+    -- edges are already normalized — re-closing must NOT re-normalize them
+    -- ('normalizeName' is not idempotent), hence 'buildFromNormalizedEdges'.
     inducedDB :: SynonymDB
     inducedDB =
-        buildFromEdges [e | e <- synEdges synDB, S.member (seA e) used, S.member (seB e) used]
+        buildFromNormalizedEdges [e | e <- synEdges synDB, S.member (seA e) used, S.member (seB e) used]
 
     expand (cf, _) =
         let dirDB = viewFor (mcfDirection cf) inducedDB

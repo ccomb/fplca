@@ -76,6 +76,15 @@ spec = do
             groupIn merged "river water" `shouldBe` Just (S.fromList ["river water", "water river"])
             groupOut merged "river water" `shouldBe` Nothing
 
+        it "does not re-normalize stored edges on merge (normalizeName is not idempotent)" $ do
+            -- "Zinc in ground," single-pass-normalizes to "zinc in ground" (the
+            -- trailing comma hides the suffix until the punctuation pass); a second
+            -- application would strip it to "zinc". The merged tables must stay
+            -- keyed by the single-pass form every lookup applies.
+            let merged = mergeSynonymDBs [buildFromPairs [("Zinc in ground,", "Zn")], buildFromPairs [("alpha", "beta")]]
+            lookupSynonymGroup merged "Zinc in ground," `shouldSatisfy` (/= Nothing)
+            lookupSynonymGroup merged "Zn" `shouldBe` lookupSynonymGroup merged "Zinc in ground,"
+
         it "demotes a both-duplicate of a directed pair so it cannot reopen the bridge" $ do
             -- A merged untyped duplicate of an input-only pair must NOT resurface it
             -- in the output view.

@@ -13,6 +13,7 @@ module SynonymDB (
     buildFromCSV,
     buildFromPairs,
     buildFromEdges,
+    buildFromNormalizedEdges,
     excludeOverFrequentSynonyms,
     excludeJunkSynonyms,
     isJunkSynonymName,
@@ -122,8 +123,19 @@ surfaces through 'oversizedClasses' (the loader warns) rather than being silentl
 dropped.
 -}
 buildFromEdges :: [SynEdge] -> SynonymDB
-buildFromEdges raws =
-    let normd = demoteDuplicates (normalizeEdges raws)
+buildFromEdges = buildFromNormalizedEdges . normalizeEdges
+
+{- | Build from edges whose endpoints already carry 'normalizeName''s output —
+the invariant every built DB's 'synEdges' satisfies. Merging and the
+induced-subgraph restriction re-close through HERE, not 'buildFromEdges':
+'normalizeName' is not idempotent (a suffix exposed by punctuation removal —
+@"Zinc in ground,"@ → @"zinc in ground"@ → @"zinc"@ — strips only on a second
+pass), so re-normalizing stored edges would key the rebuilt tables away from
+the single-pass normalization every lookup applies.
+-}
+buildFromNormalizedEdges :: [SynEdge] -> SynonymDB
+buildFromNormalizedEdges es =
+    let normd = demoteDuplicates es
         base = buildTables normd
         views
             | all ((== BridgeBoth) . seDir) normd = AllBoth
@@ -276,11 +288,12 @@ declares A=B and another B=C, the merged DB groups {A,B,C}. The sources' own
 @synEdges@ are concatenated and the whole edge set is closed again (directional
 views rebuilt, 'demoteDuplicates' applied across sources), so the merged DB
 carries the union of the original directed edges, not a lossy star reconstruction.
+Stored edges are already normalized, hence 'buildFromNormalizedEdges'.
 -}
 mergeSynonymDBs :: [SynonymDB] -> SynonymDB
 mergeSynonymDBs [] = emptySynonymDB
 mergeSynonymDBs [db] = db
-mergeSynonymDBs dbs = buildFromEdges (concatMap synEdges dbs)
+mergeSynonymDBs dbs = buildFromNormalizedEdges (concatMap synEdges dbs)
 
 -- | Number of synonym names in the database.
 synonymCount :: SynonymDB -> Int
