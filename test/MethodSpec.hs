@@ -855,6 +855,43 @@ spec = do
                     mcfDirection waterCF `shouldBe` Input
                     mcfCompartment waterCF `shouldBe` Just (Compartment "natural resource" "" "")
 
+        it "keeps region-suffixed water CFs name-regionalized (no consumer-location)" $ do
+            -- A SimaPro AWARE water flow carries its region in the flow name
+            -- ("…, CH"): each region is a distinct elementary flow with its own
+            -- CF, matched by name/UUID — NOT consumer-location regionalized.
+            -- Extracting the suffix into 'mcfConsumerLocation' routed the flow
+            -- through the activity-location dispatch, which fell back to the
+            -- region-less default (42.95) for every region instead of CH's 1.34
+            -- — a ~54x water over-count on hydro-heavy supply chains.
+            let csv =
+                    BC.pack $
+                        unlines
+                            [ "{SimaPro 10.2.0.0}"
+                            , "{methods}"
+                            , "{CSV separator: Semicolon}"
+                            , "{Decimal separator: .}"
+                            , ""
+                            , "Impact category"
+                            , "Water use;m3 depriv."
+                            , "Substances"
+                            , "Raw;(unspecified);Water, turbine use, unspecified natural origin, CH;007732-18-5;1.34;m3"
+                            , "Raw;(unspecified);Water, turbine use, unspecified natural origin;007732-18-5;42.95;m3"
+                            , "End"
+                            ]
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right coll -> do
+                    let factors = methodFactors (head (mcMethods coll))
+                        byName n = [cf | cf <- factors, mcfFlowName cf == n]
+                    case byName "Water, turbine use, unspecified natural origin, CH" of
+                        [chCF] -> do
+                            mcfConsumerLocation chCF `shouldBe` Nothing
+                            mcfValue chCF `shouldBe` 1.34
+                        _ -> expectationFailure "expected exactly one CH-suffixed turbine CF"
+                    -- the region-less default stays a distinct name-keyed factor
+                    map mcfValue (byName "Water, turbine use, unspecified natural origin")
+                        `shouldBe` [42.95]
+
         it "normalizes CAS numbers (strips leading zeros)" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"
             case parseSimaProMethodCSVBytes csv of
