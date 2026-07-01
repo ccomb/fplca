@@ -291,12 +291,16 @@ parseCFRow cfg line =
             let !rawName = decodeBS (BS8.strip name)
                 -- Keep the full suffixed name so the CF's 'mcfFlowRef' UUID
                 -- matches the suffixed biosphere flow UUID parsed by
-                -- 'SimaPro.Parser.bioRowToExchange'. The location is also
-                -- exposed via 'mcfConsumerLocation' for regional dispatch on
-                -- engines that key CFs by activity location (openLCA JSON-LD);
-                -- SimaPro CSV CFs are already region-tagged in the name, so
-                -- dual storage is correct.
-                !mLoc = snd (extractLocationSuffix rawName)
+                -- 'SimaPro.Parser.bioRowToExchange'. SimaPro CSV CFs are
+                -- name-regionalized: each region is a distinct elementary flow
+                -- carrying its own CF (as Brightway matches them), NOT
+                -- consumer-location regionalized. So the CF resolves by full
+                -- name/UUID and 'mcfConsumerLocation' stays 'Nothing'. Setting
+                -- it routed region-tagged flows into the consumer-location
+                -- dispatch, which resolves C[f, loc(activity)] and — the flow's
+                -- region living in its name, not the activity's location —
+                -- fell back to the region-less default (AWARE water 42.95 for
+                -- every region instead of e.g. CH's 1.34, a ~54x over-count).
                 !cfUnitT = decodeBS (BS8.strip cfUnit)
                 -- UUID hashed via the shared 'generateFlowUUID' +
                 -- 'normalizeSimaProCompartment' so the CF side and
@@ -316,7 +320,7 @@ parseCFRow cfg line =
                         , mcfCompartment = mkCompartment comp sub
                         , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
                         , mcfUnit = cfUnitT
-                        , mcfConsumerLocation = mLoc
+                        , mcfConsumerLocation = Nothing
                         }
              in Just cf
         _ -> Nothing
