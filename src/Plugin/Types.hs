@@ -56,7 +56,7 @@ import Data.Text (Text)
 import Data.UUID (UUID)
 
 import Matrix (Inventory)
-import Method.Types (Method, MethodCF)
+import Method.Types (FlowDirection, Method, MethodCF)
 import SynonymDB (SynonymDB)
 import Types (Activity, ActivityMap, BioFlowDB, BiosphereFlow, Database, SimpleDatabase, TechFlowDB, UnitDB)
 
@@ -142,12 +142,13 @@ data MapContext = MapContext
     , mcBioFlowsByCAS :: !(Map Text [BiosphereFlow])
     , mcSynonymDB :: !SynonymDB
     , mcActivities :: !(Map Text [Activity])
-    , mcSynGroupFlows :: !(Map Int [BiosphereFlow])
-    {- ^ Memoized synonym-group id → candidate flows, precomputed once per
-    method by 'mapMethodFlows'. The synonym matcher resolves a CF whose name
-    lands in a shared (often large) synonym group via a single lookup here,
-    instead of re-expanding that group for every such CF. Empty when the
-    cascade runs without the precompute; the matcher then falls back to
+    , mcSynGroupFlows :: !(Map (FlowDirection, Int) [BiosphereFlow])
+    {- ^ Memoized @(direction, synonym-group id)@ → candidate flows, precomputed
+    once per method by 'mapMethodFlows'. The synonym matcher resolves a CF whose
+    name lands in a shared (often large) synonym group via a single lookup here,
+    instead of re-expanding that group for every such CF. Keyed by direction
+    because input-only and output-only bridges yield different groups. Empty when
+    the cascade runs without the precompute; the matcher then falls back to
     expanding the group per call, so the result is unchanged either way.
     -}
     }

@@ -2,12 +2,13 @@
 
 module SynonymDBSpec (spec) where
 
+import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text, pack)
 import Test.Hspec
 
-import SynonymDB (buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, normalizeName, oversizedClasses, uncoveredUnitSuffixes)
+import SynonymDB (BridgeDirection (..), SynEdge (..), SynViews (..), buildFromCSV, buildFromEdges, buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, inputView, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, mergeSynonymDBs, normalizeName, outputView, oversizedClasses, synEdges, synViews, uncoveredUnitSuffixes)
 
 spec :: Spec
 spec = do
@@ -31,6 +32,68 @@ spec = do
 
         it "gives both ends of the chain the same group id" $
             lookupSynonymGroup db "alpha" `shouldBe` lookupSynonymGroup db "gamma"
+
+    describe "directional bridges" $ do
+        let groupIn db name = S.fromList <$> (lookupSynonymGroup (inputView db) name >>= getSynonyms (inputView db))
+            groupOut db name = S.fromList <$> (lookupSynonymGroup (outputView db) name >>= getSynonyms (outputView db))
+
+        it "leaves untyped data with coinciding views (AllBoth, no duplication)" $ do
+            let db = buildFromPairs [("alpha", "beta")]
+            synViews db `shouldBe` AllBoth
+            inputView db `shouldBe` db
+            outputView db `shouldBe` db
+
+        it "parses a 2-column CSV as all-both, a 3-column CSV with a direction" $ do
+            let two = buildFromCSV (BLC.pack "name1,name2\nalpha,beta\n")
+                three = buildFromCSV (BLC.pack "name1,name2,direction\nriver water,Water river,input\n")
+            fmap synViews two `shouldBe` Right AllBoth
+            case three of
+                Left e -> expectationFailure e
+                Right db -> do
+                    groupIn db "river water" `shouldBe` Just (S.fromList ["river water", "water river"])
+                    groupOut db "river water" `shouldBe` Nothing
+
+        it "treats an empty direction column as both" $
+            case buildFromCSV (BLC.pack "name1,name2,direction\nalpha,beta,\n") of
+                Left e -> expectationFailure e
+                Right db -> synViews db `shouldBe` AllBoth
+
+        it "rejects an unknown direction token instead of silently coercing it" $
+            case buildFromCSV (BLC.pack "name1,name2,direction\nalpha,beta,sideways\n") of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected Left for an invalid direction token"
+
+        it "splits a group along direction: an input edge chained to a both edge" $ do
+            -- a-b [input], b-c [both]. Input view fuses {a,b,c}; output view, missing
+            -- the a-b link, keeps only {b,c} — a split the union tables cannot recover.
+            let db = buildFromEdges [SynEdge "a" "b" BridgeInput, SynEdge "b" "c" BridgeBoth]
+            groupIn db "a" `shouldBe` Just (S.fromList ["a", "b", "c"])
+            groupOut db "a" `shouldBe` Nothing
+            groupOut db "b" `shouldBe` Just (S.fromList ["b", "c"])
+
+        it "keeps direction tags through a merge" $ do
+            let merged = mergeSynonymDBs [buildFromEdges [SynEdge "river water" "Water river" BridgeInput], buildFromPairs [("x", "y")]]
+            groupIn merged "river water" `shouldBe` Just (S.fromList ["river water", "water river"])
+            groupOut merged "river water" `shouldBe` Nothing
+
+        it "demotes a both-duplicate of a directed pair so it cannot reopen the bridge" $ do
+            -- A merged untyped duplicate of an input-only pair must NOT resurface it
+            -- in the output view.
+            let db = buildFromEdges [SynEdge "river water" "Water river" BridgeInput, SynEdge "river water" "Water river" BridgeBoth]
+            length (synEdges db) `shouldBe` 1
+            groupOut db "river water" `shouldBe` Nothing
+
+        it "loads the shipped data/flows.csv and keeps its water bridges input-only" $ do
+            -- Guards the real curated registry: it must parse (3-column direction
+            -- schema), and the water withdrawal bridges must reach their resource
+            -- flow only in the input view, never the output view.
+            loaded <- loadFromCSVFileWithCache "data/flows.csv"
+            case loaded of
+                Left e -> expectationFailure e
+                Right db -> do
+                    lookupSynonymGroup (inputView db) "freshwater" `shouldSatisfy` (/= Nothing)
+                    lookupSynonymGroup (outputView db) "freshwater" `shouldBe` Nothing
+                    lookupSynonymGroup (outputView db) "river water" `shouldBe` Nothing
 
     describe "oversizedClasses" $ do
         -- A junk hub fuses everything it touches into one transitive class.

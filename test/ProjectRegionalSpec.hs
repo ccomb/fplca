@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), projectRegionalResourceFlows)
 import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
-import SynonymDB (buildFromPairs)
+import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
 
@@ -92,6 +92,18 @@ spec = describe "projectRegionalResourceFlows" $ do
             frFlow = mkResourceFlow 11 "Water, river, FR"
         projected
             (projectRegionalResourceFlows synDB (M.fromList [(bfId frFlow, frFlow)]) [(cfGlobal, Just (baseFlow, BySynonym))])
+            `shouldNotContain` [frProjection]
+
+    it "projects a resource withdrawal through an INPUT-only bridge (resource medium picks the input view)" $ do
+        let inSynDB = buildFromEdges [SynEdge "river water" "Water, river" BridgeInput]
+            frFlow = mkResourceFlow 11 "Water, river, FR"
+        projected (projectRegionalResourceFlows inSynDB (M.fromList [(bfId frFlow, frFlow)]) baseMappings)
+            `shouldContain` [frProjection]
+
+    it "does not project a resource withdrawal through an OUTPUT-only bridge (view selection is real)" $ do
+        let outSynDB = buildFromEdges [SynEdge "river water" "Water, river" BridgeOutput]
+            frFlow = mkResourceFlow 11 "Water, river, FR"
+        projected (projectRegionalResourceFlows outSynDB (M.fromList [(bfId frFlow, frFlow)]) baseMappings)
             `shouldNotContain` [frProjection]
 
     it "projects a release CF onto a region-tagged water emission flow by its own name" $ do

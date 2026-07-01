@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -13,6 +12,7 @@ module SynonymDB (
     -- * Building
     buildFromCSV,
     buildFromPairs,
+    buildFromEdges,
     excludeOverFrequentSynonyms,
     excludeJunkSynonyms,
     isJunkSynonymName,
@@ -27,12 +27,19 @@ module SynonymDB (
     synonymCount,
     oversizedClasses,
 
+    -- * Directional views
+    inputView,
+    outputView,
+
     -- * Unit suffixes
     unitSuffixes,
     uncoveredUnitSuffixes,
 
     -- * Re-exports
     SynonymDB (..),
+    BridgeDirection (..),
+    SynEdge (..),
+    SynViews (..),
     emptySynonymDB,
 ) where
 
@@ -42,7 +49,7 @@ import Control.Exception (SomeException, catch, evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isDigit)
-import Data.Csv (HasHeader (..), decode)
+import Data.Csv (FromRecord (..), HasHeader (..), Parser, decode, (.!))
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -50,38 +57,97 @@ import Data.Store (decodeEx, encode)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.Word (Word32)
 import System.Directory (doesFileExist, getModificationTime)
 
 import SubstanceRegistry (equivalenceClasses)
-import SynonymDB.Types (SynonymDB (..), emptySynonymDB)
+import SynonymDB.Types (
+    BridgeDirection (..),
+    SynEdge (..),
+    SynViews (..),
+    SynonymDB (..),
+    emptySynonymDB,
+ )
 
-{- | Build a SynonymDB from CSV content (two columns: name1, name2).
-Each row declares two names as @SameAs@. Names are grouped by transitive
-closure (see 'buildFromPairs'): A↔B and B↔C ⟹ one class {A,B,C}.
+{- | One CSV row of the synonym registry: two @SameAs@ names and an optional
+direction. Accepts arity 2 (@name1,name2@ — direction 'BridgeBoth') or arity 3
+(@name1,name2,direction@ where direction is @input@, @output@, or empty). Any
+other direction token is a parse error (surfaced, never silently coerced), and
+any other arity is rejected.
+-}
+data SynRow = SynRow !Text !Text !BridgeDirection
+
+instance FromRecord SynRow where
+    parseRecord v = case V.length v of
+        2 -> SynRow <$> v .! 0 <*> v .! 1 <*> pure BridgeBoth
+        3 -> SynRow <$> v .! 0 <*> v .! 1 <*> (v .! 2 >>= parseDir)
+        n -> fail $ "expected 2 or 3 columns (name1,name2[,direction]), got " <> show n
+      where
+        parseDir :: Text -> Parser BridgeDirection
+        parseDir t = case T.toLower (T.strip t) of
+            "" -> pure BridgeBoth
+            "input" -> pure BridgeInput
+            "output" -> pure BridgeOutput
+            other -> fail $ "invalid direction " <> show other <> " (expected input|output|empty)"
+
+{- | Build a SynonymDB from CSV content. Columns: @name1,name2[,direction]@.
+Each row declares two names as @SameAs@ (see 'buildFromPairs'/'buildFromEdges');
+the optional third column restricts the bridge to one flow direction.
 -}
 buildFromCSV :: BL.ByteString -> Either String SynonymDB
 buildFromCSV csvData =
     case decode HasHeader csvData of
         Left err -> Left $ "CSV parse error: " <> err
-        Right rows -> Right $ buildFromPairs (V.toList (rows :: V.Vector (Text, Text)))
+        Right rows -> Right $ buildFromEdges [SynEdge a b d | SynRow a b d <- V.toList rows]
 
-{- | Build a SynonymDB from @SameAs@ name pairs.
+{- | Build a SynonymDB from untyped @SameAs@ name pairs (all 'BridgeBoth').
+The direction-agnostic entry point kept for callers that do not carry direction
+(auto-extraction, JSON import); delegates to 'buildFromEdges'.
+-}
+buildFromPairs :: [(Text, Text)] -> SynonymDB
+buildFromPairs raws = buildFromEdges [SynEdge a b BridgeBoth | (a, b) <- raws]
+
+{- | Build a SynonymDB from directed @SameAs@ edges.
 
 Names are normalized, then grouped into equivalence classes by transitive
 closure (connected components) — the "set of sets" of the canonical flow
-registry. A↔B and B↔C therefore land A, B and C in one class.
+registry. A↔B and B↔C therefore land A, B and C in one class. The top-level
+tables are the UNION closure (all directions), so direction-agnostic consumers
+see today's behavior. When any edge is directional, two extra views are
+materialized ('SynViews'): the input view closes @both ∪ input@, the output view
+@both ∪ output@ — the matching layer picks one by the CF's direction.
 
-Closure is taken honestly, with no silent degree cap. Measured on the current
-reference data, no class exceeds a handful of members (the feared
-sulfate→…→carbonate chain does not occur), so closure is safe. Bad data — a junk
-hub that would fuse unrelated substances — surfaces through 'oversizedClasses'
-(the loader warns) rather than being silently dropped, and genuinely-broader
-relations (SOx ⊃ SO₂) belong in the typed-edge layer, not as @SameAs@.
+Closure is taken honestly, with no silent degree cap; an implausibly large class
+surfaces through 'oversizedClasses' (the loader warns) rather than being silently
+dropped.
 -}
-buildFromPairs :: [(Text, Text)] -> SynonymDB
-buildFromPairs raws =
-    let normd = normalizePairs raws
-     in (fromClasses (equivalenceClasses normd)){synEdges = normd}
+buildFromEdges :: [SynEdge] -> SynonymDB
+buildFromEdges raws =
+    let normd = demoteDuplicates (normalizeEdges raws)
+        base = buildTables normd
+        views
+            | all ((== BridgeBoth) . seDir) normd = AllBoth
+            | otherwise =
+                DirectedViews
+                    (buildTables (edgesFor BridgeInput normd))
+                    (buildTables (edgesFor BridgeOutput normd))
+     in base{synViews = views}
+  where
+    edgesFor dir = filter (\e -> seDir e == BridgeBoth || seDir e == dir)
+
+{- | Normalize an edge's endpoints, dropping empty/self edges (as
+'buildFromPairs' did). Direction is preserved.
+-}
+normalizeEdges :: [SynEdge] -> [SynEdge]
+normalizeEdges es =
+    [ SynEdge n1 n2 (seDir e)
+    | e <- es
+    , let n1 = normalizeName (seA e)
+    , let n2 = normalizeName (seB e)
+    , not (T.null n1)
+    , not (T.null n2)
+    , n1 /= n2
+    ]
 
 -- | Normalize both ends of each pair, dropping empty names and self-pairs.
 normalizePairs :: [(Text, Text)] -> [(Text, Text)]
@@ -95,13 +161,29 @@ normalizePairs rs =
     , n1 /= n2
     ]
 
--- | Number a list of name classes into the bidirectional SynonymDB lookup tables.
-fromClasses :: [[Text]] -> SynonymDB
-fromClasses classes =
-    let numbered = zip [0 ..] classes
+{- | Drop the 'BridgeBoth' copy of an unordered pair that also has a directional
+edge. Without this, an untyped duplicate (e.g. a merged auto-extracted
+@freshwater = water…@ pair) would silently reopen a curated input-only bridge in
+the output view — the direction constraint would quietly stop working.
+-}
+demoteDuplicates :: [SynEdge] -> [SynEdge]
+demoteDuplicates es =
+    [e | e <- es, not (seDir e == BridgeBoth && S.member (key e) directedPairs)]
+  where
+    key e = if seA e <= seB e then (seA e, seB e) else (seB e, seA e)
+    directedPairs = S.fromList [key e | e <- es, seDir e /= BridgeBoth]
+
+{- | Number name classes into the bidirectional lookup tables, closed from the
+given edges. The result's 'synViews' is 'AllBoth' — 'buildFromEdges' attaches
+directional views when needed (a view is itself an 'AllBoth' table).
+-}
+buildTables :: [SynEdge] -> SynonymDB
+buildTables edges =
+    let classes = equivalenceClasses [(seA e, seB e) | e <- edges]
+        numbered = zip [0 ..] classes
         nameToId = M.fromList [(name, gid) | (gid, members) <- numbered, name <- members]
         idToNames = M.fromList numbered
-     in SynonymDB nameToId idToNames (starEdges classes)
+     in SynonymDB nameToId idToNames edges AllBoth
 
 {- | Star edges for a set of name classes: connect each class's members to its
 first member. Their transitive closure is exactly the classes — enough to
@@ -111,6 +193,21 @@ restriction later drops would lose links the original topology preserves.
 -}
 starEdges :: [[Text]] -> [(Text, Text)]
 starEdges classes = [(m0, m) | (m0 : ms) <- classes, m <- ms]
+
+{- | The synonym view to use for INPUT (resource) CFs: the closure of the
+bidirectional and input-only bridges. Identical to the union tables when no
+directional edge exists.
+-}
+inputView :: SynonymDB -> SynonymDB
+inputView db = case synViews db of
+    AllBoth -> db
+    DirectedViews i _ -> i
+
+-- | The synonym view to use for OUTPUT (emission) CFs (see 'inputView').
+outputView :: SynonymDB -> SynonymDB
+outputView db = case synViews db of
+    AllBoth -> db
+    DirectedViews _ o -> o
 
 {- | Load a SynonymDB from a CSV file, using a binary cache for speed.
   On first load: parse CSV → build SynonymDB → save .cache.zst
@@ -149,31 +246,41 @@ loadFromCSVFileWithCache csvPath = do
                                 compressed <- BS.readFile cachePath
                                 case Zstd.decompress compressed of
                                     Zstd.Decompress raw -> do
-                                        let !db = decodeEx raw
-                                        result <- evaluate (force db)
-                                        return (Just result)
+                                        -- Version-tagged payload: a cache written by
+                                        -- an older schema (different 'SynonymDB' Store
+                                        -- shape) fails the version check or the decode,
+                                        -- so it is reparsed rather than trusted.
+                                        let (ver, db) = decodeEx raw
+                                        if ver /= synonymDBCacheVersion
+                                            then return Nothing
+                                            else do
+                                                result <- evaluate (force (db :: SynonymDB))
+                                                return (Just result)
                                     _ -> return Nothing
                     )
                     (\(_ :: SomeException) -> return Nothing)
     saveCache cachePath db =
         catch
-            (BS.writeFile cachePath (Zstd.compress 1 (encode db)))
+            (BS.writeFile cachePath (Zstd.compress 1 (encode (synonymDBCacheVersion, db))))
             (\(_ :: SomeException) -> return ())
+
+{- | Schema version of the serialized 'SynonymDB' cache. Bump when the 'Store'
+shape of 'SynonymDB' changes so stale @.cache.zst@ files are reparsed instead of
+mis-decoded. (v2: directional edges + views.)
+-}
+synonymDBCacheVersion :: Word32
+synonymDBCacheVersion = 2
 
 {- | Merge multiple SynonymDBs into one, re-closing across them: if one source
 declares A=B and another B=C, the merged DB groups {A,B,C}. The sources' own
-@synEdges@ are concatenated and the whole edge set is closed again, so the merged
-DB carries the union of the original pairs (not a lossy star reconstruction).
+@synEdges@ are concatenated and the whole edge set is closed again (directional
+views rebuilt, 'demoteDuplicates' applied across sources), so the merged DB
+carries the union of the original directed edges, not a lossy star reconstruction.
 -}
 mergeSynonymDBs :: [SynonymDB] -> SynonymDB
 mergeSynonymDBs [] = emptySynonymDB
 mergeSynonymDBs [db] = db
-mergeSynonymDBs dbs = (fromClasses (equivalenceClasses edges)){synEdges = edges}
-  where
-    -- Re-close from each source's own (already normalized) pairs rather than
-    -- reconstructing stars from its classes, so the merged 'synEdges' keeps the
-    -- faithful topology the induced-subgraph restriction needs.
-    edges = concatMap synEdges dbs
+mergeSynonymDBs dbs = buildFromEdges (concatMap synEdges dbs)
 
 -- | Number of synonym names in the database.
 synonymCount :: SynonymDB -> Int
