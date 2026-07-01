@@ -75,6 +75,18 @@ spec = describe "projectRegionalResourceFlows" $ do
                     }
         runWith [baseFlow, frFlowSlashed] `shouldContain` [frProjection]
 
+    it "dedups colliding located CFs deterministically — higher value wins, order-independent" $ do
+        let cfLo = mkLocatedCF "river water" 6.98 (Just "FR")
+            cfHi = mkLocatedCF "river water" 9.99 (Just "FR")
+            frFlow = mkResourceFlow 14 "Water, river, FR"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, frFlow]]
+            run ms = projected (projectRegionalResourceFlows synDB flows ms)
+            mLo = [(cfLo, Just (baseFlow, BySynonym)), (cfHi, Just (baseFlow, BySynonym))]
+            mHi = [(cfHi, Just (baseFlow, BySynonym)), (cfLo, Just (baseFlow, BySynonym))]
+        run mLo `shouldContain` [("Water, river, FR", Nothing, 9.99)]
+        run mHi `shouldContain` [("Water, river, FR", Nothing, 9.99)]
+        run mLo `shouldNotContain` [("Water, river, FR", Nothing, 6.98)]
+
     it "leaves an unlocated method untouched (the SimaPro name-regionalized convention)" $ do
         let cfGlobal = mkLocatedCF "river water" 6.98 Nothing
             frFlow = mkResourceFlow 11 "Water, river, FR"
