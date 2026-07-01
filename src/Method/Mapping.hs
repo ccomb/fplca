@@ -944,8 +944,15 @@ buildMethodTables cmap energyDensities mappings =
             -- Subcompartment-blind on purpose: a resource flow and the CF that
             -- characterizes it routinely disagree on subcompartment, so a
             -- subcomp-strict bridge would zero whole resource categories.
-            -- Non-regionalized CFs only; the regionalized ones go to
-            -- 'mtRegionalCasCF'.
+            -- Regionalized CFs stay out, whichever way they carry their
+            -- region: consumer-located rows go to 'mtRegionalCasCF', and
+            -- name-regionalized rows ("Water, CH" — the SimaPro convention)
+            -- are dropped via 'extractLocationSuffix'. The bridge is
+            -- name-blind, so a region-specific row would collide with the
+            -- region-less default on the one (CAS, medium) key and the
+            -- magnitude tie-break would broadcast an arbitrary region's
+            -- value (an arid ~100 over AWARE's region-less 42.95) to every
+            -- uncovered same-CAS flow.
             --
             -- Only CFs that matched by CAS populate this table. A CF whose name
             -- or synonym pinned a specific flow (e.g. "methane (biogenic)" →
@@ -966,6 +973,7 @@ buildMethodTables cmap energyDensities mappings =
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
                     , Nothing <- [mcfConsumerLocation cf]
+                    , (_, Nothing) <- [extractLocationSuffix (mcfFlowName cf)]
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
                     , let normMed = normalizeMedium (T.toLower normMedRaw)

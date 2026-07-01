@@ -26,6 +26,7 @@ only non-regionalized CFs.
 -}
 module SharedCASCoverageSpec (spec) where
 
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Data.UUID (UUID)
@@ -33,7 +34,8 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping
-import Method.Types (Compartment (..), FlowDirection (..), Medium (..), Method (..), MethodCF (..))
+import Method.ParserSimaPro (parseSimaProMethodCSVBytes)
+import Method.Types (Compartment (..), FlowDirection (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
 import Plugin.Builtin (defaultMappers)
 import Plugin.Types (MapContext (..))
 import SubstanceRegistry (CASNumber (..))
@@ -473,6 +475,48 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- table instead of clobbering the flow's universal value.
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")
             M.lookup (bfId river, "IN") (mtRegionalizedCF tables) `shouldBe` Just (100, "m3")
+
+        it "keeps name-regionalized SimaPro rows out of mtCasCF (parser path)" $ do
+            -- End-to-end through the real parser: 'parseCFRow' leaves
+            -- 'mcfConsumerLocation' Nothing for SimaPro CFs (the region lives
+            -- in the flow name), so the consumer-location gate cannot exclude
+            -- them from the CAS bridge. Against an inventory that shares the
+            -- CAS but none of the suffixed names ('mcBioFlowsByName' is
+            -- empty), every row falls back to ByCAS — and without the
+            -- name-suffix filter the magnitude tie-break would broadcast the
+            -- arid ±100 rows instead of the region-less default.
+            let csv =
+                    BC.pack $
+                        unlines
+                            [ "{SimaPro 10.2.0.0}"
+                            , "{methods}"
+                            , "{CSV separator: Semicolon}"
+                            , "{Decimal separator: .}"
+                            , ""
+                            , "Impact category"
+                            , "Water use;m3 depriv."
+                            , "Substances"
+                            , "Raw;(unspecified);Water, turbine use, unspecified natural origin, CH;007732-18-5;1.34;m3"
+                            , "Raw;(unspecified);Water, turbine use, unspecified natural origin, IN;007732-18-5;100;m3"
+                            , "Raw;(unspecified);Water, turbine use, unspecified natural origin;007732-18-5;42.95;m3"
+                            , "Water;(unspecified);Water, CH;007732-18-5;-1.34;m3"
+                            , "Water;(unspecified);Water, IN;007732-18-5;-100;m3"
+                            , "Water;(unspecified);Water;007732-18-5;-42.95;m3"
+                            , "End"
+                            ]
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure ("Parse failed: " ++ err)
+                Right coll -> do
+                    mappings <- concat <$> mapM (mapMethodFlows defaultMappers mapCtx) (mcMethods coll)
+                    let tables = buildMethodTables M.empty M.empty mappings
+                    -- Only the region-less rows may broadcast through the
+                    -- name-blind bridge, on both the withdrawal and release
+                    -- sides (the negative release default keeps AWARE's
+                    -- netting on the CAS-fallback path).
+                    M.lookup (CASNumber waterCAS, Medium "resource") (mtCasCF tables)
+                        `shouldBe` Just (42.95, "m3")
+                    M.lookup (CASNumber waterCAS, Medium "water") (mtCasCF tables)
+                        `shouldBe` Just (-42.95, "m3")
 
     describe "unspecified subcompartment is the medium-level fallback" $ do
         it "an uncovered subcompartment falls back to the unspecified CF" $ do
