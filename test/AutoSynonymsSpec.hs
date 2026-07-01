@@ -54,6 +54,7 @@ spec = describe "autoCreateFlowSynonyms" $ do
         withTempManager $ \manager -> do
             autoCreateFlowSynonyms manager "test-method" "desc" [("alpha", "beta")]
             autoCreateFlowSynonyms manager "test-method" "desc" [("gamma", "delta")]
-            available <- readTVarIO (dmAvailableFlowSyns manager)
-            M.size (M.filterWithKey (\k _ -> k == "auto-test-method") available)
-                `shouldBe` 1
+            -- The persisted CSV must still hold the first extraction: registry
+            -- membership alone cannot tell a skip from a silent overwrite.
+            readFile ("uploads/flow-synonyms" </> "auto-test-method" </> "data.csv")
+                `shouldReturn` "name1,name2\nalpha,beta\n"
