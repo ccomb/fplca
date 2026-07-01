@@ -261,7 +261,7 @@ lookups, so scoring itself is a fast dot product over the inventory `g`.
 | `Tree.hs`                   | Supply-chain tree construction (loop-aware)                         |
 | `Expr.hs`                   | Exchange formula / parameter evaluation                             |
 | `UnitConversion.hs`         | Unit conversion                                                     |
-| `SynonymDB.hs`              | Synonyms auto-extracted from databases and methods                  |
+| `SynonymDB.hs`              | Flow-name synonym registry (curated CSV; auto-extracted candidates are opt-in) |
 | `Plugin/Bridge.hs`          | Bridge to external plugins via JSON over stdin/stdout               |
 | `Progress.hs`               | Structured progress logs and reports                                |
 

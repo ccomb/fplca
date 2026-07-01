@@ -59,6 +59,7 @@ module Database.Manager (
     parseGeographiesCSV,
 
     -- * Reference Data Operations
+    autoCreateFlowSynonyms,
     listFlowSynonyms,
     loadFlowSynonyms,
     unloadFlowSynonyms,
@@ -184,7 +185,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, buildFromPairs, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
+import SynonymDB (SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -590,10 +591,9 @@ with the database's synonym fan-out and the configured substance edges.
 Diagnostics (flow-mapping endpoints, coverage audits) must read THIS rather
 than the raw cascade, or they under-report what the score tables contain.
 
-Uses the database's frozen-at-load-time synonym DB (curated-only;
-auto-extracted method synonyms enter 'dmLoadedFlowSyns' after databases are
-loaded, so 'getMergedSynonymDB' would surface them and pollute the fan-out
-with thousands of generic PubChem synonyms like "water" → "4-aminophenol").
+Uses the database's frozen-at-load-time synonym DB, which holds the curated
+registry plus any source the user had explicitly activated at load time
+(auto-extracted candidates are persisted but never loaded by the engine).
 -}
 effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 effectiveMethodMappings manager dbName collection db method = do
@@ -3555,18 +3555,23 @@ EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
 maxSynonymFlowFrequency :: Int
 maxSynonymFlowFrequency = 25
 
-{- | Auto-create flow synonyms from extracted pairs.
-Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv,
-registers and auto-loads the synonym set.
+{- | Persist auto-extracted synonym pairs as an opt-in candidate set.
+Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv and registers it
+inactive. The pairs never enter the matching: flow matching trusts only the
+curated registry (data/flows.csv) plus sources the user explicitly activates
+(activation lasts for the session and only reaches databases loaded after it) —
+DB-embedded synonyms are a bootstrap input for offline curation, not a runtime
+one. To regenerate a stale candidate, remove the source and reload.
 -}
 autoCreateFlowSynonyms :: DatabaseManager -> Text -> Text -> [(Text, Text)] -> IO ()
 autoCreateFlowSynonyms _ _ _ [] = return ()
 autoCreateFlowSynonyms manager sourceName description pairs = do
     let slug = "auto-" <> sourceName
-    -- Skip if already loaded (persisted CSV from previous run, loaded by autoLoadRefData)
-    alreadyLoaded <- atomically $ M.member slug <$> readTVar (dmLoadedFlowSyns manager)
-    if alreadyLoaded
-        then reportProgress Info $ "  [AUTO] " <> T.unpack slug <> ": already loaded (cached)"
+    -- Skip if already registered (persisted candidate from a previous run,
+    -- discovered at startup, or extracted earlier this session)
+    alreadyExtracted <- atomically $ M.member slug <$> readTVar (dmAvailableFlowSyns manager)
+    if alreadyExtracted
+        then reportProgress Info $ "  [AUTO] " <> T.unpack slug <> ": candidate already extracted"
         else do
             let (nonJunkPairs, junkTokens) = excludeJunkSynonyms pairs
                 (keptPairs, excludedSyns) =
@@ -3604,14 +3609,11 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
                         , rdDescription = Just description
                         }
             addFlowSynonyms manager rd
-            -- Build SynonymDB directly from pairs (skip CSV round-trip). The pairs
-            -- are CAS-typed at extraction ('extractFromILCDFlows'): a name carried
-            -- by flows of more than one distinct CAS is an ambiguous bridge and is
-            -- dropped, so the transitive closure can no longer fuse unrelated
-            -- substances into a junk hub. Any residual oversized class is surfaced.
-            let !synDB = buildFromPairs keptPairs
-            atomically $ modifyTVar' (dmLoadedFlowSyns manager) (M.insert slug synDB)
-            forM_ (oversizedClasses 100 synDB) $ \cls ->
+            -- Close the candidate set only to audit its quality: an oversized
+            -- class means the transitive closure fused unrelated substances
+            -- through an ambiguous bridge (a junk hub) — surface it so the
+            -- curator sees it before ever activating the source.
+            forM_ (oversizedClasses 100 keptPairs) $ \cls ->
                 reportProgress Warning $
                     "  [AUTO] "
                         <> T.unpack slug
@@ -3624,4 +3626,4 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
                     <> T.unpack slug
                     <> ": "
                     <> show (length keptPairs)
-                    <> " synonym pairs"
+                    <> " candidate synonym pairs (opt-in, not loaded)"
