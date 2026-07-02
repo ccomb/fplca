@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Scoring-set breakdowns can now show a human-readable name for computed
+  indicators (for example "Ecotoxicity, freshwater" instead of the raw key
+  `etf`), via an optional `[methods.scoring.labels]` table in the scoring
+  configuration. A label naming an unknown scoring variable is rejected when
+  the configuration loads instead of being silently ignored.
+
 ## [0.8.1] - 2026-06-24
 
 ### Fixed
