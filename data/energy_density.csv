@@ -1,4 +1,4 @@
-flow_name,value,energy_unit,native_unit
+flow_name,value,target_unit,native_unit
 "Coal, hard",18.01,MJ,kg
 "Coal, brown",9.41,MJ,kg
 "Oil, crude",43.2,MJ,kg

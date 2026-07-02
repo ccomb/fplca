@@ -454,12 +454,13 @@ data MethodTables = MethodTables
     canonical form. Empty map = identity, no normalization.
     -}
     , mtEnergyDensities :: !EnergyDensityMap
-    {- ^ Normalized flow name → energy density (MJ per native flow unit).
-    Lets an energy-denominated CF (dimension @energy@, e.g. a JRC fossil CF in
-    MJ) characterize a mass/volume inventory flow (kg, Sm3): the flow quantity
-    is converted to energy via its density before the CF multiply. Flows with
-    no entry behave exactly as before — an energy CF vs. a mass flow still
-    yields a zero effective CF. Empty map = feature inactive.
+    {- ^ Normalized flow name → physical content per native flow unit (a
+    calorific value in MJ/kg, a mass density in m³/kg). Lets a CF denominated
+    in the content's target unit (a JRC fossil CF in MJ, a water-scarcity CF
+    in m³) characterize an inventory flow of another dimension (kg, Sm3): the
+    flow quantity is bridged into the target unit before the CF multiply.
+    Flows with no entry behave exactly as before — a cross-dimensional CF
+    still yields a zero effective CF. Empty map = feature inactive.
     -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).

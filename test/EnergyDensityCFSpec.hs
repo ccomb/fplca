@@ -213,14 +213,14 @@ spec = do
 
     describe "buildEnergyDensityMapFromCSV" $ do
         it "parses a valid row, keyed by normalized flow name" $
-            case buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\n\"Coal, hard\",18.01,MJ,kg\n") of
+            case buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\n\"Coal, hard\",18.01,MJ,kg\n") of
                 Left err -> expectationFailure err
                 Right m -> M.lookup (normalizeName "Coal, hard") m `shouldBe` Just (EnergyDensity 18.01 "MJ" "kg")
 
         it "rejects a non-positive value" $
-            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,0,MJ,kg\n")
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\nPeat,0,MJ,kg\n")
                 `shouldSatisfy` isLeft
 
         it "rejects a missing native unit" $
-            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,9.76,MJ,\n")
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\nPeat,9.76,MJ,\n")
                 `shouldSatisfy` isLeft
