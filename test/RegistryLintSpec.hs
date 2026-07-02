@@ -26,6 +26,7 @@ import Test.Hspec
 
 import EcoSpold.Parser2 (normalizeCAS)
 import SynonymDB (
+    BridgeDirection (..),
     RegistryRow (..),
     SynEdge (..),
     SynonymDB (..),
@@ -41,24 +42,52 @@ maxClassSize :: Int
 maxClassSize = 12
 
 spec :: Spec
-spec = describe "curated registry lint (data/flows.csv)" $ do
-    parsed <- runIO (parseRegistryCSV <$> BL.readFile "data/flows.csv")
-    case parsed of
-        Left err -> it "parses" $ expectationFailure err
-        Right rows -> do
-            let classes = M.elems (synIdToNames (buildFromEdges (map rrEdge rows)))
+spec = do
+    describe "curated registry lint (data/flows.csv)" $ do
+        parsed <- runIO (parseRegistryCSV <$> BL.readFile "data/flows.csv")
+        case parsed of
+            Left err -> it "parses" $ expectationFailure err
+            Right rows -> do
+                let classes = M.elems (synIdToNames (buildFromEdges (map rrEdge rows)))
 
-            it "keeps every equivalence class plausibly small" $
-                filter ((> maxClassSize) . length) classes `shouldBe` []
+                it "keeps every equivalence class plausibly small" $
+                    filter ((> maxClassSize) . length) classes `shouldBe` []
 
-            it "never fuses distinct carbon-origin qualifiers into one class" $
-                filter ((> 1) . S.size . originQualifiers) classes `shouldBe` []
+                it "never fuses distinct carbon-origin qualifiers into one class" $
+                    filter ((> 1) . S.size . originQualifiers) classes `shouldBe` []
 
-            it "has well-formed CAS numbers (format + check digit)" $
-                [c | r <- rows, Just c <- [rrCas r], not (casValid c)] `shouldBe` []
+                it "has well-formed CAS numbers (format + check digit)" $
+                    [c | r <- rows, Just c <- [rrCas r], not (casValid c)] `shouldBe` []
 
-            it "gives every equivalence class at most one CAS" $
-                filter ((> 1) . S.size . classCas rows) classes `shouldBe` []
+                it "gives every equivalence class at most one CAS" $
+                    filter ((> 1) . S.size . classCas rows) classes `shouldBe` []
+
+    -- The checks above assert the SHIPPED registry passes, so a helper that
+    -- degenerates to always-empty would keep them green. These fixtures prove
+    -- each helper still fires on data it must reject.
+    describe "registry lint helpers (negative controls)" $ do
+        it "detects two carbon-origin families fused in one class" $
+            originQualifiers ["carbon dioxide fossil", "carbon dioxide biogenic"]
+                `shouldBe` S.fromList ["fossil", "biogenic"]
+
+        it "lets an unqualified name coexist with a single family" $
+            originQualifiers ["carbon dioxide", "carbon dioxide land transformation"]
+                `shouldBe` S.singleton "luluc"
+
+        it "rejects a CAS with a wrong check digit" $
+            casValid "75-69-5" `shouldBe` False
+
+        it "rejects malformed CAS shapes" $
+            filter casValid ["", "75694", "7-69-4", "75-6-4", "75-69-44", "7x-69-4", "12345678-69-4"]
+                `shouldBe` []
+
+        it "accepts a valid CAS" $
+            casValid "75-69-4" `shouldBe` True
+
+        it "counts a zero-padded and a canonical spelling of one CAS as one" $ do
+            let row n cas = RegistryRow (SynEdge n "peer" BridgeBoth) (Just cas) Nothing
+                rows = [row "alpha" "075-69-4", row "beta" "75-69-4"]
+            classCas rows ["alpha", "beta"] `shouldBe` S.singleton "75-69-4"
 
 {- | Carbon-origin families named inside a class. A name with no qualifier is
 compatible with any single family (SimaPro's bare \"Carbon dioxide\" IS the
