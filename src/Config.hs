@@ -146,6 +146,7 @@ data ScoringSetConfig = ScoringSetConfig
     , sscUnit :: !Text -- Display unit (e.g., "Pts")
     , sscVariables :: !(M.Map Text Text) -- var → impact category name
     , sscComputed :: !(M.Map Text Text) -- var → formula string
+    , sscLabels :: !(M.Map Text Text) -- var → display label (for computed vars)
     , sscNormalization :: !(M.Map Text Double) -- var → normalization factor
     , sscWeighting :: !(M.Map Text Double) -- var → weight
     , sscScores :: !(M.Map Text Text) -- score name → formula
@@ -263,6 +264,7 @@ instance DecodeTOML ScoringSetConfig where
         sscUnit <- fromMaybe "Pt" <$> getFieldOpt "unit"
         sscVariables <- fromMaybe M.empty <$> getFieldOpt "variables"
         sscComputed <- fromMaybe M.empty <$> getFieldOpt "computed"
+        sscLabels <- fromMaybe M.empty <$> getFieldOpt "labels"
         sscNormalization <- fromMaybe M.empty <$> getFieldOpt "normalization"
         sscWeighting <- fromMaybe M.empty <$> getFieldOpt "weighting"
         sscScores <- fromMaybe M.empty <$> getFieldOpt "scores"

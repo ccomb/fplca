@@ -2063,7 +2063,11 @@ computeAllScoringSets scoringSets rawScoreMap = do
          in M.mapWithKey
                 ( \var val ->
                     ScoringIndicator
-                        { siCategory = M.findWithDefault var var (ssVariables ss)
+                        { siCategory =
+                            M.findWithDefault
+                                (M.findWithDefault var var (ssVariables ss))
+                                var
+                                (ssLabels ss)
                         , siValue = val
                         }
                 )

@@ -201,6 +201,10 @@ data ScoringSet = ScoringSet
     -- ^ var → impact category name
     , ssComputed :: !(M.Map Text Text)
     -- ^ var → formula (e.g., "2 * etfo + etfi")
+    , ssLabels :: !(M.Map Text Text)
+    {- ^ var → display label, for variables (typically computed ones) whose
+    name is not an impact category from 'ssVariables'
+    -}
     , ssNormalization :: !(M.Map Text Double)
     -- ^ var → normalization factor (divisor)
     , ssWeighting :: !(M.Map Text Double)

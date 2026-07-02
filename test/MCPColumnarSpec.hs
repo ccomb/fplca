@@ -41,6 +41,7 @@ pefSet =
         , ssUnit = "µPts PEF"
         , ssVariables = M.fromList [("acd", "Acidification"), ("cch", "Climate change")]
         , ssComputed = M.empty
+        , ssLabels = M.empty
         , ssNormalization = M.empty
         , ssWeighting = M.empty
         , ssScores = M.fromList [("total", "acd + cch")]

@@ -1211,6 +1211,7 @@ configToScoringSet ssc =
         , ssUnit = sscUnit ssc
         , ssVariables = sscVariables ssc
         , ssComputed = sscComputed ssc
+        , ssLabels = sscLabels ssc
         , ssNormalization = sscNormalization ssc
         , ssWeighting = sscWeighting ssc
         , ssScores = sscScores ssc
