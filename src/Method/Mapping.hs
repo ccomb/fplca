@@ -755,10 +755,20 @@ name-regionalized @"Water, river, FR"@ CF (the SimaPro convention) does today.
 
 Restricted to the water dimensions — the resource (withdrawal/input) and water
 (release/output) media; air and soil stay global so a method compared against an
-unregionalized reference is left untouched there. Only located CFs are indexed,
-so a method whose CFs are unlocated (e.g. the name-regionalized SimaPro one) is
-left alone; the region must match exactly, so no region's factor is broadcast
-onto another.
+unregionalized reference is left untouched there. A method whose CFs are all
+unlocated (e.g. the name-regionalized SimaPro one) is left alone.
+
+The flow's region resolves through a fallback chain: its exact located CF,
+then the parent country's (@"CN-SC"@ → @"CN"@), then the method's own
+location-less (world-average) factor. A sibling region's factor is never
+borrowed. The generic step matters for sign correctness: ILCD AWARE tabulates
+locations by ISO-2 country only, while inventory names also carry sub-national
+codes and aggregates (@"RoW"@, @"GLO"@, @"WEU"@). Without it, the release side
+of such a water balance is fully counted — the bare @"Water"@ release CF is
+reachable by name at score time — while the withdrawal side of the same volume
+scores zero (its base name only resolves through a synonym bridge, which the
+score-time region fallback does not traverse), flipping the sign of net water
+use.
 -}
 projectRegionalResourceFlows ::
     SynonymDB ->
@@ -811,6 +821,32 @@ projectRegionalResourceFlows synDB bioFlows mappings =
             | (cf, _) <- mappings
             , Just loc <- [mcfConsumerLocation cf]
             ]
+    -- The method's own location-less (world-average) factors, same two
+    -- keyings minus the region — the last step of the fallback chain. Lazy
+    -- bindings guarded by the 'byName' gate below, so an unlocated method
+    -- never builds them.
+    genByGroup :: M.Map (Int, Text) MethodCF
+    genByGroup =
+        M.fromListWith
+            preferHigherCF
+            [ ((grp, med), cf)
+            | (cf, Just (flow, _)) <- mappings
+            , Nothing <- [mcfConsumerLocation cf]
+            , let med = flowMedium flow
+            , Just grp <- [lookupSynonymGroup (dirView med) (bfName flow)]
+            ]
+    genByName :: M.Map (Text, Text) MethodCF
+    genByName =
+        M.fromListWith
+            preferHigherCF
+            [ ((normalizeName (mcfFlowName cf), cfMedium cf), cf)
+            | (cf, _) <- mappings
+            , Nothing <- [mcfConsumerLocation cf]
+            ]
+    -- @"CN-SC"@ → @"CN"@; a region without a hyphen has no parent.
+    parentRegion loc = case T.breakOn "-" loc of
+        (parent, rest) | not (T.null rest), not (T.null parent) -> Just parent
+        _ -> Nothing
     -- Scope to the water dimensions only: the resource (withdrawal/input) and
     -- water (release/output) media. Excludes air/soil — acidification and PM
     -- carry located CFs too, but they must stay GLOBAL to match an unregionalized
@@ -824,10 +860,15 @@ projectRegionalResourceFlows synDB bioFlows mappings =
             , let med = flowMedium flow
             , med == "resource" || med == "water"
             , (base, Just loc) <- [extractLocationSuffix (bfName flow)]
-            , Just cf <-
-                [ M.lookup (normalizeName base, med, loc) byName
-                    <|> (lookupSynonymGroup (dirView med) base >>= \grp -> M.lookup (grp, med, loc) byGroup)
-                ]
+            , let bname = normalizeName base
+                  grp = lookupSynonymGroup (dirView med) base
+                  atLoc l =
+                    M.lookup (bname, med, l) byName
+                        <|> (grp >>= \g -> M.lookup (g, med, l) byGroup)
+                  generic =
+                    M.lookup (bname, med) genByName
+                        <|> (grp >>= \g -> M.lookup (g, med) genByGroup)
+            , Just cf <- [atLoc loc <|> (parentRegion loc >>= atLoc) <|> generic]
             ]
 
 -- No compartment filter here on purpose: 'buildMethodTables' keys
