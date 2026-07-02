@@ -103,6 +103,17 @@ spec = describe "projectRegionalResourceFlows" $ do
         projected (projectRegionalResourceFlows inSynDB flows [(cfFR, Just (baseFlow, BySynonym)), (cfGeneric, Just (baseFlow, BySynonym))])
             `shouldNotContain` [("Water, river, RoW", Nothing, 42.95)]
 
+    it "does not let a located CF in another medium open the water fallback" $ do
+        let airCF =
+                (mkLocatedCF "Sulfur dioxide" 1.5 (Just "FR"))
+                    { mcfCompartment = Just (Compartment "air" "" "")
+                    }
+            cfGeneric = mkLocatedCF "river water" 42.95 Nothing
+            rowFlow = mkResourceFlow 24 "Water, river, RoW"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, rowFlow]]
+        projected (projectRegionalResourceFlows synDB flows [(airCF, Nothing), (cfGeneric, Just (baseFlow, BySynonym))])
+            `shouldNotContain` [("Water, river, RoW", Nothing, 42.95)]
+
     it "derives the medium across a 'medium/sub' category, so a slash-encoded resource flow still projects" $ do
         let frFlowSlashed =
                 (mkResourceFlow 13 "Water, river, FR")

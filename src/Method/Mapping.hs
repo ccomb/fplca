@@ -755,8 +755,9 @@ name-regionalized @"Water, river, FR"@ CF (the SimaPro convention) does today.
 
 Restricted to the water dimensions — the resource (withdrawal/input) and water
 (release/output) media; air and soil stay global so a method compared against an
-unregionalized reference is left untouched there. A method whose CFs are all
-unlocated (e.g. the name-regionalized SimaPro one) is left alone.
+unregionalized reference is left untouched there. A method with no located CF
+in those media — all-unlocated (e.g. the name-regionalized SimaPro one) or
+located only on air/soil — is left alone.
 
 The flow's region resolves through a fallback chain: its exact located CF,
 then the parent country's (@"CN-SC"@ → @"CN"@), then the method's own
@@ -799,49 +800,28 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- river"@) never lets a release flow inherit a withdrawal CF. On untyped data
     -- both views coincide, so this preserves today's grouping.
     dirView med = viewFor (if med == "water" then Output else Input) synDB
-    -- Located CFs reached two ways: by the matched flow's synonym GROUP — a CF
-    -- whose name is bridged to the flow (withdrawal @"river water"@ → @"Water,
+    -- CFs reached two ways: by the matched flow's synonym GROUP — a CF whose
+    -- name is bridged to the flow (withdrawal @"river water"@ → @"Water,
     -- river"@) — and by the CF's own NAME — a CF whose name equals the flow's
     -- region-stripped base (the bare @"Water"@ release CF → @"Water, FR"@).
-    byGroup :: M.Map (Int, Text, Text) MethodCF
+    -- Keyed by 'Maybe' region: 'Just' entries are the located factors,
+    -- 'Nothing' the method's own location-less (world-average) ones — the
+    -- last step of the fallback chain.
+    byGroup :: M.Map (Int, Text, Maybe Text) MethodCF
     byGroup =
         M.fromListWith
             preferHigherCF
-            [ ((grp, med, loc), cf)
+            [ ((grp, med, mcfConsumerLocation cf), cf)
             | (cf, Just (flow, _)) <- mappings
-            , Just loc <- [mcfConsumerLocation cf]
             , let med = flowMedium flow
             , Just grp <- [lookupSynonymGroup (dirView med) (bfName flow)]
             ]
-    byName :: M.Map (Text, Text, Text) MethodCF
+    byName :: M.Map (Text, Text, Maybe Text) MethodCF
     byName =
         M.fromListWith
             preferHigherCF
-            [ ((normalizeName (mcfFlowName cf), cfMedium cf, loc), cf)
+            [ ((normalizeName (mcfFlowName cf), cfMedium cf, mcfConsumerLocation cf), cf)
             | (cf, _) <- mappings
-            , Just loc <- [mcfConsumerLocation cf]
-            ]
-    -- The method's own location-less (world-average) factors, same two
-    -- keyings minus the region — the last step of the fallback chain. Lazy
-    -- bindings guarded by the 'byName' gate below, so an unlocated method
-    -- never builds them.
-    genByGroup :: M.Map (Int, Text) MethodCF
-    genByGroup =
-        M.fromListWith
-            preferHigherCF
-            [ ((grp, med), cf)
-            | (cf, Just (flow, _)) <- mappings
-            , Nothing <- [mcfConsumerLocation cf]
-            , let med = flowMedium flow
-            , Just grp <- [lookupSynonymGroup (dirView med) (bfName flow)]
-            ]
-    genByName :: M.Map (Text, Text) MethodCF
-    genByName =
-        M.fromListWith
-            preferHigherCF
-            [ ((normalizeName (mcfFlowName cf), cfMedium cf), cf)
-            | (cf, _) <- mappings
-            , Nothing <- [mcfConsumerLocation cf]
             ]
     -- @"CN-SC"@ → @"CN"@; a region without a hyphen has no parent.
     parentRegion loc = case T.breakOn "-" loc of
@@ -851,24 +831,29 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- water (release/output) media. Excludes air/soil — acidification and PM
     -- carry located CFs too, but they must stay GLOBAL to match an unregionalized
     -- reference, so projecting their region-tagged flows would wrongly regionalize
-    -- them. Most methods carry no located CF; skip the flow walk for them.
+    -- them.
+    isWaterMedium med = med == "resource" || med == "water"
+    -- The walk runs only for a method with located CFs in the water media: a
+    -- location on an air/soil CF alone must not open the water fallback, and a
+    -- method whose CFs are all unlocated (the name-regionalized SimaPro
+    -- convention) is left alone. The predicate short-circuits without building
+    -- the maps, so most methods skip the flow walk for free.
+    hasLocatedWaterCF =
+        any (\(cf, _) -> isJust (mcfConsumerLocation cf) && isWaterMedium (cfMedium cf)) mappings
     projected
-        | M.null byName = []
+        | not hasLocatedWaterCF = []
         | otherwise =
             [ (cf{mcfConsumerLocation = Nothing}, Just (flow, BySynonym))
             | flow <- M.elems bioFlows
             , let med = flowMedium flow
-            , med == "resource" || med == "water"
+            , isWaterMedium med
             , (base, Just loc) <- [extractLocationSuffix (bfName flow)]
             , let bname = normalizeName base
                   grp = lookupSynonymGroup (dirView med) base
                   atLoc l =
                     M.lookup (bname, med, l) byName
                         <|> (grp >>= \g -> M.lookup (g, med, l) byGroup)
-                  generic =
-                    M.lookup (bname, med) genByName
-                        <|> (grp >>= \g -> M.lookup (g, med) genByGroup)
-            , Just cf <- [atLoc loc <|> (parentRegion loc >>= atLoc) <|> generic]
+            , Just cf <- [atLoc (Just loc) <|> (parentRegion loc >>= atLoc . Just) <|> atLoc Nothing]
             ]
 
 -- No compartment filter here on purpose: 'buildMethodTables' keys
