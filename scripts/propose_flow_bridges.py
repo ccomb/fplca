@@ -20,9 +20,12 @@ Each surfaced pair is then classified against the same rules the Haskell
 
 * wrong-origin -- source and target disagree on carbon origin
   (fossil / biogenic / land-use-change). REJECT: methods split these on purpose.
-* collision   -- source and target both carry their OWN distinct CF in some
-  method (e.g. Dinitrogen tetroxide vs Nitrogen dioxide: ecotox 3.84 vs 11.96).
-  A single global synonym would collapse them via first-match-wins. REJECT.
+* collision   -- source and target both carry their OWN distinct CF in the same
+  compartment of some method (e.g. Dinitrogen tetroxide vs Nitrogen dioxide:
+  ecotox 3.84 vs 11.96). A single global synonym would collapse them via
+  first-match-wins. REJECT.
+* multi-target -- the candidate layer bridged the source to several DISTINCT
+  CF-flow names: that ambiguity is the junk-hub signal itself. REJECT.
 * oversize    -- adding the pair grows an equivalence class past the lint bound.
   REJECT: an over-connected bridge is the junk-hub failure mode.
 * ok          -- a genuine name variant (IUPAC/common, spelling, typo, trade
@@ -121,7 +124,7 @@ def dump(engine: str, database: str, out: str) -> None:
     for m in methods:  # key by method UUID: a category name can repeat across collections
         fm = _get(f"{engine}/db/{database}/method/{urllib.parse.quote(m['id'])}/flow-mapping")
         flows = {
-            e["flowId"]: {"n": e["flowName"], "cf": e["cfValue"], "cfn": e.get("cfFlowName")}
+            e["flowId"]: {"n": e["flowName"], "cat": e["flowCategory"], "cf": e["cfValue"], "cfn": e.get("cfFlowName")}
             for e in fm.get("flows", [])
             if e.get("cfValue") is not None
         }
@@ -151,29 +154,43 @@ def candidate_only_bridges(curated: dict, candidates: dict) -> dict:
     by_name: dict[str, dict] = defaultdict(
         lambda: {"cfn": set(), "methods": set(), "maxcf": 0.0}
     )
-    for mid in set(curated) | set(candidates):
+    for mid, cand in candidates.items():  # a curated-only method cannot add coverage
         cur_f = curated.get(mid, {}).get("flows", {})
-        cand = candidates.get(mid, {})
         for fid, e in cand.get("flows", {}).items():
             if fid in cur_f:
                 continue  # already characterized without the candidate layer
             rec = by_name[e["n"]]
             if e.get("cfn"):
                 rec["cfn"].add(e["cfn"])
-            rec["methods"].add(cand.get("name"))
+            rec["methods"].add(mid)  # by UUID: a category name repeats across collections
             rec["maxcf"] = max(rec["maxcf"], abs(e["cf"]))
     return by_name
 
 
 def method_name_cfs(dump_json: dict) -> dict:
-    """(methodId -> normalized flow name -> cf), to spot distinct-CF collisions."""
-    out: dict[str, dict[str, float]] = {}
+    """(methodId -> flow name -> compartment -> CF set), to spot distinct-CF collisions.
+
+    Nested by compartment: one substance name carries different CFs per
+    compartment (metals to air vs water in ecotox), so only same-compartment
+    values are comparable -- a flat name->cf dict would compare whichever
+    compartment representative happened to be written last.
+    """
+    out: dict[str, dict] = {}
     for mid, m in dump_json.items():
-        d: dict[str, float] = {}
+        d: dict[str, dict[str, set[float]]] = {}
         for e in m["flows"].values():
-            d[normalize(e["n"])] = e["cf"]
+            d.setdefault(normalize(e["n"]), {}).setdefault(e.get("cat", ""), set()).add(e["cf"])
         out[mid] = d
     return out
+
+
+def cfs_differ(a: set[float], b: set[float]) -> bool:
+    """True when two same-compartment CF sets disagree beyond FP noise."""
+
+    def covered(xs: set[float], ys: set[float]) -> bool:
+        return all(any(abs(x - y) <= 1e-9 for y in ys) for x in xs)
+
+    return not (covered(a, b) and covered(b, a))
 
 
 def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, str]]) -> list[dict]:
@@ -184,13 +201,18 @@ def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, st
     proposals = []
     for name, ev in bridges.items():
         src = normalize(name)
-        # target = the CF-flow name it reached; pick the capitalized spelling
-        targets = sorted(ev["cfn"])
-        target = targets[0] if targets else None
+        # one spelling per distinct normalized target; uppercase sorts first, so
+        # case variants of one name keep the capitalized spelling
+        spellings: dict[str, str] = {}
+        for t in sorted(ev["cfn"]):
+            spellings.setdefault(normalize(t), t)
+        target = next(iter(spellings.values()), None)
         verdict, reason = "ok", ""
 
         if not target:
             verdict, reason = "reject", "no CF-flow name (non-synonym match, e.g. regional/UUID path)"
+        elif len(spellings) > 1:
+            verdict, reason = "reject", f"multi-target: bridged to {sorted(spellings)} (junk-hub ambiguity)"
         elif normalize(target) == src:
             verdict, reason = "skip", "already identical after normalization"
         elif frozenset((src, normalize(target))) <= reg_norm or (src, normalize(target)) in {
@@ -200,10 +222,12 @@ def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, st
         else:
             fs, ft = origin_families(name), origin_families(target)
             tgt = normalize(target)
-            # collision: src and tgt both carry their OWN distinct CF in some method
+            # collision: src and tgt both carry their OWN distinct CF in the same
+            # compartment of some method (cross-compartment CFs are not comparable)
             collide = any(
-                src in d and tgt in d and abs(d[src] - d[tgt]) > 1e-9
+                cat in d.get(tgt, {}) and cfs_differ(cfs, d[tgt][cat])
                 for d in per_method.values()
+                for cat, cfs in d.get(src, {}).items()
             )
             if fs and ft and fs != ft:
                 verdict, reason = "reject", f"wrong-origin: {sorted(fs)} vs {sorted(ft)}"
@@ -238,12 +262,11 @@ def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, st
     return sorted(proposals, key=lambda p: (-p["methods"], -p["maxcf"]))
 
 
-def emit_patch(proposals: list[dict]) -> str:
+def emit_patch(accepted: list[dict]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n", quoting=csv.QUOTE_MINIMAL)
-    for p in proposals:
-        if p["verdict"] == "ok":
-            w.writerow([p["name1"], p["name2"]])
+    for p in accepted:
+        w.writerow([p["name1"], p["name2"]])
     return buf.getvalue()
 
 
@@ -277,30 +300,43 @@ def propose(curated_path: str, candidates_path: str, registry: str, out_patch: s
 # selftest: the three rejection rules + one legit pass, on synthetic dumps      #
 # --------------------------------------------------------------------------- #
 def selftest() -> None:
-    # method M1: source flows with no curated CF; candidate layer bridges them.
+    # source flows with no curated CF; the candidate layer bridges them.
     curated = {"M1": {"name": "tox", "coll": "c", "flows": {}}}
     candidates = {
         "M1": {
             "name": "tox",
             "coll": "c",
             "flows": {
-                "f1": {"n": "Tetrachloroethylene", "cf": 1.0, "cfn": "tetrachloroethene"},  # legit
-                "f2": {"n": "Carbon dioxide, fossil", "cf": 1.0, "cfn": "Carbon dioxide, biogenic"},  # wrong-origin
-                "f3": {"n": "Dinitrogen tetroxide", "cf": 3.0, "cfn": "Nitrogen dioxide"},  # collision (below)
-                "f4": {"n": "Nitrogen dioxide", "cf": 9.0, "cfn": "Nitrogen dioxide"},  # native, distinct cf
+                "f1": {"n": "Tetrachloroethylene", "cat": "air", "cf": 1.0, "cfn": "tetrachloroethene"},  # legit
+                "f2": {"n": "Carbon dioxide, fossil", "cat": "air", "cf": 1.0, "cfn": "Carbon dioxide, biogenic"},  # wrong-origin
+                "f3": {"n": "Dinitrogen tetroxide", "cat": "air", "cf": 3.0, "cfn": "Nitrogen dioxide"},  # collision with f4
+                "f4": {"n": "Nitrogen dioxide", "cat": "air", "cf": 9.0, "cfn": "Nitrogen dioxide"},  # native, distinct cf
+                "f5": {"n": "Chromium VI", "cat": "water", "cf": 2.0, "cfn": "Chromium hexavalent"},  # multi-target (with M2)
+                "f7": {"n": "Zineb", "cat": "air", "cf": 5.0, "cfn": "Zinc organic"},  # tgt CF sits in ANOTHER compartment: no collision
+                "f8": {"n": "Zinc organic", "cat": "water", "cf": 3.0, "cfn": "Zinc organic"},
             },
-        }
+        },
+        "M2": {
+            "name": "tox2",
+            "coll": "c",
+            "flows": {
+                "f5": {"n": "Chromium VI", "cat": "water", "cf": 4.0, "cfn": "Dichromate"},
+            },
+        },
     }
-    got = {p["name1"]: p["verdict"] for p in classify(curated, candidates, [])}
+    got = {p["name1"]: (p["verdict"], p["reason"]) for p in classify(curated, candidates, [])}
     expect = {
-        "Tetrachloroethylene": "ok",
-        "Carbon dioxide, fossil": "reject",
-        "Dinitrogen tetroxide": "reject",
+        "Tetrachloroethylene": ("ok", ""),
+        "Carbon dioxide, fossil": ("reject", "wrong-origin"),
+        "Dinitrogen tetroxide": ("reject", "collision"),
+        "Chromium VI": ("reject", "multi-target"),
+        "Zineb": ("ok", ""),
     }
-    for k, v in expect.items():
-        assert got.get(k) == v, f"selftest FAIL: {k} -> {got.get(k)}, expected {v}"
-    assert got["Tetrachloroethylene"] == "ok"
-    print("selftest OK:", {k: got[k] for k in expect})
+    for k, (verdict, needle) in expect.items():
+        got_verdict, got_reason = got.get(k, (None, ""))
+        assert got_verdict == verdict, f"selftest FAIL: {k} -> {got_verdict} ({got_reason}), expected {verdict}"
+        assert needle in got_reason, f"selftest FAIL: {k} reason {got_reason!r} lacks {needle!r}"
+    print("selftest OK:", {k: got[k][0] for k in expect})
 
 
 def main() -> None:
