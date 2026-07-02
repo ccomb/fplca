@@ -24,8 +24,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Matrix (accumulateDepDemands, depDemandsToVector)
 import Method.Mapping (MethodTables (..), inventoryContributions)
-import Method.Types (CFFamily (..))
 import qualified Method.Mapping as Mapping
+import Method.Types (CFFamily (..))
 import SharedSolver (
     computeInventoryMatrixBatchCached,
     computeInventoryMatrixBatchWithDepsCached,
