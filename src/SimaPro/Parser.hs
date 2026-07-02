@@ -825,8 +825,19 @@ processBlockToActivity ::
     ProcessBlock ->
     [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])]
 processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
-    map makeActivity pbProducts
+    map makeActivity productsInFileOrder
   where
+    -- pbProducts is accumulated by prepending; restore file order so the
+    -- first row is the reference (main) product of the block.
+    productsInFileOrder = reverse pbProducts
+
+    -- Shared fallback identity when the "Process name" field is empty: every
+    -- coproduct inherits the reference product's name and location, so a
+    -- multi-product block still collapses onto one activityUUID (which is
+    -- derived from name + location) instead of splitting into N activities.
+    (fallbackName, fallbackLoc) = case productsInFileOrder of
+        (p : _) -> extractLocation (prName p)
+        [] -> ("", "")
     (env, exprMap) =
         buildParamEnv
             (reverse <$> [gpDbInput, gpProjInput, pbInputParams])
@@ -878,13 +889,14 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
             effUnitName = unitName productUnit
             allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
             allocFraction = allocPercent / 100.0
-            (cleanProductName, locFromProduct) = extractLocation (prName prod)
-            effectiveLoc = if T.null location then locFromProduct else location
-            -- Activity name = Process name when present (so coproducts of the same
-            -- Process share one activityUUID via generateActivityUUID), otherwise
-            -- fall back to product name (mono-product blocks with empty field).
-            effectiveActivityName =
-                if T.null processNameTrimmed then cleanProductName else processNameTrimmed
+            (_, locFromProduct) = extractLocation (prName prod)
+            -- Activity name = Process name when present, otherwise the reference
+            -- product's name (with its location) — never the coproduct's own,
+            -- so all coproducts of a name-less block share one activityUUID.
+            (effectiveActivityName, effectiveLoc) =
+                if T.null processNameTrimmed
+                    then (fallbackName, if T.null location then fallbackLoc else location)
+                    else (processNameTrimmed, if T.null location then locFromProduct else location)
             allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
             activity =
                 Activity

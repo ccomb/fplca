@@ -1115,6 +1115,16 @@ spec = do
             let total = sum perActivity
             abs (total - 1.0) `shouldSatisfy` (< 0.001)
 
+        it "shares one activityUUID across coproducts when Process name is empty" $ do
+            -- Agribalyse 4.0 fishing blocks (e.g. yellowfin tuna) declare two
+            -- coproducts but leave "Process name" blank; both must land on the
+            -- reference product's activity, not split into two activities.
+            (activities, _, _, _, _) <- parseNoNameCoproductCSV
+            length activities `shouldBe` 2
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
+            S.fromList (map activityName activities)
+                `shouldBe` S.singleton "Tuna, main product {FR} U"
+
     describe "SimaPro Process name fallback" $ do
         it "falls back to product name when Process name field is empty" $ do
             (activities, _, _, _, _) <- parseNoProcessNameCSV
@@ -1358,6 +1368,48 @@ multiCoproductCSV =
 parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
+    hClose handle
+    parseSimaProCSV defaultUnitConfig path
+
+{- | Two-coproduct block with an empty Process name field (Agribalyse 4.0
+fishing pattern): both coproducts must inherit the reference (first) product's
+name and location so they share one activityUUID.
+-}
+noNameCoproductCSV :: BS.ByteString
+noNameCoproductCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , ""
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Geography"
+        , "Unspecified"
+        , ""
+        , "Products"
+        , "Tuna, main product {FR} U;kg;1;91;not defined;material;"
+        , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "Upstream feedstock;kg;1;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseNoNameCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseNoNameCoproductCSV = withSystemTempFile "no-name-coproduct.csv" $ \path handle -> do
+    BS.hPut handle noNameCoproductCSV
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
