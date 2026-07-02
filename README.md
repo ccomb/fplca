@@ -131,7 +131,7 @@ path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 
 [[flow-synonyms]]
 name = "Default flow synonyms"
-path = "data/flows.csv"        # CSV with two columns: name1,name2
+path = "data/flows.csv"        # CSV: name1,name2[,direction[,cas[,note]]]
 active = true
 
 [[compartment-mappings]]

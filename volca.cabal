@@ -267,6 +267,7 @@ test-suite lca-tests
                      , UploadedDatabaseSpec
                      , UploadSizeSpec
                      , ProgressSpec
+                     , RegistryLintSpec
                      , EcoSpold1Spec
                      , EcoSpold1WriterSpec
                      , EcoSpold2Spec

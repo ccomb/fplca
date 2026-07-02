@@ -8,7 +8,7 @@ import qualified Data.Set as S
 import Data.Text (Text, pack)
 import Test.Hspec
 
-import SynonymDB (BridgeDirection (..), SynEdge (..), SynViews (..), buildFromCSV, buildFromEdges, buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, inputView, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, mergeSynonymDBs, normalizeName, outputView, oversizedClasses, reopenedBridges, synEdges, synViews, uncoveredUnitSuffixes)
+import SynonymDB (BridgeDirection (..), RegistryRow (..), SynEdge (..), SynViews (..), buildFromCSV, buildFromEdges, buildFromPairs, excludeJunkSynonyms, excludeOverFrequentSynonyms, getSynonyms, inputView, isJunkSynonymName, loadFromCSVFileWithCache, lookupSynonymGroup, mergeSynonymDBs, normalizeName, outputView, oversizedClasses, parseRegistryCSV, reopenedBridges, synEdges, synViews, uncoveredUnitSuffixes)
 
 spec :: Spec
 spec = do
@@ -62,6 +62,23 @@ spec = do
             case buildFromCSV (BLC.pack "name1,name2,direction\nalpha,beta,sideways\n") of
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected Left for an invalid direction token"
+
+        it "keeps cas/note metadata on parsed rows without feeding it to matching" $ do
+            -- 4- and 5-column rows: the metadata is exposed for the registry
+            -- lint; the built SynonymDB is the same as without it.
+            let csv = BLC.pack "name1,name2,direction,cas,note\nCFC-11,Methane trichlorofluoro-,,75-69-4,ozd bridge\nalpha,beta,, ,\n"
+            case parseRegistryCSV csv of
+                Left e -> expectationFailure e
+                Right rows -> do
+                    map rrCas rows `shouldBe` [Just "75-69-4", Nothing]
+                    map rrNote rows `shouldBe` [Just "ozd bridge", Nothing]
+                    map (seDir . rrEdge) rows `shouldBe` [BridgeBoth, BridgeBoth]
+            fmap synViews (buildFromCSV csv) `shouldBe` Right AllBoth
+
+        it "rejects rows with more than 5 columns" $
+            case buildFromCSV (BLC.pack "name1,name2,direction,cas,note\na,b,,,,surplus\n") of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected Left for a 6-column row"
 
         it "splits a group along direction: an input edge chained to a both edge" $ do
             -- a-b [input], b-c [both]. Input view fuses {a,b,c}; output view, missing
