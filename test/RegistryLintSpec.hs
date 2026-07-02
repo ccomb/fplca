@@ -24,6 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Hspec
 
+import EcoSpold.Parser2 (normalizeCAS)
 import SynonymDB (
     RegistryRow (..),
     SynEdge (..),
@@ -75,9 +76,11 @@ originQualifiers = S.fromList . concatMap families
     lulucPhrases =
         ["land transformation", "land use change", "peat oxidation", "soil or biomass stock"]
 
-{- | CAS numbers declared for a class's member names. A row's CAS applies to
-both endpoints of its bridge (the bridge asserts one substance), keyed by
-normalized name to line up with the class members.
+{- | CAS numbers declared for a class's member names, in canonical form
+('normalizeCAS' strips ecoinvent-style zero-padding, so padded spellings of one
+substance count as one CAS). A row's CAS applies to both endpoints of its
+bridge (the bridge asserts one substance), keyed by normalized name to line up
+with the class members.
 -}
 classCas :: [RegistryRow] -> [Text] -> S.Set Text
 classCas rows cls = S.unions (mapMaybe (`M.lookup` byName) cls)
@@ -85,7 +88,7 @@ classCas rows cls = S.unions (mapMaybe (`M.lookup` byName) cls)
     byName =
         M.fromListWith
             S.union
-            [ (n, S.singleton cas)
+            [ (n, S.singleton (normalizeCAS cas))
             | r <- rows
             , Just cas <- [rrCas r]
             , n <- [normalizeName (seA (rrEdge r)), normalizeName (seB (rrEdge r))]
