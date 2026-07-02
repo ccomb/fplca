@@ -64,9 +64,55 @@ spec = describe "projectRegionalResourceFlows" $ do
         runWith [baseFlow, mkResourceFlow 11 "Water, river, FR"]
             `shouldContain` [frProjection]
 
-    it "does not project a region that has no located CF" $
+    it "does not borrow a sibling region's located CF" $
         runWith [baseFlow, mkResourceFlow 12 "Water, river, ZZ"]
             `shouldNotContain` [("Water, river, ZZ", Nothing, 6.98)]
+
+    it "falls a sub-national region back to its parent country's located CF" $ do
+        let cfCN = mkLocatedCF "river water" 42.4 (Just "CN")
+            cnSC = mkResourceFlow 15 "Water, river, CN-SC"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, cnSC]]
+        projected (projectRegionalResourceFlows synDB flows [(cfFR, Just (baseFlow, BySynonym)), (cfCN, Just (baseFlow, BySynonym))])
+            `shouldContain` [("Water, river, CN-SC", Nothing, 42.4)]
+
+    it "falls an untabulated region back to the method's location-less CF through the synonym bridge" $ do
+        let cfGeneric = mkLocatedCF "river water" 42.95 Nothing
+            rowFlow = mkResourceFlow 16 "Water, river, RoW"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, rowFlow]]
+        projected (projectRegionalResourceFlows synDB flows [(cfFR, Just (baseFlow, BySynonym)), (cfGeneric, Just (baseFlow, BySynonym))])
+            `shouldContain` [("Water, river, RoW", Nothing, 42.95)]
+
+    it "prefers the exact located region over the parent and generic fallbacks" $ do
+        let cfSC = mkLocatedCF "river water" 39.9 (Just "CN-SC")
+            cfCN = mkLocatedCF "river water" 42.4 (Just "CN")
+            cfGeneric = mkLocatedCF "river water" 42.95 Nothing
+            cnSC = mkResourceFlow 17 "Water, river, CN-SC"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, cnSC]]
+            ms = [(cf, Just (baseFlow, BySynonym)) | cf <- [cfSC, cfCN, cfGeneric]]
+        projected (projectRegionalResourceFlows synDB flows ms)
+            `shouldContain` [("Water, river, CN-SC", Nothing, 39.9)]
+
+    it "does not route the generic fallback through an input-only bridge for a release flow" $ do
+        let inSynDB = buildFromEdges [SynEdge "river water" "Water, river" BridgeInput]
+            cfGeneric = mkLocatedCF "river water" 42.95 Nothing
+            rowRelease =
+                (mkResourceFlow 18 "Water, river, RoW")
+                    { bfCompartment = Just (VT.Compartment "water" Nothing)
+                    }
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, rowRelease]]
+        projected (projectRegionalResourceFlows inSynDB flows [(cfFR, Just (baseFlow, BySynonym)), (cfGeneric, Just (baseFlow, BySynonym))])
+            `shouldNotContain` [("Water, river, RoW", Nothing, 42.95)]
+
+    it "does not let a located CF in another medium open the water fallback" $ do
+        let airCF =
+                (mkLocatedCF "Sulfur dioxide" 1.5 (Just "FR"))
+                    { mcfCompartment = Just (Compartment "air" "" "")
+                    }
+            cfGeneric = mkLocatedCF "river water" 42.95 Nothing
+            rowFlow = mkResourceFlow 24 "Water, river, RoW"
+            flows = M.fromList [(bfId f, f) | f <- [baseFlow, rowFlow]]
+        projected (projectRegionalResourceFlows synDB flows [(airCF, Nothing), (cfGeneric, Just (baseFlow, BySynonym))])
+            `shouldNotContain` [("Water, river, RoW", Nothing, 42.95)]
 
     it "derives the medium across a 'medium/sub' category, so a slash-encoded resource flow still projects" $ do
         let frFlowSlashed =
