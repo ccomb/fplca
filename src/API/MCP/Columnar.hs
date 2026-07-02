@@ -185,9 +185,10 @@ toColumnarBatch summaryOnly mBaseUrl dbName coll ss bir =
                 ++ [total]
                 ++ tailCells
 
-{- | Format the dominant indicator of a row as a @{key, share_pct}@
-object. Returns 'Null' when the row has no total, the total is zero
-(share is undefined), or the indicator map is empty.
+{- | Format the dominant indicator of a row as a @{key, label, share_pct}@
+object — @label@ is the indicator's display name ('siCategory'), so clients
+never have to show the raw variable key. Returns 'Null' when the row has no
+total, the total is zero (share is undefined), or the indicator map is empty.
 -}
 dominantIndicatorCell :: Maybe Double -> M.Map Text ScoringIndicator -> Value
 dominantIndicatorCell mTotal indMap
@@ -199,5 +200,5 @@ dominantIndicatorCell mTotal indMap
                     (comparing (abs . siValue . snd))
                     (M.toList indMap)
             share = abs (siValue ind) / abs t * 100
-         in object ["key" .= k, "share_pct" .= share]
+         in object ["key" .= k, "label" .= siCategory ind, "share_pct" .= share]
     | otherwise = Null

@@ -248,12 +248,12 @@ spec = do
                         )
                     )
 
-        it "fills the cell with a {key, share_pct} object, not a delimited string" $ do
+        it "fills the cell with a {key, label, share_pct} object, not a delimited string" $ do
             case KM.lookup (fromText "rows") km of
                 Just (Array rs) -> case V.toList rs of
                     [Array a] ->
                         last (V.toList a)
-                            `shouldBe` object ["key" .= ("cch" :: Text), "share_pct" .= (80.0 :: Double)]
+                            `shouldBe` object ["key" .= ("cch" :: Text), "label" .= ("cch" :: Text), "share_pct" .= (80.0 :: Double)]
                     other -> expectationFailure ("expected one row, got " <> show other)
                 other -> expectationFailure ("expected rows array, got " <> show other)
 
@@ -309,17 +309,19 @@ spec = do
             KM.lookup (fromText "rows") km `shouldBe` Just (Array (V.fromList []))
 
     describe "dominantIndicatorCell" $ do
-        let inds = M.fromList [("a", ScoringIndicator "a" 1.0), ("b", ScoringIndicator "b" 9.0)]
+        -- The indicator's siCategory is its display name — it rides along as
+        -- 'label' so clients never have to show the raw variable key.
+        let inds = M.fromList [("a", ScoringIndicator "a" 1.0), ("b", ScoringIndicator "Big impact" 9.0)]
 
-        it "picks the indicator with the largest absolute share" $
+        it "picks the indicator with the largest absolute share, labelled with its display name" $
             dominantIndicatorCell (Just 10.0) inds
-                `shouldBe` object ["key" .= ("b" :: Text), "share_pct" .= (90.0 :: Double)]
+                `shouldBe` object ["key" .= ("b" :: Text), "label" .= ("Big impact" :: Text), "share_pct" .= (90.0 :: Double)]
 
         it "uses absolute value so negative contributors can win" $
             dominantIndicatorCell
                 (Just 10.0)
-                (M.fromList [("a", ScoringIndicator "a" 1.0), ("b", ScoringIndicator "b" (-9.0))])
-                `shouldBe` object ["key" .= ("b" :: Text), "share_pct" .= (90.0 :: Double)]
+                (M.fromList [("a", ScoringIndicator "a" 1.0), ("b", ScoringIndicator "Big impact" (-9.0))])
+                `shouldBe` object ["key" .= ("b" :: Text), "label" .= ("Big impact" :: Text), "share_pct" .= (90.0 :: Double)]
 
         it "returns Null when the total is zero (share undefined)" $
             dominantIndicatorCell (Just 0.0) inds `shouldBe` Null
