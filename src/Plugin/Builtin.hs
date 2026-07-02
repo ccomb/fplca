@@ -188,11 +188,15 @@ lciaAnalyzer =
                 mapM
                     ( \m -> do
                         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx m
+                        -- Build the tables with the method's CF family so the
+                        -- subcompartment gates apply here exactly as on the
+                        -- Database.Manager scoring path.
+                        let tables = Mapping.buildMethodTables (cfFamily (methodUnit m)) M.empty M.empty mappings
                         pure $
                             toJSON $
                                 M.fromList
                                     [ ("method" :: String, toJSON (show m))
-                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acBioFlowDB ctx) inv mappings)))
+                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig (acUnitDB ctx) (acBioFlowDB ctx) inv tables)))
                                     ]
                     )
                     methods
