@@ -427,7 +427,9 @@ description r = case r of
         \values (e.g. an overall single score plus per-area-of-protection \
         \sub-scores). For each set returns: name, display unit, variables \
         \referenced (with the impact category each binds to), computed \
-        \intermediates, normalization and weighting factors, and the score \
+        \intermediates, display labels (variable → human-readable indicator \
+        \name shown in score breakdowns), normalization and weighting \
+        \factors, and the score \
         \formulas. Use the returned set names as keys when interpreting \
         \score_activity / score_activities responses."
 
