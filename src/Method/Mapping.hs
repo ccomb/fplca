@@ -1153,12 +1153,12 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
                 !flowSubN = T.toLower (T.strip flowSubRaw)
-             in -- A wildcard (unspecified) CF matches any subcompartment except a
-                -- foreign medium (sea/ocean): a freshwater CF must not reach a
-                -- sea-water flow via the regionalized wildcard, mirroring the
-                -- 'lookupCascadeCF' gate for the non-regional path. An explicit
-                -- same-sub CF still matches.
-                (isUnspecifiedSub cfSubN && not (isForeignMediumSub (Subcompartment flowSubN)))
+             in -- A wildcard (unspecified) CF matches any subcompartment except
+                -- the ones the 'lookupCascadeCF' gate excludes on the
+                -- non-regional path — both tiers: a foreign medium (sea/ocean)
+                -- never borrows a freshwater CF, and groundwater borrows no
+                -- surface USEtox CF. An explicit same-sub CF still matches.
+                (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily (Subcompartment flowSubN))
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
@@ -1654,9 +1654,8 @@ lookupCascadeCF tables flowDB fid =
             -- water, so the method characterizes it). An explicit exact-sub CF and
             -- the method's own long-term default are never gated.
             gate mcf
-                | isForeignMediumSub normSub = Nothing
-                | isDetachedSub normSub && mtCFFamily tables == USEtoxFamily = Nothing
-                | otherwise = mcf
+                | wildcardReachesSub (mtCFFamily tables) normSub = mcf
+                | otherwise = Nothing
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
             -- just the one a CF resolved to at build time. A long-term (delayed)
@@ -1782,6 +1781,16 @@ isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
 
 isForeignMediumSub :: Subcompartment -> Bool
 isForeignMediumSub (Subcompartment s) = s `elem` ["ocean", "sea water", "sea"]
+
+{- | Whether a medium-level (wildcard / fallback) CF may reach the given
+subcompartment — both tiers above, combined. Shared by the read-path
+'lookupCascadeCF' gate and the build-time regionalized wildcard match so the
+two scoring paths apply the same rule and can't drift.
+-}
+wildcardReachesSub :: CFFamily -> Subcompartment -> Bool
+wildcardReachesSub family sub =
+    not (isForeignMediumSub sub)
+        && not (isDetachedSub sub && family == USEtoxFamily)
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is

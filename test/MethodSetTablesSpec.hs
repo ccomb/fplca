@@ -468,6 +468,28 @@ spec = do
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
             M.lookup (fid, "DE") (mtRegionalizedCF tables) `shouldBe` Nothing
 
+        it "does not let a wildcard CF reach a groundwater flow for a USEtox method" $ do
+            -- The USEtox fate model is surface freshwater: a groundwater metal
+            -- emission must not borrow the surface CF via the regionalized
+            -- wildcard — same rule as the non-regional cascade gate. A
+            -- non-USEtox (e.g. nutrient) method keeps characterizing
+            -- groundwater, since phosphate migrates to surface water.
+            let fid = mkUuid 131
+                uidKg = mkUuid 200
+                flowGw =
+                    (mkFlow fid "nickel" uidKg)
+                        { bfCompartment = Just (VT.Compartment "water" (Just "groundwater"))
+                        }
+                cfUnspecified =
+                    (mkCF fid 7.0)
+                        { mcfFlowName = "nickel"
+                        , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
+                tablesFor fam = buildMethodTables fam M.empty M.empty [(cfUnspecified, Just (flowGw, ByName))]
+            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor USEtoxFamily)) `shouldBe` Nothing
+            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor OtherCFFamily)) `shouldBe` Just (7.0, "kg")
+
         it "keeps CF when mcfCompartment is Nothing (no subcomp info)" $ do
             let fid = mkUuid 120
                 uidKg = mkUuid 200
