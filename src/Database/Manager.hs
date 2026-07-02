@@ -676,7 +676,7 @@ buildMethodTablesFor manager dbName collection db hier method = do
     -- question; a method whose CFs are all region-tagged would be left with none.
     -- The config loader warns when a 'global-methods' name matches no method.
     globalMethods <- maybe [] mcGlobalMethods . M.lookup collection <$> readTVarIO (dmAvailableMethods manager)
-    let !raw0 = buildMethodTables cmap energyDensities expanded
+    let !raw0 = buildMethodTables (methodUnit method) cmap energyDensities expanded
         !raw =
             if methodName method `elem` globalMethods
                 then raw0{mtRegionalizedCF = M.empty}

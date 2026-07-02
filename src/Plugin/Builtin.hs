@@ -367,7 +367,7 @@ hotspotAnalyzer =
     -- Characterization uses the merged flow/unit snapshot the caller built.
     analyzeMethod flowDB unitDB mapCtx inv topN method = do
         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx method
-        let tables = Mapping.buildMethodTables M.empty M.empty mappings
+        let tables = Mapping.buildMethodTables (methodUnit method) M.empty M.empty mappings
             (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables
             sorted = take topN $ sortOn (\(_, _, c) -> negate (abs c)) rawContribs
             total = Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables)

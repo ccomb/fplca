@@ -440,6 +440,13 @@ data MethodTables = MethodTables
     Empty for non-regionalized methods. When non-empty, callers should dispatch
     to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
     -}
+    , mtMethodUnit :: !Text
+    {- ^ The method's result unit (e.g. @"CTUe"@, @"kg P eq"@). Carries the CF
+    family the individual CF units can't: the SimaPro-adapted collection stores
+    every CF unit as the flow unit (@"kg"@), so the read-path subcompartment gate
+    keys off this — a USEtox toxicity method ('isUSEtoxUnit') doesn't characterize
+    groundwater, a nutrient method does.
+    -}
     , mtCompartmentMap :: !CompartmentMap
     {- ^ Compartment-normalization rules (e.g. @"Emissions to air" → "air"@).
     Applied to both CF compartments at build time and database flow
@@ -929,8 +936,8 @@ strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 
-buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
-buildMethodTables cmap energyDensities mappings =
+buildMethodTables :: Text -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
+buildMethodTables methodUnitText cmap energyDensities mappings =
     MethodTables
         { mtUuidCF =
             -- Non-regionalized rows only, like the name tables below: a
@@ -1089,6 +1096,7 @@ buildMethodTables cmap energyDensities mappings =
                 , cfSubcompMatchesFlow cf flow
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
+        , mtMethodUnit = methodUnitText
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -1145,7 +1153,12 @@ buildMethodTables cmap energyDensities mappings =
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
                 !flowSubN = T.toLower (T.strip flowSubRaw)
-             in isUnspecifiedSub cfSubN
+             in -- A wildcard (unspecified) CF matches any subcompartment except a
+                -- foreign medium (sea/ocean): a freshwater CF must not reach a
+                -- sea-water flow via the regionalized wildcard, mirroring the
+                -- 'lookupCascadeCF' gate for the non-regional path. An explicit
+                -- same-sub CF still matches.
+                (isUnspecifiedSub cfSubN && not (isForeignMediumSub (Subcompartment flowSubN)))
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
@@ -1438,7 +1451,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty M.empty mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables "" M.empty M.empty mappings)
 
 {- | LCIA score with automatic dispatch.
 
@@ -1629,19 +1642,30 @@ lookupCascadeCF tables flowDB fid =
     byNameOrCas flow =
         let name = SR.NormName (normalizeName (bfName flow))
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
+            -- The medium-level / CAS / sub-blind fallbacks all stand for a
+            -- surface, immediate emission, so gate a resolved one by the flow's
+            -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
+            -- at all; a detached sub (groundwater) drops a surface-freshwater-fate
+            -- USEtox CF (CTUe/CTUh) — those methods don't model groundwater — but
+            -- keeps a nutrient/other freshwater CF (phosphate migrates to surface
+            -- water, so the method characterizes it). An explicit exact-sub CF and
+            -- the method's own long-term default are never gated.
+            gate mcf
+                | isForeignMediumSub normSub = Nothing
+                | isDetachedSub normSub && isUSEtoxUnit (mtMethodUnit tables) = Nothing
+                | otherwise = mcf
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
             -- just the one a CF resolved to at build time. A long-term (delayed)
             -- emission first tries the method's long-term default
             -- ('mtLongTermFallbackCF') so it inherits the long-term factor, not
-            -- the immediate-emission one; if the method has none it still falls
-            -- through to the ordinary fallbacks.
+            -- the immediate-emission one; if the method has none it falls through.
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
-                <|> M.lookup (name, baseMed) (mtFallbackCF tables)
-                <|> (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
-                <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
-                <|> regionBaseFallback flow baseMed normSub
+                <|> gate (M.lookup (name, baseMed) (mtFallbackCF tables))
+                <|> gate (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
+                <|> gate (M.lookup (name, baseMed) (mtSubBlindCF tables))
+                <|> gate (regionBaseFallback flow baseMed normSub)
                 <|> energyResourceFallback flow baseMed normSub
 
     -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
@@ -1714,6 +1738,38 @@ long-term emission than for its immediate one.
 -}
 isLongTermSub :: Subcompartment -> Bool
 isLongTermSub (Subcompartment s) = "long-term" `T.isInfixOf` s || "long term" `T.isInfixOf` s
+
+{- | A subcompartment that names a different fate than the surface / immediate
+emission a method's unspecified (medium-level) CF stands for, so that CF must
+not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
+
+  * 'isDetachedSub' — emissions to groundwater (immediate or long-term). A
+    surface-freshwater-fate USEtox CF ('isUSEtoxUnit') does not apply (metals to
+    groundwater are out of scope for ecotoxicity/human toxicity — EF leaves them
+    uncharacterized), but a nutrient/other freshwater CF does (phosphate migrates
+    to surface water, so the method characterizes it). Scoped to groundwater, NOT
+    every long-term sub: a "river, long-term" release is still surface freshwater
+    and stays characterized.
+  * 'isForeignMediumSub' — the sea/ocean, a different receiving medium
+    altogether: a freshwater CF does not apply at all (water released to the sea
+    is not freshwater depletion; EF ships a distinct, uncharacterized sea-water
+    flow).
+
+Names are the post-'normalizeCompartment' lower-cased subcompartment.
+-}
+isDetachedSub :: Subcompartment -> Bool
+isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
+
+isForeignMediumSub :: Subcompartment -> Bool
+isForeignMediumSub (Subcompartment s) = s `elem` ["ocean", "sea water", "sea"]
+
+{- | True for a USEtox toxicity CF (unit CTUe for ecotoxicity, CTUh for human
+toxicity). Their fate model is surface freshwater, so a groundwater emission is
+out of scope and must not borrow the surface CF — unlike a nutrient CF (kg P eq)
+which does characterize groundwater, since phosphate migrates to surface water.
+-}
+isUSEtoxUnit :: Text -> Bool
+isUSEtoxUnit u = T.toLower (T.strip u) `elem` ["ctue", "ctuh"]
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is

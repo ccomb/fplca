@@ -120,7 +120,7 @@ coalDensities = M.fromList [(normalizeName "Coal, hard", EnergyDensity 26.4 "MJ"
 tablesFor :: BiosphereFlow -> EnergyDensityMap -> MethodCF -> MethodTables
 tablesFor flow densities cf =
     let fdb = M.singleton (bfId flow) flow
-        raw = buildMethodTables M.empty densities [(cf, Just (flow, ByUUID))]
+        raw = buildMethodTables "" M.empty densities [(cf, Just (flow, ByUUID))]
      in fillBroadcastVector unitConfig unitDB fdb raw
 
 -- Score a @qty@-unit inventory of @flow@ against the given tables.

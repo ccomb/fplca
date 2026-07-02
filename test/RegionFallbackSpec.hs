@@ -47,7 +47,7 @@ situation a non-regionalized method (e.g. EF v3.1 JRC ILCD) produces.
 -}
 tablesFor :: Text -> Double -> MethodTables
 tablesFor base val =
-    buildMethodTables M.empty M.empty [(baseCF base val, Just (mkFlow 1 base, ByName))]
+    buildMethodTables "" M.empty M.empty [(baseCF base val, Just (mkFlow 1 base, ByName))]
 
 -- | Score a flow of the given name against those tables.
 scoreOf :: Text -> Double -> Text -> Maybe Double

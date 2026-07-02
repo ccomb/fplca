@@ -44,7 +44,7 @@ mkFlow i name sub =
 
 score :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> BiosphereFlow -> Maybe Double
 score mappings flow =
-    fmap fst (lookupCFForFlow (buildMethodTables M.empty M.empty mappings) (bfId flow) (Just flow))
+    fmap fst (lookupCFForFlow (buildMethodTables "" M.empty M.empty mappings) (bfId flow) (Just flow))
 
 spec :: Spec
 spec = describe "sub-blind CF fallback" $ do

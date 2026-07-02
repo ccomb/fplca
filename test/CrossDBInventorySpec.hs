@@ -179,6 +179,7 @@ spec = do
                     , mtCasCF = M.empty
                     , mtRegionalCasCF = M.empty
                     , mtRegionalizedCF = M.empty
+                    , mtMethodUnit = ""
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
                     , mtBroadcast = M.empty
