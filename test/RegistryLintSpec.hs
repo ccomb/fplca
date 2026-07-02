@@ -16,7 +16,7 @@ a bad bridge fails CI here instead of silently corrupting scores:
 module RegistryLintSpec (spec) where
 
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (digitToInt, isDigit)
+import Data.Char (isDigit, ord)
 import qualified Data.Map.Strict as M
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as S
@@ -99,13 +99,13 @@ digit is the mod-10 weighted sum of the other digits, weighted 1.. from the
 right. Catches transcription typos at commit time.
 -}
 casValid :: Text -> Bool
-casValid t = case T.splitOn "-" t of
-    [a, b, c] ->
-        digitsBetween 2 7 a
-            && digitsBetween 2 2 b
-            && digitsBetween 1 1 c
-            && checkDigit (T.unpack (a <> b)) == T.unpack c
+casValid t = case traverse digits (T.splitOn "-" t) of
+    Just [body, mid, [check]] ->
+        between 2 7 (length body)
+            && length mid == 2
+            && sum (zipWith (*) [1 ..] (reverse (body <> mid))) `mod` 10 == check
     _ -> False
   where
-    digitsBetween lo hi s = T.all isDigit s && T.length s >= lo && T.length s <= hi
-    checkDigit ds = show (sum (zipWith (*) [1 ..] (map digitToInt (reverse ds))) `mod` 10)
+    digits = traverse digitVal . T.unpack
+    digitVal ch = if isDigit ch then Just (ord ch - ord '0') else Nothing
+    between lo hi n = lo <= n && n <= hi
