@@ -1720,11 +1720,16 @@ lookupCascadeCF tables flowDB fid =
     -- takes that element's resource CF. Without this the whole ore-grade family
     -- scores zero and mineral/metal depletion silently under-counts (copper- and
     -- gold-intensive products by 100×+). Resource medium only; base = the element
-    -- before the first comma. Self-scoping and last in the cascade: 'resourceCF'
-    -- returns Nothing for a non-metal resource the method doesn't characterize
-    -- ("Calcite, in ground"), so it only fires where the base element has a CF.
+    -- before the first comma; the "%" requirement pins the fallback to
+    -- grade-bearing variants — every ore-grade name encodes its grade as a
+    -- percentage — so an ordinary comma-qualified resource ("Water, salt,
+    -- ocean", "Coal, 18 MJ per kg") never borrows the base CF, and in
+    -- particular an ambiguity 'energyResourceFallback' refused to resolve
+    -- stays unresolved. Self-scoping and last in the cascade: 'resourceCF'
+    -- returns Nothing when the base element has no CF in the method.
     resourceBaseNameFallback flow baseMed@(Medium med) normSub
         | med == "resource"
+        , "%" `T.isInfixOf` bfName flow
         , (base, rest) <- T.breakOn "," (bfName flow)
         , not (T.null rest) =
             resourceCF (SR.NormName (normalizeName base)) baseMed normSub

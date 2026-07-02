@@ -84,3 +84,11 @@ spec = describe "sub-blind CF fallback" $ do
         it "does not fire for a comma-less resource name" $
             score copperMapping (mkFlow 99 "Gravel" (Just "in ground"))
                 `shouldBe` Nothing
+
+        it "does not fire for a comma-qualified name without a grade marker" $ do
+            -- The "%" pins the fallback to ore-grade variants: an ordinary
+            -- comma-qualified resource must not borrow the base CF (a
+            -- salt-water withdrawal is not freshwater scarcity).
+            let waterMapping = [(mkCF 1 "Water" "in water" 42.0, Just (mkFlow 1 "Water" (Just "in water"), ByName))]
+            score waterMapping (mkFlow 99 "Water, salt, ocean" (Just "in water"))
+                `shouldBe` Nothing

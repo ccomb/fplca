@@ -66,6 +66,9 @@ disagreeingCoalTables =
         )
         [ (resourceCF "Coal, hard" 1.0, Just (mkFlow 1 "Coal, hard", ByName))
         , (resourceCF "Coal, brown" 2.0, Just (mkFlow 2 "Coal, brown", ByName))
+        , -- A bare base-element CF too: the ore-grade base-name fallback must
+          -- not grab it for a density variant the family refusal just dropped.
+          (resourceCF "Coal" 5.0, Just (mkFlow 3 "Coal", ByName))
         ]
 
 -- Borrowed raw CF (the density is applied later by convertAndMultiply).
