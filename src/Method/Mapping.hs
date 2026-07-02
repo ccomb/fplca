@@ -961,7 +961,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -984,7 +984,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1002,7 +1002,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1104,7 +1104,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
   where
-    stripStrategy = M.map (\(v, u, _) -> (v, u))
+    stripStrategy = M.map (\(v, u, _, _) -> (v, u))
 
     -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
     -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
@@ -1162,11 +1162,23 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily (Subcompartment flowSubN))
                     || cfSubN == flowSubN
 
-    preferBetter (v1, u1, s1) (v2, u2, s2)
-        | strategyPriority s1 < strategyPriority s2 = (v1, u1, s1)
-        | strategyPriority s1 > strategyPriority s2 = (v2, u2, s2)
-        | v1 >= v2 = (v1, u1, s1)
-        | otherwise = (v2, u2, s2)
+    -- Rank colliding CFs for one name key: better match strategy first, then a
+    -- CF whose own (raw) flow name equals the matched DB flow's name — when
+    -- normalization collapses unit-suffixed homonyms ("Gas, natural/kg" and
+    -- "Gas, natural/m3" both normalize to "gas, natural"), the row that matched
+    -- verbatim carries the unit the flow is actually declared in; the other
+    -- variant is dimensionally incompatible and would silently convert to 0.
+    -- Only then the historical higher-value tie-break.
+    preferBetter a@(v1, _, s1, r1) b@(v2, _, s2, r2)
+        | strategyPriority s1 < strategyPriority s2 = a
+        | strategyPriority s1 > strategyPriority s2 = b
+        | r1 /= r2 = if r1 then a else b
+        | v1 >= v2 = a
+        | otherwise = b
+
+    rawNameMatches cf mflow = case mflow of
+        Just (flow, _) -> T.toLower (T.strip (mcfFlowName cf)) == T.toLower (T.strip (bfName flow))
+        Nothing -> False
 
     matchStrategy mflow = case mflow of
         Just (_, s) -> s
