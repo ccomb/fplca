@@ -19,7 +19,9 @@ Each surfaced pair is then classified against the same rules the Haskell
 ``RegistryLintSpec`` enforces, so a proposed row that survives will pass CI:
 
 * wrong-origin -- source and target disagree on carbon origin
-  (fossil / biogenic / land-use-change). REJECT: methods split these on purpose.
+  (fossil / biogenic / land-use-change), checked pairwise and again on the
+  classes merged with the registry (an unqualified name can transitively fuse
+  two families). REJECT: methods split these on purpose.
 * collision   -- source and target both carry their OWN distinct CF in the same
   compartment of some method (e.g. Dinitrogen tetroxide vs Nitrogen dioxide:
   ecotox 3.84 vs 11.96). A single global synonym would collapse them via
@@ -56,7 +58,6 @@ import argparse
 import csv
 import io
 import json
-import re
 import sys
 import urllib.parse
 import urllib.request
@@ -70,9 +71,19 @@ LULUC_PHRASES = ("land transformation", "land use change", "peat oxidation", "so
 # --------------------------------------------------------------------------- #
 # pure helpers (mirror SynonymDB.normalizeName / RegistryLintSpec closely)     #
 # --------------------------------------------------------------------------- #
+_PUNCT = str.maketrans("", "", ",()'\"")
+
+
 def normalize(name: str) -> str:
-    """Lowercase + collapse whitespace. Enough to line names up across sources."""
-    return re.sub(r"\s+", " ", name.strip().lower())
+    """Single-pass mirror of SynonymDB.normalizeName -- the key the lint builds
+    its equivalence classes on, so class sizes and registry membership computed
+    here agree with CI: lowercase, collapse whitespace, strip the " in ground"
+    suffix and SimaPro unit suffixes, drop punctuation, collapse again."""
+    t = " ".join(name.strip().lower().split())
+    for suffix in (" in ground", ", in ground", "/sm3", "/m3", "/kg"):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)]
+    return " ".join(t.translate(_PUNCT).split())
 
 
 def origin_families(name: str) -> frozenset[str]:
@@ -196,7 +207,10 @@ def cfs_differ(a: set[float], b: set[float]) -> bool:
 def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, str]]) -> list[dict]:
     bridges = candidate_only_bridges(curated, candidates)
     per_method = method_name_cfs(candidates)
-    reg_norm = {n for e in registry_edges for n in e}
+    # same class = already bridged (possibly transitively); both names merely
+    # appearing in UNRELATED registry rows is not a reason to skip -- such a
+    # pair would merge two classes and must reach review and the closure check
+    class_of = {n: i for i, cls in enumerate(connected_components(registry_edges)) for n in cls}
 
     proposals = []
     for name, ev in bridges.items():
@@ -215,10 +229,8 @@ def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, st
             verdict, reason = "reject", f"multi-target: bridged to {sorted(spellings)} (junk-hub ambiguity)"
         elif normalize(target) == src:
             verdict, reason = "skip", "already identical after normalization"
-        elif frozenset((src, normalize(target))) <= reg_norm or (src, normalize(target)) in {
-            (a, b) for e in registry_edges for a, b in (e, e[::-1])
-        }:
-            verdict, reason = "skip", "already in registry"
+        elif src in class_of and class_of.get(normalize(target)) == class_of[src]:
+            verdict, reason = "skip", "already bridged in the registry (same equivalence class)"
         else:
             fs, ft = origin_families(name), origin_families(target)
             tgt = normalize(target)
@@ -251,14 +263,26 @@ def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, st
             }
         )
 
-    # oversize check on the accepted set, closed together with the registry
+    # class-level rules on the accepted set, closed together with the registry:
+    # size and origin fusion only exist on the merged classes (an unqualified
+    # hub -- bare "Carbon dioxide" -- can transitively join a fossil class to a
+    # luluc name without any pair failing the pairwise check above). One
+    # conservative pass: every accepted pair touching a bad class is rejected
+    # together (a kept subset might fit, but rescuing one is the reviewer's
+    # call -- the pairs stay visible in the REJECTED report).
     accepted = [p for p in proposals if p["verdict"] == "ok"]
     proposed_edges = [(normalize(p["name1"]), normalize(p["name2"])) for p in accepted]
     for cls in connected_components(registry_edges + proposed_edges):
+        fams = sorted(set().union(*map(origin_families, cls)))
         if len(cls) > MAX_CLASS_SIZE:
-            for p in accepted:
-                if normalize(p["name1"]) in cls or normalize(p["name2"]) in cls:
-                    p["verdict"], p["reason"] = "reject", f"oversize: would join a class of {len(cls)} (>{MAX_CLASS_SIZE})"
+            problem = f"oversize: would join a class of {len(cls)} (>{MAX_CLASS_SIZE})"
+        elif len(fams) > 1:
+            problem = f"origin fusion: class would mix {fams}"
+        else:
+            continue
+        for p in accepted:
+            if normalize(p["name1"]) in cls or normalize(p["name2"]) in cls:
+                p["verdict"], p["reason"] = "reject", problem
     return sorted(proposals, key=lambda p: (-p["methods"], -p["maxcf"]))
 
 
@@ -297,7 +321,7 @@ def propose(curated_path: str, candidates_path: str, registry: str, out_patch: s
 
 
 # --------------------------------------------------------------------------- #
-# selftest: the three rejection rules + one legit pass, on synthetic dumps      #
+# selftest: every rejection/skip rule + the legit passes, on synthetic dumps    #
 # --------------------------------------------------------------------------- #
 def selftest() -> None:
     # source flows with no curated CF; the candidate layer bridges them.
@@ -312,8 +336,10 @@ def selftest() -> None:
                 "f3": {"n": "Dinitrogen tetroxide", "cat": "air", "cf": 3.0, "cfn": "Nitrogen dioxide"},  # collision with f4
                 "f4": {"n": "Nitrogen dioxide", "cat": "air", "cf": 9.0, "cfn": "Nitrogen dioxide"},  # native, distinct cf
                 "f5": {"n": "Chromium VI", "cat": "water", "cf": 2.0, "cfn": "Chromium hexavalent"},  # multi-target (with M2)
+                "f6": {"n": "Carbon monoxide", "cat": "air", "cf": 2.0, "cfn": "Carbon monoxide, land transformation"},  # unqualified hub fuses fossil+luluc
                 "f7": {"n": "Zineb", "cat": "air", "cf": 5.0, "cfn": "Zinc organic"},  # tgt CF sits in ANOTHER compartment: no collision
                 "f8": {"n": "Zinc organic", "cat": "water", "cf": 3.0, "cfn": "Zinc organic"},
+                "f9": {"n": "Methylene chloride", "cat": "air", "cf": 1.0, "cfn": "Dichloromethane"},  # same registry class already
             },
         },
         "M2": {
@@ -324,18 +350,23 @@ def selftest() -> None:
             },
         },
     }
-    got = {p["name1"]: (p["verdict"], p["reason"]) for p in classify(curated, candidates, [])}
+    registry = [("carbon monoxide", "carbon monoxide fossil"), ("methylene chloride", "dichloromethane")]
+    got = {p["name1"]: (p["verdict"], p["reason"]) for p in classify(curated, candidates, registry)}
     expect = {
         "Tetrachloroethylene": ("ok", ""),
         "Carbon dioxide, fossil": ("reject", "wrong-origin"),
         "Dinitrogen tetroxide": ("reject", "collision"),
         "Chromium VI": ("reject", "multi-target"),
+        "Carbon monoxide": ("reject", "origin fusion"),
         "Zineb": ("ok", ""),
+        "Methylene chloride": ("skip", "same equivalence class"),
     }
     for k, (verdict, needle) in expect.items():
         got_verdict, got_reason = got.get(k, (None, ""))
         assert got_verdict == verdict, f"selftest FAIL: {k} -> {got_verdict} ({got_reason}), expected {verdict}"
         assert needle in got_reason, f"selftest FAIL: {k} reason {got_reason!r} lacks {needle!r}"
+    assert normalize("Zinc, in ground") == "zinc", normalize("Zinc, in ground")
+    assert normalize("Gas, natural/m3") == "gas natural", normalize("Gas, natural/m3")
     print("selftest OK:", {k: got[k][0] for k in expect})
 
 
