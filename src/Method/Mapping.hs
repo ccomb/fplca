@@ -45,6 +45,7 @@ module Method.Mapping (
     lookupCFForFlow,
     convertForCharacterization,
     expandSynonymMappings,
+    directionExcludedCFs,
     projectRegionalResourceFlows,
     ProxyTargets (..),
     expandProxyEdges,
@@ -84,7 +85,7 @@ import Data.List (find, nub, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -286,47 +287,61 @@ findFlowBySynonymComp synDB flowsByName name mComp =
   where
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
 
+{- | The synonym view a CF resolves against: input-only bridges apply to INPUT
+(resource) CFs, output-only to OUTPUT (emission) CFs. On untyped data both
+views coincide with the union tables, so this is a no-op.
+-}
+viewFor :: FlowDirection -> SynonymDB -> SynonymDB
+viewFor Input = inputView
+viewFor Output = outputView
+
 {- | Synonym match that reads a precomputed group → flows memo. When
 'mapMethodFlows' has expanded this CF's group (the common path), the resolution
 is a single map lookup plus the compartment pick; otherwise it falls back to
 'findFlowBySynonymComp'. The memoized flow list is exactly that function's
 inline @concatMap@ (same elements, same order), so the pick — and the flow it
-returns — is identical: a pure speedup.
+returns — is identical: a pure speedup. The group is resolved in the CF's
+direction view, and the memo is keyed by @(direction, group id)@ because the two
+views number their groups independently. Takes the CF and context whole so
+direction, name and compartment can never be mixed from different CFs.
 -}
-findFlowBySynonymMemo ::
-    SynonymDB ->
-    M.Map Int [BiosphereFlow] ->
-    M.Map Text [BiosphereFlow] ->
-    Text ->
-    Maybe Compartment ->
-    Maybe BiosphereFlow
-findFlowBySynonymMemo synDB memo flowsByName name mComp =
-    case lookupSynonymGroup synDB name of
+findFlowBySynonymMemo :: MapContext -> MethodCF -> Maybe BiosphereFlow
+findFlowBySynonymMemo ctx cf =
+    case lookupSynonymGroup dirDB name of
         Nothing -> Nothing
-        Just gid -> case M.lookup gid memo of
+        Just gid -> case M.lookup (dir, gid) (mcSynGroupFlows ctx) of
             Just flows -> pickByCompartment flows mComp
-            Nothing -> findFlowBySynonymComp synDB flowsByName name mComp
+            Nothing -> findFlowBySynonymComp dirDB (mcBioFlowsByName ctx) name mComp
+  where
+    dir = mcfDirection cf
+    dirDB = viewFor dir (mcSynonymDB ctx)
+    name = mcfFlowName cf
+    mComp = mcfCompartment cf
 
-{- | Expand, once per synonym group, the candidate flows reachable from that
-group's names — for exactly the groups the given CFs reference. 'mapMethodFlows'
-runs this before resolving a method's CFs, so the synonym matcher reads a shared
-(often large) group's flows from the memo instead of re-expanding it per CF. The
-per-group value is identical to 'findFlowBySynonymComp''s inline @concatMap@.
+{- | Expand, once per @(direction, synonym group)@, the candidate flows reachable
+from that group's names — for exactly the groups the given CFs reference.
+'mapMethodFlows' runs this before resolving a method's CFs, so the synonym matcher
+reads a shared (often large) group's flows from the memo instead of re-expanding
+it per CF. The per-group value is identical to 'findFlowBySynonymComp''s inline
+@concatMap@. Keyed by direction because a CF resolves against its direction's view.
 -}
-buildSynGroupFlows :: MapContext -> [MethodCF] -> M.Map Int [BiosphereFlow]
+buildSynGroupFlows :: MapContext -> [MethodCF] -> M.Map (FlowDirection, Int) [BiosphereFlow]
 buildSynGroupFlows ctx cfs =
     M.fromList
-        [ (gid, maybe [] (concatMap groupFlows) (getSynonyms synDB gid))
-        | gid <- gids
+        [ ((dir, gid), maybe [] (concatMap groupFlows) (getSynonyms (viewFor dir synDB) gid))
+        | (dir, gid) <- keys
         ]
   where
     synDB = mcSynonymDB ctx
     flowsByName = mcBioFlowsByName ctx
     groupFlows syn = M.findWithDefault [] (normalizeName syn) flowsByName
-    gids =
+    keys =
         S.toList $
             S.fromList
-                [gid | cf <- cfs, Just gid <- [lookupSynonymGroup synDB (mcfFlowName cf)]]
+                [ (mcfDirection cf, gid)
+                | cf <- cfs
+                , Just gid <- [lookupSynonymGroup (viewFor (mcfDirection cf) synDB) (mcfFlowName cf)]
+                ]
 
 {- | Pick the best flow match based on compartment preference. The flow's own
 compartment now lives in 'bfCompartment' as a structured 'Types.Compartment'
@@ -686,16 +701,44 @@ expandSynonymMappings synDB flowsByName mappings =
             (S.fromList (M.keys flowsByName))
             mappings
 
+    -- Re-close so the direction tags survive: the induced DB is rebuilt from
+    -- 'SynEdge's, so it carries the same directional views as the source. A CF
+    -- then fans out only through bridges valid for its direction. The stored
+    -- edges are already normalized — re-closing must NOT re-normalize them
+    -- ('normalizeName' is not idempotent), hence 'buildFromNormalizedEdges'.
     inducedDB :: SynonymDB
     inducedDB =
-        buildFromPairs [e | e@(a, b) <- synEdges synDB, S.member a used, S.member b used]
+        buildFromNormalizedEdges [e | e <- synEdges synDB, S.member (seA e) used, S.member (seB e) used]
 
     expand (cf, _) =
-        let peers = fromMaybe [] (getSynonyms inducedDB =<< lookupSynonymGroup inducedDB (mcfFlowName cf))
+        let dirDB = viewFor (mcfDirection cf) inducedDB
+            peers = fromMaybe [] (getSynonyms dirDB =<< lookupSynonymGroup dirDB (mcfFlowName cf))
          in [ (cf, Just (flow, BySynonym))
             | syn <- peers
             , flow <- M.findWithDefault [] syn flowsByName
             ]
+
+{- | Unmapped CFs whose name matches through the UNION synonym tables but not
+through their own direction's view: the direction restriction alone stands
+between them and a synonym match. Empty on untyped data, where the views
+coincide. The typical cause is a parser that defaulted 'mcfDirection' (the
+method carried no direction metadata), making a one-way bridge unreachable —
+the loader surfaces these so the loss is distinguishable from a genuinely
+uncharacterized flow, per the no-silent-misbehaviour rule.
+-}
+directionExcludedCFs ::
+    SynonymDB ->
+    M.Map Text [BiosphereFlow] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [MethodCF]
+directionExcludedCFs synDB flowsByName mappings =
+    [ cf
+    | (cf, Nothing) <- mappings
+    , isJust (matchIn synDB cf)
+    , isNothing (matchIn (viewFor (mcfDirection cf) synDB) cf)
+    ]
+  where
+    matchIn db cf = findFlowBySynonymComp db flowsByName (mcfFlowName cf) (mcfCompartment cf)
 
 {- | Project a region-tagged resource (withdrawal) flow onto its region's located
 CF, in the GLOBAL name tables. An ILCD method whose CFs carry a consumer location
@@ -740,6 +783,12 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- Keep the larger (more conservative, never-undercounting) factor instead, the
     -- same value preference 'buildMethodTables' applies through 'preferBetter'.
     preferHigherCF a b = if mcfValue a >= mcfValue b then a else b
+    -- The synonym view a resource/water flow bridges through: a withdrawal
+    -- (resource-medium) flow uses the input view, a release (water-medium) flow
+    -- the output view, so an input-only bridge (@"river water"@ → @"Water,
+    -- river"@) never lets a release flow inherit a withdrawal CF. On untyped data
+    -- both views coincide, so this preserves today's grouping.
+    dirView med = viewFor (if med == "water" then Output else Input) synDB
     -- Located CFs reached two ways: by the matched flow's synonym GROUP — a CF
     -- whose name is bridged to the flow (withdrawal @"river water"@ → @"Water,
     -- river"@) — and by the CF's own NAME — a CF whose name equals the flow's
@@ -748,10 +797,11 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     byGroup =
         M.fromListWith
             preferHigherCF
-            [ ((grp, flowMedium flow, loc), cf)
+            [ ((grp, med, loc), cf)
             | (cf, Just (flow, _)) <- mappings
             , Just loc <- [mcfConsumerLocation cf]
-            , Just grp <- [lookupSynonymGroup synDB (bfName flow)]
+            , let med = flowMedium flow
+            , Just grp <- [lookupSynonymGroup (dirView med) (bfName flow)]
             ]
     byName :: M.Map (Text, Text, Text) MethodCF
     byName =
@@ -776,7 +826,7 @@ projectRegionalResourceFlows synDB bioFlows mappings =
             , (base, Just loc) <- [extractLocationSuffix (bfName flow)]
             , Just cf <-
                 [ M.lookup (normalizeName base, med, loc) byName
-                    <|> (lookupSynonymGroup synDB base >>= \grp -> M.lookup (grp, med, loc) byGroup)
+                    <|> (lookupSynonymGroup (dirView med) base >>= \grp -> M.lookup (grp, med, loc) byGroup)
                 ]
             ]
 

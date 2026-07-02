@@ -157,6 +157,7 @@ import Method.Mapping (
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
+    directionExcludedCFs,
     expandProxyEdges,
     expandSynonymMappings,
     fillBroadcastVector,
@@ -170,7 +171,7 @@ import Method.Types (
     CompartmentMap,
     EnergyDensityMap,
     Method (..),
-    MethodCF,
+    MethodCF (..),
     MethodCollection (..),
     ScoringSet (..),
     buildCompartmentMapFromCSV,
@@ -185,7 +186,7 @@ import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
-import SynonymDB (SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, synonymCount, uncoveredUnitSuffixes)
+import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
     AttributeFallback (..),
@@ -647,6 +648,22 @@ buildMethodTablesFor ::
     DatabaseManager -> Text -> Text -> Database -> M.Map Text [Text] -> Method -> IO MethodTables
 buildMethodTablesFor manager dbName collection db hier method = do
     expanded <- effectiveMethodMappings manager dbName collection db method
+    -- A CF matchable through the union synonym tables but not through its own
+    -- direction's view was excluded by the direction restriction alone — the
+    -- usual cause is a method whose parser defaulted the direction (no
+    -- metadata). Warn so the loss is distinguishable from a genuinely
+    -- uncharacterized flow.
+    let dirExcluded =
+            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (dbFlowsByName db) expanded
+    unless (null dirExcluded) $
+        reportProgress Warning $
+            "[LCIA "
+                <> T.unpack (methodName method)
+                <> "] "
+                <> show (length dirExcluded)
+                <> " CF(s) match a synonym bridge only outside their flow direction "
+                <> "(direction metadata may be missing from the method). Samples: "
+                <> show (take 3 (map mcfFlowName dirExcluded))
     cmap <- getMergedCompartmentMap manager
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager
@@ -987,6 +1004,7 @@ initDatabaseManager config noCache configPath = do
         Left err -> reportError $ "Dependency resolution failed: " <> T.unpack err
         Right loadOrder -> do
             synonymDB <- getMergedSynonymDB manager
+            warnReopenedBridges synonymDB
             unitConfig <- getMergedUnitConfig manager
             let dbsToLoad = [configMap M.! name | name <- loadOrder, M.member name configMap]
                 levels = computeDepLevels configMap loadOrder
@@ -1632,6 +1650,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                     currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
                     let otherIndexes = M.elems currentIndexedDbs
                     synonymDB <- getMergedSynonymDB manager
+                    warnReopenedBridges synonymDB
                     unitConfig <- getMergedUnitConfig manager
                     let transforms = prTransforms (dmPlugins manager)
                     eitherResult <-
@@ -3090,6 +3109,30 @@ getMergedSynonymDB manager = do
         if M.null loaded
             then emptySynonymDB
             else mergeSynonymDBs (M.elems loaded)
+
+{- | Surface one-way synonym bridges whose direction constraint is void in the
+(merged) set — re-linked in the opposite view by an untyped transitive chain or
+a contradictory row ('reopenedBridges'). 'demoteDuplicates' only drops the exact
+duplicate pair, so this residue would otherwise silently widen a curated
+one-way bridge back to both directions. Called where the merged set is about to
+drive a database load, not on the request-path getters, so it fires once per
+load rather than per query.
+-}
+warnReopenedBridges :: SynonymDB -> IO ()
+warnReopenedBridges synDB =
+    forM_ (reopenedBridges synDB) $ \e ->
+        reportProgress Warning $
+            "Flow synonyms: one-way bridge "
+                <> show (seA e)
+                <> " = "
+                <> show (seB e)
+                <> " ("
+                <> dirLabel (seDir e)
+                <> ") is re-linked in the opposite direction's view by other rows; its direction restriction is void"
+  where
+    dirLabel BridgeBoth = "both"
+    dirLabel BridgeInput = "input"
+    dirLabel BridgeOutput = "output"
 
 -- | Get the merged CompartmentMap from all loaded compartment mappings.
 getMergedCompartmentMap :: DatabaseManager -> IO CompartmentMap

@@ -72,7 +72,7 @@ data FlowDirection
       Input
     | -- | Emission to environment (e.g., CO2, pollutants)
       Output
-    deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
+    deriving (Eq, Ord, Show, Generic, NFData, ToJSON, FromJSON)
 
 {- | Compartment triple: (medium, subcompartment, qualifier)
 medium: "air", "water", "soil", "natural resource"

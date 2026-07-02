@@ -12,7 +12,7 @@ import Test.Hspec
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..))
-import SynonymDB (buildFromPairs, emptySynonymDB)
+import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
@@ -193,6 +193,48 @@ spec = do
             let synDB = buildFromPairs [("CO2", "Carbon dioxide")]
             fmap bfId (findFlowBySynonymComp synDB M.empty "CO2" Nothing)
                 `shouldBe` Nothing
+
+    describe "expandSynonymMappings direction" $ do
+        -- The water withdrawal bridge "freshwater" → resource flow applies to an
+        -- INPUT (withdrawal) CF only. An OUTPUT (release) CF named "freshwater"
+        -- must not fan out onto the resource flow through it — else a release
+        -- inherits a withdrawal scarcity factor (wrong sign/magnitude).
+        let synDB = buildFromEdges [SynEdge "freshwater" "Water, unspecified natural origin" BridgeInput]
+            resourceFlow fid = mkFlow fid "Water, unspecified natural origin" "natural resource" Nothing
+            flowsByName fid = M.singleton "water unspecified natural origin" [resourceFlow fid]
+            inputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Input}
+            outputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Output}
+            fannedIds cf fid =
+                [bfId flow | (_, Just (flow, _)) <- drop 1 (expandSynonymMappings synDB (flowsByName fid) [(cf, Nothing)])]
+
+        it "fans an INPUT CF out onto the withdrawal resource flow" $ do
+            fid <- nextRandom
+            fannedIds inputCF fid `shouldBe` [fid]
+
+        it "does NOT fan an OUTPUT CF through the input-only bridge" $ do
+            fid <- nextRandom
+            fannedIds outputCF fid `shouldBe` []
+
+    describe "directionExcludedCFs" $ do
+        -- An unmapped CF whose name matches through the UNION synonym tables but
+        -- not through its own direction's view was excluded by the direction
+        -- restriction alone — e.g. a parser defaulted the direction when the
+        -- method carried none. The loader surfaces these so the loss is
+        -- distinguishable from a genuinely uncharacterized flow.
+        let synDB = buildFromEdges [SynEdge "freshwater" "Water, unspecified natural origin" BridgeInput]
+            flowsByName fid = M.singleton "water unspecified natural origin" [mkFlow fid "Water, unspecified natural origin" "natural resource" Nothing]
+            inputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Input}
+            outputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Output}
+
+        it "flags an unmapped CF whose synonym match exists only outside its direction view" $ do
+            fid <- nextRandom
+            map mcfFlowName (directionExcludedCFs synDB (flowsByName fid) [(outputCF, Nothing)])
+                `shouldBe` ["freshwater"]
+
+        it "does not flag a CF its own direction view still matches, nor a genuinely unmatched one" $ do
+            fid <- nextRandom
+            directionExcludedCFs synDB (flowsByName fid) [(inputCF, Nothing)] `shouldSatisfy` null
+            directionExcludedCFs synDB (flowsByName fid) [(mkCF "unrelated" Nothing 1.0, Nothing)] `shouldSatisfy` null
 
     describe "computeMappingStats" $ do
         it "counts totals and strategies correctly" $ do
