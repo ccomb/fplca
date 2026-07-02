@@ -1017,7 +1017,7 @@ spec = do
             (activities, _, _, _, _) <-
                 parseProductsCSV
                     "Horticultural fleece, at plant (WFLDB)/m2/CH"
-                    "Horticultural fleece, at plant (WFLDB)/m2/GLO U;m2;1;100;not defined;material;"
+                    ["Horticultural fleece, at plant (WFLDB)/m2/GLO U;m2;1;100;not defined;material;"]
             length activities `shouldBe` 1
             let act = head activities
             activityLocation act `shouldBe` "CH"
@@ -1115,6 +1115,34 @@ spec = do
             let total = sum perActivity
             abs (total - 1.0) `shouldSatisfy` (< 0.001)
 
+        it "shares one activityUUID across coproducts when Process name is empty" $ do
+            -- Agribalyse 4.0 fishing blocks (e.g. yellowfin tuna) declare two
+            -- coproducts but leave "Process name" blank; both must land on the
+            -- reference product's activity, not split into two activities.
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    ""
+                    [ "Tuna, main product {FR} U;kg;1;91;not defined;material;"
+                    , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                    ]
+            length activities `shouldBe` 2
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
+            S.fromList (map activityName activities)
+                `shouldBe` S.singleton "Tuna, main product {FR} U"
+
+        it "does not blank the whole block when the reference product name is empty" $ do
+            -- Malformed export: name-less block whose first Products row has an
+            -- empty name cell. The blank must stay confined to that row; other
+            -- coproducts keep their own name instead of inheriting "".
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    ""
+                    [ ";kg;1;91;not defined;material;"
+                    , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                    ]
+            S.fromList (map activityName activities)
+                `shouldBe` S.fromList ["", "Tuna by-products {FR} U"]
+
     describe "SimaPro Process name fallback" $ do
         it "falls back to product name when Process name field is empty" $ do
             (activities, _, _, _, _) <- parseNoProcessNameCSV
@@ -1162,9 +1190,9 @@ parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlo
 parseSectionCSV sectionLines =
     parseNamedCSV "Test process" sectionLines
 
--- | Build a minimal process CSV with a custom Process name and Products row.
-parseProductsCSV :: BS.ByteString -> BS.ByteString -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
-parseProductsCSV procName productsRow =
+-- | Build a minimal process CSV with a custom Process name and Products rows.
+parseProductsCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseProductsCSV procName productsRows =
     withSystemTempFile "products-test.csv" $ \path handle -> do
         let content =
                 BS.intercalate "\r\n" $
@@ -1184,10 +1212,11 @@ parseProductsCSV procName productsRow =
                     , "Unit process"
                     , ""
                     , "Products"
-                    , productsRow
-                    , ""
-                    , "End"
                     ]
+                        ++ productsRows
+                        ++ [ ""
+                           , "End"
+                           ]
         BS.hPut handle content
         hClose handle
         parseSimaProCSV defaultUnitConfig path
