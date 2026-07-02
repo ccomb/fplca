@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Propose curated flow-name bridges for data/flows.csv from the auto-candidate set.
+
+The LCIA matcher bridges a database's biosphere-flow name to a method's CF-flow
+name via the curated registry (``data/flows.csv``). Auto-extraction (ILCD
+othernames / PubChem) is kept only as an OFFLINE candidate generator -- it is
+never injected into runtime matching, because its transitive closure fuses
+unrelated substances (junk hubs). This tool turns that candidate set into a
+short, human-reviewable list of *legitimate* additions.
+
+A naive "auto-candidates minus registry" diff is useless: the candidate set has
+~130k pairs, almost all junk. Instead we diff two engine flow-mappings -- the
+curated-only state vs. curated+candidates -- and keep only the pairs that
+actually change coverage: a database flow that gains a CF *only* because a
+candidate bridged it to a real CF-flow name. That is the ~100-item set worth a
+human's time.
+
+Each surfaced pair is then classified against the same rules the Haskell
+``RegistryLintSpec`` enforces, so a proposed row that survives will pass CI:
+
+* wrong-origin -- source and target disagree on carbon origin
+  (fossil / biogenic / land-use-change), checked pairwise and again on the
+  classes merged with the registry (an unqualified name can transitively fuse
+  two families). REJECT: methods split these on purpose.
+* collision   -- source and target both carry their OWN distinct CF in the same
+  compartment of some method (e.g. Dinitrogen tetroxide vs Nitrogen dioxide:
+  ecotox 3.84 vs 11.96). A single global synonym would collapse them via
+  first-match-wins. REJECT.
+* multi-target -- the candidate layer bridged the source to several DISTINCT
+  CF-flow names: that ambiguity is the junk-hub signal itself. REJECT.
+* oversize    -- adding the pair grows an equivalence class past the lint bound.
+  REJECT: an over-connected bridge is the junk-hub failure mode.
+* ok          -- a genuine name variant (IUPAC/common, spelling, typo, trade
+  name). PROPOSE, emitted as a ready-to-append flows.csv row.
+
+Two subcommands:
+
+    # 1. dump a database's per-method flow-mapping (run once per engine state)
+    scripts/propose_flow_bridges.py dump \\
+        --engine http://127.0.0.1:8095/api/v1 --database agribalyse-3-2 \\
+        --out fm_curated.json
+    # ...restart the engine with the candidate synonyms active, then:
+    scripts/propose_flow_bridges.py dump \\
+        --engine http://127.0.0.1:8095/api/v1 --database agribalyse-3-2 \\
+        --out fm_candidates.json
+
+    # 2. classify the difference into a review report + a flows.csv patch
+    scripts/propose_flow_bridges.py propose \\
+        --curated fm_curated.json --candidates fm_candidates.json \\
+        --registry data/flows.csv --out-patch proposed_rows.csv
+
+A maintainer reviews the report, drops anything the chemistry doesn't justify,
+appends the accepted rows to data/flows.csv, and commits (bump data/VERSION).
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import io
+import json
+import sys
+import urllib.parse
+import urllib.request
+from collections import defaultdict
+
+# Mirror of RegistryLintSpec.maxClassSize -- keep in sync with the Haskell lint.
+MAX_CLASS_SIZE = 12
+LULUC_PHRASES = ("land transformation", "land use change", "peat oxidation", "soil or biomass stock")
+
+
+# --------------------------------------------------------------------------- #
+# pure helpers (mirror SynonymDB.normalizeName / RegistryLintSpec closely)     #
+# --------------------------------------------------------------------------- #
+_PUNCT = str.maketrans("", "", ",()'\"")
+
+
+def normalize(name: str) -> str:
+    """Single-pass mirror of SynonymDB.normalizeName -- the key the lint builds
+    its equivalence classes on, so class sizes and registry membership computed
+    here agree with CI: lowercase, collapse whitespace, strip the " in ground"
+    suffix and SimaPro unit suffixes, drop punctuation, collapse again."""
+    t = " ".join(name.strip().lower().split())
+    for suffix in (" in ground", ", in ground", "/sm3", "/m3", "/kg"):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)]
+    return " ".join(t.translate(_PUNCT).split())
+
+
+def origin_families(name: str) -> frozenset[str]:
+    """Carbon-origin qualifiers a name declares (see RegistryLintSpec.originQualifiers)."""
+    s = name.lower()
+    fam = set()
+    if "biogenic" in s or "non-fossil" in s:
+        fam.add("biogenic")
+    if "fossil" in s and "non-fossil" not in s:
+        fam.add("fossil")
+    if any(p in s for p in LULUC_PHRASES):
+        fam.add("luluc")
+    return frozenset(fam)
+
+
+def connected_components(edges: list[tuple[str, str]]) -> list[set[str]]:
+    """Union-find closure over normalized name pairs -> equivalence classes."""
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    for a, b in edges:
+        parent[find(a)] = find(b)
+    groups: dict[str, set[str]] = defaultdict(set)
+    for n in parent:
+        groups[find(n)].add(n)
+    return list(groups.values())
+
+
+# --------------------------------------------------------------------------- #
+# dump subcommand                                                              #
+# --------------------------------------------------------------------------- #
+def _get(url: str):
+    with urllib.request.urlopen(url, timeout=600) as r:
+        return json.load(r)
+
+
+def dump(engine: str, database: str, out: str) -> None:
+    methods = _get(f"{engine}/methods")
+    print(f"{len(methods)} sub-methods", file=sys.stderr)
+    result = {}
+    for m in methods:  # key by method UUID: a category name can repeat across collections
+        fm = _get(f"{engine}/db/{database}/method/{urllib.parse.quote(m['id'])}/flow-mapping")
+        flows = {
+            e["flowId"]: {"n": e["flowName"], "cat": e["flowCategory"], "cf": e["cfValue"], "cfn": e.get("cfFlowName")}
+            for e in fm.get("flows", [])
+            if e.get("cfValue") is not None
+        }
+        result[m["id"]] = {"name": m["name"], "coll": m["collection"], "flows": flows}
+        print(f"  [{m['collection']}] {m['name']}: {fm.get('matchedFlows')}/{fm.get('totalFlows')}", file=sys.stderr)
+    with open(out, "w") as fh:
+        json.dump(result, fh)
+    print(f"wrote {out}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# propose subcommand                                                           #
+# --------------------------------------------------------------------------- #
+def load_registry_edges(path: str) -> list[tuple[str, str]]:
+    edges = []
+    with open(path, newline="") as fh:
+        rd = csv.reader(fh)
+        next(rd, None)  # header
+        for row in rd:
+            if len(row) >= 2 and row[0] and row[1]:
+                edges.append((normalize(row[0]), normalize(row[1])))
+    return edges
+
+
+def candidate_only_bridges(curated: dict, candidates: dict) -> dict:
+    """flow-name -> aggregated evidence, for flows matched only under candidates."""
+    by_name: dict[str, dict] = defaultdict(
+        lambda: {"cfn": set(), "methods": set(), "maxcf": 0.0}
+    )
+    for mid, cand in candidates.items():  # a curated-only method cannot add coverage
+        cur_f = curated.get(mid, {}).get("flows", {})
+        for fid, e in cand.get("flows", {}).items():
+            if fid in cur_f:
+                continue  # already characterized without the candidate layer
+            rec = by_name[e["n"]]
+            if e.get("cfn"):
+                rec["cfn"].add(e["cfn"])
+            rec["methods"].add(mid)  # by UUID: a category name repeats across collections
+            rec["maxcf"] = max(rec["maxcf"], abs(e["cf"]))
+    return by_name
+
+
+def method_name_cfs(dump_json: dict) -> dict:
+    """(methodId -> flow name -> compartment -> CF set), to spot distinct-CF collisions.
+
+    Nested by compartment: one substance name carries different CFs per
+    compartment (metals to air vs water in ecotox), so only same-compartment
+    values are comparable -- a flat name->cf dict would compare whichever
+    compartment representative happened to be written last.
+    """
+    out: dict[str, dict] = {}
+    for mid, m in dump_json.items():
+        d: dict[str, dict[str, set[float]]] = {}
+        for e in m["flows"].values():
+            d.setdefault(normalize(e["n"]), {}).setdefault(e.get("cat", ""), set()).add(e["cf"])
+        out[mid] = d
+    return out
+
+
+def cfs_differ(a: set[float], b: set[float]) -> bool:
+    """True when two same-compartment CF sets disagree beyond FP noise."""
+
+    def covered(xs: set[float], ys: set[float]) -> bool:
+        return all(any(abs(x - y) <= 1e-9 for y in ys) for x in xs)
+
+    return not (covered(a, b) and covered(b, a))
+
+
+def classify(curated: dict, candidates: dict, registry_edges: list[tuple[str, str]]) -> list[dict]:
+    bridges = candidate_only_bridges(curated, candidates)
+    per_method = method_name_cfs(candidates)
+    # same class = already bridged (possibly transitively); both names merely
+    # appearing in UNRELATED registry rows is not a reason to skip -- such a
+    # pair would merge two classes and must reach review and the closure check
+    class_of = {n: i for i, cls in enumerate(connected_components(registry_edges)) for n in cls}
+
+    proposals = []
+    for name, ev in bridges.items():
+        src = normalize(name)
+        # one spelling per distinct normalized target; uppercase sorts first, so
+        # case variants of one name keep the capitalized spelling
+        spellings: dict[str, str] = {}
+        for t in sorted(ev["cfn"]):
+            spellings.setdefault(normalize(t), t)
+        target = next(iter(spellings.values()), None)
+        verdict, reason = "ok", ""
+
+        if not target:
+            verdict, reason = "reject", "no CF-flow name (non-synonym match, e.g. regional/UUID path)"
+        elif len(spellings) > 1:
+            verdict, reason = "reject", f"multi-target: bridged to {sorted(spellings)} (junk-hub ambiguity)"
+        elif normalize(target) == src:
+            verdict, reason = "skip", "already identical after normalization"
+        elif src in class_of and class_of.get(normalize(target)) == class_of[src]:
+            verdict, reason = "skip", "already bridged in the registry (same equivalence class)"
+        else:
+            fs, ft = origin_families(name), origin_families(target)
+            tgt = normalize(target)
+            # collision: src and tgt both carry their OWN distinct CF in the same
+            # compartment of some method (cross-compartment CFs are not comparable)
+            collide = any(
+                cat in d.get(tgt, {}) and cfs_differ(cfs, d[tgt][cat])
+                for d in per_method.values()
+                for cat, cfs in d.get(src, {}).items()
+            )
+            if fs and ft and fs != ft:
+                verdict, reason = "reject", f"wrong-origin: {sorted(fs)} vs {sorted(ft)}"
+            elif collide:
+                verdict, reason = "reject", "collision: source and target carry distinct CFs (would corrupt via first-match-wins)"
+            elif ev["maxcf"] == 0:
+                # a genuine name variant never needs a synonym to score 0; a zero-CF
+                # target is almost always a biogenic / deliberately-excluded flow
+                # (e.g. bare "Carbon dioxide" -> "Carbon dioxide, biogenic"), which
+                # the origin check cannot see because the source carries no qualifier.
+                verdict, reason = "reject", "zero-CF target (would assert no impact; verify it is not a biogenic/excluded flow)"
+
+        proposals.append(
+            {
+                "name1": name,
+                "name2": target or "",
+                "verdict": verdict,
+                "reason": reason,
+                "methods": len(ev["methods"]),
+                "maxcf": ev["maxcf"],
+            }
+        )
+
+    # class-level rules on the accepted set, closed together with the registry:
+    # size and origin fusion only exist on the merged classes (an unqualified
+    # hub -- bare "Carbon dioxide" -- can transitively join a fossil class to a
+    # luluc name without any pair failing the pairwise check above). One
+    # conservative pass: every accepted pair touching a bad class is rejected
+    # together (a kept subset might fit, but rescuing one is the reviewer's
+    # call -- the pairs stay visible in the REJECTED report).
+    accepted = [p for p in proposals if p["verdict"] == "ok"]
+    proposed_edges = [(normalize(p["name1"]), normalize(p["name2"])) for p in accepted]
+    for cls in connected_components(registry_edges + proposed_edges):
+        fams = sorted(set().union(*map(origin_families, cls)))
+        if len(cls) > MAX_CLASS_SIZE:
+            problem = f"oversize: would join a class of {len(cls)} (>{MAX_CLASS_SIZE})"
+        elif len(fams) > 1:
+            problem = f"origin fusion: class would mix {fams}"
+        else:
+            continue
+        for p in accepted:
+            if normalize(p["name1"]) in cls or normalize(p["name2"]) in cls:
+                p["verdict"], p["reason"] = "reject", problem
+    return sorted(proposals, key=lambda p: (-p["methods"], -p["maxcf"]))
+
+
+def emit_patch(accepted: list[dict]) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n", quoting=csv.QUOTE_MINIMAL)
+    for p in accepted:
+        w.writerow([p["name1"], p["name2"]])
+    return buf.getvalue()
+
+
+def propose(curated_path: str, candidates_path: str, registry: str, out_patch: str | None) -> None:
+    curated = json.load(open(curated_path))
+    candidates = json.load(open(candidates_path))
+    reg_edges = load_registry_edges(registry)
+    proposals = classify(curated, candidates, reg_edges)
+
+    by_verdict = defaultdict(list)
+    for p in proposals:
+        by_verdict[p["verdict"]].append(p)
+
+    print(f"candidate-only flows: {len(proposals)}")
+    for v in ("ok", "reject", "skip"):
+        print(f"  {v:7} {len(by_verdict[v])}")
+    print("\n=== PROPOSED (review, then append to data/flows.csv) ===")
+    for p in by_verdict["ok"]:
+        print(f"  {p['methods']:2d}m maxcf={p['maxcf']:<10.3g} {p['name1'][:40]:40} <- {p['name2']}")
+    print("\n=== REJECTED (kept out on purpose) ===")
+    for p in by_verdict["reject"]:
+        print(f"  {p['name1'][:40]:40} <- {p['name2'][:30]:30} : {p['reason']}")
+
+    if out_patch:
+        with open(out_patch, "w") as fh:
+            fh.write(emit_patch(by_verdict["ok"]))
+        print(f"\nwrote {len(by_verdict['ok'])} rows to {out_patch}")
+
+
+# --------------------------------------------------------------------------- #
+# selftest: every rejection/skip rule + the legit passes, on synthetic dumps    #
+# --------------------------------------------------------------------------- #
+def selftest() -> None:
+    # source flows with no curated CF; the candidate layer bridges them.
+    curated = {"M1": {"name": "tox", "coll": "c", "flows": {}}}
+    candidates = {
+        "M1": {
+            "name": "tox",
+            "coll": "c",
+            "flows": {
+                "f1": {"n": "Tetrachloroethylene", "cat": "air", "cf": 1.0, "cfn": "tetrachloroethene"},  # legit
+                "f2": {"n": "Carbon dioxide, fossil", "cat": "air", "cf": 1.0, "cfn": "Carbon dioxide, biogenic"},  # wrong-origin
+                "f3": {"n": "Dinitrogen tetroxide", "cat": "air", "cf": 3.0, "cfn": "Nitrogen dioxide"},  # collision with f4
+                "f4": {"n": "Nitrogen dioxide", "cat": "air", "cf": 9.0, "cfn": "Nitrogen dioxide"},  # native, distinct cf
+                "f5": {"n": "Chromium VI", "cat": "water", "cf": 2.0, "cfn": "Chromium hexavalent"},  # multi-target (with M2)
+                "f6": {"n": "Carbon monoxide", "cat": "air", "cf": 2.0, "cfn": "Carbon monoxide, land transformation"},  # unqualified hub fuses fossil+luluc
+                "f7": {"n": "Zineb", "cat": "air", "cf": 5.0, "cfn": "Zinc organic"},  # tgt CF sits in ANOTHER compartment: no collision
+                "f8": {"n": "Zinc organic", "cat": "water", "cf": 3.0, "cfn": "Zinc organic"},
+                "f9": {"n": "Methylene chloride", "cat": "air", "cf": 1.0, "cfn": "Dichloromethane"},  # same registry class already
+            },
+        },
+        "M2": {
+            "name": "tox2",
+            "coll": "c",
+            "flows": {
+                "f5": {"n": "Chromium VI", "cat": "water", "cf": 4.0, "cfn": "Dichromate"},
+            },
+        },
+    }
+    registry = [("carbon monoxide", "carbon monoxide fossil"), ("methylene chloride", "dichloromethane")]
+    got = {p["name1"]: (p["verdict"], p["reason"]) for p in classify(curated, candidates, registry)}
+    expect = {
+        "Tetrachloroethylene": ("ok", ""),
+        "Carbon dioxide, fossil": ("reject", "wrong-origin"),
+        "Dinitrogen tetroxide": ("reject", "collision"),
+        "Chromium VI": ("reject", "multi-target"),
+        "Carbon monoxide": ("reject", "origin fusion"),
+        "Zineb": ("ok", ""),
+        "Methylene chloride": ("skip", "same equivalence class"),
+    }
+    for k, (verdict, needle) in expect.items():
+        got_verdict, got_reason = got.get(k, (None, ""))
+        assert got_verdict == verdict, f"selftest FAIL: {k} -> {got_verdict} ({got_reason}), expected {verdict}"
+        assert needle in got_reason, f"selftest FAIL: {k} reason {got_reason!r} lacks {needle!r}"
+    assert normalize("Zinc, in ground") == "zinc", normalize("Zinc, in ground")
+    assert normalize("Gas, natural/m3") == "gas natural", normalize("Gas, natural/m3")
+    print("selftest OK:", {k: got[k][0] for k in expect})
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    d = sub.add_parser("dump", help="dump a database's per-method flow-mapping from a running engine")
+    d.add_argument("--engine", required=True, help="engine base URL, e.g. http://127.0.0.1:8095/api/v1")
+    d.add_argument("--database", required=True)
+    d.add_argument("--out", required=True)
+
+    p = sub.add_parser("propose", help="classify curated-vs-candidates into a review report + patch")
+    p.add_argument("--curated", required=True, help="flow-mapping dump, curated-only engine")
+    p.add_argument("--candidates", required=True, help="flow-mapping dump, curated+candidate engine")
+    p.add_argument("--registry", default="data/flows.csv")
+    p.add_argument("--out-patch", help="write accepted rows here (ready to append to flows.csv)")
+
+    sub.add_parser("selftest", help="run the built-in classifier checks")
+
+    a = ap.parse_args()
+    if a.cmd == "dump":
+        dump(a.engine, a.database, a.out)
+    elif a.cmd == "propose":
+        propose(a.curated, a.candidates, a.registry, a.out_patch)
+    elif a.cmd == "selftest":
+        selftest()
+
+
+if __name__ == "__main__":
+    main()

@@ -14,6 +14,7 @@ cbits/*.o
 *.txt
 /scripts/*
 !/scripts/build_chem_synonyms.py
+!/scripts/propose_flow_bridges.py
 node_modules/
 
 # Generated source
