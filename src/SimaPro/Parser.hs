@@ -889,14 +889,17 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
             effUnitName = unitName productUnit
             allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
             allocFraction = allocPercent / 100.0
-            (_, locFromProduct) = extractLocation (prName prod)
+            (cleanProductName, locFromProduct) = extractLocation (prName prod)
             -- Activity name = Process name when present, otherwise the reference
             -- product's name (with its location) — never the coproduct's own,
             -- so all coproducts of a name-less block share one activityUUID.
-            (effectiveActivityName, effectiveLoc) =
-                if T.null processNameTrimmed
-                    then (fallbackName, if T.null location then fallbackLoc else location)
-                    else (processNameTrimmed, if T.null location then locFromProduct else location)
+            -- A blank reference name (malformed row) must not blank the whole
+            -- block: degrade per-product, as before the shared fallback.
+            (effectiveActivityName, locFallback)
+                | not (T.null processNameTrimmed) = (processNameTrimmed, locFromProduct)
+                | not (T.null fallbackName) = (fallbackName, fallbackLoc)
+                | otherwise = (cleanProductName, locFromProduct)
+            effectiveLoc = if T.null location then locFallback else location
             allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
             activity =
                 Activity

@@ -1130,6 +1130,19 @@ spec = do
             S.fromList (map activityName activities)
                 `shouldBe` S.singleton "Tuna, main product {FR} U"
 
+        it "does not blank the whole block when the reference product name is empty" $ do
+            -- Malformed export: name-less block whose first Products row has an
+            -- empty name cell. The blank must stay confined to that row; other
+            -- coproducts keep their own name instead of inheriting "".
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    ""
+                    [ ";kg;1;91;not defined;material;"
+                    , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                    ]
+            S.fromList (map activityName activities)
+                `shouldBe` S.fromList ["", "Tuna by-products {FR} U"]
+
     describe "SimaPro Process name fallback" $ do
         it "falls back to product name when Process name field is empty" $ do
             (activities, _, _, _, _) <- parseNoProcessNameCSV
