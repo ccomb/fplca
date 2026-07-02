@@ -24,6 +24,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Matrix (accumulateDepDemands, depDemandsToVector)
 import Method.Mapping (MethodTables (..), inventoryContributions)
+import Method.Types (CFFamily (..))
 import qualified Method.Mapping as Mapping
 import SharedSolver (
     computeInventoryMatrixBatchCached,
@@ -179,7 +180,7 @@ spec = do
                     , mtCasCF = M.empty
                     , mtRegionalCasCF = M.empty
                     , mtRegionalizedCF = M.empty
-                    , mtMethodUnit = ""
+                    , mtCFFamily = OtherCFFamily
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
                     , mtBroadcast = M.empty

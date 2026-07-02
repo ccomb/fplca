@@ -9,7 +9,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, lookupCFForFlow)
-import Method.Types (Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), parseEnergyDensitySuffix)
+import Method.Types (CFFamily (..), Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), parseEnergyDensitySuffix)
 import SynonymDB (normalizeName)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
@@ -47,7 +47,7 @@ mkFlow i name =
 -- engine knows coal is an energy resource (an energy_density entry).
 coalTables :: EnergyDensityMap -> MethodTables
 coalTables eds =
-    buildMethodTables "" M.empty eds [(resourceCF "Coal, hard" 1.0, Just (mkFlow 1 "Coal, hard", ByName))]
+    buildMethodTables OtherCFFamily M.empty eds [(resourceCF "Coal, hard" 1.0, Just (mkFlow 1 "Coal, hard", ByName))]
 
 coalDensity :: EnergyDensityMap
 coalDensity = M.singleton (normalizeName "Coal, hard") (EnergyDensity 18.01 "MJ" "kg")
@@ -57,7 +57,7 @@ coalDensity = M.singleton (normalizeName "Coal, hard") (EnergyDensity 18.01 "MJ"
 disagreeingCoalTables :: MethodTables
 disagreeingCoalTables =
     buildMethodTables
-        ""
+        OtherCFFamily
         M.empty
         ( M.fromList
             [ (normalizeName "Coal, hard", EnergyDensity 18 "MJ" "kg")

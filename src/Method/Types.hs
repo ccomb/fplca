@@ -16,6 +16,8 @@ module Method.Types (
     Compartment (..),
     Medium (..),
     Subcompartment (..),
+    CFFamily (..),
+    cfFamily,
 
     -- * Method Collection (with normalization/weighting)
     MethodCollection (..),
@@ -342,6 +344,27 @@ normalizeCompartment cmap (Compartment med sub qual) =
 -- | Number of entries in the compartment map.
 compartmentMapSize :: CompartmentMap -> Int
 compartmentMapSize = M.size
+
+{- | The CF family a method's result unit implies, for read-path gating.
+
+USEtox toxicity methods (ecotoxicity in CTUe, human toxicity in CTUh) model a
+surface-freshwater fate only, so their medium-level CFs must not reach a
+groundwater emission; every other family (e.g. nutrients in kg P eq) keeps
+characterizing groundwater, since phosphate migrates to surface water.
+Classified once from 'methodUnit' — the individual CF units can't carry the
+distinction (the SimaPro-adapted collection stores every CF unit as the flow
+unit, @"kg"@).
+-}
+data CFFamily = USEtoxFamily | OtherCFFamily
+    deriving (Eq, Show, Generic)
+
+instance NFData CFFamily
+
+-- | Classify a method's result unit ('methodUnit') into its 'CFFamily'.
+cfFamily :: Text -> CFFamily
+cfFamily u
+    | T.toLower (T.strip u) `elem` map T.pack ["ctue", "ctuh"] = USEtoxFamily
+    | otherwise = OtherCFFamily
 
 {- | Energy content of a flow, used to characterize an energy-denominated CF
 (e.g. a JRC fossil-resource CF in MJ) against an inventory flow given in mass or

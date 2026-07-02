@@ -19,6 +19,8 @@ module Method.Mapping (
     buildMapContext,
 
     -- * LCIA scoring
+    CFFamily (..),
+    cfFamily,
     MethodTables (..),
     MethodIndex (..),
     LCIAOutcome (..),
@@ -440,12 +442,10 @@ data MethodTables = MethodTables
     Empty for non-regionalized methods. When non-empty, callers should dispatch
     to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
     -}
-    , mtMethodUnit :: !Text
-    {- ^ The method's result unit (e.g. @"CTUe"@, @"kg P eq"@). Carries the CF
-    family the individual CF units can't: the SimaPro-adapted collection stores
-    every CF unit as the flow unit (@"kg"@), so the read-path subcompartment gate
-    keys off this — a USEtox toxicity method ('isUSEtoxUnit') doesn't characterize
-    groundwater, a nutrient method does.
+    , mtCFFamily :: !CFFamily
+    {- ^ The CF family the method's result unit implies (see 'cfFamily'). The
+    subcompartment gates key off this — a USEtox toxicity method
+    ('USEtoxFamily') doesn't characterize groundwater, a nutrient method does.
     -}
     , mtCompartmentMap :: !CompartmentMap
     {- ^ Compartment-normalization rules (e.g. @"Emissions to air" → "air"@).
@@ -936,8 +936,8 @@ strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 
-buildMethodTables :: Text -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
-buildMethodTables methodUnitText cmap energyDensities mappings =
+buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
+buildMethodTables methodFamily cmap energyDensities mappings =
     MethodTables
         { mtUuidCF =
             -- Non-regionalized rows only, like the name tables below: a
@@ -1096,7 +1096,7 @@ buildMethodTables methodUnitText cmap energyDensities mappings =
                 , cfSubcompMatchesFlow cf flow
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
-        , mtMethodUnit = methodUnitText
+        , mtCFFamily = methodFamily
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -1446,12 +1446,15 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
         Nothing -> Nothing
         Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cfTuple qty)
 
-{- | Back-compat wrapper: build tables on the fly. Prefer the cached path
-('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
+{- | Back-compat wrapper: build tables on the fly, with no compartment map,
+energy densities, or CF-family gating ('OtherCFFamily'). Prefer the cached path
+('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops, and
+'buildMethodTables' with the method's real 'cfFamily' wherever the method is
+in hand.
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables "" M.empty M.empty mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables OtherCFFamily M.empty M.empty mappings)
 
 {- | LCIA score with automatic dispatch.
 
@@ -1652,7 +1655,7 @@ lookupCascadeCF tables flowDB fid =
             -- the method's own long-term default are never gated.
             gate mcf
                 | isForeignMediumSub normSub = Nothing
-                | isDetachedSub normSub && isUSEtoxUnit (mtMethodUnit tables) = Nothing
+                | isDetachedSub normSub && mtCFFamily tables == USEtoxFamily = Nothing
                 | otherwise = mcf
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
@@ -1761,7 +1764,7 @@ emission a method's unspecified (medium-level) CF stands for, so that CF must
 not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
 
   * 'isDetachedSub' — emissions to groundwater (immediate or long-term). A
-    surface-freshwater-fate USEtox CF ('isUSEtoxUnit') does not apply (metals to
+    surface-freshwater-fate USEtox CF ('USEtoxFamily') does not apply (metals to
     groundwater are out of scope for ecotoxicity/human toxicity — EF leaves them
     uncharacterized), but a nutrient/other freshwater CF does (phosphate migrates
     to surface water, so the method characterizes it). Scoped to groundwater, NOT
@@ -1779,14 +1782,6 @@ isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
 
 isForeignMediumSub :: Subcompartment -> Bool
 isForeignMediumSub (Subcompartment s) = s `elem` ["ocean", "sea water", "sea"]
-
-{- | True for a USEtox toxicity CF (unit CTUe for ecotoxicity, CTUh for human
-toxicity). Their fate model is surface freshwater, so a groundwater emission is
-out of scope and must not borrow the surface CF — unlike a nutrient CF (kg P eq)
-which does characterize groundwater, since phosphate migrates to surface water.
--}
-isUSEtoxUnit :: Text -> Bool
-isUSEtoxUnit u = T.toLower (T.strip u) `elem` ["ctue", "ctuh"]
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is
