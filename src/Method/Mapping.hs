@@ -107,7 +107,7 @@ import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeToCanonical, normalizeUnit)
+import UnitConversion (UnitConfig, convertUnit, isKnownUnit, normalizeToCanonical, normalizeUnit, unitsCompatible)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -1807,16 +1807,6 @@ flowMediumSub cmap flow =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
      in (Medium (normalizeMedium normMedRaw), Subcompartment normSub)
 
-{- | True when @unit@ is dimensionally an energy unit (same exponent vector as
-the reference @mj@). Used to detect the energy-CF-vs-non-energy-flow case the
-energy-density bridge targets, without hardcoding any unit string.
--}
-isEnergyUnit :: UnitConfig -> Text -> Bool
-isEnergyUnit cfg unit =
-    case (lookupUnitDef cfg unit, lookupUnitDef cfg "MJ") of
-        (Just a, Just energyRef) -> udDimension a == udDimension energyRef
-        _ -> False
-
 {- | Flow→CF conversion factor for @qty@ units of flow, applying the
 energy-density bridge when it is needed and available.
 
@@ -1835,12 +1825,19 @@ to 'convertForCharacterization', so flows without a density are unchanged.
 energyAwareConversion :: UnitConfig -> Text -> Text -> Maybe EnergyDensity -> Double -> Double
 energyAwareConversion cfg flowUnit cfUnit mDensity qty =
     case mDensity of
-        Just (EnergyDensity ev energyUnit nativeUnit)
-            | isEnergyUnit cfg cfUnit
-            , not (isEnergyUnit cfg flowUnit) ->
+        -- The bridge fires when the CF is denominated in the density's target
+        -- unit (MJ for a calorific value, m³ for a mass density) and the flow is
+        -- a different dimension (mass). Generalizing the guard from "energy" to
+        -- "same dimension as the density unit" lets one mechanism serve both the
+        -- fossil energy CF (kg → MJ via calorific value) and the water-scarcity
+        -- CF (kg → m³ via density), which are the two cases where a per-physical-
+        -- quantity CF meets a mass inventory flow.
+        Just (EnergyDensity ev densityUnit nativeUnit)
+            | unitsCompatible cfg cfUnit densityUnit
+            , not (unitsCompatible cfg cfUnit flowUnit) ->
                 fromMaybe 0 $ do
                     qtyNative <- toNativeQty flowUnit nativeUnit
-                    factor <- convertUnit cfg energyUnit cfUnit ev
+                    factor <- convertUnit cfg densityUnit cfUnit ev
                     pure (qtyNative * factor)
         _ -> convertForCharacterization cfg flowUnit cfUnit qty
   where

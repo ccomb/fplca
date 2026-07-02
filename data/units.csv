@@ -225,3 +225,4 @@ kg no3-n/ha.year,mass/length/length,1.0e-4
 kg p2o5/ha,mass/length/length,1.0e-4
 kg po4/ha,mass/length/length,1.0e-4
 kg nh3-n,mass/length/length,1.0e-4
+m3-world equivalents,volume,1.0
