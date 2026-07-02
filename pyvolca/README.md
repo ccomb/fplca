@@ -1367,7 +1367,10 @@ One per-variable entry inside ``LCIABatchResult.scoring_indicators``.
 
 ``value`` is pre-multiplied by the scoring set's ``displayMultiplier``
 (configured in the scoring TOML) and expressed in the set's display unit.
-``category`` names the impact category the variable was resolved from.
+``category`` is the indicator's display name: the scoring set's
+``labels`` entry when one is configured (typically for computed
+variables), otherwise the impact category the variable was resolved
+from, or as a last resort the raw variable key.
 
 | Field | Type | Default |
 |-------|------|---------|

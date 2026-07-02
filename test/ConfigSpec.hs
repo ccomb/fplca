@@ -6,10 +6,13 @@ import Config (
     Config (..),
     MethodConfig (..),
     RefDataConfig (..),
+    ScoringSetConfig (..),
     applyDataDir,
     defaultConfig,
     redirectIntoDataDir,
  )
+import qualified Data.Map.Strict as M
+import Data.Text (Text)
 import qualified TOML
 import Test.Hspec
 
@@ -75,3 +78,38 @@ spec = do
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
+
+    describe "ScoringSetConfig labels" $ do
+        let decodeSet :: Text -> Either TOML.TOMLError ScoringSetConfig
+            decodeSet = TOML.decode
+
+        it "accepts a label on a computed variable" $ do
+            let toml =
+                    "name = \"ECS\"\n\
+                    \[computed]\n\
+                    \etf = \"2 * etfo + etfi\"\n\
+                    \[labels]\n\
+                    \etf = \"Ecotoxicity, freshwater\"\n"
+            fmap sscLabels (decodeSet toml)
+                `shouldBe` Right (M.singleton "etf" "Ecotoxicity, freshwater")
+
+        it "accepts a label on a primitive variable" $ do
+            let toml =
+                    "name = \"ECS\"\n\
+                    \[variables]\n\
+                    \cch = \"Climate change\"\n\
+                    \[labels]\n\
+                    \cch = \"Changement climatique\"\n"
+            fmap sscLabels (decodeSet toml)
+                `shouldBe` Right (M.singleton "cch" "Changement climatique")
+
+        it "rejects a label whose key matches no scoring variable" $ do
+            let toml =
+                    "name = \"ECS\"\n\
+                    \[computed]\n\
+                    \etf = \"2 * etfo + etfi\"\n\
+                    \[labels]\n\
+                    \eft = \"Ecotoxicity, freshwater\"\n"
+            case decodeSet toml of
+                Right _ -> expectationFailure "orphan label key must be rejected"
+                Left err -> show err `shouldContain` "eft"

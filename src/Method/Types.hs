@@ -201,6 +201,12 @@ data ScoringSet = ScoringSet
     -- ^ var → impact category name
     , ssComputed :: !(M.Map Text Text)
     -- ^ var → formula (e.g., "2 * etfo + etfi")
+    , ssLabels :: !(M.Map Text Text)
+    {- ^ var → display label, overriding the breakdown name. Needed for
+    computed variables, whose raw key would otherwise leak; on a primitive
+    variable it deliberately overrides the 'ssVariables' category name.
+    Keys are validated against declared variables when the config decodes.
+    -}
     , ssNormalization :: !(M.Map Text Double)
     -- ^ var → normalization factor (divisor)
     , ssWeighting :: !(M.Map Text Double)
