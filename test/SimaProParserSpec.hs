@@ -1017,7 +1017,7 @@ spec = do
             (activities, _, _, _, _) <-
                 parseProductsCSV
                     "Horticultural fleece, at plant (WFLDB)/m2/CH"
-                    "Horticultural fleece, at plant (WFLDB)/m2/GLO U;m2;1;100;not defined;material;"
+                    ["Horticultural fleece, at plant (WFLDB)/m2/GLO U;m2;1;100;not defined;material;"]
             length activities `shouldBe` 1
             let act = head activities
             activityLocation act `shouldBe` "CH"
@@ -1119,7 +1119,12 @@ spec = do
             -- Agribalyse 4.0 fishing blocks (e.g. yellowfin tuna) declare two
             -- coproducts but leave "Process name" blank; both must land on the
             -- reference product's activity, not split into two activities.
-            (activities, _, _, _, _) <- parseNoNameCoproductCSV
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    ""
+                    [ "Tuna, main product {FR} U;kg;1;91;not defined;material;"
+                    , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                    ]
             length activities `shouldBe` 2
             S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
             S.fromList (map activityName activities)
@@ -1172,9 +1177,9 @@ parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlo
 parseSectionCSV sectionLines =
     parseNamedCSV "Test process" sectionLines
 
--- | Build a minimal process CSV with a custom Process name and Products row.
-parseProductsCSV :: BS.ByteString -> BS.ByteString -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
-parseProductsCSV procName productsRow =
+-- | Build a minimal process CSV with a custom Process name and Products rows.
+parseProductsCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseProductsCSV procName productsRows =
     withSystemTempFile "products-test.csv" $ \path handle -> do
         let content =
                 BS.intercalate "\r\n" $
@@ -1194,10 +1199,11 @@ parseProductsCSV procName productsRow =
                     , "Unit process"
                     , ""
                     , "Products"
-                    , productsRow
-                    , ""
-                    , "End"
                     ]
+                        ++ productsRows
+                        ++ [ ""
+                           , "End"
+                           ]
         BS.hPut handle content
         hClose handle
         parseSimaProCSV defaultUnitConfig path
@@ -1368,48 +1374,6 @@ multiCoproductCSV =
 parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
-    hClose handle
-    parseSimaProCSV defaultUnitConfig path
-
-{- | Two-coproduct block with an empty Process name field (Agribalyse 4.0
-fishing pattern): both coproducts must inherit the reference (first) product's
-name and location so they share one activityUUID.
--}
-noNameCoproductCSV :: BS.ByteString
-noNameCoproductCSV =
-    BS.intercalate
-        "\r\n"
-        [ "{SimaPro 9.6.0.1}"
-        , "{CSV separator: semicolon}"
-        , "{Decimal separator: .}"
-        , ""
-        , "Process"
-        , ""
-        , "Category type"
-        , "material"
-        , ""
-        , "Process name"
-        , ""
-        , ""
-        , "Type"
-        , "Unit process"
-        , ""
-        , "Geography"
-        , "Unspecified"
-        , ""
-        , "Products"
-        , "Tuna, main product {FR} U;kg;1;91;not defined;material;"
-        , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
-        , ""
-        , "Materials/fuels"
-        , "Upstream feedstock;kg;1;Undefined;;;;;;"
-        , ""
-        , "End"
-        ]
-
-parseNoNameCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
-parseNoNameCoproductCSV = withSystemTempFile "no-name-coproduct.csv" $ \path handle -> do
-    BS.hPut handle noNameCoproductCSV
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
