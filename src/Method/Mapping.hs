@@ -1667,6 +1667,7 @@ lookupCascadeCF tables flowDB fid =
                 <|> gate (M.lookup (name, baseMed) (mtSubBlindCF tables))
                 <|> gate (regionBaseFallback flow baseMed normSub)
                 <|> energyResourceFallback flow baseMed normSub
+                <|> resourceBaseNameFallback flow baseMed normSub
 
     -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
     -- doesn't tag falls back to the base substance's CF: an unregionalized CF
@@ -1710,6 +1711,22 @@ lookupCascadeCF tables flowDB fid =
     resourceCF rname baseMed normSub =
         M.lookup (rname, baseMed, normSub) (mtExactCF tables)
             <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
+
+    -- An ecoinvent metal-ore resource flow ("Copper, 0.99% in sulfide, Cu 0.36%
+    -- …, in ground", "Gold, Au 7.1E-4%, in ore") carries no CAS and matches no CF
+    -- of its own, but its reference amount is the mass of the base element, so it
+    -- takes that element's resource CF. Without this the whole ore-grade family
+    -- scores zero and mineral/metal depletion silently under-counts (copper- and
+    -- gold-intensive products by 100×+). Resource medium only; base = the element
+    -- before the first comma. Self-scoping and last in the cascade: 'resourceCF'
+    -- returns Nothing for a non-metal resource the method doesn't characterize
+    -- ("Calcite, in ground"), so it only fires where the base element has a CF.
+    resourceBaseNameFallback flow baseMed@(Medium med) normSub
+        | med == "resource"
+        , (base, rest) <- T.breakOn "," (bfName flow)
+        , not (T.null rest) =
+            resourceCF (SR.NormName (normalizeName base)) baseMed normSub
+        | otherwise = Nothing
 
     firstWord = T.takeWhile (/= ' ') . T.strip
 
