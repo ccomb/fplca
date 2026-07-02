@@ -337,6 +337,7 @@ test-suite lca-tests
                      , optparse-applicative
                      , QuickCheck
                      , network
+                     , toml-reader
   build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010

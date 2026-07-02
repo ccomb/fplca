@@ -269,6 +269,11 @@ instance DecodeTOML ScoringSetConfig where
         sscWeighting <- fromMaybe M.empty <$> getFieldOpt "weighting"
         sscScores <- fromMaybe M.empty <$> getFieldOpt "scores"
         sscDisplayMultiplier <- getFieldOpt "displayMultiplier"
+        let orphanLabels = M.keysSet sscLabels S.\\ (M.keysSet sscComputed <> M.keysSet sscVariables)
+        unless (S.null orphanLabels) $
+            fail $
+                "labels: unknown scoring variable(s): "
+                    <> T.unpack (T.intercalate ", " (S.toList orphanLabels))
         pure ScoringSetConfig{..}
 
 instance DecodeTOML RefDataConfig where
