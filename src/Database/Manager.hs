@@ -2875,19 +2875,31 @@ and enriches CFs from ILCD flow XMLs when available.
 -}
 loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text (MethodCollection, M.Map UUID ILCDFlowInfo))
 loadMethodCollectionFromConfig mc = do
-    -- Resolve archives (ZIP → extracted directory). Single .json files (openLCA
-    -- JSON-LD ImpactCategory documents) are accepted directly without a wrapping
-    -- directory or archive.
+    -- Resolve archives (ZIP → extracted directory). Single .json (openLCA
+    -- JSON-LD ImpactCategory) and .csv (SimaPro method export) files are
+    -- accepted directly without a wrapping directory or archive.
     resolvedPath <- resolveDataPath (mcPath mc)
     isDir <- doesDirectoryExist resolvedPath
     isFile <- doesFileExist resolvedPath
-    let isSingleJson = isFile && map toLower (takeExtension resolvedPath) == ".json"
-    if not isDir && not isSingleJson
-        then return $ Left $ "Method path not found: " <> T.pack (mcPath mc)
+    let hasExt e = map toLower (takeExtension resolvedPath) == e
+        isSingleJson = isFile && hasExt ".json"
+        isSingleCsv = isFile && hasExt ".csv"
+    if not isDir && not isSingleJson && not isSingleCsv
+        then
+            return . Left $
+                if isFile
+                    then "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
+                    else "Method path not found: " <> T.pack (mcPath mc)
         else do
             (dir, xmlFiles, csvFiles, jsonFiles) <-
-                if isSingleJson
-                    then return (takeDirectory resolvedPath, [], [], [takeFileName resolvedPath])
+                if isSingleJson || isSingleCsv
+                    then
+                        return
+                            ( takeDirectory resolvedPath
+                            , []
+                            , [takeFileName resolvedPath | isSingleCsv]
+                            , [takeFileName resolvedPath | isSingleJson]
+                            )
                     else do
                         -- Find method directory (handles nested ILCD structures)
                         d <- findMethodDirectory resolvedPath

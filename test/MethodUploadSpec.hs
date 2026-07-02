@@ -10,6 +10,7 @@ module MethodUploadSpec (spec) where
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.Maybe (fromMaybe)
+import qualified Data.Text as T
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -129,3 +130,39 @@ spec = do
                         methodName (head methods) `shouldBe` "Test category"
                         fromMaybe "" (methodMethodology (head methods))
                             `shouldBe` "openLCA JSON-LD"
+
+    describe "loadMethodCollectionFromConfig on a bare file path" $ do
+        -- SimaPro exports a method as a single .csv; requiring users to wrap it
+        -- in a zip or directory is pure friction, so the loader takes it as-is.
+        it "loads a single SimaPro method .csv directly" $ do
+            loaded <- loadMethodCollectionFromConfig (bareConfig "test/data/simapro_method.csv")
+            case loaded of
+                Left err -> expectationFailure ("load failed: " ++ show err)
+                Right (collection, _) -> mcMethods collection `shouldSatisfy` (not . null)
+
+        it "reports an existing file of unsupported type as such, not as missing" $
+            withSystemTempDirectory "volca-method-load" $ \tmp -> do
+                let path = tmp </> "not-a-method.txt"
+                BL.writeFile path (BLC.pack "hello")
+                loaded <- loadMethodCollectionFromConfig (bareConfig path)
+                case loaded of
+                    Left err -> err `shouldSatisfy` T.isInfixOf "Unsupported method file type"
+                    Right _ -> expectationFailure "expected a Left for a .txt file"
+
+        it "still reports a missing path as not found" $ do
+            loaded <- loadMethodCollectionFromConfig (bareConfig "test/data/no-such-method.csv")
+            case loaded of
+                Left err -> err `shouldSatisfy` T.isInfixOf "Method path not found"
+                Right _ -> expectationFailure "expected a Left for a missing path"
+  where
+    bareConfig path =
+        MethodConfig
+            { mcName = "bare"
+            , mcPath = path
+            , mcActive = False
+            , mcIsUploaded = False
+            , mcDescription = Nothing
+            , mcFormat = Nothing
+            , mcScoringSets = []
+            , mcGlobalMethods = []
+            }
