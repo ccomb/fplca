@@ -2060,14 +2060,11 @@ computeAllScoringSets scoringSets rawScoreMap = do
     -- `scores.*` formula) are hidden from the breakdown.
     toIndicators ss e =
         let displayed = S.fromList (concatMap (Expr.collectIdentifiers '.') (M.elems (ssScores ss)))
+            names = ssLabels ss <> ssVariables ss
          in M.mapWithKey
                 ( \var val ->
                     ScoringIndicator
-                        { siCategory =
-                            M.findWithDefault
-                                (M.findWithDefault var var (ssVariables ss))
-                                var
-                                (ssLabels ss)
+                        { siCategory = M.findWithDefault var var names
                         , siValue = val
                         }
                 )

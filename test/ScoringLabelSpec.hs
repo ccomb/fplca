@@ -16,7 +16,7 @@ import Test.Hspec
 scoringSet :: ScoringSet
 scoringSet =
     ScoringSet
-        { ssName = "ECS"
+        { ssName = "SingleScore"
         , ssUnit = "Pts"
         , ssVariables =
             M.fromList
@@ -40,14 +40,19 @@ rawScores =
         , ("Ecotoxicity, freshwater_inorganics", 3.0)
         ]
 
+-- | Display name of one breakdown indicator, straight from the scoring pass.
+categoryOf :: ScoringSet -> Text -> IO (Maybe Text)
+categoryOf ss var = do
+    (_, indicators) <- computeAllScoringSets [ss] rawScores
+    pure (siCategory <$> (M.lookup (ssName ss) indicators >>= M.lookup var))
+
 spec :: Spec
 spec = describe "scoring indicator display names" $ do
-    it "labels a computed variable via [methods.scoring.labels]" $ do
-        (_, indicators) <- computeAllScoringSets [scoringSet] rawScores
-        (siCategory <$> (M.lookup "ECS" indicators >>= M.lookup "etf"))
-            `shouldBe` Just "Ecotoxicity, freshwater"
+    it "labels a computed variable via [methods.scoring.labels]" $
+        categoryOf scoringSet "etf" >>= (`shouldBe` Just "Ecotoxicity, freshwater")
 
-    it "keeps impact-category names for primitive variables" $ do
-        (_, indicators) <- computeAllScoringSets [scoringSet] rawScores
-        (siCategory <$> (M.lookup "ECS" indicators >>= M.lookup "cch"))
-            `shouldBe` Just "Climate change"
+    it "keeps impact-category names for primitive variables" $
+        categoryOf scoringSet "cch" >>= (`shouldBe` Just "Climate change")
+
+    it "falls back to the raw key for a computed variable with no label" $
+        categoryOf scoringSet{ssLabels = M.empty} "etf" >>= (`shouldBe` Just "etf")
