@@ -9,7 +9,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, lookupCFForFlow)
-import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..), extractLocationSuffix)
+import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..), extractLocationSuffix)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
 
@@ -47,7 +47,7 @@ situation a non-regionalized method (e.g. EF v3.1 JRC ILCD) produces.
 -}
 tablesFor :: Text -> Double -> MethodTables
 tablesFor base val =
-    buildMethodTables M.empty M.empty [(baseCF base val, Just (mkFlow 1 base, ByName))]
+    buildMethodTables OtherCFFamily M.empty M.empty [(baseCF base val, Just (mkFlow 1 base, ByName))]
 
 -- | Score a flow of the given name against those tables.
 scoreOf :: Text -> Double -> Text -> Maybe Double

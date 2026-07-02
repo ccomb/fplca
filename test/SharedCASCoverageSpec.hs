@@ -158,7 +158,7 @@ mapCtx =
 buildTablesFor :: Method -> IO MethodTables
 buildTablesFor method = do
     mappings <- mapMethodFlows defaultMappers mapCtx method
-    let raw = buildMethodTables M.empty M.empty mappings
+    let raw = buildMethodTables OtherCFFamily M.empty M.empty mappings
     pure (fillBroadcastVector defaultUnitConfig M.empty flowDB raw)
 
 buildTables :: IO MethodTables
@@ -237,7 +237,7 @@ carbonSynonyms =
 buildCarbonTables :: IO MethodTables
 buildCarbonTables = do
     mappings <- mapMethodFlows defaultMappers carbonSynonyms biogenicMethaneMethod
-    let raw = buildMethodTables M.empty M.empty mappings
+    let raw = buildMethodTables OtherCFFamily M.empty M.empty mappings
     pure (fillBroadcastVector defaultUnitConfig M.empty carbonFlows raw)
 
 -- ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ fallbackCtx =
 buildFallbackTables :: IO MethodTables
 buildFallbackTables = do
     mappings <- mapMethodFlows defaultMappers fallbackCtx fallbackMethod
-    let raw = buildMethodTables M.empty M.empty mappings
+    let raw = buildMethodTables OtherCFFamily M.empty M.empty mappings
     pure (fillBroadcastVector defaultUnitConfig M.empty fallbackFlowDB raw)
 
 -- ---------------------------------------------------------------------------
@@ -463,14 +463,14 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
     describe "regionalized rows stay out of the global tables" $ do
         it "routes a location-bearing CAS-matched CF to mtRegionalCasCF only" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx regionalCasMethod
-            let tables = buildMethodTables M.empty M.empty mappings
+            let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber waterCAS, Medium "resource") (mtRegionalCasCF tables)
                 `shouldBe` Just (M.fromList [("FR", (9, "m3"))])
             M.member (CASNumber waterCAS, Medium "resource") (mtCasCF tables) `shouldBe` False
 
         it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
             mappings <- mapMethodFlows defaultMappers mapCtx uuidRegionalMethod
-            let tables = buildMethodTables M.empty M.empty mappings
+            let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- The global row stands; the location row lives in the regional
             -- table instead of clobbering the flow's universal value.
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")
@@ -508,7 +508,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
                 Left err -> expectationFailure ("Parse failed: " ++ err)
                 Right coll -> do
                     mappings <- concat <$> mapM (mapMethodFlows defaultMappers mapCtx) (mcMethods coll)
-                    let tables = buildMethodTables M.empty M.empty mappings
+                    let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
                     -- Only the region-less rows may broadcast through the
                     -- name-blind bridge, on both the withdrawal and release
                     -- sides (the negative release default keeps AWARE's
@@ -539,13 +539,13 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
     describe "CAS bridge broadcasts the unspecified value, not the niche max" $ do
         it "keeps the unspecified factor when subcompartment CFs diverge" $ do
             mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
-            let tables = buildMethodTables M.empty M.empty mappings
+            let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- indoor air is 100x; the bridge must not broadcast it.
             M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables) `shouldBe` Just (1, "kg")
 
         it "reaches the flow with the unspecified factor, not the indoor max" $ do
             mappings <- mapMethodFlows defaultMappers acrCtx acrMethod
-            let raw = buildMethodTables M.empty M.empty mappings
+            let raw = buildMethodTables OtherCFFamily M.empty M.empty mappings
                 tables = fillBroadcastVector defaultUnitConfig M.empty (mcBioFlowsByUUID acrCtx) raw
             M.lookup (bfId acrFlow) (mtBroadcast tables) `shouldBe` Just 1
 
@@ -554,6 +554,6 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- regionalized bridge must keep the medium-level default, not the
             -- niche max — same rule as the non-regional 'mtCasCF'.
             mappings <- mapMethodFlows defaultMappers acrCtx acrRegionalMethod
-            let tables = buildMethodTables M.empty M.empty mappings
+            let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber acrCAS, Medium "air") (mtRegionalCasCF tables)
                 `shouldBe` Just (M.fromList [("FR", (1, "kg"))])

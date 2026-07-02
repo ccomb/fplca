@@ -60,7 +60,7 @@ import Matrix (Inventory)
 import qualified Matrix.Export as MatrixExport
 import Method.Mapping (MatchStrategy)
 import qualified Method.Mapping as Mapping
-import Method.Types (Method (..), MethodCF (..))
+import Method.Types (Method (..), MethodCF (..), cfFamily)
 import SynonymDB (emptySynonymDB)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
@@ -188,11 +188,15 @@ lciaAnalyzer =
                 mapM
                     ( \m -> do
                         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx m
+                        -- Build the tables with the method's CF family so the
+                        -- subcompartment gates apply here exactly as on the
+                        -- Database.Manager scoring path.
+                        let tables = Mapping.buildMethodTables (cfFamily (methodUnit m)) M.empty M.empty mappings
                         pure $
                             toJSON $
                                 M.fromList
                                     [ ("method" :: String, toJSON (show m))
-                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScore UnitConversion.defaultUnitConfig (acUnitDB ctx) (acBioFlowDB ctx) inv mappings)))
+                                    , ("score", toJSON (Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig (acUnitDB ctx) (acBioFlowDB ctx) inv tables)))
                                     ]
                     )
                     methods
@@ -367,7 +371,7 @@ hotspotAnalyzer =
     -- Characterization uses the merged flow/unit snapshot the caller built.
     analyzeMethod flowDB unitDB mapCtx inv topN method = do
         mappings <- Mapping.mapMethodFlows defaultMappers mapCtx method
-        let tables = Mapping.buildMethodTables M.empty M.empty mappings
+        let tables = Mapping.buildMethodTables (cfFamily (methodUnit method)) M.empty M.empty mappings
             (rawContribs, _) = Mapping.inventoryContributions UnitConversion.defaultUnitConfig unitDB flowDB inv tables
             sorted = take topN $ sortOn (\(_, _, c) -> negate (abs c)) rawContribs
             total = Mapping.loScore (Mapping.computeLCIAScoreFromTables UnitConversion.defaultUnitConfig unitDB flowDB inv tables)

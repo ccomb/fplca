@@ -16,6 +16,8 @@ module Method.Types (
     Compartment (..),
     Medium (..),
     Subcompartment (..),
+    CFFamily (..),
+    cfFamily,
 
     -- * Method Collection (with normalization/weighting)
     MethodCollection (..),
@@ -343,21 +345,44 @@ normalizeCompartment cmap (Compartment med sub qual) =
 compartmentMapSize :: CompartmentMap -> Int
 compartmentMapSize = M.size
 
-{- | Energy content of a flow, used to characterize an energy-denominated CF
-(e.g. a JRC fossil-resource CF in MJ) against an inventory flow given in mass or
-volume (kg, Sm3, …).
+{- | The CF family a method's result unit implies, for read-path gating.
 
-A row @Coal, hard,18.01,MJ,kg@ reads: 1 kg of @Coal, hard@ carries 18.01 MJ.
-'edEnergyUnit' is the unit of the energy amount (converted to the CF's unit at
-score time); 'edNativeUnit' is the unit the content is denominated against, so
-the inventory quantity is brought into that unit before the density is applied.
-Naming the native unit keeps the bridge dimensionally honest: a flow reported in
-a different but compatible unit (g, t) still scores correctly, and one whose
-unit can't be converted to the native unit scores 0 instead of by a wrong basis.
+USEtox toxicity methods (ecotoxicity in CTUe, human toxicity in CTUh) model a
+surface-freshwater fate only, so their medium-level CFs must not reach a
+groundwater emission; every other family (e.g. nutrients in kg P eq) keeps
+characterizing groundwater, since phosphate migrates to surface water.
+Classified once from 'methodUnit' — the individual CF units can't carry the
+distinction (the SimaPro-adapted collection stores every CF unit as the flow
+unit, @"kg"@).
+-}
+data CFFamily = USEtoxFamily | OtherCFFamily
+    deriving (Eq, Show, Generic)
+
+instance NFData CFFamily
+
+-- | Classify a method's result unit ('methodUnit') into its 'CFFamily'.
+cfFamily :: Text -> CFFamily
+cfFamily u
+    | T.toLower (T.strip u) `elem` map T.pack ["ctue", "ctuh"] = USEtoxFamily
+    | otherwise = OtherCFFamily
+
+{- | Physical content of a flow per native unit — a calorific value (MJ per kg
+of coal) or a mass density (m³ per kg of water) — used to characterize a CF
+denominated in that target unit against an inventory flow given in another
+dimension (kg, Sm3, …).
+
+A row @Coal, hard,18.01,MJ,kg@ reads: 1 kg of @Coal, hard@ carries 18.01 MJ;
+@Water,0.001,m3,kg@ reads: 1 kg of water occupies 0.001 m³. 'edTargetUnit' is
+the unit of the content amount (converted to the CF's unit at score time);
+'edNativeUnit' is the unit the content is denominated against, so the inventory
+quantity is brought into that unit before the density is applied. Naming the
+native unit keeps the bridge dimensionally honest: a flow reported in a
+different but compatible unit (g, t) still scores correctly, and one whose unit
+can't be converted to the native unit scores 0 instead of by a wrong basis.
 -}
 data EnergyDensity = EnergyDensity
     { edValue :: !Double
-    , edEnergyUnit :: !Text
+    , edTargetUnit :: !Text
     , edNativeUnit :: !Text
     }
     deriving (Eq, Show, Generic)
@@ -371,7 +396,7 @@ already use for CF matching.
 type EnergyDensityMap = M.Map Text EnergyDensity
 
 {- | Build an 'EnergyDensityMap' from CSV content.
-CSV columns (with header): @flow_name, value, energy_unit, native_unit@ — e.g.
+CSV columns (with header): @flow_name, value, target_unit, native_unit@ — e.g.
 @Coal, hard,18.01,MJ,kg@. Keys are normalized at parse time so the union of
 active CSVs and the read-path lookups agree. Each row is validated: a
 non-positive value or a missing unit is a load error, never a silently inert or
@@ -384,13 +409,13 @@ buildEnergyDensityMapFromCSV csvData =
         Right rows ->
             M.fromList <$> traverse toEntry (V.toList (rows :: V.Vector (Text, Double, Text, Text)))
   where
-    toEntry (name, value, energyUnit, nativeUnit)
+    toEntry (name, value, targetUnit, nativeUnit)
         | value <= 0 =
-            Left $ "energy density must be positive (flow: " <> T.unpack name <> ")"
-        | T.null (T.strip energyUnit) || T.null (T.strip nativeUnit) =
-            Left $ "energy density needs an energy unit and a native unit (flow: " <> T.unpack name <> ")"
+            Left $ "density must be positive (flow: " <> T.unpack name <> ")"
+        | T.null (T.strip targetUnit) || T.null (T.strip nativeUnit) =
+            Left $ "density needs a target unit and a native unit (flow: " <> T.unpack name <> ")"
         | otherwise =
-            Right (normalizeName name, EnergyDensity value (T.strip energyUnit) (T.strip nativeUnit))
+            Right (normalizeName name, EnergyDensity value (T.strip targetUnit) (T.strip nativeUnit))
 
 -- | Number of entries in the energy-density map.
 energyDensityMapSize :: EnergyDensityMap -> Int

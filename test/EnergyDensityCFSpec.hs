@@ -116,11 +116,26 @@ massCF = energyCF{mcfValue = 3.0, mcfUnit = "kg"}
 coalDensities :: EnergyDensityMap
 coalDensities = M.fromList [(normalizeName "Coal, hard", EnergyDensity 26.4 "MJ" "kg")]
 
+-- A water resource flow in a chosen unit, for the mass→volume bridge.
+waterId :: UUID
+waterId = UUID.fromWords64 11 0
+
+waterFlowIn :: UUID -> BiosphereFlow
+waterFlowIn unitId = (coalFlowIn unitId){bfId = waterId, bfName = "Water"}
+
+-- A volume-denominated CF (an AWARE-style water-scarcity factor per m³).
+volumeCF :: MethodCF
+volumeCF = energyCF{mcfFlowRef = waterId, mcfFlowName = "Water", mcfValue = 42.95, mcfUnit = "m3"}
+
+-- Mass density of water: 0.001 m³ per kg — same shape as a calorific value.
+waterDensities :: EnergyDensityMap
+waterDensities = M.fromList [(normalizeName "Water", EnergyDensity 0.001 "m3" "kg")]
+
 -- Build tables (with broadcast) for a flow + energy-density set + CF.
 tablesFor :: BiosphereFlow -> EnergyDensityMap -> MethodCF -> MethodTables
 tablesFor flow densities cf =
     let fdb = M.singleton (bfId flow) flow
-        raw = buildMethodTables M.empty densities [(cf, Just (flow, ByUUID))]
+        raw = buildMethodTables OtherCFFamily M.empty densities [(cf, Just (flow, ByUUID))]
      in fillBroadcastVector unitConfig unitDB fdb raw
 
 -- Score a @qty@-unit inventory of @flow@ against the given tables.
@@ -176,16 +191,36 @@ spec = do
             broadcastShouldBeNear (tablesFor flow coalDensities massCF) 3.0
             broadcastShouldBeNear (tablesFor flow M.empty massCF) 3.0
 
+    describe "Density bridge generalized: volume CF vs. mass flow (water)" $ do
+        -- Same mechanism, different dimension pair: a water-scarcity CF is
+        -- denominated per m³ but ecoinvent water emissions come in kg. A
+        -- "Water" density row (0.001 m³/kg) must bridge kg → m³ exactly like a
+        -- calorific value bridges kg → MJ.
+        it "applies the mass density to a per-m3 CF (1 kg water → 0.001 × CF)" $ do
+            let flow = waterFlowIn uidKg
+                tables = tablesFor flow waterDensities volumeCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near (0.001 * 42.95)
+
+        it "leaves a flow already declared in m3 untouched (no double conversion)" $ do
+            let flow = waterFlowIn uidM3
+                tables = tablesFor flow waterDensities volumeCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 42.95
+
+        it "still scores 0 without a density (cross-dimensional, no bridge)" $ do
+            let flow = waterFlowIn uidKg
+                tables = tablesFor flow M.empty volumeCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 0
+
     describe "buildEnergyDensityMapFromCSV" $ do
         it "parses a valid row, keyed by normalized flow name" $
-            case buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\n\"Coal, hard\",18.01,MJ,kg\n") of
+            case buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\n\"Coal, hard\",18.01,MJ,kg\n") of
                 Left err -> expectationFailure err
                 Right m -> M.lookup (normalizeName "Coal, hard") m `shouldBe` Just (EnergyDensity 18.01 "MJ" "kg")
 
         it "rejects a non-positive value" $
-            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,0,MJ,kg\n")
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\nPeat,0,MJ,kg\n")
                 `shouldSatisfy` isLeft
 
         it "rejects a missing native unit" $
-            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,energy_unit,native_unit\nPeat,9.76,MJ,\n")
+            buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\nPeat,9.76,MJ,\n")
                 `shouldSatisfy` isLeft

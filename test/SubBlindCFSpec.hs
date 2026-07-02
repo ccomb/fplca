@@ -9,7 +9,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), buildMethodTables, lookupCFForFlow)
-import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
+import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
 import Types (BiosphereFlow (..))
 import qualified Types as VT
 
@@ -44,7 +44,7 @@ mkFlow i name sub =
 
 score :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> BiosphereFlow -> Maybe Double
 score mappings flow =
-    fmap fst (lookupCFForFlow (buildMethodTables M.empty M.empty mappings) (bfId flow) (Just flow))
+    fmap fst (lookupCFForFlow (buildMethodTables OtherCFFamily M.empty M.empty mappings) (bfId flow) (Just flow))
 
 spec :: Spec
 spec = describe "sub-blind CF fallback" $ do
@@ -64,3 +64,31 @@ spec = describe "sub-blind CF fallback" $ do
                 , (mkCF 2 "Mercury" "in water" 2.0, Just (mkFlow 2 "Mercury" (Just "in water"), ByName))
                 ]
         score mappings (mkFlow 99 "Mercury" Nothing) `shouldBe` Nothing
+
+    describe "resource base-name fallback (ore-grade variants)" $ do
+        -- The method characterizes the base element; ecoinvent supplies dozens
+        -- of ore-grade variants ("Copper, 0.99% in sulfide, Cu 0.36% …, in
+        -- ground") that carry no CAS and match no CF of their own. Their
+        -- reference amount is the mass of the element, so they take its CF.
+        let copperCF = mkCF 1 "Copper" "in ground" 1.37e-6
+            copperMapping = [(copperCF, Just (mkFlow 1 "Copper" (Just "in ground"), ByName))]
+
+        it "characterizes an ore-grade variant with the base element's CF" $
+            score copperMapping (mkFlow 99 "Copper, 0.99% in sulfide, Cu 0.36% and Mo 8.2E-3% in crude ore" (Just "in ground"))
+                `shouldBe` Just 1.37e-6
+
+        it "leaves a variant alone when the method has no CF for the base" $
+            score copperMapping (mkFlow 99 "Calcite, in ground" Nothing)
+                `shouldBe` Nothing
+
+        it "does not fire for a comma-less resource name" $
+            score copperMapping (mkFlow 99 "Gravel" (Just "in ground"))
+                `shouldBe` Nothing
+
+        it "does not fire for a comma-qualified name without a grade marker" $ do
+            -- The "%" pins the fallback to ore-grade variants: an ordinary
+            -- comma-qualified resource must not borrow the base CF (a
+            -- salt-water withdrawal is not freshwater scarcity).
+            let waterMapping = [(mkCF 1 "Water" "in water" 42.0, Just (mkFlow 1 "Water" (Just "in water"), ByName))]
+            score waterMapping (mkFlow 99 "Water, salt, ocean" (Just "in water"))
+                `shouldBe` Nothing

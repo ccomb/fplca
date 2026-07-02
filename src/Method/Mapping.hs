@@ -19,6 +19,8 @@ module Method.Mapping (
     buildMapContext,
 
     -- * LCIA scoring
+    CFFamily (..),
+    cfFamily,
     MethodTables (..),
     MethodIndex (..),
     LCIAOutcome (..),
@@ -107,7 +109,7 @@ import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig, UnitDef (..), convertUnit, isKnownUnit, lookupUnitDef, normalizeToCanonical, normalizeUnit)
+import UnitConversion (UnitConfig, convertUnit, isKnownUnit, normalizeToCanonical, normalizeUnit, unitsCompatible)
 
 -- | Matching strategy used to find a flow
 data MatchStrategy
@@ -440,6 +442,11 @@ data MethodTables = MethodTables
     Empty for non-regionalized methods. When non-empty, callers should dispatch
     to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
     -}
+    , mtCFFamily :: !CFFamily
+    {- ^ The CF family the method's result unit implies (see 'cfFamily'). The
+    subcompartment gates key off this — a USEtox toxicity method
+    ('USEtoxFamily') doesn't characterize groundwater, a nutrient method does.
+    -}
     , mtCompartmentMap :: !CompartmentMap
     {- ^ Compartment-normalization rules (e.g. @"Emissions to air" → "air"@).
     Applied to both CF compartments at build time and database flow
@@ -447,12 +454,13 @@ data MethodTables = MethodTables
     canonical form. Empty map = identity, no normalization.
     -}
     , mtEnergyDensities :: !EnergyDensityMap
-    {- ^ Normalized flow name → energy density (MJ per native flow unit).
-    Lets an energy-denominated CF (dimension @energy@, e.g. a JRC fossil CF in
-    MJ) characterize a mass/volume inventory flow (kg, Sm3): the flow quantity
-    is converted to energy via its density before the CF multiply. Flows with
-    no entry behave exactly as before — an energy CF vs. a mass flow still
-    yields a zero effective CF. Empty map = feature inactive.
+    {- ^ Normalized flow name → physical content per native flow unit (a
+    calorific value in MJ/kg, a mass density in m³/kg). Lets a CF denominated
+    in the content's target unit (a JRC fossil CF in MJ, a water-scarcity CF
+    in m³) characterize an inventory flow of another dimension (kg, Sm3): the
+    flow quantity is bridged into the target unit before the CF multiply.
+    Flows with no entry behave exactly as before — a cross-dimensional CF
+    still yields a zero effective CF. Empty map = feature inactive.
     -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
@@ -929,8 +937,8 @@ strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 
-buildMethodTables :: CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
-buildMethodTables cmap energyDensities mappings =
+buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
+buildMethodTables methodFamily cmap energyDensities mappings =
     MethodTables
         { mtUuidCF =
             -- Non-regionalized rows only, like the name tables below: a
@@ -1089,6 +1097,7 @@ buildMethodTables cmap energyDensities mappings =
                 , cfSubcompMatchesFlow cf flow
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
+        , mtCFFamily = methodFamily
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -1145,7 +1154,12 @@ buildMethodTables cmap energyDensities mappings =
                 Compartment _ flowSubRaw _ =
                     normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
                 !flowSubN = T.toLower (T.strip flowSubRaw)
-             in isUnspecifiedSub cfSubN
+             in -- A wildcard (unspecified) CF matches any subcompartment except
+                -- the ones the 'lookupCascadeCF' gate excludes on the
+                -- non-regional path — both tiers: a foreign medium (sea/ocean)
+                -- never borrows a freshwater CF, and groundwater borrows no
+                -- surface USEtox CF. An explicit same-sub CF still matches.
+                (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily (Subcompartment flowSubN))
                     || cfSubN == flowSubN
 
     preferBetter (v1, u1, s1) (v2, u2, s2)
@@ -1433,12 +1447,15 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
         Nothing -> Nothing
         Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cfTuple qty)
 
-{- | Back-compat wrapper: build tables on the fly. Prefer the cached path
-('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops.
+{- | Back-compat wrapper: build tables on the fly, with no compartment map,
+energy densities, or CF-family gating ('OtherCFFamily'). Prefer the cached path
+('mapMethodToTablesCached' + 'computeLCIAScoreFromTables') in hot loops, and
+'buildMethodTables' with the method's real 'cfFamily' wherever the method is
+in hand.
 -}
 computeLCIAScore :: UnitConfig -> UnitDB -> BioFlowDB -> Inventory -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> LCIAOutcome
 computeLCIAScore unitConfig unitDB flowDB inventory mappings =
-    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables M.empty M.empty mappings)
+    computeLCIAScoreFromTables unitConfig unitDB flowDB inventory (buildMethodTables OtherCFFamily M.empty M.empty mappings)
 
 {- | LCIA score with automatic dispatch.
 
@@ -1629,20 +1646,31 @@ lookupCascadeCF tables flowDB fid =
     byNameOrCas flow =
         let name = SR.NormName (normalizeName (bfName flow))
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
+            -- The medium-level / CAS / sub-blind fallbacks all stand for a
+            -- surface, immediate emission, so gate a resolved one by the flow's
+            -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
+            -- at all; a detached sub (groundwater) drops a surface-freshwater-fate
+            -- USEtox CF (CTUe/CTUh) — those methods don't model groundwater — but
+            -- keeps a nutrient/other freshwater CF (phosphate migrates to surface
+            -- water, so the method characterizes it). An explicit exact-sub CF and
+            -- the method's own long-term default are never gated.
+            gate mcf
+                | wildcardReachesSub (mtCFFamily tables) normSub = mcf
+                | otherwise = Nothing
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
             -- just the one a CF resolved to at build time. A long-term (delayed)
             -- emission first tries the method's long-term default
             -- ('mtLongTermFallbackCF') so it inherits the long-term factor, not
-            -- the immediate-emission one; if the method has none it still falls
-            -- through to the ordinary fallbacks.
+            -- the immediate-emission one; if the method has none it falls through.
             M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
-                <|> M.lookup (name, baseMed) (mtFallbackCF tables)
-                <|> (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
-                <|> M.lookup (name, baseMed) (mtSubBlindCF tables)
-                <|> regionBaseFallback flow baseMed normSub
+                <|> gate (M.lookup (name, baseMed) (mtFallbackCF tables))
+                <|> gate (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
+                <|> gate (M.lookup (name, baseMed) (mtSubBlindCF tables))
+                <|> gate (regionBaseFallback flow baseMed normSub)
                 <|> energyResourceFallback flow baseMed normSub
+                <|> resourceBaseNameFallback flow baseMed normSub
 
     -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
     -- doesn't tag falls back to the base substance's CF: an unregionalized CF
@@ -1687,6 +1715,27 @@ lookupCascadeCF tables flowDB fid =
         M.lookup (rname, baseMed, normSub) (mtExactCF tables)
             <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
 
+    -- An ecoinvent metal-ore resource flow ("Copper, 0.99% in sulfide, Cu 0.36%
+    -- …, in ground", "Gold, Au 7.1E-4%, in ore") carries no CAS and matches no CF
+    -- of its own, but its reference amount is the mass of the base element, so it
+    -- takes that element's resource CF. Without this the whole ore-grade family
+    -- scores zero and mineral/metal depletion silently under-counts (copper- and
+    -- gold-intensive products by 100×+). Resource medium only; base = the element
+    -- before the first comma; the "%" requirement pins the fallback to
+    -- grade-bearing variants — every ore-grade name encodes its grade as a
+    -- percentage — so an ordinary comma-qualified resource ("Water, salt,
+    -- ocean", "Coal, 18 MJ per kg") never borrows the base CF, and in
+    -- particular an ambiguity 'energyResourceFallback' refused to resolve
+    -- stays unresolved. Self-scoping and last in the cascade: 'resourceCF'
+    -- returns Nothing when the base element has no CF in the method.
+    resourceBaseNameFallback flow baseMed@(Medium med) normSub
+        | med == "resource"
+        , "%" `T.isInfixOf` bfName flow
+        , (base, rest) <- T.breakOn "," (bfName flow)
+        , not (T.null rest) =
+            resourceCF (SR.NormName (normalizeName base)) baseMed normSub
+        | otherwise = Nothing
+
     firstWord = T.takeWhile (/= ' ') . T.strip
 
 -- | Normalize medium names between method CFs and database flows.
@@ -1714,6 +1763,40 @@ long-term emission than for its immediate one.
 -}
 isLongTermSub :: Subcompartment -> Bool
 isLongTermSub (Subcompartment s) = "long-term" `T.isInfixOf` s || "long term" `T.isInfixOf` s
+
+{- | A subcompartment that names a different fate than the surface / immediate
+emission a method's unspecified (medium-level) CF stands for, so that CF must
+not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
+
+  * 'isDetachedSub' — emissions to groundwater (immediate or long-term). A
+    surface-freshwater-fate USEtox CF ('USEtoxFamily') does not apply (metals to
+    groundwater are out of scope for ecotoxicity/human toxicity — EF leaves them
+    uncharacterized), but a nutrient/other freshwater CF does (phosphate migrates
+    to surface water, so the method characterizes it). Scoped to groundwater, NOT
+    every long-term sub: a "river, long-term" release is still surface freshwater
+    and stays characterized.
+  * 'isForeignMediumSub' — the sea/ocean, a different receiving medium
+    altogether: a freshwater CF does not apply at all (water released to the sea
+    is not freshwater depletion; EF ships a distinct, uncharacterized sea-water
+    flow).
+
+Names are the post-'normalizeCompartment' lower-cased subcompartment.
+-}
+isDetachedSub :: Subcompartment -> Bool
+isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
+
+isForeignMediumSub :: Subcompartment -> Bool
+isForeignMediumSub (Subcompartment s) = s `elem` ["ocean", "sea water", "sea"]
+
+{- | Whether a medium-level (wildcard / fallback) CF may reach the given
+subcompartment — both tiers above, combined. Shared by the read-path
+'lookupCascadeCF' gate and the build-time regionalized wildcard match so the
+two scoring paths apply the same rule and can't drift.
+-}
+wildcardReachesSub :: CFFamily -> Subcompartment -> Bool
+wildcardReachesSub family sub =
+    not (isForeignMediumSub sub)
+        && not (isDetachedSub sub && family == USEtoxFamily)
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is
@@ -1751,16 +1834,6 @@ flowMediumSub cmap flow =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
      in (Medium (normalizeMedium normMedRaw), Subcompartment normSub)
 
-{- | True when @unit@ is dimensionally an energy unit (same exponent vector as
-the reference @mj@). Used to detect the energy-CF-vs-non-energy-flow case the
-energy-density bridge targets, without hardcoding any unit string.
--}
-isEnergyUnit :: UnitConfig -> Text -> Bool
-isEnergyUnit cfg unit =
-    case (lookupUnitDef cfg unit, lookupUnitDef cfg "MJ") of
-        (Just a, Just energyRef) -> udDimension a == udDimension energyRef
-        _ -> False
-
 {- | Flow→CF conversion factor for @qty@ units of flow, applying the
 energy-density bridge when it is needed and available.
 
@@ -1779,12 +1852,19 @@ to 'convertForCharacterization', so flows without a density are unchanged.
 energyAwareConversion :: UnitConfig -> Text -> Text -> Maybe EnergyDensity -> Double -> Double
 energyAwareConversion cfg flowUnit cfUnit mDensity qty =
     case mDensity of
-        Just (EnergyDensity ev energyUnit nativeUnit)
-            | isEnergyUnit cfg cfUnit
-            , not (isEnergyUnit cfg flowUnit) ->
+        -- The bridge fires when the CF is denominated in the density's target
+        -- unit (MJ for a calorific value, m³ for a mass density) and the flow is
+        -- a different dimension (mass). Generalizing the guard from "energy" to
+        -- "same dimension as the density unit" lets one mechanism serve both the
+        -- fossil energy CF (kg → MJ via calorific value) and the water-scarcity
+        -- CF (kg → m³ via density), which are the two cases where a per-physical-
+        -- quantity CF meets a mass inventory flow.
+        Just (EnergyDensity ev densityUnit nativeUnit)
+            | unitsCompatible cfg cfUnit densityUnit
+            , not (unitsCompatible cfg cfUnit flowUnit) ->
                 fromMaybe 0 $ do
                     qtyNative <- toNativeQty flowUnit nativeUnit
-                    factor <- convertUnit cfg energyUnit cfUnit ev
+                    factor <- convertUnit cfg densityUnit cfUnit ev
                     pure (qtyNative * factor)
         _ -> convertForCharacterization cfg flowUnit cfUnit qty
   where
