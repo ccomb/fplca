@@ -2884,7 +2884,8 @@ loadMethodCollectionFromConfig mc = do
     let hasExt e = map toLower (takeExtension resolvedPath) == e
         isSingleJson = isFile && hasExt ".json"
         isSingleCsv = isFile && hasExt ".csv"
-    if not isDir && not isSingleJson && not isSingleCsv
+        isBareFile = isSingleJson || isSingleCsv
+    if not isDir && not isBareFile
         then
             return . Left $
                 if isFile
@@ -2892,7 +2893,7 @@ loadMethodCollectionFromConfig mc = do
                     else "Method path not found: " <> T.pack (mcPath mc)
         else do
             (dir, xmlFiles, csvFiles, jsonFiles) <-
-                if isSingleJson || isSingleCsv
+                if isBareFile
                     then
                         return
                             ( takeDirectory resolvedPath
@@ -2911,8 +2912,14 @@ loadMethodCollectionFromConfig mc = do
             if null xmlFiles && null csvFiles && null jsonFiles
                 then return $ Left $ "No method files (.xml/.csv/.json) found in: " <> T.pack dir
                 else do
-                    -- Try to find sibling flows/ directory for CF enrichment
-                    mFlowsDir <- FlowResolver.resolveFlowDirectory dir
+                    -- A bare method file (.csv/.json) carries its own CFs and has no
+                    -- ILCD flows/ sibling; only a real ILCD directory does. Scanning a
+                    -- coincidental neighbouring flows/ would parse unrelated flow XMLs
+                    -- and register foreign synonyms under this collection's name.
+                    mFlowsDir <-
+                        if isBareFile
+                            then return Nothing
+                            else FlowResolver.resolveFlowDirectory dir
                     flowInfo <- case mFlowsDir of
                         Nothing -> do
                             reportProgress Info "  No flows/ directory found, using shortDescription fallback"
