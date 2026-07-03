@@ -1296,6 +1296,10 @@ loadDatabaseFromConfig dbConfig synonymDB noCache =
         (fmap fst)
         (loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty)
 
+-- | File extensions 'resolveDataPath' knows how to extract as archives.
+archiveExtensions :: [String]
+archiveExtensions = [".zip", ".7z", ".gz", ".xz"]
+
 {- | Resolve a database path: if it's an archive, extract it first.
 Extracts to "{archivePath}.d/" and finds the actual data directory inside.
 Plain files/directories pass through unchanged.
@@ -1311,7 +1315,7 @@ resolveDataPath path = do
                 then return path -- missing: let caller handle
                 else
                     let ext = map toLower (takeExtension path)
-                     in if ext `elem` [".zip", ".7z", ".gz", ".xz"]
+                     in if ext `elem` archiveExtensions
                             then extractAndFind path
                             else return path
   where
@@ -2881,16 +2885,21 @@ loadMethodCollectionFromConfig mc = do
     resolvedPath <- resolveDataPath (mcPath mc)
     isDir <- doesDirectoryExist resolvedPath
     isFile <- doesFileExist resolvedPath
-    let hasExt e = map toLower (takeExtension resolvedPath) == e
-        isSingleJson = isFile && hasExt ".json"
-        isSingleCsv = isFile && hasExt ".csv"
+    let ext = map toLower (takeExtension resolvedPath)
+        isSingleJson = isFile && ext == ".json"
+        isSingleCsv = isFile && ext == ".csv"
         isBareFile = isSingleJson || isSingleCsv
     if not isDir && not isBareFile
         then
             return . Left $
-                if isFile
-                    then "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
-                    else "Method path not found: " <> T.pack (mcPath mc)
+                if not isFile
+                    then "Method path not found: " <> T.pack (mcPath mc)
+                    else
+                        if ext `elem` archiveExtensions
+                            -- resolveDataPath returns the archive path unchanged when
+                            -- extraction failed, so an archive reaching here means that.
+                            then "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
+                            else "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
         else do
             (dir, xmlFiles, csvFiles, jsonFiles) <-
                 if isBareFile

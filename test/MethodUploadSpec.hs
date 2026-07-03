@@ -154,6 +154,19 @@ spec = do
             case loaded of
                 Left err -> err `shouldSatisfy` T.isInfixOf "Method path not found"
                 Right _ -> expectationFailure "expected a Left for a missing path"
+
+        -- A .zip is a supported wrapper, so a failed extraction must not be
+        -- reported as an unsupported file type (that message even lists 'archive').
+        it "reports an unextractable archive as an extraction failure, not an unsupported type" $
+            withSystemTempDirectory "volca-method-load" $ \tmp -> do
+                let path = tmp </> "broken.zip"
+                -- Binary garbage: recognised as no known archive format, so extraction
+                -- fails and resolveDataPath hands the .zip path back unchanged.
+                BL.writeFile path (BL.pack [0, 1, 2, 3, 4, 5, 6, 7])
+                loaded <- loadMethodCollectionFromConfig (bareConfig path)
+                case loaded of
+                    Left err -> err `shouldSatisfy` T.isInfixOf "Archive could not be extracted"
+                    Right _ -> expectationFailure "expected a Left for an unextractable .zip"
   where
     bareConfig path =
         MethodConfig
