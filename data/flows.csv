@@ -243,6 +243,7 @@ CAS also 7789-75-5,"Fluorspar, 92%, in ground"
 COD (Chemical Oxygen Demand),"COD, Chemical Oxygen Demand"
 Cadmium,"Cadmium, in ground"
 Cadmium,"Cadmium, ion"
+Cadmium,"Cadmium (II)",,022537-48-0,EF 3.1 toxicity characterizes only the ionic species; the elemental metal emission maps to it
 "Caesium, in ground",Cesium
 Calcite,"Calcite, in ground"
 Calcium,"Calcium, in ground"
@@ -460,6 +461,7 @@ Lanox 216,Methomyl
 Lanthanum,"Lanthanum, in ground"
 Laterite,"Laterite, in ground"
 Lead,"Lead, in ground"
+Lead,"Lead (II)",,014280-50-3,EF 3.1 toxicity characterizes only the ionic species; the elemental metal emission maps to it
 "Lead, Pb 3.6E-1%, in mixed ore","Lead, Pb 3.6E-1%, in mixed ore, in ground"
 Lead-210,Lead-210/kg
 Lithium,"Lithium, in ground"
@@ -473,6 +475,7 @@ Maneb,manganese ethylenebis(ditiocarbamate) (polymeric)
 Manganese,"Manganese, in ground"
 Maposol,Metam-sodium
 Mercury,"Mercury, in ground"
+Mercury,"Mercury (II)",,014302-87-5,EF 3.1 toxicity characterizes only the ionic species; the elemental metal emission maps to it
 Metalaxil,"methyl N-(methoxyacetyl)-N-(2,6-xylyl)-DL-alaninate"
 Metaldehyde,Metaldehyde (tetramer)
 Metaldehyde,"r-2,c-4,c-6,c-8-tetramethyl-1,3,5,7-tetroxocane"
@@ -522,6 +525,7 @@ Naphtalene,Naphthalene
 Neodymium,"Neodymium, in ground"
 Nickel,"Nickel, in ground"
 Nickel,"Nickel, ion"
+Nickel,"Nickel (II)",,014701-22-5,EF 3.1 toxicity characterizes only the ionic species; the elemental metal emission maps to it
 "Nickel, 1.13% in sulfide, Ni 0.76% and Cu 0.76% in crude ore","Nickel, 1.13% in sulfide, Ni 0.76% and Cu 0.76% in crude ore, in ground"
 "Nickel, 1.98% in silicates, 1.04% in crude ore","Nickel, 1.98% in silicates, 1.04% in crude ore, in ground"
 "Nickel, Ni 2.5E+0%, in mixed ore","Nickel, Ni 2.5E+0%, in mixed ore, in ground"
@@ -674,6 +678,7 @@ Ytterbium,"Ytterbium, in ground"
 Yttrium,"Yttrium, in ground"
 Zinc,"Zinc, in ground"
 Zinc,"Zinc, ion"
+Zinc,"Zinc (II)",,023713-49-7,EF 3.1 toxicity characterizes only the ionic species; the elemental metal emission maps to it
 "Zinc, Zn 3.1%, in mixed ore","Zinc, Zn 3.1%, in mixed ore, in ground"
 Zircat,"Zirconium, 50% in zircon, 0.39% in crude ore, in ground"
 Zirconium,"Zirconium, in ground"
