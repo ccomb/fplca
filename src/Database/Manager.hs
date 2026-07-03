@@ -1296,6 +1296,10 @@ loadDatabaseFromConfig dbConfig synonymDB noCache =
         (fmap fst)
         (loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty)
 
+-- | File extensions 'resolveDataPath' knows how to extract as archives.
+archiveExtensions :: [String]
+archiveExtensions = [".zip", ".7z", ".gz", ".xz"]
+
 {- | Resolve a database path: if it's an archive, extract it first.
 Extracts to "{archivePath}.d/" and finds the actual data directory inside.
 Plain files/directories pass through unchanged.
@@ -1311,7 +1315,7 @@ resolveDataPath path = do
                 then return path -- missing: let caller handle
                 else
                     let ext = map toLower (takeExtension path)
-                     in if ext `elem` [".zip", ".7z", ".gz", ".xz"]
+                     in if ext `elem` archiveExtensions
                             then extractAndFind path
                             else return path
   where
@@ -2875,19 +2879,37 @@ and enriches CFs from ILCD flow XMLs when available.
 -}
 loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text (MethodCollection, M.Map UUID ILCDFlowInfo))
 loadMethodCollectionFromConfig mc = do
-    -- Resolve archives (ZIP → extracted directory). Single .json files (openLCA
-    -- JSON-LD ImpactCategory documents) are accepted directly without a wrapping
-    -- directory or archive.
+    -- Resolve archives (ZIP → extracted directory). Single .json (openLCA
+    -- JSON-LD ImpactCategory) and .csv (SimaPro method export) files are
+    -- accepted directly without a wrapping directory or archive.
     resolvedPath <- resolveDataPath (mcPath mc)
     isDir <- doesDirectoryExist resolvedPath
     isFile <- doesFileExist resolvedPath
-    let isSingleJson = isFile && map toLower (takeExtension resolvedPath) == ".json"
-    if not isDir && not isSingleJson
-        then return $ Left $ "Method path not found: " <> T.pack (mcPath mc)
+    let ext = map toLower (takeExtension resolvedPath)
+        isSingleJson = isFile && ext == ".json"
+        isSingleCsv = isFile && ext == ".csv"
+        isBareFile = isSingleJson || isSingleCsv
+    if not isDir && not isBareFile
+        then
+            return . Left $
+                if not isFile
+                    then "Method path not found: " <> T.pack (mcPath mc)
+                    else
+                        if ext `elem` archiveExtensions
+                            -- resolveDataPath returns the archive path unchanged when
+                            -- extraction failed, so an archive reaching here means that.
+                            then "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
+                            else "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
         else do
             (dir, xmlFiles, csvFiles, jsonFiles) <-
-                if isSingleJson
-                    then return (takeDirectory resolvedPath, [], [], [takeFileName resolvedPath])
+                if isBareFile
+                    then
+                        return
+                            ( takeDirectory resolvedPath
+                            , []
+                            , [takeFileName resolvedPath | isSingleCsv]
+                            , [takeFileName resolvedPath | isSingleJson]
+                            )
                     else do
                         -- Find method directory (handles nested ILCD structures)
                         d <- findMethodDirectory resolvedPath
@@ -2899,8 +2921,14 @@ loadMethodCollectionFromConfig mc = do
             if null xmlFiles && null csvFiles && null jsonFiles
                 then return $ Left $ "No method files (.xml/.csv/.json) found in: " <> T.pack dir
                 else do
-                    -- Try to find sibling flows/ directory for CF enrichment
-                    mFlowsDir <- FlowResolver.resolveFlowDirectory dir
+                    -- A bare method file (.csv/.json) carries its own CFs and has no
+                    -- ILCD flows/ sibling; only a real ILCD directory does. Scanning a
+                    -- coincidental neighbouring flows/ would parse unrelated flow XMLs
+                    -- and register foreign synonyms under this collection's name.
+                    mFlowsDir <-
+                        if isBareFile
+                            then return Nothing
+                            else FlowResolver.resolveFlowDirectory dir
                     flowInfo <- case mFlowsDir of
                         Nothing -> do
                             reportProgress Info "  No flows/ directory found, using shortDescription fallback"
