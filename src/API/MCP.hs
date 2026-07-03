@@ -41,7 +41,7 @@ import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (
 import Control.Monad (unless)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
-import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, excludeLongTermFlows, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
@@ -954,7 +954,7 @@ runImpactsRequest dbManager args req = do
     subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
     unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
     (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-    inventory <-
+    solvedInventory <-
         ExceptT $
             if null subs
                 then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName (ldSharedSolver ld) (raPid ra))
@@ -968,6 +968,10 @@ runImpactsRequest dbManager args req = do
                             (ldSharedSolver ld)
                             (raPid ra)
                             subs
+    let inventory =
+            if fromMaybe False (boolArg "exclude_long_term" args)
+                then excludeLongTermFlows mFlows solvedInventory
+                else solvedInventory
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
@@ -1830,7 +1834,8 @@ callScoreActivity dbManager mBaseUrl rid args =
         subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
         wantedSets <- except (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
         let mSub = if null subs then Nothing else Just SubstitutionRequest{srSubstitutions = subs}
-        res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub
+            ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
+        res <- liftIO $ BI.runActivityLCIABatch dbManager dbName pidText coll mSub ltMode
         case res of
             Left e -> throwE (batchErrorMsg e)
             Right lbr -> do

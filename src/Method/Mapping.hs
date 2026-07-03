@@ -36,6 +36,9 @@ module Method.Mapping (
     RegionalActivityWeights (..),
     computeLCIAScore,
     computeLCIAScoreFromTables,
+    LongTermMode (..),
+    longTermModeFromExclude,
+    excludeLongTermFlows,
     computeLCIAScoreAuto,
     computeRegionalizedLCIAScore,
     sumRegionalizedLCIAScoreCrossDB,
@@ -1825,6 +1828,32 @@ isLongTermUnspecifiedSub s =
             . T.filter (`notElem` ("()" :: String))
             . T.replace "long term" ""
             . T.replace "long-term" ""
+
+{- | Whether delayed long-term (> 100 yr) biosphere emissions count toward the
+impact score. 'IncludeLongTerm' is the default and preserves the standard
+ecoinvent/EF convention; 'ExcludeLongTerm' characterizes the process as if the
+delayed emissions were out of scope.
+-}
+data LongTermMode = IncludeLongTerm | ExcludeLongTerm
+    deriving (Eq, Show)
+
+{- | Read a request/tool @exclude@ flag into a 'LongTermMode'. Absent or false
+means keep the delayed emissions (the convention default).
+-}
+longTermModeFromExclude :: Bool -> LongTermMode
+longTermModeFromExclude excl = if excl then ExcludeLongTerm else IncludeLongTerm
+
+{- | Drop delayed long-term biosphere emissions from an inventory before
+characterization. A flow is long-term when its sub-compartment carries the
+"long-term" marker ('isLongTermSub'). These flows are always emissions, never
+resources, so this never removes a regionalized resource flow (water use / land
+use) — those categories are computed from a separate path and stay untouched.
+-}
+excludeLongTermFlows :: BioFlowDB -> Inventory -> Inventory
+excludeLongTermFlows flowDB = M.filterWithKey (\fid _ -> not (isLongTermFlow fid))
+  where
+    isLongTermFlow = maybe False subIsLongTerm . (`M.lookup` flowDB)
+    subIsLongTerm = maybe False (isLongTermSub . Subcompartment . T.toLower) . VT.bfCompartmentSub
 
 {- | The @(normalized medium, subcompartment)@ a database flow resolves to after
 compartment normalization. Shared by the name/CAS read path

@@ -490,6 +490,23 @@ pSubstitutions =
         \PIDs can be bare (root DB) or qualified as dbName::pid (cross-DB). \
         \When empty or absent, the call behaves as a plain GET."
 
+{- | Optional switch to drop delayed long-term emissions before scoring.
+Shared by 'get_impacts' and 'score_activity'. Long-term flows are always
+emissions (never resources), so excluding them never touches regionalized
+water/land categories.
+-}
+pExcludeLongTerm :: Param
+pExcludeLongTerm =
+    Param
+        "exclude_long_term"
+        "boolean"
+        Optional
+        "When true, drop delayed long-term (> 100 yr) emissions before \
+        \characterization — the score is computed as if those emissions were \
+        \out of scope. Long-term flows are emissions (never resources), so \
+        \regionalized water/land categories are unaffected. Default false \
+        \(keep them, per the ecoinvent/EF convention)."
+
 {- | The 'scoring_sets' parameter, shared by 'score_activity' and
 'score_activities' but with slightly different semantics:
 
@@ -609,6 +626,7 @@ params r = case r of
         , pCollection
         , Param "top_flows" "integer" Optional "Number of top contributing flows to return (default 5)"
         , pSubstitutions
+        , pExcludeLongTerm
         , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge). Lets reviewers tell genuine method gaps from mapping bugs."
         ]
     ComputeSensitivity ->
@@ -701,6 +719,7 @@ params r = case r of
         , pProcessId
         , Param "collection" "string" Required "Method collection name (use list_methods to discover)"
         , pSubstitutions
+        , pExcludeLongTerm
         , pScoringSetsFilter
         ]
     ScoreActivities ->
