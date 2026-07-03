@@ -399,6 +399,36 @@ spec = do
             -- 1000 g → 1.0 kg, * cf 2.0 = 2.0
             score `shouldBe` 2.0
 
+    describe "buildMethodTables unit-suffixed homonym collision" $ do
+        -- SimaPro-style methods carry one CF row per denominator unit for the
+        -- same substance ("Gas, natural/kg" = 43.1 MJ/kg and "Gas, natural/m3"
+        -- = 34.5 MJ/m3). normalizeName strips the suffix, so both rows collide
+        -- on one name key. The row whose raw name equals the flow's raw name
+        -- must win: the other variant is dimensionally incompatible with the
+        -- flow and would silently convert to 0.
+        let kgDef = UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0
+            m3Def = UnitDef [0, 3, 0, 0, 0, 0, 0, 0] 1.0
+            cfg =
+                UnitConfig
+                    { ucDimensionOrder = []
+                    , ucUnits = M.fromList [("kg", kgDef), ("m3", m3Def)]
+                    , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3")]
+                    }
+            cfPerKg = (mkCFComp "Gas, natural/kg" "natural resource" "" 43.1){mcfUnit = "kg"}
+            cfPerM3 = (mkCFComp "Gas, natural/m3" "natural resource" "" 34.5){mcfUnit = "m3"}
+
+        it "the verbatim-named CF wins over the higher-valued homonym" $ do
+            fid <- nextRandom
+            uidM3 <- nextRandom
+            let flow = (mkFlow fid "Gas, natural/m3" "natural resource" (Just "in ground")){bfUnitId = uidM3}
+                mappings = [(cfPerKg, Just (flow, ByName)), (cfPerM3, Just (flow, ByName))]
+                unitDB = M.singleton uidM3 Unit{unitId = uidM3, unitName = "m3", unitSymbol = "m3", unitComment = ""}
+                flowDB = M.singleton fid flow
+                score ms = loScore (computeLCIAScoreFromTables cfg unitDB flowDB (M.singleton fid 2.0) (buildMethodTables OtherCFFamily M.empty M.empty ms))
+            score mappings `shouldBe` 2.0 * 34.5
+            -- insertion order must not matter
+            score (reverse mappings) `shouldBe` 2.0 * 34.5
+
     describe "inventoryContributions" $ do
         -- Regression: same fallback bug as computeLCIAScoreFromTables.
         it "yields zero contribution when unit conversion fails" $ do
