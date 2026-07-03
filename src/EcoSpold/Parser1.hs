@@ -42,19 +42,30 @@ Using UUID v5 (SHA1-based) with a custom namespace
 ecospold1Namespace :: UUID
 ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "ecospold1.ecoinvent.org")
 
-{- | Generate deterministic UUID from dataset number and exchange number
-This ensures consistent UUIDs across multiple parses
+{- | Generate deterministic UUID from dataset number, exchange number, and the
+full compartment (category + subCategory).
+
+The subCategory is part of the key because it is part of a flow's identity: an
+emission of one substance to two subcompartments (e.g. a leachate to both
+@river@ and @groundwater, long-term@) is two distinct flows with distinct
+environmental fates and distinct characterization factors. Dropping subCategory
+collapsed them onto one UUID, so the matrix summed their amounts into a single
+row carrying whichever subcompartment label happened to win the flow-map merge —
+silently scoring gated groundwater/ocean mass at a surface-freshwater CF (or the
+reverse). Keying on the full compartment keeps each subcompartment a separate row
+scored at its own CF.
 -}
-generateFlowUUID :: Int -> Int -> Text -> Text -> UUID
-generateFlowUUID datasetNumber exchangeNumber flowName category =
+generateFlowUUID :: Int -> Int -> Text -> Text -> Text -> UUID
+generateFlowUUID datasetNumber exchangeNumber flowName category subCategory =
     let key =
-            T.pack (show datasetNumber)
-                <> ":"
-                <> T.pack (show exchangeNumber)
-                <> ":"
-                <> flowName
-                <> ":"
-                <> category
+            T.intercalate
+                ":"
+                [ T.pack (show datasetNumber)
+                , T.pack (show exchangeNumber)
+                , flowName
+                , category
+                , subCategory
+                ]
      in UUID5.generateNamed ecospold1Namespace (BS.unpack $ TE.encodeUtf8 key)
 
 -- | Generate deterministic UUID for unit from unit name
@@ -358,7 +369,7 @@ buildExchange datasetNum activityLoc edata
     | isBiosphere = (bioEx, ParsedBio bioFlow, unit)
     | otherwise = (techEx, ParsedTech techFlow, unit)
   where
-    flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata)
+    flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata)
     unitId = generateUnitUUID (exUnit edata)
     unit = Unit unitId (exUnit edata) (exUnit edata) ""
 

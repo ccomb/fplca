@@ -182,6 +182,10 @@ History of manual bumps:
      the product name). Activity record gained activityAllocationPercent
      and activityAllocationFormula. Old caches have stale per-product
      UUIDs and miss the allocation fields entirely.
+- 8: EcoSpold1 biosphere-flow UUID now includes the subCategory, so an
+     emission to two subcompartments (e.g. river + groundwater, long-term)
+     no longer collapses to one row scored at a single arbitrary
+     subcompartment's CF. Old caches merged those amounts under one flow.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -189,7 +193,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 7
+     in hi `xor` lo `xor` 8
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

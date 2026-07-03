@@ -220,20 +220,24 @@ spec :: Spec
 spec = do
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
-            generateFlowUUID 42 1 "CO2" "air"
-                `shouldBe` read "4b869b57-e716-5e42-ae6f-0536cf112615"
+            generateFlowUUID 42 1 "CO2" "air" ""
+                `shouldBe` read "64b107af-792c-5a2a-874f-2a3323510af7"
 
         it "differs when dataset number changes" $
-            generateFlowUUID 1 1 "CO2" "air"
-                `shouldNotBe` generateFlowUUID 2 1 "CO2" "air"
+            generateFlowUUID 1 1 "CO2" "air" ""
+                `shouldNotBe` generateFlowUUID 2 1 "CO2" "air" ""
 
         it "differs when exchange number changes" $
-            generateFlowUUID 1 1 "CO2" "air"
-                `shouldNotBe` generateFlowUUID 1 2 "CO2" "air"
+            generateFlowUUID 1 1 "CO2" "air" ""
+                `shouldNotBe` generateFlowUUID 1 2 "CO2" "air" ""
 
         it "differs when flow name changes" $
-            generateFlowUUID 1 1 "CO2" "air"
-                `shouldNotBe` generateFlowUUID 1 1 "methane" "air"
+            generateFlowUUID 1 1 "CO2" "air" ""
+                `shouldNotBe` generateFlowUUID 1 1 "methane" "air" ""
+
+        it "differs when subcategory changes (river vs groundwater must not collapse)" $
+            generateFlowUUID 1 1 "Hydrogen sulfide" "water" "river"
+                `shouldNotBe` generateFlowUUID 1 1 "Hydrogen sulfide" "water" "groundwater, long-term"
 
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $
