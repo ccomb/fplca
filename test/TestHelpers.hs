@@ -6,7 +6,6 @@ module TestHelpers (
     withinTolerance,
     assertVectorNear,
     findFlowByName,
-    findActivityByUUID,
     mkDepLookupFromMap,
     linkDatabases,
     mkSolverFromDb,
@@ -60,17 +59,6 @@ findFlowByName db name =
     let flows = M.elems (dbBioFlows db)
      in case filter (\f -> T.toLower (bfName f) == T.toLower name) flows of
             (f : _) -> Just f
-            [] -> Nothing
-
-{- | Find an activity by UUID in the database
-Search in ProcessId table for matching activity UUID
--}
-findActivityByUUID :: Database -> UUID -> Maybe Activity
-findActivityByUUID db uuid =
-    let processIdTable = dbProcessIdTable db
-        matchingIndices = [i | (i, (actUUID, _)) <- zip [0 ..] (V.toList processIdTable), actUUID == uuid]
-     in case matchingIndices of
-            (idx : _) -> Just $ dbActivities db V.! idx
             [] -> Nothing
 
 {- | Turn a map of loaded (Database, SharedSolver) pairs into the lookup

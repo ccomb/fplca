@@ -39,7 +39,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Upload (DatabaseFormat (..))
 import GHC.Generics (Generic)
-import Plugin.Config (PluginConfig)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (takeFileName)
@@ -72,7 +71,6 @@ data Config = Config
     , cfgCompartmentMappings :: ![RefDataConfig]
     , cfgUnits :: ![RefDataConfig]
     , cfgEnergyDensities :: ![RefDataConfig]
-    , cfgPlugins :: ![PluginConfig]
     , cfgHosting :: !(Maybe HostingConfig)
     , cfgGeographies :: !(Maybe FilePath) -- Path to geographies CSV (code,display_name,parents)
     , cfgChemSynonyms :: !(Maybe FilePath) -- Path to chem_synonyms CSV (PubChem snapshot for the suggester)
@@ -187,7 +185,6 @@ defaultConfig =
         , cfgCompartmentMappings = []
         , cfgUnits = []
         , cfgEnergyDensities = []
-        , cfgPlugins = []
         , cfgHosting = Nothing
         , cfgGeographies = Nothing
         , cfgChemSynonyms = Nothing
@@ -206,7 +203,6 @@ instance DecodeTOML Config where
         cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
         cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
         cfgEnergyDensities <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "energy-densities"
-        cfgPlugins <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "plugin"
         cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         cfgGeographies <- getFieldOpt "geographies"
         cfgChemSynonyms <- getFieldOpt "chem-synonyms"

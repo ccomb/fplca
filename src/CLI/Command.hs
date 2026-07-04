@@ -3,10 +3,11 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
+import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.List (isPrefixOf)
@@ -27,7 +28,6 @@ import qualified Database.UploadedDatabase as UploadedDB
 import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
 import Method.Types (MethodCF (..))
 import qualified Method.Types
-import Plugin.Types (AnalyzeHandle (..), ExportContext (..), ExportHandle (..), ImportHandle (..), MapperHandle (..), PluginBackend (..), PluginRegistry (..), ReportHandle (..), SearchHandle (..), TransformHandle (..), ValidateHandle (..))
 import Progress
 import qualified Service
 import SharedSolver (SharedSolver)
@@ -71,24 +71,21 @@ requireDatabase manager mName = do
                     reportError $ "Multiple databases loaded, use --db to select one: " ++ unwords available
                     exitFailure
 
--- | Output result using the plugin registry's reporter handles.
-outputResult :: PluginRegistry -> OutputFormat -> Value -> IO ()
-outputResult registry fmt result =
-    case M.lookup (formatToId fmt) (prReporters registry) of
-        Just reporter -> rhReport reporter result >>= BSL.putStrLn
-        Nothing -> BSL.putStrLn (encode result) -- fallback
+-- | Print a result value in the requested output format.
+outputResult :: OutputFormat -> Value -> IO ()
+outputResult fmt result = BSL.putStrLn (render result)
   where
-    formatToId JSON = "json"
-    formatToId CSV = "csv"
-    formatToId Table = "table"
-    formatToId Pretty = "pretty"
+    render = case fmt of
+        JSON -> encode
+        CSV -> encode
+        Table -> encodePretty
+        Pretty -> encodePretty
 
 -- | Execute a CLI command with global options
 executeCommand :: CLIConfig -> Command -> DatabaseManager -> IO ()
 executeCommand (CLIConfig globalOpts _) cmd manager = do
     let outputFormat = resolveOutputFormat globalOpts cmd
-        registry = dmPlugins manager
-        out = outputResult registry outputFormat
+        out = outputResult outputFormat
 
     case cmd of
         -- Manager-level commands (no database required)
@@ -98,27 +95,27 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
         Database DbList ->
             DM.listDatabases manager >>= out . toJSON
         Database (DbLoad name) ->
-            executeDbLoad registry outputFormat manager name
+            executeDbLoad outputFormat manager name
         Database (DbUnload name) ->
-            executeDbUnload registry outputFormat manager name
+            executeDbUnload outputFormat manager name
         Database (DbUpload args) ->
-            executeDbUpload registry outputFormat manager args
+            executeDbUpload outputFormat manager args
         Database (DbDelete name) ->
-            executeDbDelete registry outputFormat manager name
+            executeDbDelete outputFormat manager name
         Database (DbDeleteActivities args) ->
-            executeDbDeleteActivities registry outputFormat manager args
+            executeDbDeleteActivities outputFormat manager args
         Database (DbCopy srcName newName) ->
-            executeDbCopy registry outputFormat manager srcName newName
+            executeDbCopy outputFormat manager srcName newName
         Database (DbRelinkMapping args) ->
-            executeDbRelinkMapping registry outputFormat manager args
+            executeDbRelinkMapping outputFormat manager args
         Database (DbExport args) ->
-            executeDbExport registry outputFormat manager args
+            executeDbExport outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
-            executeMcUpload registry outputFormat manager args
+            executeMcUpload outputFormat manager args
         Method (McDelete name) ->
-            executeMcDelete registry outputFormat manager name
+            executeMcDelete outputFormat manager name
         Methods -> do
             pairs <- DM.getLoadedMethods manager
             let val = toJSON [object ["collection" .= col, "method" .= m] | (col, m) <- pairs]
@@ -129,37 +126,35 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             DM.listCompartmentMappings manager >>= out . toJSON
         Units ->
             DM.listUnitDefs manager >>= out . toJSON
-        Plugin PluginList ->
-            executePluginList registry outputFormat
         FlowMapping opts -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeFlowMappingCommand registry outputFormat database manager opts
+            executeFlowMappingCommand outputFormat database manager opts
 
         -- Database-level commands
         Activity _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         Inventory _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         Flow _ _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         SearchActivities _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         SearchFlows _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         Impacts _ _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         DebugMatrices _ _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         ExportMatrices _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
-            executeDbCommand registry outputFormat globalOpts database cmd
+            executeDbCommand outputFormat globalOpts database cmd
         Stop -> do
             reportError "Stop command should be handled in Main.hs"
             exitFailure
@@ -174,31 +169,30 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             exitFailure
 
 -- | Execute commands that require a loaded database
-executeDbCommand :: PluginRegistry -> OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
-executeDbCommand registry fmt _globalOpts database = \case
+executeDbCommand :: OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
+executeDbCommand fmt _globalOpts database = \case
     Activity uuid ->
-        executeActivityCommand registry fmt database uuid
+        executeActivityCommand fmt database uuid
     Inventory uuid ->
-        executeActivityInventoryCommand registry fmt database uuid
+        executeActivityInventoryCommand fmt database uuid
     Flow flowId Nothing ->
-        executeFlowCommand registry fmt database flowId
+        executeFlowCommand fmt database flowId
     Flow flowId (Just FlowActivities) ->
-        executeFlowActivitiesCommand registry fmt database flowId
+        executeFlowActivitiesCommand fmt database flowId
     SearchActivities opts ->
-        executeSearchActivitiesCommand registry fmt database opts
+        executeSearchActivitiesCommand fmt database opts
     SearchFlows opts ->
-        executeSearchFlowsCommand registry fmt database opts
+        executeSearchFlowsCommand fmt database opts
     Impacts uuid lciaOpts ->
-        executeImpactsCommand registry fmt database uuid lciaOpts
+        executeImpactsCommand fmt database uuid lciaOpts
     DebugMatrices uuid debugOpts ->
         executeDebugMatricesCommand database uuid debugOpts
     ExportMatrices outputDir ->
-        executeExportMatricesCommand registry database outputDir
+        executeExportMatricesCommand database outputDir
     -- Manager-level commands already handled above; should never be reached here
     Server _ -> pure ()
     Database _ -> pure ()
     Method _ -> pure ()
-    Plugin _ -> pure ()
     Methods -> pure ()
     Synonyms -> pure ()
     CompartmentMappings -> pure ()
@@ -210,40 +204,40 @@ executeDbCommand registry fmt _globalOpts database = \case
     DumpMcpTools -> pure ()
 
 -- | Execute activity info command
-executeActivityCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> IO ()
-executeActivityCommand registry fmt database uuid =
+executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()
+executeActivityCommand fmt database uuid =
     case Service.getActivityInfo defaultUnitConfig database uuid of
         Left err -> reportServiceError err
-        Right result -> outputResult registry fmt result
+        Right result -> outputResult fmt result
 
 -- | Execute activity inventory command
-executeActivityInventoryCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> IO ()
-executeActivityInventoryCommand registry fmt database uuid = do
+executeActivityInventoryCommand :: OutputFormat -> Database -> T.Text -> IO ()
+executeActivityInventoryCommand fmt database uuid = do
     reportProgress Info $ "Computing inventory for activity: " ++ T.unpack uuid
     result <- Service.getActivityInventory database uuid
     case result of
         Left err -> reportServiceError err
         Right value -> do
             reportProgress Info "Inventory computation completed"
-            outputResult registry fmt value
+            outputResult fmt value
 
 -- | Execute flow info command
-executeFlowCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> IO ()
-executeFlowCommand registry fmt database flowId =
+executeFlowCommand :: OutputFormat -> Database -> T.Text -> IO ()
+executeFlowCommand fmt database flowId =
     case Service.getFlowInfo database flowId of
         Left err -> reportServiceError err
-        Right result -> outputResult registry fmt result
+        Right result -> outputResult fmt result
 
 -- | Execute flow activities command
-executeFlowActivitiesCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> IO ()
-executeFlowActivitiesCommand registry fmt database flowId =
+executeFlowActivitiesCommand :: OutputFormat -> Database -> T.Text -> IO ()
+executeFlowActivitiesCommand fmt database flowId =
     case Service.getFlowActivities database flowId of
         Left err -> reportServiceError err
-        Right result -> outputResult registry fmt result
+        Right result -> outputResult fmt result
 
 -- | Execute search activities command
-executeSearchActivitiesCommand :: PluginRegistry -> OutputFormat -> Database -> SearchActivitiesOptions -> IO ()
-executeSearchActivitiesCommand registry fmt database opts = do
+executeSearchActivitiesCommand :: OutputFormat -> Database -> SearchActivitiesOptions -> IO ()
+executeSearchActivitiesCommand fmt database opts = do
     let sf =
             Service.SearchFilter
                 { Service.sfCore =
@@ -262,13 +256,13 @@ executeSearchActivitiesCommand registry fmt database opts = do
     searchResult <- Service.searchActivities database sf
     case searchResult of
         Left err -> reportServiceError err
-        Right result -> outputResult registry fmt result
+        Right result -> outputResult fmt result
 
 -- | Execute search flows command
-executeSearchFlowsCommand :: PluginRegistry -> OutputFormat -> Database -> SearchFlowsOptions -> IO ()
-executeSearchFlowsCommand registry fmt database opts =
+executeSearchFlowsCommand :: OutputFormat -> Database -> SearchFlowsOptions -> IO ()
+executeSearchFlowsCommand fmt database opts =
     case searchQuery opts of
-        Nothing -> outputResult registry fmt Service.emptyFlowSearchResults
+        Nothing -> outputResult fmt Service.emptyFlowSearchResults
         Just query -> do
             let ff =
                     Service.FlowFilter
@@ -282,11 +276,11 @@ executeSearchFlowsCommand registry fmt database opts =
             searchResult <- Service.searchFlows database ff
             case searchResult of
                 Left err -> reportServiceError err
-                Right result -> outputResult registry fmt result
+                Right result -> outputResult fmt result
 
 -- | Impacts (LCIA) is now handled via HTTP client (see CLI.Client)
-executeImpactsCommand :: PluginRegistry -> OutputFormat -> Database -> T.Text -> LCIAOptions -> IO ()
-executeImpactsCommand _ _ _ _ _ = do
+executeImpactsCommand :: OutputFormat -> Database -> T.Text -> LCIAOptions -> IO ()
+executeImpactsCommand _ _ _ _ = do
     reportError "impacts is only available via HTTP. Start the server first: volca --config volca.toml server"
     exitFailure
 
@@ -308,51 +302,20 @@ executeDebugMatricesCommand database uuid opts = do
             reportProgress Info $ "Supply chain data: " ++ debugOutput opts ++ "_supply_chain.csv"
             reportProgress Info $ "Biosphere matrix: " ++ debugOutput opts ++ "_biosphere_matrix.csv"
 
--- | Execute export matrices command using plugin registry
-executeExportMatricesCommand :: PluginRegistry -> Database -> FilePath -> IO ()
-executeExportMatricesCommand registry database outputDir = do
+-- | Execute export matrices command
+executeExportMatricesCommand :: Database -> FilePath -> IO ()
+executeExportMatricesCommand database outputDir = do
     reportProgress Info $ "Exporting matrices to: " ++ outputDir
-    case M.lookup "ecoinvent-matrix" (prExporters registry) of
-        Just exporter -> do
-            let ctx = ExportContext{ecDatabase = database, ecInventory = Nothing, ecMethods = []}
-            ehExport exporter ctx outputDir
-        Nothing -> Service.exportUniversalMatrixFormat outputDir database
+    Service.exportUniversalMatrixFormat outputDir database
     reportProgress Info "Matrix export completed"
     reportProgress Info "  - ie_index.csv (activity index)"
     reportProgress Info "  - ee_index.csv (biosphere flow index)"
     reportProgress Info "  - A_public.csv (technosphere matrix)"
     reportProgress Info "  - B_public.csv (biosphere matrix)"
 
--- | Execute plugin list command
-executePluginList :: PluginRegistry -> OutputFormat -> IO ()
-executePluginList registry fmt = do
-    let noPriority = Nothing :: Maybe Int
-        plugins =
-            concat
-                [ [pluginEntry (mhName m) "mapper" (mhBackend m) (Just $ mhPriority m) | m <- prMappers registry]
-                , [pluginEntry (rhName r) "reporter" (rhBackend r) noPriority | r <- M.elems (prReporters registry)]
-                , [pluginEntry (ehName e) "exporter" (ehBackend e) noPriority | e <- M.elems (prExporters registry)]
-                , [pluginEntry (ahName a) "analyzer" (ahBackend a) noPriority | a <- M.elems (prAnalyzers registry)]
-                , [pluginEntry (thName t) "transform" (thBackend t) (Just $ thPriority t) | t <- prTransforms registry]
-                , [pluginEntry (vhName v) "validator" (vhBackend v) noPriority | v <- prValidators registry]
-                , [pluginEntry (shName s) "searcher" (shBackend s) (Just $ shPriority s) | s <- prSearchers registry]
-                , [pluginEntry (ihName i) "importer" (ihBackend i) noPriority | i <- prImporters registry]
-                ]
-    outputResult registry fmt (toJSON plugins)
-  where
-    pluginEntry name typ backend mPriority =
-        object $
-            [ "name" .= name
-            , "type" .= (typ :: T.Text)
-            , "backend" .= backendText backend
-            ]
-                ++ maybe [] (\p -> ["priority" .= p]) mPriority
-    backendText Builtin = "builtin" :: T.Text
-    backendText (External p) = "external:" <> T.pack p
-
 -- | Execute database upload command
-executeDbUpload :: PluginRegistry -> OutputFormat -> DatabaseManager -> UploadArgs -> IO ()
-executeDbUpload registry fmt manager args = do
+executeDbUpload :: OutputFormat -> DatabaseManager -> UploadArgs -> IO ()
+executeDbUpload fmt manager args = do
     reportProgress Info $ "Reading file: " ++ uaFile args
     fileData <- BL.readFile (uaFile args)
 
@@ -404,7 +367,7 @@ executeDbUpload registry fmt manager args = do
             addDatabase manager dbConfig
             reportProgress Info $ "Database uploaded: " ++ T.unpack slug
 
-            outputResult registry fmt $
+            outputResult fmt $
                 object
                     [ "slug" .= slug
                     , "format" .= urFormat uploadResult
@@ -417,8 +380,8 @@ executeDbUpload registry fmt manager args = do
         | otherwise = path
 
 -- | Execute method upload command
-executeMcUpload :: PluginRegistry -> OutputFormat -> DatabaseManager -> UploadArgs -> IO ()
-executeMcUpload registry fmt manager args = do
+executeMcUpload :: OutputFormat -> DatabaseManager -> UploadArgs -> IO ()
+executeMcUpload fmt manager args = do
     reportProgress Info $ "Reading file: " ++ uaFile args
     fileData <- BL.readFile (uaFile args)
 
@@ -467,7 +430,7 @@ executeMcUpload registry fmt manager args = do
             addMethodCollection manager mc
             reportProgress Info $ "Method uploaded: " ++ T.unpack slug
 
-            outputResult registry fmt $
+            outputResult fmt $
                 object
                     [ "slug" .= slug
                     , "format" .= urFormat uploadResult
@@ -480,8 +443,8 @@ executeMcUpload registry fmt manager args = do
         | otherwise = path
 
 -- | Execute database delete command
-executeDbDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
-executeDbDelete registry fmt manager name = do
+executeDbDelete :: OutputFormat -> DatabaseManager -> Text -> IO ()
+executeDbDelete fmt manager name = do
     result <- DM.removeDatabase manager name
     case result of
         Left err -> do
@@ -489,13 +452,13 @@ executeDbDelete registry fmt manager name = do
             exitFailure
         Right () -> do
             reportProgress Info $ "Deleted database: " ++ T.unpack name
-            outputResult registry fmt $ object ["deleted" .= name]
+            outputResult fmt $ object ["deleted" .= name]
 
 {- | Execute delete-by-selection: deletes the whole filtered set (pagination
 ignored) plus the explicit @--add@ ProcessIds, sparing @--keep@.
 -}
-executeDbDeleteActivities :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbDeleteArgs -> IO ()
-executeDbDeleteActivities registry fmt manager args = do
+executeDbDeleteActivities :: OutputFormat -> DatabaseManager -> DbDeleteArgs -> IO ()
+executeDbDeleteActivities fmt manager args = do
     let classFilters = case (ddaClassSystem args, ddaClassValue args) of
             (Just sys, Just val) -> [(sys, val, ddaExact args)]
             _ -> []
@@ -516,13 +479,13 @@ executeDbDeleteActivities registry fmt manager args = do
             exitFailure
         Right deleted -> do
             reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
-            outputResult registry fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
+            outputResult fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
 
 {- | Execute database load: bring a configured database (and its declared
 dependencies) into memory. Any failed dependency is surfaced in the output.
 -}
-executeDbLoad :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
-executeDbLoad registry fmt manager name = do
+executeDbLoad :: OutputFormat -> DatabaseManager -> Text -> IO ()
+executeDbLoad fmt manager name = do
     result <- DM.loadDatabase manager name
     case result of
         Left err -> do
@@ -530,13 +493,13 @@ executeDbLoad registry fmt manager name = do
             exitFailure
         Right (_loaded, deps) -> do
             reportProgress Info $ "Loaded database: " ++ T.unpack name
-            outputResult registry fmt $ object ["loaded" .= name, "dependencies" .= deps]
+            outputResult fmt $ object ["loaded" .= name, "dependencies" .= deps]
 
 {- | Execute database unload: drop a database from memory (refused while another
 loaded database still depends on it).
 -}
-executeDbUnload :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
-executeDbUnload registry fmt manager name = do
+executeDbUnload :: OutputFormat -> DatabaseManager -> Text -> IO ()
+executeDbUnload fmt manager name = do
     result <- DM.unloadDatabase manager name
     case result of
         Left err -> do
@@ -544,11 +507,11 @@ executeDbUnload registry fmt manager name = do
             exitFailure
         Right () -> do
             reportProgress Info $ "Unloaded database: " ++ T.unpack name
-            outputResult registry fmt $ object ["unloaded" .= name]
+            outputResult fmt $ object ["unloaded" .= name]
 
 -- | Execute database copy command
-executeDbCopy :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> Text -> IO ()
-executeDbCopy registry fmt manager srcName newName = do
+executeDbCopy :: OutputFormat -> DatabaseManager -> Text -> Text -> IO ()
+executeDbCopy fmt manager srcName newName = do
     result <- copyDatabase manager srcName newName
     case result of
         Left err -> do
@@ -556,11 +519,11 @@ executeDbCopy registry fmt manager srcName newName = do
             exitFailure
         Right () -> do
             reportProgress Info $ "Copied database: " ++ T.unpack srcName ++ " -> " ++ T.unpack newName
-            outputResult registry fmt $ object ["source" .= srcName, "copy" .= newName]
+            outputResult fmt $ object ["source" .= srcName, "copy" .= newName]
 
 -- | Execute relink-with-mapping: relink a DB to a dependency via an alias CSV.
-executeDbRelinkMapping :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbRelinkArgs -> IO ()
-executeDbRelinkMapping registry fmt manager args = do
+executeDbRelinkMapping :: OutputFormat -> DatabaseManager -> DbRelinkArgs -> IO ()
+executeDbRelinkMapping fmt manager args = do
     result <- relinkWithMappingFile manager (draDb args) (draToDep args) (draMappingCsv args)
     case result of
         Left err -> do
@@ -577,7 +540,7 @@ executeDbRelinkMapping registry fmt manager args = do
                     ++ " unresolved ("
                     ++ show (rresCrossDBLinks r)
                     ++ " cross-DB links)"
-            outputResult registry fmt $
+            outputResult fmt $
                 object
                     [ "database" .= rresDbName r
                     , "unresolved_before" .= rresUnresolvedBefore r
@@ -587,8 +550,8 @@ executeDbRelinkMapping registry fmt manager args = do
                     ]
 
 -- | Execute database export: serialize a loaded database to a file.
-executeDbExport :: PluginRegistry -> OutputFormat -> DatabaseManager -> DbExportArgs -> IO ()
-executeDbExport registry fmt manager args =
+executeDbExport :: OutputFormat -> DatabaseManager -> DbExportArgs -> IO ()
+executeDbExport fmt manager args =
     case parseExportFormat (deaFormat args) of
         Left err -> reportError (T.unpack err) >> exitFailure
         Right dbFmt -> do
@@ -603,7 +566,7 @@ executeDbExport registry fmt manager args =
                         Left err -> reportError (T.unpack err) >> exitFailure
                         Right () -> do
                             reportProgress Info $ "Exported " ++ T.unpack (deaDb args) ++ " -> " ++ deaOut args
-                            outputResult registry fmt $
+                            outputResult fmt $
                                 object
                                     [ "database" .= deaDb args
                                     , "format" .= deaFormat args
@@ -611,8 +574,8 @@ executeDbExport registry fmt manager args =
                                     ]
 
 -- | Execute method delete command
-executeMcDelete :: PluginRegistry -> OutputFormat -> DatabaseManager -> Text -> IO ()
-executeMcDelete registry fmt manager name = do
+executeMcDelete :: OutputFormat -> DatabaseManager -> Text -> IO ()
+executeMcDelete fmt manager name = do
     result <- DM.removeMethodCollection manager name
     case result of
         Left err -> do
@@ -620,11 +583,11 @@ executeMcDelete registry fmt manager name = do
             exitFailure
         Right () -> do
             reportProgress Info $ "Deleted method: " ++ T.unpack name
-            outputResult registry fmt $ object ["deleted" .= name]
+            outputResult fmt $ object ["deleted" .= name]
 
 -- | Execute mapping command: analyze flow mapping coverage
-executeFlowMappingCommand :: PluginRegistry -> OutputFormat -> Types.Database -> DatabaseManager -> MappingOptions -> IO ()
-executeFlowMappingCommand registry fmt database manager opts = do
+executeFlowMappingCommand :: OutputFormat -> Types.Database -> DatabaseManager -> MappingOptions -> IO ()
+executeFlowMappingCommand fmt database manager opts = do
     -- Find method by UUID
     loadedMethods <- DM.getLoadedMethods manager
     let allMethods = map snd loadedMethods
@@ -638,7 +601,7 @@ executeFlowMappingCommand registry fmt database manager opts = do
                     reportError $ "Method not found: " ++ T.unpack (mappingMethodId opts)
                     exitFailure
                 (method : _) -> do
-                    mappings <- mapMethodToFlows (prMappers registry) database method
+                    mappings <- mapMethodToFlows database method
                     let stats = computeMappingStats mappings
                         totalMatched = msTotal stats - msUnmatched stats
                         coverage =
@@ -712,7 +675,7 @@ executeFlowMappingCommand registry fmt database manager opts = do
 
                     case fmt of
                         JSON ->
-                            outputResult registry JSON $
+                            outputResult JSON $
                                 toJSON $
                                     object
                                         [ "method" .= Method.Types.methodName method

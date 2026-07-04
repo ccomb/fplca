@@ -3,7 +3,6 @@
 
 module Numerical.MUMPS.Types (
     MUMPSSolver (..),
-    MUMPSError (..),
 ) where
 
 import Foreign.Ptr (Ptr)
@@ -15,10 +14,6 @@ data MUMPSSolver = MUMPSSolver
     , solverSize :: !Int
     -- ^ Matrix dimension n
     }
-
--- | MUMPS error with the INFOG(1) code
-newtype MUMPSError = MUMPSError Int
-    deriving (Show)
 
 instance Show MUMPSSolver where
     show s = "MUMPSSolver{n=" ++ show (solverSize s) ++ "}"

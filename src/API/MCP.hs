@@ -46,7 +46,6 @@ import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
 import Numeric (showFFloat)
-import Plugin.Types ()
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
 import qualified Service.Aggregate as Agg

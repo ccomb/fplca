@@ -171,7 +171,6 @@ POST   /api/v1/db/{dbName}/activity/{processId}/supply-chain             Same, w
 GET    /api/v1/db/{dbName}/activity/{processId}/consumers                Downstream activities consuming this one
 GET    /api/v1/db/{dbName}/activity/{processId}/path-to?target=          Shortest supply-chain path to a target activity
 GET    /api/v1/db/{dbName}/activity/{processId}/aggregate                SQL-style group/filter on exchanges, supply chain, or biosphere
-GET    /api/v1/db/{dbName}/activity/{processId}/analyze/{analyzerName}   Run a registered plugin analyzer
 
 # Inventory and impacts
 GET    /api/v1/db/{dbName}/activity/{processId}/inventory                Life cycle inventory (LCI)
@@ -437,9 +436,6 @@ volca method delete ef-31                        # delete
 | Flow synonyms | `GET /flow-synonyms` (+ load/unload/upload/delete/groups/download) | `synonyms` |
 | Compartment mappings | `GET /compartment-mappings` (+ load/unload/upload/delete) | `compartment-mappings` |
 | Units | `GET /units` (+ load/unload/upload/delete) | `units` |
-| **Plugins** | | |
-| List plugins | — | `plugin list` |
-| Run analyzer | `GET /db/{db}/activity/{id}/analyze/{name}` | — |
 | **Matrix Export** | | |
 | Universal format | — | `export-matrices DIR` (local only) |
 | Debug matrices | — | `debug-matrices ID --output FILE` (local only) |

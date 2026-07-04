@@ -37,7 +37,6 @@ module API.MCP.Enrich (
     -- * Value combinators (exported for tests)
     overObject,
     overArray,
-    valueText,
 ) where
 
 import Data.Aeson (Value (..), object, (.=))
@@ -77,16 +76,6 @@ overArray f = \case
     Number n -> Number n
     Bool b -> Bool b
     Null -> Null
-
--- | Pull a 'Text' out of a 'Value' (only 'String' is admitted).
-valueText :: Value -> Maybe Text
-valueText = \case
-    String s -> Just s
-    Object _ -> Nothing
-    Array _ -> Nothing
-    Number _ -> Nothing
-    Bool _ -> Nothing
-    Null -> Nothing
 
 -- ---------------------------------------------------------------------------
 -- URL helpers

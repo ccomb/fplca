@@ -138,10 +138,6 @@ spec = do
             cmd <- parseCmd ["method"]
             cmd `shouldBe` Method McList
 
-        it "parses `plugin` with no subcommand → PluginList" $ do
-            cmd <- parseCmd ["plugin"]
-            cmd `shouldBe` Plugin PluginList
-
     describe "server command" $ do
         it "parses `server` with defaults" $ do
             cmd <- parseCmd ["server"]

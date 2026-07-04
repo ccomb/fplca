@@ -23,6 +23,7 @@ One CSV file → multiple 'Method' values (one per column).
 -}
 module Method.ParserCSV (
     parseMethodCSVBytes,
+    stripBOM,
 ) where
 
 import qualified Data.ByteString as BS

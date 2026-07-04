@@ -93,7 +93,6 @@ commandParser =
             <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
             <> OA.command "database" (info (databaseParser <**> helper) (progDesc "Manage databases (list, upload, delete)"))
             <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections (list, upload, delete)"))
-            <> OA.command "plugin" (info (pluginParser <**> helper) (progDesc "Manage plugins (list)"))
             <> OA.command "methods" (info (pure Methods <**> helper) (progDesc "List loaded methods (flattened)"))
             <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
@@ -179,15 +178,6 @@ methodParser =
                     <> OA.command "upload" (info (McUpload <$> uploadArgsParser) (progDesc "Upload a method collection from a local file"))
                     <> OA.command "delete" (info (McDelete <$> deleteNameParser) (progDesc "Delete a method collection"))
                 )
-            )
-
--- | Plugin command parser with optional subcommand (defaults to list)
-pluginParser :: Parser Command
-pluginParser =
-    Plugin . fromMaybe PluginList
-        <$> optional
-            ( subparser
-                (OA.command "list" (info (pure PluginList) (progDesc "List registered plugins")))
             )
 
 -- | Shared upload arguments parser (positional FILE, --name, --description)
@@ -277,8 +267,6 @@ impactsParser =
 lciaOptionsParser :: Parser LCIAOptions
 lciaOptionsParser = do
     lciaMethodId <- textOpt "method" (Just 'm') "METHOD_UUID" "Method UUID (method must be loaded on the server)"
-    lciaOutput <- optStrOpt "output" (Just 'o') "FILE" "Export results to XML ILCD format"
-    lciaCSV <- optStrOpt "csv" Nothing "FILE" "Export results to CSV format"
     pure LCIAOptions{..}
 
 -- | Debug matrices command parser

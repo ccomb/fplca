@@ -35,7 +35,6 @@ library
                      , UnitConversion
                      , Amount
                      , Config
-                     , ConfigWriter
                      , Service
                      , Service.Aggregate
                      , Tree
@@ -96,10 +95,6 @@ library
                      , ILCD.Parser
                      , ILCD.Writer
                      , Database.Export
-                     , Plugin.Types
-                     , Plugin.Builtin
-                     , Plugin.Bridge
-                     , Plugin.Config
                      , Search.Normalize
                      , Search.BM25
                      , Search.BM25.Types
@@ -223,7 +218,6 @@ test-suite lca-tests
                      , BrightwayExcelSpec
                      , BrightwayExcelWriterSpec
                      , UnitConversionSpec
-                     , PluginSpec
                      , ProxyEdgeSpec
                      , CASBackfillSpec
                      , RegionFallbackSpec
@@ -254,7 +248,6 @@ test-suite lca-tests
                      , CoalescingSolverSpec
                      , FlowResolverSpec
                      , SynonymExtractSpec
-                     , PluginConfigSpec
                      , ConfigSpec
                      , LoaderSpec
                      , SetupInfoSpec
@@ -300,7 +293,6 @@ test-suite lca-tests
                      , ScoringKeySpec
                      , NumericEdgesSpec
                      , AggregateSpec
-                     , ConfigWriterSpec
                      , CopySpec
                      , DeleteSelectionSpec
                      , ExportSpec

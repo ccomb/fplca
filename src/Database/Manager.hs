@@ -121,7 +121,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
-import Data.Either (lefts, rights)
+import Data.Either (lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -180,8 +180,6 @@ import Method.Types (
     compartmentMapSize,
     energyDensityMapSize,
  )
-import Plugin.Config (buildRegistry)
-import Plugin.Types (PluginRegistry (..), TransformContext (..), TransformHandle (..), TransformResult (..))
 import Progress (ProgressLevel (..), reportError, reportProgress, reportProgressWithTiming)
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
@@ -235,7 +233,7 @@ import Method.FlowResolver (ILCDFlowInfo)
 import qualified Method.FlowResolver as FlowResolver
 import qualified Method.Parser
 import qualified Method.Parser.OlcaSchema as OlcaSchema
-import Method.ParserCSV (parseMethodCSVBytes)
+import Method.ParserCSV (parseMethodCSVBytes, stripBOM)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
@@ -511,7 +509,6 @@ data DatabaseManager = DatabaseManager
       dmAvailableEnergyDensities :: !(TVar (Map Text RefDataConfig))
     , dmLoadedEnergyDensities :: !(TVar (Map Text EnergyDensityMap))
     , dmNoCache :: !Bool -- Caching disabled flag
-    , dmPlugins :: !PluginRegistry -- Plugin registry (built-in + external)
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
     , dmMethodMappingCache :: !(TVar (Map (Text, Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
     {- ^ Cached flow mappings: (dbName, collection, methodId) → mappings.
@@ -584,7 +581,7 @@ mapMethodToFlowsCached manager dbName collection db method = do
     case M.lookup key cache of
         Just cached -> return cached
         Nothing -> do
-            result <- mapMethodToFlows (prMappers (dmPlugins manager)) db method
+            result <- mapMethodToFlows db method
             atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
             return result
 
@@ -970,7 +967,6 @@ initDatabaseManager config noCache configPath = do
                 , dmAvailableEnergyDensities = availableEnergyDensitiesVar
                 , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
                 , dmNoCache = noCache
-                , dmPlugins = buildRegistry (cfgPlugins config)
                 , dmGeographies = geographies
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
@@ -1087,8 +1083,7 @@ loadOneDatabase ::
 loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = do
     dbStart <- getCurrentTime
     reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-    let transforms = prTransforms (dmPlugins manager)
-    result <- loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
+    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
     case result of
         Right (loaded0, _fromCache) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
@@ -1351,19 +1346,7 @@ loadDatabaseFromConfigWithCrossDB ::
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map T.Text [T.Text] -> -- Location hierarchy (empty = use built-in)
     IO (Either Text (LoadedDatabase, Bool))
-loadDatabaseFromConfigWithCrossDB = loadDatabaseFromConfigWithCrossDBAndTransforms []
-
--- | Load with optional transform pipeline
-loadDatabaseFromConfigWithCrossDBAndTransforms ::
-    [TransformHandle] ->
-    DatabaseConfig ->
-    SynonymDB ->
-    UnitConversion.UnitConfig ->
-    Bool -> -- noCache
-    [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
-    M.Map T.Text [T.Text] -> -- Location hierarchy (empty = use built-in)
-    IO (Either Text (LoadedDatabase, Bool))
-loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
+loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
     reportProgress Info $ "Loading database from: " <> sourcePath
@@ -1372,43 +1355,25 @@ loadDatabaseFromConfigWithCrossDBAndTransforms transforms dbConfig synonymDB uni
     case dbResult of
         Left err -> return $ Left err
         Right (dbRaw, fromCache) -> do
-            -- Apply transform plugins (sorted by priority) before runtime init
-            transformed <- applyTransforms transforms (toSimpleDatabase dbRaw)
-            dbRebuiltResult <-
-                if null transforms
-                    then pure (Right dbRaw)
-                    else buildDatabaseWithMatrices unitConfig (sdbActivities transformed) (sdbTechFlows transformed) (sdbBioFlows transformed) (sdbWasteFlows transformed) (sdbUnits transformed)
+            -- Initialize runtime fields (synonym DB and flow name index)
+            let database = BM25.addBM25Index (initializeRuntimeFields dbRaw synonymDB)
 
-            case dbRebuiltResult of
-                Left err -> return $ Left err
-                Right dbRebuilt -> do
-                    -- Initialize runtime fields (synonym DB and flow name index)
-                    let database = BM25.addBM25Index (initializeRuntimeFields dbRebuilt synonymDB)
+                -- Create shared solver with lazy factorization (deferred to first query)
+                techTriples = dbTechnosphereTriples database
+                activityCount = dbActivityCount database
+                techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
+                activityCountInt = fromIntegral activityCount
+            sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
 
-                    -- Create shared solver with lazy factorization (deferred to first query)
-                    let techTriples = dbTechnosphereTriples database
-                        activityCount = dbActivityCount database
-                        techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                        activityCountInt = fromIntegral activityCount
-                    sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
-
-                    return $
-                        Right
-                            ( LoadedDatabase
-                                { ldDatabase = database
-                                , ldSharedSolver = sharedSolver
-                                , ldConfig = dbConfig
-                                }
-                            , fromCache
-                            )
-
--- | Apply transform plugins sequentially (sorted by priority)
-applyTransforms :: [TransformHandle] -> SimpleDatabase -> IO SimpleDatabase
-applyTransforms [] db = pure db
-applyTransforms (t : ts) db = do
-    result <- thTransform t (TransformContext db M.empty)
-    mapM_ (reportProgress Info . T.unpack) (trLog result)
-    applyTransforms ts (trDatabase result)
+            return $
+                Right
+                    ( LoadedDatabase
+                        { ldDatabase = database
+                        , ldSharedSolver = sharedSolver
+                        , ldConfig = dbConfig
+                        }
+                    , fromCache
+                    )
 
 -- | Detected format of a database directory
 data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatILCD | FormatUnknown
@@ -1658,11 +1623,9 @@ loadDatabaseSingleFromConfig manager dbName = do
                     synonymDB <- getMergedSynonymDB manager
                     warnReopenedBridges synonymDB
                     unitConfig <- getMergedUnitConfig manager
-                    let transforms = prTransforms (dmPlugins manager)
                     eitherResult <-
                         try $
-                            loadDatabaseFromConfigWithCrossDBAndTransforms
-                                transforms
+                            loadDatabaseFromConfigWithCrossDB
                                 dbConfig
                                 synonymDB
                                 unitConfig
@@ -2991,17 +2954,6 @@ loadMethodCollectionFromConfig mc = do
                                 reportProgress Warning $
                                     "  " <> show (length errs) <> " method file(s) failed to parse"
                             return $ Right (collection, flowInfo)
-  where
-    partitionEithers = foldr f ([], [])
-      where
-        f (Left a) (ls, rs) = (a : ls, rs)
-        f (Right b) (ls, rs) = (ls, b : rs)
-
--- | Strip UTF-8 BOM if present (common in Windows-created CSV files).
-stripBOM :: BS.ByteString -> BS.ByteString
-stripBOM bs
-    | BS.isPrefixOf "\xEF\xBB\xBF" bs = BS.drop 3 bs
-    | otherwise = bs
 
 -- | List all method collections with their status
 listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]

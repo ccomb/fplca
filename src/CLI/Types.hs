@@ -45,7 +45,6 @@ data Command
     -- Resource management (symmetric subcommands)
     | Database DatabaseAction -- Database management
     | Method MethodAction -- Method collection management
-    | Plugin PluginAction -- Plugin management
     -- Listing commands (mirror API)
     | Methods -- List loaded methods (flattened)
     | Synonyms -- List synonym sources
@@ -121,11 +120,6 @@ data DbDeleteArgs = DbDeleteArgs
     }
     deriving (Eq, Show, Generic)
 
--- | Plugin management actions
-data PluginAction
-    = PluginList
-    deriving (Eq, Show, Generic)
-
 -- | Method collection management actions
 data MethodAction
     = McList
@@ -150,14 +144,6 @@ data ServerOptions = ServerOptions
     , serverIdleTimeout :: Int -- Idle timeout in minutes (--idle-timeout, 0=disabled). Server exits after being idle.
     , serverTreeDepth :: Int -- Default max depth for /tree endpoint (--tree-depth, default 2)
     }
-    deriving (Eq, Show, Generic)
-
--- | Activity sub-commands (kept for flow activities only now)
-data ActivitySubCommand
-    = ActivityFlows -- /activity/{uuid}/flows
-    | ActivityInputs -- /activity/{uuid}/inputs
-    | ActivityOutputs -- /activity/{uuid}/outputs
-    | ActivityReferenceProduct -- /activity/{uuid}/reference-product
     deriving (Eq, Show, Generic)
 
 -- | Flow sub-commands
@@ -189,10 +175,8 @@ data SearchFlowsOptions = SearchFlowsOptions
 -- | Synonym command types removed - now top-level commands
 
 -- | LCIA computation options
-data LCIAOptions = LCIAOptions
+newtype LCIAOptions = LCIAOptions
     { lciaMethodId :: Text -- Method UUID (methods loaded on server)
-    , lciaOutput :: Maybe FilePath -- --output XML export
-    , lciaCSV :: Maybe FilePath -- --csv export
     }
     deriving (Eq, Show, Generic)
 
