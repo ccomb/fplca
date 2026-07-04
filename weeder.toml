@@ -51,22 +51,5 @@ roots = [
   # mumps-hs is a separate package; withMUMPSSolver is its bracket-style public
   # helper, kept alongside the lower-level solver entry points it wraps.
   "^Numerical\\.MUMPS\\.Solver\\.withMUMPSSolver$",
-
-  # ---------------------------------------------------------------------------
-  # Known-dead, kept here as an explicit baseline rather than silently deleted
-  # so a maintainer can prune them in a dedicated, reviewed pass:
-  #
-  #   * Service.{computeLCIA,exportLCIAAsXML,exportLCIAAsCSV} — "(placeholder)"
-  #     stubs with no-op bodies (superseded by Method.Mapping + Matrix.Export).
-  #   * API.MCP.Enrich.valueText, API.Routes.inventoriesWithDeps — leftover
-  #     helpers with no remaining caller.
-  #   * test fixtures with no referencing spec (GoldenData sample* / the
-  #     SAMPLE.min expectations, TestHelpers.findActivityByUUID).
-  # ---------------------------------------------------------------------------
-  "^Service\\.(computeLCIA|exportLCIAAsXML|exportLCIAAsCSV)$",
-  "^API\\.MCP\\.Enrich\\.valueText$",
-  "^API\\.Routes\\.inventoriesWithDeps$",
-  "^GoldenData\\.(sampleMin3ActivityY|sampleMin3TechMatrix|sampleMin3BioMatrix|sampleMinExpectedSupply|sampleMinExpectedCO2)$",
-  "^TestHelpers\\.findActivityByUUID$",
 ]
 type-class-roots = true   # instance methods are reachable via their class
