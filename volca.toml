@@ -113,26 +113,3 @@ active = true
 #     { system = "Category", value = "Agricultural\\Food", mode = "exact" },
 #     { system = "Category", value = "Agricultural\\Plant production\\Cereals\\Transformation", mode = "exact" },
 # ]
-
-# ── Plugins ──────────────────────────────────────────────────────────
-#
-# Extend VoLCA with external plugins (executables that speak JSON on stdin/stdout).
-#
-# Fields:
-#   name          (required) Plugin name
-#   type          (required) One of: importer, exporter, searcher, mapper,
-#                            transform, validator, analyzer, reporter
-#   path                     Path to plugin executable (omit to override built-in)
-#   enabled       = true     Set to false to disable a built-in plugin
-#   priority                 Execution order (lower = first)
-#   format-id                Format identifier (for exporter/reporter)
-#   phase                    "pre-compute" or "post-compute" (for validator)
-#   mime-type                MIME type (for reporter)
-#
-# Example:
-#
-# [[plugin]]
-# name = "my-exporter"
-# type = "exporter"
-# path = "/usr/local/bin/my-exporter"
-# format-id = "my-format"

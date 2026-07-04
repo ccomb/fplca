@@ -58,7 +58,6 @@ of the system; the CLI and REPL are just thin HTTP clients.
    └────────────────────────────────────────┘     └───────────────────┘
 
    ┌──────────────────── CROSS-CUTTING ───────────────────────────────┐
-   │  Plugin.Bridge → external plugins (Python/shell, JSON over stdio)│
    │  Progress (structured logs)   ·   Version                        │
    └──────────────────────────────────────────────────────────────────┘
 ```
@@ -122,7 +121,7 @@ a small amount of **mutable runtime state** (`Database.Manager` + `SharedSolver`
  │  dmStagedDbs        TVar (Map Text StagedDatabase)   parsed, not yet linked│
  │  dmLoaded{FlowSyns,CompMaps,UnitDefs}   reference data (toggleable)        │
  │  dmMethod{Mapping,Tables,SetTables}Cache  memoised LCIA lookup tables      │
- │  dmPlugins  PluginRegistry        dmGeographies  Map code → (name, parents)│
+ │  dmGeographies  Map code → (name, parents)                                 │
  └─────────────────────────────────┬──────────────────────────────────────────┘
                                    │  one value per loaded database
                                    ▼
@@ -262,7 +261,6 @@ lookups, so scoring itself is a fast dot product over the inventory `g`.
 | `Expr.hs`                   | Exchange formula / parameter evaluation                             |
 | `UnitConversion.hs`         | Unit conversion                                                     |
 | `SynonymDB.hs`              | Flow-name synonym registry (curated CSV; auto-extracted candidates are opt-in) |
-| `Plugin/Bridge.hs`          | Bridge to external plugins via JSON over stdin/stdout               |
 | `Progress.hs`               | Structured progress logs and reports                                |
 
 ## Structuring principles
