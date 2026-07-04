@@ -254,11 +254,6 @@ solutionWithDeps dbName db solver pid = do
         Right sol -> pure sol
         Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
 
--- | Batch inventory with cross-DB back-substitution; maps unit-conversion errors to 422.
-inventoriesWithDeps :: Text -> Database -> SharedSolver -> [ProcessId] -> AppM [Inventory]
-inventoriesWithDeps dbName db solver pids =
-    map SharedSolver.csInventory <$> solutionsWithDeps dbName db solver pids
-
 -- | Batch variant of 'solutionWithDeps'.
 solutionsWithDeps :: Text -> Database -> SharedSolver -> [ProcessId] -> AppM [SharedSolver.CrossDBSolution]
 solutionsWithDeps dbName db solver pids = do
