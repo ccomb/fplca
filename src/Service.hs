@@ -2846,21 +2846,6 @@ getConsumers db dbName processIdText cnf = do
 
     Right $ ConsumersResponse (SearchResults page total offset limit hasMore 0.0) edges
 
--- | Compute LCIA scores (placeholder)
-computeLCIA :: Database -> Text -> FilePath -> Either ServiceError Value
-computeLCIA db queryText methodFile = do
-    (processId, _activity) <- resolveActivityAndProcessId db queryText
-    let placeholder = M.fromList [("method" :: Text, T.pack methodFile), ("activity", processIdToText db processId)]
-     in Right $ toJSON placeholder
-
--- | Export LCIA results as XML (placeholder)
-exportLCIAAsXML :: Value -> FilePath -> Either ServiceError ()
-exportLCIAAsXML _ _ = Right ()
-
--- | Export LCIA results as CSV (placeholder)
-exportLCIAAsCSV :: Value -> FilePath -> Either ServiceError ()
-exportLCIAAsCSV _ _ = Right ()
-
 -- | Export matrix debug data (delegates to Matrix.Export)
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either ServiceError Value)
 exportMatrixDebugData database processIdText opts = do

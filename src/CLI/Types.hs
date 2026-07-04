@@ -152,14 +152,6 @@ data ServerOptions = ServerOptions
     }
     deriving (Eq, Show, Generic)
 
--- | Activity sub-commands (kept for flow activities only now)
-data ActivitySubCommand
-    = ActivityFlows -- /activity/{uuid}/flows
-    | ActivityInputs -- /activity/{uuid}/inputs
-    | ActivityOutputs -- /activity/{uuid}/outputs
-    | ActivityReferenceProduct -- /activity/{uuid}/reference-product
-    deriving (Eq, Show, Generic)
-
 -- | Flow sub-commands
 data FlowSubCommand
     = FlowActivities -- /flow/{flowId}/activities
@@ -189,10 +181,8 @@ data SearchFlowsOptions = SearchFlowsOptions
 -- | Synonym command types removed - now top-level commands
 
 -- | LCIA computation options
-data LCIAOptions = LCIAOptions
+newtype LCIAOptions = LCIAOptions
     { lciaMethodId :: Text -- Method UUID (methods loaded on server)
-    , lciaOutput :: Maybe FilePath -- --output XML export
-    , lciaCSV :: Maybe FilePath -- --csv export
     }
     deriving (Eq, Show, Generic)
 

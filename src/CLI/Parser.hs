@@ -277,8 +277,6 @@ impactsParser =
 lciaOptionsParser :: Parser LCIAOptions
 lciaOptionsParser = do
     lciaMethodId <- textOpt "method" (Just 'm') "METHOD_UUID" "Method UUID (method must be loaded on the server)"
-    lciaOutput <- optStrOpt "output" (Just 'o') "FILE" "Export results to XML ILCD format"
-    lciaCSV <- optStrOpt "csv" Nothing "FILE" "Export results to CSV format"
     pure LCIAOptions{..}
 
 -- | Debug matrices command parser
