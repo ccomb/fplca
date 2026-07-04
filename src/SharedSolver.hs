@@ -64,7 +64,7 @@ import Matrix (
     solveSparseLinearSystemWithFactorization,
     solveSparseLinearSystemWithFactorizationMulti,
  )
-import Method.Mapping (MethodTables, processContributionsFromTables)
+import Method.Mapping (LongTermMode (..), MethodTables, processContributionsFromTables)
 import Progress
 import Types
 import UnitConversion (UnitConfig)
@@ -419,8 +419,10 @@ crossDBProcessContributions ::
     -- | root functional unit
     ProcessId ->
     MethodTables ->
+    -- | long-term emission policy, forwarded to the per-DB attribution
+    LongTermMode ->
     IO (Either Text (M.Map (Text, ProcessId) Double))
-crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName rootSolver rootPid tables =
+crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName rootSolver rootPid tables ltMode =
     go
         rootDb
         rootName
@@ -440,7 +442,7 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
         -- attribute each root demand's contributions to this DB's activities;
         -- sum across demands (we currently only call with K=1, but keep the
         -- shape aligned with goWithDeps for future batching).
-        let localByRoot = map (\s -> processContributionsFromTables unitConfig unitDB flowDB db s tables) scalings
+        let localByRoot = map (\s -> processContributionsFromTables unitConfig unitDB flowDB ltMode db s tables) scalings
             localTagged = M.mapKeys (dbName,) (foldr (M.unionWith (+)) M.empty localByRoot)
         if depth >= maxDepsDepth
             then pure (Right localTagged)

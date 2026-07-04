@@ -42,7 +42,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (LCIAOutcome (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -91,8 +91,8 @@ type LCAAPI =
                     :> QueryParam "group_by" Text
                     :> QueryParam "aggregate" Text
                     :> Get '[JSON] Aggregation
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Get '[JSON] LCIABatchResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> QueryParam "exclude-long-term" Bool :> Get '[JSON] LCIABatchResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> QueryParam "exclude-long-term" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIABatchResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "top-flows" Int :> Get '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "impacts" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] LCIAResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "sensitivity" :> Capture "collection" Text :> Capture "methodId" Text :> ReqBody '[JSON] SensitivityRequest :> Post '[JSON] SensitivityResponse
@@ -101,8 +101,8 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] ConsumersResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-flows" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingFlowsResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-activities" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingActivitiesResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-flows" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> QueryParam "exclude-long-term" Bool :> Get '[JSON] ContributingFlowsResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-activities" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> QueryParam "exclude-long-term" Bool :> Get '[JSON] ContributingActivitiesResult
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "methods" :> Get '[JSON] [MethodSummary]
@@ -538,6 +538,17 @@ crossDBSolutionFor dbName db solver pid mSub = case mSub of
                     (srSubstitutions subReq)
         either throwServiceError pure eSol
 
+{- | Apply the request's long-term policy to a freshly solved inventory. Drops
+the delayed long-term emission flows when excluding, and is a no-op (with no
+extra work) when including. Every downstream scoring path reads @csInventory@,
+so filtering here once keeps scores and top-contributor breakdowns consistent.
+-}
+applyLongTermToSolution :: DatabaseManager -> LongTermMode -> SharedSolver.CrossDBSolution -> IO SharedSolver.CrossDBSolution
+applyLongTermToSolution _ IncludeLongTerm sol = pure sol
+applyLongTermToSolution dbManager ExcludeLongTerm sol = do
+    (mFlows, _) <- DM.getMergedFlowMetadata dbManager
+    pure sol{SharedSolver.csInventory = applyLongTermMode mFlows ExcludeLongTerm (SharedSolver.csInventory sol)}
+
 {- | Look up MethodSetTables for every (DB, scaling) pair in the cross-DB
 solution. Cache-keyed by (dbName, methods).
 -}
@@ -789,8 +800,9 @@ activityLCIABatchH ::
     Text ->
     Text ->
     Maybe SubstitutionRequest ->
+    LongTermMode ->
     AppM LCIABatchResult
-activityLCIABatchH dbName processIdText collectionName mSub = do
+activityLCIABatchH dbName processIdText collectionName mSub ltMode = do
     dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     (actProcessId, activity) <- resolveOrThrow db processIdText
@@ -798,7 +810,7 @@ activityLCIABatchH dbName processIdText collectionName mSub = do
     let dcLookup = M.fromList [(subName, dcName dc) | dc <- damageCats, (subName, _) <- dcImpacts dc]
         mNW = case nwSets of (nw : _) -> Just nw; [] -> Nothing
     t0 <- liftIO getCurrentTime
-    sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub
+    sol <- crossDBSolutionFor dbName db sharedSolver actProcessId mSub >>= liftIO . applyLongTermToSolution dbManager ltMode
     t1 <- liftIO getCurrentTime
     let inventory = SharedSolver.csInventory sol
         !invSize = M.size inventory
@@ -1499,13 +1511,13 @@ postActivitySensitivity dbName processIdText collectionName methodIdText senReq 
             mapConcurrently (buildEntry baselineLcia) perResults
     pure SensitivityResponse{srBaseline = baselineLcia, srPerturbed = perturbed}
 
-getActivityLCIABatch :: Text -> Text -> Text -> AppM LCIABatchResult
-getActivityLCIABatch dbName processIdText collectionName =
-    activityLCIABatchH dbName processIdText collectionName Nothing
+getActivityLCIABatch :: Text -> Text -> Text -> Maybe Bool -> AppM LCIABatchResult
+getActivityLCIABatch dbName processIdText collectionName mExcludeLT =
+    activityLCIABatchH dbName processIdText collectionName Nothing (longTermModeFromExclude (fromMaybe False mExcludeLT))
 
-postActivityLCIABatch :: Text -> Text -> Text -> SubstitutionRequest -> AppM LCIABatchResult
-postActivityLCIABatch dbName processIdText collectionName subReq =
-    activityLCIABatchH dbName processIdText collectionName (Just subReq)
+postActivityLCIABatch :: Text -> Text -> Text -> Maybe Bool -> SubstitutionRequest -> AppM LCIABatchResult
+postActivityLCIABatch dbName processIdText collectionName mExcludeLT subReq =
+    activityLCIABatchH dbName processIdText collectionName (Just subReq) (longTermModeFromExclude (fromMaybe False mExcludeLT))
 
 postActivityInventory :: Text -> Text -> SubstitutionRequest -> AppM InventoryExport
 postActivityInventory dbName processIdText subReq = activityInventoryCore dbName processIdText (Just subReq)
@@ -1616,14 +1628,15 @@ getActivityAnalyze dbName processIdText analyzerName = do
                                 }
                     liftIO $ ahAnalyze analyzer ctx
 
-getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
-getContributingFlows dbName processIdText collectionName methodIdText limitParam =
+getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> Maybe Bool -> AppM ContributingFlowsResult
+getContributingFlows dbName processIdText collectionName methodIdText limitParam mExcludeLT =
     withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 20 limitParam
+            ltMode = longTermModeFromExclude (fromMaybe False mExcludeLT)
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
+        inventory <- applyLongTermMode mFlows ltMode <$> inventoryWithDeps dbName db sharedSolver actProcessId
         tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
         let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1657,11 +1670,12 @@ getContributingFlows dbName processIdText collectionName methodIdText limitParam
                 , cfrTopFlows = topFlows
                 }
 
-getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
-getContributingActivities dbName processIdText collectionName methodIdText limitParam =
+getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> Maybe Bool -> AppM ContributingActivitiesResult
+getContributingActivities dbName processIdText collectionName methodIdText limitParam mExcludeLT =
     withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 10 limitParam
+            ltMode = longTermModeFromExclude (fromMaybe False mExcludeLT)
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
@@ -1678,6 +1692,7 @@ getContributingActivities dbName processIdText collectionName methodIdText limit
                     sharedSolver
                     actProcessId
                     tables
+                    ltMode
         case eContribs of
             Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
             Right contributions -> do
