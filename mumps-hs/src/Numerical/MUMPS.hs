@@ -9,12 +9,10 @@ sparse linear systems via LU factorization.
 module Numerical.MUMPS (
     -- * Types
     MUMPSSolver,
-    MUMPSError (..),
 
     -- * Lifecycle
     mumpsCreate,
     mumpsDestroy,
-    withMUMPSSolver,
 
     -- * Phases
     mumpsAnalyze,
@@ -27,4 +25,4 @@ module Numerical.MUMPS (
 ) where
 
 import Numerical.MUMPS.Solver
-import Numerical.MUMPS.Types (MUMPSError (..), MUMPSSolver)
+import Numerical.MUMPS.Types (MUMPSSolver)

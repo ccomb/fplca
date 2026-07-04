@@ -9,10 +9,9 @@ module Numerical.MUMPS.Solver (
     mumpsSolveMulti,
     mumpsDestroy,
     mumpsAnalyzeAndFactorize,
-    withMUMPSSolver,
 ) where
 
-import Control.Exception (bracket, throwIO)
+import Control.Exception (throwIO)
 import qualified Data.Vector.Storable as VS
 import Foreign.C.Types (CDouble (..), CInt (..))
 import Foreign.Marshal.Array (allocaArray, withArray)
@@ -93,11 +92,6 @@ mumpsDestroy = c_mumps_destroy . solverPtr
 -- | Convenience: analyze + factorize in one call.
 mumpsAnalyzeAndFactorize :: MUMPSSolver -> IO ()
 mumpsAnalyzeAndFactorize s = mumpsAnalyze s >> mumpsFactorize s
-
--- | Bracket-style: create, use, destroy.
-withMUMPSSolver :: Int -> Int -> [Int] -> [Int] -> [Double] -> (MUMPSSolver -> IO a) -> IO a
-withMUMPSSolver n nnz rows cols vals =
-    bracket (mumpsCreate n nnz rows cols vals) mumpsDestroy
 
 checkError :: String -> CInt -> IO ()
 checkError phase rc

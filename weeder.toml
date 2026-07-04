@@ -47,9 +47,5 @@ roots = [
   # client can serialise a loaded database; not all are exercised in-repo yet.
   "^BrightwayExcel\\.Writer\\.writeBrightwayExcel$",
   "^SimaPro\\.Writer\\.writeSimaProCSV$",
-
-  # mumps-hs is a separate package; withMUMPSSolver is its bracket-style public
-  # helper, kept alongside the lower-level solver entry points it wraps.
-  "^Numerical\\.MUMPS\\.Solver\\.withMUMPSSolver$",
 ]
 type-class-roots = true   # instance methods are reachable via their class
