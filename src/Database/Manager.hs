@@ -121,7 +121,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
-import Data.Either (lefts, rights)
+import Data.Either (lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -235,7 +235,7 @@ import Method.FlowResolver (ILCDFlowInfo)
 import qualified Method.FlowResolver as FlowResolver
 import qualified Method.Parser
 import qualified Method.Parser.OlcaSchema as OlcaSchema
-import Method.ParserCSV (parseMethodCSVBytes)
+import Method.ParserCSV (parseMethodCSVBytes, stripBOM)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
@@ -2991,17 +2991,6 @@ loadMethodCollectionFromConfig mc = do
                                 reportProgress Warning $
                                     "  " <> show (length errs) <> " method file(s) failed to parse"
                             return $ Right (collection, flowInfo)
-  where
-    partitionEithers = foldr f ([], [])
-      where
-        f (Left a) (ls, rs) = (a : ls, rs)
-        f (Right b) (ls, rs) = (ls, b : rs)
-
--- | Strip UTF-8 BOM if present (common in Windows-created CSV files).
-stripBOM :: BS.ByteString -> BS.ByteString
-stripBOM bs
-    | BS.isPrefixOf "\xEF\xBB\xBF" bs = BS.drop 3 bs
-    | otherwise = bs
 
 -- | List all method collections with their status
 listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]
