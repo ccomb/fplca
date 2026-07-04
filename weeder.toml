@@ -35,8 +35,6 @@ roots = [
   "^Method\\.Mapping\\.computeLCIAScoreWithDiagnostics$",
   "^Method\\.ParserNW\\.parseNormWeightCSV$",
   "^Method\\.ParserSimaPro\\.parseSimaProMethodCSV$",
-  "^Plugin\\.Bridge\\.(callPluginBatch|parseLines)$",
-  "^Plugin\\.Builtin\\.flowContribution$",
   "^SharedSolver\\.(computeScalingVectorCached|computeInventoryMatrixCached)$",
   "^Service\\.getActivityTree$",
   "^Types\\.(flowKindUnitId|searchProductsByLocation|lookupTechFlow|lookupBioFlow)$",

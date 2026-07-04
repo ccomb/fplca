@@ -13,9 +13,10 @@ Default cascade: UUID → Name → Synonym → CAS.
 -}
 module Method.Mapping (
     -- * Mapping functions
+    MapContext (..),
     mapMethodFlows,
     mapMethodToFlows,
-    mapSingleFlow,
+    resolveCF,
     buildMapContext,
 
     -- * LCIA scoring
@@ -80,6 +81,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData)
+import Control.Exception (evaluate)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.Either (lefts, rights)
@@ -104,7 +106,6 @@ import qualified Data.Set as Set
 import Matrix (Inventory, Vector, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
-import Plugin.Types (MapContext (..), MapQuery (..), MapResult (..), MapperHandle (..))
 import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
@@ -171,6 +172,24 @@ instance Semigroup MappingStats where
 instance Monoid MappingStats where
     mempty = MappingStats 0 0 0 0 0 0 0 0
 
+-- | Everything the CF matcher cascade needs, precomputed once per method.
+data MapContext = MapContext
+    { mcBioFlowsByUUID :: !BioFlowDB -- Biosphere flows by UUID (CF matching targets these)
+    , mcBioFlowsByName :: !(M.Map Text [BiosphereFlow])
+    , mcBioFlowsByCAS :: !(M.Map Text [BiosphereFlow])
+    , mcSynonymDB :: !SynonymDB
+    , mcActivities :: !(M.Map Text [Activity])
+    , mcSynGroupFlows :: !(M.Map (FlowDirection, Int) [BiosphereFlow])
+    {- ^ Memoized @(direction, synonym-group id)@ → candidate flows, precomputed
+    once per method by 'mapMethodFlows'. The synonym matcher resolves a CF whose
+    name lands in a shared (often large) synonym group via a single lookup here,
+    instead of re-expanding that group for every such CF. Keyed by direction
+    because input-only and output-only bridges yield different groups. Empty when
+    the cascade runs without the precompute; the matcher then falls back to
+    expanding the group per call, so the result is unchanged either way.
+    -}
+    }
+
 -- | Build a MapContext from a Database (convenience for callers)
 buildMapContext :: Database -> MapContext
 buildMapContext db =
@@ -183,15 +202,21 @@ buildMapContext db =
         , mcSynGroupFlows = M.empty
         }
 
-{- | Map all method flows to database flows using mapper handles.
-Mappers are tried in priority order (assumed pre-sorted).
+{- | Map every method CF to a database biosphere flow via the built-in matcher
+cascade ('resolveCF'). Each CF resolves independently (no cross-CF state), so
+chunk the CFs across capabilities and resolve the chunks concurrently:
+'mapConcurrently' preserves order, so the result — and every table built from it
+— is identical to the serial 'mapM'; this is a pure speedup, not a behaviour
+change. 'evaluate' forces each CF's resolution inside its own task so the lookups
+run in parallel rather than as thunks the caller forces later. The chunking wins
+on a cold single-method mapping; the method-set build already fans out across
+methods, so there the inner parallelism mostly nests under that outer fan-out.
 -}
 mapMethodFlows ::
-    [MapperHandle] ->
     MapContext ->
     Method ->
     IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodFlows mappers ctx0 method = do
+mapMethodFlows ctx0 method = do
     caps <- getNumCapabilities
     let cfs = methodFactors method
         n = length cfs
@@ -200,46 +225,30 @@ mapMethodFlows mappers ctx0 method = do
         -- it. Without it the synonym matcher re-expands a shared group — often a
         -- large closure class — once per CF whose name lands in it.
         ctx = ctx0{mcSynGroupFlows = buildSynGroupFlows ctx0 cfs}
-        resolve cf = fmap (cf,) (mapSingleFlow mappers ctx cf)
-    -- Each CF resolves independently (first-matching mapper wins, no cross-CF
-    -- state), so chunk the CFs across capabilities and resolve the chunks
-    -- concurrently. 'mapConcurrently' preserves order and the chunks are
-    -- concatenated in order, so the result list — and every table built from it
-    -- — is identical to the serial 'mapM'; this is a pure speedup, not a
-    -- behaviour change. Chunking (rather than one task per CF) spawns ~'caps'
-    -- tasks instead of one per CF on methods with tens of thousands of CFs.
-    -- This wins on a cold single-method mapping; the method-set build already
-    -- fans out across methods (see 'Database.Manager.mapMethodSetToTablesCached'),
-    -- which saturates the cores, so there the inner parallelism mostly nests
-    -- under that outer fan-out.
+        resolve cf = (cf,) <$> evaluate (resolveCF ctx cf)
     if caps <= 1 || n < parCfThreshold
         then mapM resolve cfs
         else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
   where
     parCfThreshold = 1000
 
-{- | Map a single CF using the mapper handle cascade.
-Each mapper is tried in order; the first match wins.
+{- | Resolve one method CF to a database biosphere flow. The built-in matchers
+are tried in cascade order — UUID → name → synonym → CAS — and the first whose
+target flow is present in the by-UUID index wins. A matcher resolving to a flow
+absent from that index is skipped, so resolution falls through to the next.
 -}
-mapSingleFlow ::
-    [MapperHandle] ->
-    MapContext ->
-    MethodCF ->
-    IO (Maybe (BiosphereFlow, MatchStrategy))
-mapSingleFlow mappers ctx cf = go mappers
+resolveCF :: MapContext -> MethodCF -> Maybe (BiosphereFlow, MatchStrategy)
+resolveCF ctx cf =
+    canon ByUUID (findFlowByUUID (mcBioFlowsByUUID ctx) (mcfFlowRef cf))
+        <|> canon ByName (findFlowByNameComp (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf))
+        <|> canon BySynonym (findFlowBySynonymMemo ctx cf)
+        <|> canon ByCAS (mcfCAS cf >>= \cas -> findFlowByCAS (mcBioFlowsByCAS ctx) cas (mcfCompartment cf))
   where
-    go [] = pure Nothing
-    go (m : ms) = do
-        result <- mhMatch m ctx (MatchCF cf)
-        case result of
-            Just mr
-                | Just flow <- M.lookup (mrTargetId mr) (mcBioFlowsByUUID ctx) ->
-                    pure $ Just (flow, strategyFromText (mrStrategy mr))
-            _ -> go ms
+    canon strat found = found >>= \flow -> (,strat) <$> M.lookup (bfId flow) (mcBioFlowsByUUID ctx)
 
--- | Convenience wrapper: map method CFs using the given mappers + DB.
-mapMethodToFlows :: [MapperHandle] -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodToFlows mappers db = mapMethodFlows mappers (buildMapContext db)
+-- | Convenience wrapper: map method CFs using the built-in cascade + DB.
+mapMethodToFlows :: Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+mapMethodToFlows db = mapMethodFlows (buildMapContext db)
 
 -- | Convert strategy text back to MatchStrategy
 strategyFromText :: Text -> MatchStrategy
