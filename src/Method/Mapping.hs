@@ -39,6 +39,8 @@ module Method.Mapping (
     LongTermMode (..),
     longTermModeFromExclude,
     excludeLongTermFlows,
+    applyLongTermMode,
+    isLongTermFlow,
     computeLCIAScoreAuto,
     computeRegionalizedLCIAScore,
     sumRegionalizedLCIAScoreCrossDB,
@@ -1843,17 +1845,33 @@ means keep the delayed emissions (the convention default).
 longTermModeFromExclude :: Bool -> LongTermMode
 longTermModeFromExclude excl = if excl then ExcludeLongTerm else IncludeLongTerm
 
+{- | Whether a biosphere flow is a delayed long-term emission: it is known to the
+FlowDB and its sub-compartment carries the "long-term" marker ('isLongTermSub').
+An unknown UUID is never treated as long-term (absence of evidence is not
+evidence). Shared by every exclusion path so they all agree on what "long-term"
+means.
+-}
+isLongTermFlow :: BioFlowDB -> UUID -> Bool
+isLongTermFlow flowDB = maybe False subIsLongTerm . (`M.lookup` flowDB)
+  where
+    subIsLongTerm = maybe False (isLongTermSub . Subcompartment . T.toLower) . VT.bfCompartmentSub
+
 {- | Drop delayed long-term biosphere emissions from an inventory before
-characterization. A flow is long-term when its sub-compartment carries the
-"long-term" marker ('isLongTermSub'). These flows are always emissions, never
-resources, so this never removes a regionalized resource flow (water use / land
-use) — those categories are computed from a separate path and stay untouched.
+characterization. These flows are always emissions, never resources, so this
+never removes a regionalized resource flow (water use / land use) — those
+categories are computed from a separate path and stay untouched.
 -}
 excludeLongTermFlows :: BioFlowDB -> Inventory -> Inventory
-excludeLongTermFlows flowDB = M.filterWithKey (\fid _ -> not (isLongTermFlow fid))
-  where
-    isLongTermFlow = maybe False subIsLongTerm . (`M.lookup` flowDB)
-    subIsLongTerm = maybe False (isLongTermSub . Subcompartment . T.toLower) . VT.bfCompartmentSub
+excludeLongTermFlows flowDB = M.filterWithKey (\fid _ -> not (isLongTermFlow flowDB fid))
+
+{- | Apply a 'LongTermMode' to an inventory. 'IncludeLongTerm' is the identity
+(no extra work); 'ExcludeLongTerm' drops the delayed long-term emissions. This
+is the single entry point every score path uses so include/exclude stays
+consistent across the batch, single-method, and contribution surfaces.
+-}
+applyLongTermMode :: BioFlowDB -> LongTermMode -> Inventory -> Inventory
+applyLongTermMode _ IncludeLongTerm = id
+applyLongTermMode flowDB ExcludeLongTerm = excludeLongTermFlows flowDB
 
 {- | The @(normalized medium, subcompartment)@ a database flow resolves to after
 compartment normalization. Shared by the name/CAS read path
@@ -2009,11 +2027,15 @@ processContributionsFromTables ::
     UnitConfig ->
     UnitDB ->
     BioFlowDB ->
+    {- | long-term emission policy: 'ExcludeLongTerm' zeroes the delayed flows so
+    per-activity contributions match a score computed the same way
+    -}
+    LongTermMode ->
     Database ->
     Vector ->
     MethodTables ->
     M.Map ProcessId Double
-processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
+processContributionsFromTables unitConfig unitDB flowDB ltMode db scalingVec tables =
     U.foldl' step M.empty (dbBiosphereTriples db)
   where
     actIdx = dbActivityIndex db
@@ -2021,18 +2043,26 @@ processContributionsFromTables unitConfig unitDB flowDB db scalingVec tables =
     nFlows = V.length bioFlows
     nActs = V.length actIdx
 
+    excluded = case ltMode of
+        IncludeLongTerm -> const False
+        ExcludeLongTerm -> isLongTermFlow flowDB
+
     -- Precompute the effective CF (CF value × flow→CF unit conversion factor)
     -- per biosphere-matrix row so the triple loop becomes pure arithmetic.
-    -- O(|bioFlows|) once, vs O(|triples| × map-lookups) before.
+    -- O(|bioFlows|) once, vs O(|triples| × map-lookups) before. A long-term
+    -- flow gets 0 under 'ExcludeLongTerm', dropping it exactly as the inventory
+    -- pre-filter would.
     effectiveCF :: U.Vector Double
     effectiveCF = U.generate nFlows $ \i ->
         let flowUUID = bioFlows V.! i
             mflow = M.lookup flowUUID flowDB
-         in case mflow of
-                Nothing -> 0
-                Just _ -> case lookupCascadeCF tables flowDB flowUUID of
+         in if excluded flowUUID
+                then 0
+                else case mflow of
                     Nothing -> 0
-                    Just cfTuple -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cfTuple 1.0
+                    Just _ -> case lookupCascadeCF tables flowDB flowUUID of
+                        Nothing -> 0
+                        Just cfTuple -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cfTuple 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in

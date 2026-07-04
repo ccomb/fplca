@@ -668,6 +668,7 @@ params r = case r of
         , Param "method_id" "string" Required "Method UUID for the impact category"
         , pCollection
         , pLimit "Max flows to return, sorted by contribution (default 20)"
+        , pExcludeLongTerm
         , Param "include_diagnostics" "boolean" Optional "When true, surface uncharacterized inventory flows above 0.1% of total |qty|, each with up to 3 candidate similar CFs (PubChem-expanded Jaccard + CAS bridge)."
         ]
     GetContributingActivities ->
@@ -676,6 +677,7 @@ params r = case r of
         , Param "method_id" "string" Required "Method UUID for the impact category"
         , pCollection
         , pLimit "Max processes to return, sorted by contribution (default 10)"
+        , pExcludeLongTerm
         ]
     ListGeographies ->
         [ pDatabase

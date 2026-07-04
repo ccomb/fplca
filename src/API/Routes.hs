@@ -42,7 +42,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, excludeLongTermFlows, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -101,8 +101,8 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] ConsumersResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-flows" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingFlowsResult
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-activities" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingActivitiesResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-flows" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> QueryParam "exclude-long-term" Bool :> Get '[JSON] ContributingFlowsResult
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-activities" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> QueryParam "exclude-long-term" Bool :> Get '[JSON] ContributingActivitiesResult
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> "activities" :> Get '[JSON] [ActivitySummary]
                 :<|> "methods" :> Get '[JSON] [MethodSummary]
@@ -547,7 +547,7 @@ applyLongTermToSolution :: DatabaseManager -> LongTermMode -> SharedSolver.Cross
 applyLongTermToSolution _ IncludeLongTerm sol = pure sol
 applyLongTermToSolution dbManager ExcludeLongTerm sol = do
     (mFlows, _) <- DM.getMergedFlowMetadata dbManager
-    pure sol{SharedSolver.csInventory = excludeLongTermFlows mFlows (SharedSolver.csInventory sol)}
+    pure sol{SharedSolver.csInventory = applyLongTermMode mFlows ExcludeLongTerm (SharedSolver.csInventory sol)}
 
 {- | Look up MethodSetTables for every (DB, scaling) pair in the cross-DB
 solution. Cache-keyed by (dbName, methods).
@@ -1628,14 +1628,15 @@ getActivityAnalyze dbName processIdText analyzerName = do
                                 }
                     liftIO $ ahAnalyze analyzer ctx
 
-getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
-getContributingFlows dbName processIdText collectionName methodIdText limitParam =
+getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> Maybe Bool -> AppM ContributingFlowsResult
+getContributingFlows dbName processIdText collectionName methodIdText limitParam mExcludeLT =
     withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 20 limitParam
+            ltMode = longTermModeFromExclude (fromMaybe False mExcludeLT)
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
+        inventory <- applyLongTermMode mFlows ltMode <$> inventoryWithDeps dbName db sharedSolver actProcessId
         tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
         let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
@@ -1669,11 +1670,12 @@ getContributingFlows dbName processIdText collectionName methodIdText limitParam
                 , cfrTopFlows = topFlows
                 }
 
-getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingActivitiesResult
-getContributingActivities dbName processIdText collectionName methodIdText limitParam =
+getContributingActivities :: Text -> Text -> Text -> Text -> Maybe Int -> Maybe Bool -> AppM ContributingActivitiesResult
+getContributingActivities dbName processIdText collectionName methodIdText limitParam mExcludeLT =
     withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
         dbManager <- asks aeDbManager
         let lim = fromMaybe 10 limitParam
+            ltMode = longTermModeFromExclude (fromMaybe False mExcludeLT)
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
@@ -1690,6 +1692,7 @@ getContributingActivities dbName processIdText collectionName methodIdText limit
                     sharedSolver
                     actProcessId
                     tables
+                    ltMode
         case eContribs of
             Left err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err}
             Right contributions -> do

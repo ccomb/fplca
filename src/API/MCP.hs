@@ -41,7 +41,7 @@ import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (
 import Control.Monad (unless)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
-import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, excludeLongTermFlows, inventoryContributions, longTermModeFromExclude)
+import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (hAccept, hHost)
@@ -968,10 +968,8 @@ runImpactsRequest dbManager args req = do
                             (ldSharedSolver ld)
                             (raPid ra)
                             subs
-    let inventory =
-            if fromMaybe False (boolArg "exclude_long_term" args)
-                then excludeLongTermFlows mFlows solvedInventory
-                else solvedInventory
+    let ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
+        inventory = applyLongTermMode mFlows ltMode solvedInventory
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
     let stats = computeMappingStats mappings
@@ -1649,7 +1647,8 @@ callGetContributingFlows dbManager mBaseUrl rid args =
                     dbName
                     (ldSharedSolver ld)
                     (raPid ra)
-        let inventory = SharedSolver.csInventory sol
+        let ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
+            inventory = applyLongTermMode mFlows ltMode (SharedSolver.csInventory sol)
         tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
         let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
             score = loScore outcome
@@ -1724,6 +1723,7 @@ callGetContributingActivities dbManager mBaseUrl rid args =
             collection = lrCollection req
             ra = lrResolved req
             lim = fromMaybe 10 (intArg "limit" args)
+            ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
         except $ ensureLinked dbName "computing contributions" db
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
@@ -1741,6 +1741,7 @@ callGetContributingActivities dbManager mBaseUrl rid args =
                     (ldSharedSolver ld)
                     (raPid ra)
                     tables
+                    ltMode
         let score = sum (M.elems contributions)
             sorted = L.sortOn (\(_, c) -> negate (abs c)) (M.toList contributions)
             top = take lim sorted

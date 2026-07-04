@@ -140,6 +140,14 @@ spec = do
             longTermModeFromExclude True `shouldBe` ExcludeLongTerm
             longTermModeFromExclude False `shouldBe` IncludeLongTerm
 
+    describe "applyLongTermMode" $ do
+        it "is the identity under IncludeLongTerm (long-term flows kept)" $
+            applyLongTermMode flowDB IncludeLongTerm inventory `shouldBe` inventory
+
+        it "drops long-term flows under ExcludeLongTerm (same as excludeLongTermFlows)" $
+            applyLongTermMode flowDB ExcludeLongTerm inventory
+                `shouldBe` excludeLongTermFlows flowDB inventory
+
     describe "scoring with vs without long-term emissions" $ do
         it "full score counts both flows (2·1 + 5·1 = 7)" $
             scoreOf (M.fromList [(ltId, 2.0), (stId, 5.0)]) `shouldSatisfy` near 7.0
