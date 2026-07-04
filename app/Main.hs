@@ -31,7 +31,6 @@ import CLI.Types
 import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ServerConfig (..), loadConfig)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
-import Matrix (initializeSolverForServer)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Progress
 
@@ -109,7 +108,6 @@ isLocalCommand _ = False
 runCLIWithConfig :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIWithConfig cliConfig cmd cfgFile = do
     config <- loadConfigOrDie cfgFile
-    initializeSolverForServer
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
     executeCommand cliConfig cmd dbManager
 
@@ -222,7 +220,6 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
     reportProgress Info "Initializing database manager..."
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
     logLoadedDatabases dbManager
-    initializeSolverForServer
     let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
         staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)

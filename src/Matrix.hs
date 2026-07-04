@@ -54,7 +54,6 @@ module Matrix (
     applySparseMatrix,
     fromList,
     toList,
-    initializeSolverForServer,
     precomputeMatrixFactorization,
     solveSparseLinearSystemWithFactorization,
     solveSparseLinearSystemWithFactorizationMulti,
@@ -162,10 +161,6 @@ solves across DBs while leaving the per-DB coalescing workers intact.
 {-# NOINLINE mumpsSolveMutex #-}
 mumpsSolveMutex :: MVar ()
 mumpsSolveMutex = unsafePerformIO $ newMVar ()
-
--- | Initialize solver for server lifetime. No-op for MUMPS (no global state needed).
-initializeSolverForServer :: IO ()
-initializeSolverForServer = pure ()
 
 -- ---------------------------------------------------------------------------
 -- Coalescing solver: per-database worker that batches concurrent requests
