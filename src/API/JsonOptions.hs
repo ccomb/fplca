@@ -5,15 +5,11 @@
 
 module API.JsonOptions (
     stripLowerPrefix,
-    strippedToJSON,
-    strippedToEncoding,
-    strippedParseJSON,
     strippedSchemaOptions,
     Stripped (..),
 ) where
 
 import Data.Aeson (
-    Encoding,
     FromJSON (..),
     Options,
     ToJSON (..),
@@ -24,7 +20,7 @@ import Data.Aeson (
     genericToEncoding,
     genericToJSON,
  )
-import Data.Aeson.Types (GFromJSON, GToEncoding, GToJSON', Parser, Zero)
+import Data.Aeson.Types (GFromJSON, GToEncoding, GToJSON', Zero)
 import Data.Char (isLower, toLower)
 import Data.OpenApi.Internal.Schema (GToSchema)
 import Data.OpenApi.Schema (SchemaOptions, ToSchema (..), fromAesonOptions, genericDeclareNamedSchema)
@@ -44,15 +40,6 @@ stripLowerPrefix =
         "" -> label
         (c : cs) -> toLower c : cs
 
-strippedToJSON :: (Generic a, GToJSON' Value Zero (Rep a)) => a -> Value
-strippedToJSON = genericToJSON stripLowerPrefix
-
-strippedToEncoding :: (Generic a, GToEncoding Zero (Rep a)) => a -> Encoding
-strippedToEncoding = genericToEncoding stripLowerPrefix
-
-strippedParseJSON :: (Generic a, GFromJSON Zero (Rep a)) => Value -> Parser a
-strippedParseJSON = genericParseJSON stripLowerPrefix
-
 strippedSchemaOptions :: SchemaOptions
 strippedSchemaOptions = fromAesonOptions stripLowerPrefix
 
@@ -69,11 +56,11 @@ strippedSchemaOptions = fromAesonOptions stripLowerPrefix
 newtype Stripped a = Stripped {unStripped :: a}
 
 instance (Generic a, GToJSON' Value Zero (Rep a), GToEncoding Zero (Rep a)) => ToJSON (Stripped a) where
-    toJSON (Stripped a) = strippedToJSON a
-    toEncoding (Stripped a) = strippedToEncoding a
+    toJSON (Stripped a) = genericToJSON stripLowerPrefix a
+    toEncoding (Stripped a) = genericToEncoding stripLowerPrefix a
 
 instance (Generic a, GFromJSON Zero (Rep a)) => FromJSON (Stripped a) where
-    parseJSON v = Stripped <$> strippedParseJSON v
+    parseJSON v = Stripped <$> genericParseJSON stripLowerPrefix v
 
 instance (Typeable a, Generic a, GToSchema (Rep a)) => ToSchema (Stripped a) where
     declareNamedSchema _ = genericDeclareNamedSchema strippedSchemaOptions (Proxy :: Proxy a)
