@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), PluginAction (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -27,7 +27,7 @@ import qualified Database.UploadedDatabase as UploadedDB
 import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
 import Method.Types (MethodCF (..))
 import qualified Method.Types
-import Plugin.Types (AnalyzeHandle (..), ExportContext (..), ExportHandle (..), ImportHandle (..), MapperHandle (..), PluginBackend (..), PluginRegistry (..), ReportHandle (..), SearchHandle (..), TransformHandle (..), ValidateHandle (..))
+import Plugin.Types (ExportContext (..), ExportHandle (..), PluginRegistry (..), ReportHandle (..))
 import Progress
 import qualified Service
 import SharedSolver (SharedSolver)
@@ -129,8 +129,6 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             DM.listCompartmentMappings manager >>= out . toJSON
         Units ->
             DM.listUnitDefs manager >>= out . toJSON
-        Plugin PluginList ->
-            executePluginList registry outputFormat
         FlowMapping opts -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
             executeFlowMappingCommand registry outputFormat database manager opts
@@ -198,7 +196,6 @@ executeDbCommand registry fmt _globalOpts database = \case
     Server _ -> pure ()
     Database _ -> pure ()
     Method _ -> pure ()
-    Plugin _ -> pure ()
     Methods -> pure ()
     Synonyms -> pure ()
     CompartmentMappings -> pure ()
@@ -322,33 +319,6 @@ executeExportMatricesCommand registry database outputDir = do
     reportProgress Info "  - ee_index.csv (biosphere flow index)"
     reportProgress Info "  - A_public.csv (technosphere matrix)"
     reportProgress Info "  - B_public.csv (biosphere matrix)"
-
--- | Execute plugin list command
-executePluginList :: PluginRegistry -> OutputFormat -> IO ()
-executePluginList registry fmt = do
-    let noPriority = Nothing :: Maybe Int
-        plugins =
-            concat
-                [ [pluginEntry (mhName m) "mapper" (mhBackend m) (Just $ mhPriority m) | m <- prMappers registry]
-                , [pluginEntry (rhName r) "reporter" (rhBackend r) noPriority | r <- M.elems (prReporters registry)]
-                , [pluginEntry (ehName e) "exporter" (ehBackend e) noPriority | e <- M.elems (prExporters registry)]
-                , [pluginEntry (ahName a) "analyzer" (ahBackend a) noPriority | a <- M.elems (prAnalyzers registry)]
-                , [pluginEntry (thName t) "transform" (thBackend t) (Just $ thPriority t) | t <- prTransforms registry]
-                , [pluginEntry (vhName v) "validator" (vhBackend v) noPriority | v <- prValidators registry]
-                , [pluginEntry (shName s) "searcher" (shBackend s) (Just $ shPriority s) | s <- prSearchers registry]
-                , [pluginEntry (ihName i) "importer" (ihBackend i) noPriority | i <- prImporters registry]
-                ]
-    outputResult registry fmt (toJSON plugins)
-  where
-    pluginEntry name typ backend mPriority =
-        object $
-            [ "name" .= name
-            , "type" .= (typ :: T.Text)
-            , "backend" .= backendText backend
-            ]
-                ++ maybe [] (\p -> ["priority" .= p]) mPriority
-    backendText Builtin = "builtin" :: T.Text
-    backendText (External p) = "external:" <> T.pack p
 
 -- | Execute database upload command
 executeDbUpload :: PluginRegistry -> OutputFormat -> DatabaseManager -> UploadArgs -> IO ()

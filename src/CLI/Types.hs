@@ -45,7 +45,6 @@ data Command
     -- Resource management (symmetric subcommands)
     | Database DatabaseAction -- Database management
     | Method MethodAction -- Method collection management
-    | Plugin PluginAction -- Plugin management
     -- Listing commands (mirror API)
     | Methods -- List loaded methods (flattened)
     | Synonyms -- List synonym sources
@@ -119,11 +118,6 @@ data DbDeleteArgs = DbDeleteArgs
     , ddaKeep :: [Text]
     , ddaExtra :: [Text]
     }
-    deriving (Eq, Show, Generic)
-
--- | Plugin management actions
-data PluginAction
-    = PluginList
     deriving (Eq, Show, Generic)
 
 -- | Method collection management actions
