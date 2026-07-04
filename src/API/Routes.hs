@@ -47,7 +47,6 @@ import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
 import Numeric (showFFloat)
-import Plugin.Types (AnalyzeContext (..), AnalyzeHandle (..), PluginRegistry (..))
 import Progress (ProgressLevel (Info, Warning), getLogLines, reportProgress)
 import Servant
 import Servant.OpenApi (toOpenApi)
@@ -100,7 +99,6 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "supply-chain" :> QueryParam "name" Text :> QueryParam "limit" Int :> QueryParam "min-quantity" Double :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> ReqBody '[JSON] SubstitutionRequest :> Post '[JSON] SupplyChainResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "consumers" :> QueryParam "name" Text :> QueryParam "location" Text :> QueryParam "product" Text :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "max-depth" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> QueryParam "include-edges" Bool :> Get '[JSON] ConsumersResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "path-to" :> QueryParam "target" Text :> Get '[JSON] Value
-                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "analyze" :> Capture "analyzerName" Text :> Get '[JSON] Value
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-flows" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingFlowsResult
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "contributing-activities" :> Capture "collection" Text :> Capture "methodId" Text :> QueryParam "limit" Int :> Get '[JSON] ContributingActivitiesResult
                 :<|> "db" :> Capture "dbName" Text :> "flow" :> Capture "flowId" Text :> Get '[JSON] FlowDetail
@@ -1583,34 +1581,6 @@ getActivityPathTo dbName processIdText targetParam = do
             throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
         Right val -> return val
 
-getActivityAnalyze :: Text -> Text -> Text -> AppM Value
-getActivityAnalyze dbName processIdText analyzerName = do
-    dbManager <- asks aeDbManager
-    (db, sharedSolver) <- requireDatabaseByName dbName
-    case M.lookup analyzerName (prAnalyzers (dmPlugins dbManager)) of
-        Nothing -> throwError err404{errBody = "Analyzer not found: " <> BSL.fromStrict (T.encodeUtf8 analyzerName)}
-        Just analyzer -> do
-            case Service.resolveActivityAndProcessId db processIdText of
-                Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
-                Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
-                Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
-                Right (actProcessId, _) -> do
-                    inventory <- inventoryWithDeps dbName db sharedSolver actProcessId
-                    (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-                    loadedMethods <- liftIO $ DM.getLoadedMethods dbManager
-                    let methods = map snd loadedMethods
-                        ctx =
-                            AnalyzeContext
-                                { acDatabase = db
-                                , acInventory = inventory
-                                , acMethods = methods
-                                , acParameters = M.empty
-                                , acTechFlowDB = M.empty
-                                , acBioFlowDB = mFlows
-                                , acUnitDB = mUnits
-                                }
-                    liftIO $ ahAnalyze analyzer ctx
-
 getContributingFlows :: Text -> Text -> Text -> Text -> Maybe Int -> AppM ContributingFlowsResult
 getContributingFlows dbName processIdText collectionName methodIdText limitParam =
     withActivityAndMethod dbName collectionName processIdText methodIdText $ \db sharedSolver actProcessId _ method -> do
@@ -1955,7 +1925,6 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> postActivitySupplyChain
             :<|> getActivityConsumers
             :<|> getActivityPathTo
-            :<|> getActivityAnalyze
             :<|> getContributingFlows
             :<|> getContributingActivities
             :<|> getFlowDetail

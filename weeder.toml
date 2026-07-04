@@ -38,8 +38,7 @@ roots = [
   "^Plugin\\.Bridge\\.(callPluginBatch|parseLines)$",
   "^Plugin\\.Builtin\\.flowContribution$",
   "^SharedSolver\\.(computeScalingVectorCached|computeInventoryMatrixCached)$",
-  "^Service\\.(getActivityTree|getActivityInventoryWithSharedSolver)$",
-  "^Service\\.(runPreComputeValidation|runPostComputeValidation|hasValidationErrors)$",
+  "^Service\\.getActivityTree$",
   "^Types\\.(flowKindUnitId|searchProductsByLocation|lookupTechFlow|lookupBioFlow)$",
   "^UnitConversion\\.(newUnknownUnitTracker|warnIfUnknownUnit|getUnknownUnits)$",
 

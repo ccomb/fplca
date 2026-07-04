@@ -30,9 +30,8 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
-import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, applySparseMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
+import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
-import Plugin.Types (Severity (..), ValidateContext (..), ValidateHandle (..), ValidationIssue (..), ValidationPhase (..))
 import qualified Progress
 import qualified Search.BM25 as BM25
 import qualified Search.Fuzzy as Fuzzy
@@ -290,54 +289,6 @@ getActivityInventory db processIdText =
             inventory <- computeInventoryMatrix db processId
             let !inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
             return $ Right $ toJSON inventoryExport
-
--- | Shared solver-aware activity inventory export for concurrent processing
-getActivityInventoryWithSharedSolver :: [ValidateHandle] -> SharedSolver -> Database -> Text -> IO (Either ServiceError InventoryExport)
-getActivityInventoryWithSharedSolver validators sharedSolver db processIdText = do
-    case resolveActivityAndProcessId db processIdText of
-        Left err -> return $ Left err
-        Right (processId, activity) -> do
-            -- Validate ProcessId exists in matrix index before expensive computation
-            case validateProcessIdInMatrixIndex db processId of
-                Left validationErr -> return $ Left validationErr
-                Right () -> do
-                    -- Run pre-compute validators
-                    preIssues <- runPreComputeValidation validators db
-                    if hasValidationErrors preIssues
-                        then
-                            return $
-                                Left $
-                                    MatrixError $
-                                        T.intercalate "; " [viMessage i | i <- preIssues, viSeverity i == Error]
-                        else do
-                            -- Inline matrix calculation with shared solver
-                            let bioFlowCount = dbBiosphereCount db
-                                bioTriples = dbBiosphereTriples db
-                                activityIndex = dbActivityIndex db
-                                bioFlowUUIDs = dbBiosphereOrder db
-                                demandVec = buildDemandVectorFromIndex activityIndex processId
-
-                            -- Use shared solver (lazy factorization on first call, cached thereafter)
-                            supplyVec <- solveWithSharedSolver sharedSolver demandVec
-
-                            -- Calculate inventory using sparse biosphere matrix: g = B * supply
-                            -- Convert Int32 to Int for applySparseMatrix
-                            let bioTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList bioTriples]
-                                bioFlowCountInt = fromIntegral bioFlowCount
-                                inventoryVec = applySparseMatrix bioTriplesInt bioFlowCountInt supplyVec
-                                inventory = M.fromList $ zip (V.toList bioFlowUUIDs) (toList inventoryVec)
-
-                            -- Run post-compute validators
-                            postIssues <- runPostComputeValidation validators db inventory
-                            if hasValidationErrors postIssues
-                                then
-                                    return $
-                                        Left $
-                                            MatrixError $
-                                                T.intercalate "; " [viMessage i | i <- postIssues, viSeverity i == Error]
-                                else do
-                                    let inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
-                                    return $ Right inventoryExport
 
 -- | Tree-traversal counters (total nodes / loop nodes / leaf nodes).
 data TreeStats = TreeStats Int Int Int -- total, loops, leaves
@@ -2881,23 +2832,3 @@ exportMatrixDebugData database processIdText opts = do
 -- | Export matrices in universal matrix format (delegates to Matrix.Export)
 exportUniversalMatrixFormat :: FilePath -> Database -> IO ()
 exportUniversalMatrixFormat = MatrixExport.exportUniversalMatrixFormat
-
--- ──────────────────────────────────────────────
--- Plugin validation hooks
--- ──────────────────────────────────────────────
-
--- | Run pre-compute validators (before matrix solve)
-runPreComputeValidation :: [ValidateHandle] -> Database -> IO [ValidationIssue]
-runPreComputeValidation validators db = do
-    let preValidators = filter ((== PreCompute) . vhPhase) validators
-    concat <$> mapM (\v -> vhValidate v (ValidateContext db Nothing)) preValidators
-
--- | Run post-compute validators (after inventory is computed)
-runPostComputeValidation :: [ValidateHandle] -> Database -> Inventory -> IO [ValidationIssue]
-runPostComputeValidation validators db inv = do
-    let postValidators = filter ((== PostCompute) . vhPhase) validators
-    concat <$> mapM (\v -> vhValidate v (ValidateContext db (Just inv))) postValidators
-
--- | Check if any validation issues are errors (should abort computation)
-hasValidationErrors :: [ValidationIssue] -> Bool
-hasValidationErrors = any ((== Error) . viSeverity)
