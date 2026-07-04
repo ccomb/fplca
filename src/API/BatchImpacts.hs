@@ -29,6 +29,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Database.Manager (DatabaseManager (..))
+import Method.Mapping (LongTermMode)
 import Servant (ServerError (..))
 import qualified Servant
 
@@ -76,8 +77,10 @@ runActivityLCIABatch ::
     Text ->
     -- | optional what-if supplier substitutions
     Maybe SubstitutionRequest ->
+    -- | whether to keep or drop delayed long-term emissions
+    LongTermMode ->
     IO (Either BatchError LCIABatchResult)
-runActivityLCIABatch dbm dbName pid coll mSub = do
+runActivityLCIABatch dbm dbName pid coll mSub ltMode = do
     let env =
             AppEnv
                 { aeDbManager = dbm
@@ -86,7 +89,7 @@ runActivityLCIABatch dbm dbName pid coll mSub = do
                 , aeHostingConfig = Nothing
                 , aeClassificationPresets = []
                 }
-    res <- Servant.runHandler (runApp env (activityLCIABatchH dbName pid coll mSub))
+    res <- Servant.runHandler (runApp env (activityLCIABatchH dbName pid coll mSub ltMode))
     case res of
         Right lbr -> pure (Right lbr)
         Left se -> Left <$> translateErrorIO dbm se

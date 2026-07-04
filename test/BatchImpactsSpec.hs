@@ -28,6 +28,7 @@ import Test.Hspec
 
 import qualified API.BatchImpacts as BI
 import Data.Text (Text)
+import Method.Mapping (LongTermMode (..))
 
 {- | Drive 'translateError' with a synthetic 'ServerError' of the given
 status code and body. Picks the canonical err400/404/422/500
@@ -73,7 +74,7 @@ spec = do
     describe "runActivityLCIABatch (empty DatabaseManager)" $ do
         it "returns DatabaseNotLoaded when the requested DB is not loaded" $ do
             dbm <- initDatabaseManager defaultConfig True Nothing
-            res <- runActivityLCIABatch dbm "no-such-db" "no-pid" "no-coll" Nothing
+            res <- runActivityLCIABatch dbm "no-such-db" "no-pid" "no-coll" Nothing IncludeLongTerm
             -- LCIABatchResult has no Show instance, so we pattern-match
             -- rather than rely on 'shouldBe' over the whole Either.
             case res of

@@ -243,6 +243,7 @@ test-suite lca-tests
                      , ProjectRegionalSpec
                      , SharedCASCoverageSpec
                      , EnergyDensityCFSpec
+                     , LongTermExclusionSpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec
                      , FlowResolverSpec
