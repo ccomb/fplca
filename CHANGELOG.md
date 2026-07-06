@@ -1,14 +1,61 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.0] - 2026-07-06
+
+A characterization-accuracy release. EF 3.1 scores on Agribalyse and ecoinvent
+now track the published references far more closely, the plugin framework that
+carried no external users is gone, and a database can be loaded or unloaded from
+every surface rather than only at start-up.
 
 ### Added
-- Scoring-set breakdowns can now show a human-readable name for computed
-  indicators (for example "Ecotoxicity, freshwater" instead of the raw key
-  `etf`), via an optional `[methods.scoring.labels]` table in the scoring
-  configuration. The dominant indicator of batch scoring summaries carries
-  the same display name. A label naming an unknown scoring variable is
-  rejected when the configuration loads instead of being silently ignored.
+- A database can be loaded and unloaded from every surface — the REST API, the
+  MCP server, the CLI, and the web UI — not only at server start-up.
+- Scoring-set breakdowns can show a human-readable name for computed indicators
+  (for example "Ecotoxicity, freshwater" instead of the raw key `etf`), via an
+  optional `[methods.scoring.labels]` table in the scoring configuration. A
+  label naming an unknown scoring variable is rejected when the configuration
+  loads instead of being silently ignored.
+- Scoring can optionally exclude long-term emissions — those a method releases
+  beyond its time horizon — so results line up with inventories that account for
+  them separately.
+- A characterization method can be loaded from a bare `.csv` file, not only a
+  zip archive; an unsupported file type now fails with a clear message instead
+  of being silently misread.
+
+### Changed
+- Much closer EF 3.1 agreement with the published Agribalyse 3.2 and ecoinvent
+  references, the sum of many corrections to how inventory flows are matched to
+  characterization factors: CAS-guided matching with ambiguous bridges dropped,
+  a curated and linted registry of name bridges for refrigerants and pesticides,
+  a region-fallback chain for water flows, sub-compartment gating, a generalized
+  density bridge, an ore-grade resource fallback, and a preference for the
+  verbatim flow name when unit-suffixed homonyms collide. Many products that
+  previously scored short — pesticide-heavy processes especially — are now
+  characterized.
+- Auto-extracted flow synonyms are an opt-in candidate set rather than always
+  applied, so the shipped mapping rests on the curated bridges.
+
+### Fixed
+- Long-term emissions are characterized with the method's long-term factor
+  rather than its default, and ionising radiation against its kBq reference unit.
+- Water no longer collapses across regions: SimaPro factors are treated as
+  name-regionalized rather than keyed on the consumer location.
+- An unspecified chromium emission is treated as trivalent, and elemental metal
+  emissions bridge to their ionic toxicity factor — correcting large human
+  toxicity over-counts.
+- EcoSpold 1 flow identity now includes the sub-category, and a SimaPro
+  name-less multi-product block stays a single activity instead of splitting.
+
+### Removed
+- The plugin framework — its eight-handle registry, the `/analyze` REST
+  endpoint, and the `plugin list` CLI command — is gone. It carried a single
+  built-in implementation and no external users; flow-to-factor mapping is now a
+  plain internal cascade.
+
+### Performance
+- Method tables are built once, off the request path, with a parallelized
+  cascade and synonym-group memoization — a large speedup on the first scoring
+  after a database loads.
 
 ## [0.8.1] - 2026-06-24
 
