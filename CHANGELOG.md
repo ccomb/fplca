@@ -1,5 +1,7 @@
 # Changelog
 
+## [Unreleased]
+
 ## [0.9.0] - 2026-07-06
 
 A characterization-accuracy release. EF 3.1 scores on Agribalyse and ecoinvent
