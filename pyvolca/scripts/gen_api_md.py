@@ -149,6 +149,16 @@ def _public_members(cls: type) -> tuple[list[tuple[str, str, str]], list[tuple[s
     return methods, properties
 
 
+def _render_properties(properties: list[tuple[str, str]], buf: io.StringIO) -> None:
+    """Append the Properties section — shared by class and dataclass rendering."""
+    if not properties:
+        return
+    buf.write("#### Properties\n\n")
+    for name, doc in properties:
+        buf.write(f"##### `{name}`\n\n")
+        buf.write((doc or "_(no docstring)_") + "\n\n")
+
+
 def render_class(cls: type, buf: io.StringIO) -> None:
     """Render a class with its public methods.
 
@@ -173,11 +183,7 @@ def render_class(cls: type, buf: io.StringIO) -> None:
         except (TypeError, ValueError):
             pass
     methods, properties = _public_members(cls)
-    if properties:
-        buf.write("#### Properties\n\n")
-        for name, doc in properties:
-            buf.write(f"##### `{name}`\n\n")
-            buf.write((doc or "_(no docstring)_") + "\n\n")
+    _render_properties(properties, buf)
     if methods:
         buf.write("#### Methods\n\n")
         for name, sig_str, doc in methods:
@@ -209,11 +215,7 @@ def render_dataclass(cls: type, buf: io.StringIO) -> None:
     # Dataclasses carry computed @property members too (e.g.
     # ``ActivityDetail.allocation_percent``); the field table alone hides them.
     _, properties = _public_members(cls)
-    if properties:
-        buf.write("#### Properties\n\n")
-        for name, doc in properties:
-            buf.write(f"##### `{name}`\n\n")
-            buf.write((doc or "_(no docstring)_") + "\n\n")
+    _render_properties(properties, buf)
 
 
 def render_function(fn: object, buf: io.StringIO) -> None:
