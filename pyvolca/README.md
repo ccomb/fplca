@@ -887,6 +887,47 @@ instead of walking the raw exchanges list.
 | `all_products` | `list[Activity]` | — |
 | `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | — |
 
+#### Properties
+
+##### `allocation_percent`
+
+This process's own allocation share (0..100), or ``None``.
+
+A multi-output process splits the parent activity's burden across its
+co-products; every :attr:`all_products` entry carries its share. This
+returns the share of *this* process — the entry whose ``process_id``
+matches — and ``None`` for single-output processes.
+
+##### `inputs`
+
+Every input exchange — technosphere inputs and biosphere resources.
+
+Equivalent to filtering :attr:`exchanges` by ``e.is_input``. Mixed
+kinds: callers needing only one variant should use
+:attr:`technosphere_inputs` or filter manually.
+
+##### `is_allocated`
+
+True iff the activity splits its burden across several co-products.
+
+Reads the structured ``allocation_percent`` the engine sets on each
+:attr:`all_products` entry (authoritative), not the description text.
+
+##### `outputs`
+
+Every output exchange — products and biosphere emissions.
+
+Includes the reference product, coproducts (in allocated
+activities), and all biosphere emissions.
+
+##### `technosphere_inputs`
+
+Only the technosphere inputs (ingredients from other activities).
+
+Excludes biosphere inputs (resource extractions) and waste
+outputs. The common case when answering "what does this activity
+consume from upstream?".
+
 ### `ActivityDiff`
 
 Result of ``compare_activities``.
@@ -909,6 +950,12 @@ One matched or unmatched flow in an activity comparison.
 | `left` | `float \| None` | — |
 | `right` | `float \| None` | — |
 | `unit` | `str \| None` | — |
+
+#### Properties
+
+##### `delta`
+
+right - left (0 if one side is missing).
 
 ### `AggregateGroup`
 
@@ -953,6 +1000,22 @@ An exchange with the environment (resource extraction or emission).
 | `is_biosphere` | `bool` | True |
 | `is_waste` | `bool` | False |
 
+#### Properties
+
+##### `is_input`
+
+True for resource extractions (``direction`` is ``RESOURCE``).
+
+Biosphere inputs are resource extractions; outputs are emissions
+to the environment.
+
+##### `is_reference`
+
+Always False — biosphere exchanges cannot be reference flows.
+
+The reference flow defines the functional unit and is always a
+technosphere product (see :class:`TechnosphereExchange.is_reference`).
+
 ### `CharacterizationFactor`
 
 One characterization factor matched against a database biosphere flow.
@@ -989,6 +1052,12 @@ the slice is incomplete.
 | `matches` | `int` | — |
 | `shown` | `int` | — |
 | `factors` | `list[CharacterizationFactor]` | list() |
+
+#### Properties
+
+##### `has_more`
+
+True when the server truncated below ``matches``.
 
 ### `ClassificationFilter`
 
@@ -1160,6 +1229,12 @@ response of :meth:`Client.get_flow_mapping`.
 | `total_flows` | `int` | — |
 | `matched_flows` | `int` | — |
 | `flows` | `list[FlowMappingEntry]` | list() |
+
+#### Properties
+
+##### `coverage_pct`
+
+Matched fraction expressed as 0..100. Returns 0 when total is 0.
 
 ### `FlowMappingEntry`
 
@@ -1407,6 +1482,12 @@ materialise eagerly if you prefer.
 | `_fetched` | `list[~T]` | list() |
 | `_exhausted` | `bool` | False |
 
+#### Properties
+
+##### `page_size`
+
+Server-applied limit (page size for further fetches).
+
 ### `ServerVersion`
 
 Server build metadata returned by :meth:`Client.get_version`.
@@ -1461,6 +1542,16 @@ lengths by hand.
 | `filtered_activities` | `int` | — |
 | `entries` | `list[SupplyChainEntry]` | list() |
 | `edges` | `list[SupplyChainEdge]` | list() |
+
+#### Properties
+
+##### `has_more`
+
+True when the server truncated ``entries`` below ``filtered_activities``.
+
+Surfacing this lets callers detect silent truncation: if you passed
+``limit=100`` and ``filtered_activities`` is 500, downstream LCA work
+would be wrong without flagging the gap.
 
 ### `SupplyChainEdge`
 
@@ -1519,6 +1610,22 @@ producing activity's classifications describe the product taxonomy.
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | False |
 
+#### Properties
+
+##### `is_input`
+
+True for technosphere inputs (``role`` is ``INPUT`` or ``REFERENCE_INPUT``).
+
+Lets callers split exchanges into inputs vs. outputs without
+knowing the four-role taxonomy.
+
+##### `is_reference`
+
+True for reference roles (``REFERENCE_PRODUCT`` / ``REFERENCE_INPUT``).
+
+The reference exchange is the one that defines the activity's
+functional unit — the basis the LCA result is normalised to.
+
 ### `WasteExchange`
 
 An exchange of a waste flow with a treatment activity.
@@ -1540,6 +1647,15 @@ product input. Orphan waste (no linked treatment) contributes zero impact
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | True |
+
+#### Properties
+
+##### `is_reference`
+
+Always False — waste flows never define an activity's functional unit.
+
+Treatment activities have a ``ReferenceInput`` instead, exposed
+via :class:`TechnosphereExchange`.
 
 ## Functions
 
