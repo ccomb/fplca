@@ -72,15 +72,19 @@ class Server:
         """Find the volca binary.
 
         Resolution order:
-          1. ``self.binary`` if it is an existing path.
+          1. ``self.binary`` if it is an existing file.
           2. The shared install root (``platformdirs.user_data_dir``) —
              populated by :func:`volca.download`, ``install.sh``, or
              ``install.ps1`` interchangeably.
           3. ``shutil.which(self.binary)`` — PATH lookup, including the
              ``~/.local/bin/volca`` shim that ``install.sh`` drops.
           4. ``./volca`` / ``./dist/volca`` for ad-hoc dev trees.
+
+        The check is ``is_file``, not ``exists``: a directory named ``volca``
+        in the working tree (e.g. a source checkout) must not shadow the real
+        binary and get handed to ``Popen`` as an unexecutable path.
         """
-        if Path(self.binary).exists():
+        if Path(self.binary).is_file():
             return self.binary
         installed = _download.installed_binary()
         if installed is not None:
@@ -89,7 +93,7 @@ class Server:
         if found:
             return found
         for candidate in ["./volca", "./dist/volca"]:
-            if Path(candidate).exists():
+            if Path(candidate).is_file():
                 return candidate
         raise FileNotFoundError(
             f"Cannot find '{self.binary}' binary. "

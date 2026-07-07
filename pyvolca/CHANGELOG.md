@@ -18,6 +18,15 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.7.1] - 2026-07-07
+
+### Fixed
+
+- `Server` no longer mistakes a directory named `volca` in the working tree for
+  the engine binary. The lookup now checks for a *file*, so running a script
+  from a source checkout (which has a `volca/` package directory) starts the
+  downloaded binary instead of timing out on an unexecutable path.
+
 ## [0.7.0] - 2026-06-24
 
 Co-product allocation shares are now visible from the typed client.
