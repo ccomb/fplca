@@ -18,6 +18,15 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.7.2] - 2026-07-08
+
+### Added
+
+- `Client.search_activities` gains a `classification_match` argument
+  (`MatchMode.CONTAINS` default, or `MatchMode.EXACT`). A classification filter
+  can now require exact equality instead of substring — the match mode the
+  engine and MCP already accept, finally reachable from the typed client.
+
 ## [0.7.1] - 2026-07-07
 
 ### Fixed

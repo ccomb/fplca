@@ -67,6 +67,7 @@ from .types import (
     LCIABatchResult,
     LCIAResult,
     MatchMode,
+    MatchModeLike,
     Method,
     PathResult,
     Preset,
@@ -849,6 +850,7 @@ class Client:
         preset: str | None = None,
         classification: str | None = None,
         classification_value: str | None = None,
+        classification_match: MatchModeLike | None = None,
         page: int | None = None,
         page_size: int | None = None,
         limit: int | None = None,
@@ -872,6 +874,10 @@ class Client:
             preset: Apply a named classification preset configured in the engine.
             classification: System name (``"ISIC rev.4 ecoinvent"``).
             classification_value: Substring within that system's value.
+            classification_match: How ``classification_value`` is compared —
+                :class:`MatchMode.CONTAINS` (default, substring) or
+                :class:`MatchMode.EXACT` (case-insensitive equality). Ignored
+                when ``classification`` is unset.
             page: 1-based page number. Must be paired with ``page_size`` —
                 offset cannot be derived from page alone.
             page_size: Items per page (becomes the wire-level ``limit``).
@@ -891,6 +897,11 @@ class Client:
             preset=preset,
             classification=classification,
             classification_value=classification_value,
+            classification_mode=(
+                MatchMode(classification_match).value
+                if classification_match is not None
+                else None
+            ),
             exact=exact,
         )
 
