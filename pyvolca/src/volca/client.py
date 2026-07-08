@@ -422,7 +422,7 @@ class Client:
         self,
         operation_id: str,
         *,
-        substitutions: list[dict] | None = None,
+        substitutions: list[SubstitutionLike] | None = None,
         **kwargs: Any,
     ) -> Any:
         """Dispatch an OpenAPI operation by ``operationId``.

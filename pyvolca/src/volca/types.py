@@ -654,8 +654,12 @@ class ConsumersResponse:
         if fetch is None:
             inner_fetch = None
         else:
-            def inner_fetch(o: int, l: int | None) -> dict:
-                return fetch(o, l)["results"]
+            page_fetch = fetch  # narrowed to non-None for the closure below
+
+            def _fetch_results(o: int, l: int | None) -> dict:
+                return page_fetch(o, l)["results"]
+
+            inner_fetch = _fetch_results
         return cls(
             consumers=SearchResults.from_raw(
                 d["results"], parse=ConsumerResult.from_json, fetch=inner_fetch,
