@@ -57,6 +57,7 @@ def fixture_spec() -> dict[str, Any]:
                         {"name": "preset", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "classification", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "classification-value", "in": "query", "required": False, "schema": {"type": "string"}},
+                        {"name": "classification-mode", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "limit", "in": "query", "required": False, "schema": {"type": "integer"}},
                         {"name": "offset", "in": "query", "required": False, "schema": {"type": "integer"}},
                     ],

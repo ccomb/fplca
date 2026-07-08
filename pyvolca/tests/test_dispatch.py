@@ -145,6 +145,29 @@ class TestDispatcher:
         assert "geo" not in params
         assert "limit" not in params
 
+    def test_search_activities_classification_match_sends_mode(self, mocked_client, make_response, empty_envelope):
+        """classification_match reaches the wire as ``classification-mode``."""
+        client, session = mocked_client
+        session.get.return_value = make_response(empty_envelope())
+        client.search_activities(classification="Category", classification_value="Food", classification_match="exact")
+        params = dict(session.get.call_args[1]["params"])
+        assert params["classification-value"] == "Food"
+        assert params["classification-mode"] == "exact"
+
+    def test_search_activities_omits_mode_by_default(self, mocked_client, make_response, empty_envelope):
+        """No classification_match → no ``classification-mode`` query param (server default: contains)."""
+        client, session = mocked_client
+        session.get.return_value = make_response(empty_envelope())
+        client.search_activities(classification="Category", classification_value="Food")
+        params = dict(session.get.call_args[1]["params"])
+        assert "classification-mode" not in params
+
+    def test_search_activities_rejects_bad_match_mode(self, mocked_client):
+        """A typo'd match mode fails client-side before any HTTP call."""
+        client, _ = mocked_client
+        with pytest.raises(ValueError):
+            client.search_activities(classification="Category", classification_value="Food", classification_match="exct")
+
     def test_search_activities_page_kwargs_compute_offset(self, mocked_client, make_response, empty_envelope):
         """page=3 + page_size=20 must translate to offset=40, limit=20."""
         client, session = mocked_client

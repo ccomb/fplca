@@ -26,7 +26,7 @@ pyvolca speaks one revision of the engine's JSON wire format; the engine adverti
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.7.1** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+This build of **pyvolca 0.7.2** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
 
 <!-- END: compatibility -->
 
@@ -672,7 +672,7 @@ Remove ``dep_name`` from the target database's dependencies.
 
 Returns the updated ``DatabaseSetupInfo`` dict.
 
-##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
+##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
 
 Search activities in the current database.
 
@@ -691,6 +691,10 @@ Args:
     preset: Apply a named classification preset configured in the engine.
     classification: System name (``"ISIC rev.4 ecoinvent"``).
     classification_value: Substring within that system's value.
+    classification_match: How ``classification_value`` is compared —
+        :class:`MatchMode.CONTAINS` (default, substring) or
+        :class:`MatchMode.EXACT` (case-insensitive equality). Ignored
+        when ``classification`` is unset.
     page: 1-based page number. Must be paired with ``page_size`` —
         offset cannot be derived from page alone.
     page_size: Items per page (becomes the wire-level ``limit``).
