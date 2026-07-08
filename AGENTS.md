@@ -89,6 +89,7 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 - Simplicity: perfection = nothing left to remove. Avoid over-engineering and cognitive load.
 - **Pre-1.0 (`v0.y.z`): no backward-compatibility obligation yet** — keep wire formats and APIs clean rather than carrying cruft. Reassess at `v1.0.0`.
 - Use language servers for fast diagnostics: HLS for Haskell, pyright for the `pyvolca/` Python client.
+- Fix a diagnostic the moment you see it, even a pre-existing one you only surfaced in passing — don't defer it to "later" or leave it because it predates your change. A separate small commit keeps it out of your feature's scope.
 
 ### Open-source boundary
 - This engine stands alone — keep deployment/SaaS concerns and any customer- or product-specific names out of code, comments, and PRs.
