@@ -406,12 +406,17 @@ jobs:
           #   sign, so any test that spawns volca times out. Skip strip+UPX
           #   for the CI test run (the artifact is larger but usable).
           # - Linux: nothing special needed.
+          # --werror on Linux only: -Wall-clean is a project rule, but only the
+          # Linux compile is verified warning-free (it mirrors the local ci.sh
+          # gate). Windows/macOS keep -Wall without -Werror so a platform-only
+          # warning we can't yet reproduce doesn't block every merge; promote
+          # them once each is confirmed clean.
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             timeout --foreground 1500 ./build.sh --test
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             ./build.sh --test --no-optimize
           else
-            ./build.sh --test
+            ./build.sh --test --werror
           fi
 
       - name: Verify static MUMPS link (Linux)
