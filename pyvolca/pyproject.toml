@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pyright==1.1.411"]
 
 [project.urls]
 Documentation = "https://volca.run/docs/guides/pyvolca/"
@@ -29,3 +29,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pyright]
+include = ["src/volca"]
+typeCheckingMode = "basic"
+pythonVersion = "3.10"

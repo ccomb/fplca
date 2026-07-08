@@ -49,6 +49,12 @@ jobs:
       - name: Install pyvolca with dev extras
         run: pip install -e .[dev]
 
+      - name: Type-check with pyright
+        # Pinned pyright (see dev extras) over src/volca; config in
+        # pyproject.toml [tool.pyright]. Catches type regressions the
+        # editor LSP would show but pytest never would.
+        run: pyright
+
       - name: Download engine binary from main's latest build
         # Pull the linux-amd64 engine artefact from the most recent
         # successful build.yml run on main. test_drift.py's live_spec
