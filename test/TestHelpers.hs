@@ -28,7 +28,7 @@ import UnitConversion (defaultUnitConfig)
 
 -- | Load a SAMPLE database for testing
 loadSampleDatabase :: String -> IO Database
-loadSampleDatabase sampleName = loadSampleDatabaseWithPath sampleName
+loadSampleDatabase = loadSampleDatabaseWithPath
 
 -- | Load database from a specific path
 loadSampleDatabaseWithPath :: String -> IO Database

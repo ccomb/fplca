@@ -367,7 +367,7 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
 handleLogStream :: Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 handleLogStream req respond = do
     let lastEventId = lookup "Last-Event-ID" (requestHeaders req)
-        since = maybe 0 (\v -> fromMaybe 0 (readMaybe (C8.unpack v))) lastEventId
+        since = maybe 0 (fromMaybe 0 . readMaybe . C8.unpack) lastEventId
     respond
         $ responseStream
             status200

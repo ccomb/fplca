@@ -901,10 +901,10 @@ spec = do
     -- non-kg or '(unspecified)'-sub CF through the slower name cascade.
     -- -----------------------------------------------------------------------
     describe "CF / biosphere flow UUID alignment" $ do
-        let cfSide name comp sub unit =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub) unit
-            bioSide name comp sub unit =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub) unit
+        let cfSide name comp sub =
+                generateFlowUUID name (normalizeSimaProCompartment comp sub)
+            bioSide name comp sub =
+                generateFlowUUID name (normalizeSimaProCompartment comp sub)
 
         it "regional water in m³: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
             cfSide "Water, FR" "Raw" "(unspecified)" "m3"
@@ -1097,7 +1097,7 @@ spec = do
             -- Multi-coproduct allocations are of the form 'Sx /(...)*100',
             -- so the formula field should be populated for each coproduct.
             let formulas = [activityAllocationFormula a | a <- activities]
-            all (/= Nothing) formulas `shouldBe` True
+            notElem Nothing formulas `shouldBe` True
 
         it "scales shared exchanges by the per-coproduct allocation fraction" $ do
             (activities, _, _, _, _) <- parseMultiCoproductCSV
@@ -1187,8 +1187,8 @@ spec = do
 
 -- | Build a minimal process CSV with extra section lines inserted
 parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
-parseSectionCSV sectionLines =
-    parseNamedCSV "Test process" sectionLines
+parseSectionCSV =
+    parseNamedCSV "Test process"
 
 -- | Build a minimal process CSV with a custom Process name and Products rows.
 parseProductsCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)

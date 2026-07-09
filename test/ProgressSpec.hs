@@ -101,7 +101,7 @@ spec = do
             concatLines newLines `shouldSatisfy` ("[SOLVER]" `isInfixOf`)
 
 concatLines :: [String] -> String
-concatLines = concatMap (\l -> l ++ "\n")
+concatLines = unlines
 
 isInfixOf :: String -> String -> Bool
 isInfixOf needle haystack = any (needle `isPrefixOf'`) (tails' haystack)

@@ -26,7 +26,7 @@ Plus the CSV reader: it keys by normalized name and rejects malformed rows.
 module EnergyDensityCFSpec (spec) where
 
 import qualified Data.ByteString.Lazy.Char8 as BLC
-import Data.Either (isLeft)
+import Data.Either (fromRight, isLeft)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Data.UUID (UUID)
@@ -49,7 +49,7 @@ import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 -- bridge can't fire against it. Mirrors how production loads data/units.csv.
 unitConfig :: UnitConfig
 unitConfig =
-    either (const defaultUnitConfig) id $
+    fromRight defaultUnitConfig $
         buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\ntonne,mass,1000.0\nm3,volume,1.0\nmj,energy,1.0e6\n")
 
 uidKg, uidTonne, uidM3 :: UUID

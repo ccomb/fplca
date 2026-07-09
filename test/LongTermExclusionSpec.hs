@@ -20,6 +20,7 @@ track the engine's actual behaviour rather than a re-implementation:
 module LongTermExclusionSpec (spec) where
 
 import qualified Data.ByteString.Lazy.Char8 as BLC
+import Data.Either (fromRight)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Data.UUID (UUID)
@@ -40,7 +41,7 @@ import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 
 unitConfig :: UnitConfig
 unitConfig =
-    either (const defaultUnitConfig) id $
+    fromRight defaultUnitConfig $
         buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\n")
 
 uidKg :: UUID

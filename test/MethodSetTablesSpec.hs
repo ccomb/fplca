@@ -142,7 +142,7 @@ spec = do
                 mB = mkMethod 2 "B" [cfB1, cfB2]
                 mC = mkMethod 3 "C" [cfC1]
 
-                fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
+                fill = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb
                 tA = fill (buildMethodTables OtherCFFamily M.empty M.empty [(cfA1, Just (flow1, ByUUID))])
                 tB = fill (buildMethodTables OtherCFFamily M.empty M.empty [(cfB1, Just (flow1, ByUUID)), (cfB2, Just (flow2, ByUUID))])
                 tC = fill (buildMethodTables OtherCFFamily M.empty M.empty [(cfC1, Just (flow1, ByUUID))])
@@ -184,7 +184,7 @@ spec = do
                 m2 = mkMethod 2 "m2" [cf]
                 fdb = M.singleton fid (mkFlow fid "co2" uidKg)
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
-                fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
+                fill = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb
                 t = fill (buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
                 mst = buildMethodSetTables [(m1, t), (m2, t)]
                 results =
@@ -305,7 +305,7 @@ spec = do
                 flow2 = mkFlow fid2 "ch4" uidKg
                 fdb = M.fromList [(fid1, flow1), (fid2, flow2)]
                 udb = M.singleton uidKg (mkUnit uidKg "kg")
-                fill ts = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb ts
+                fill = fillBroadcastVector UnitConversion.defaultUnitConfig udb fdb
                 -- Two non-regional CFs (m1 on fid1; m3 on fid1+fid2) and a
                 -- regional one (m2 with a per-location override on fid1).
                 cf1a = mkCF fid1 2.0
@@ -356,8 +356,11 @@ spec = do
             -- method alone via computeLCIAScoreFromTables.
             let s1 = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tNonRegio1)
                 s3 = loScore (computeLCIAScoreFromTables UnitConversion.defaultUnitConfig udb fdb inv tNonRegio2)
-            map snd results !! 0 `shouldBe` Right s1
-            map snd results !! 2 `shouldBe` Right s3
+            case map snd results of
+                r1 : _ : r3 : _ -> do
+                    r1 `shouldBe` Right s1
+                    r3 `shouldBe` Right s3
+                _ -> expectationFailure "expected at least three scored results"
 
     describe "buildMethodTables mtRegionalizedCF subcomp filter" $ do
         -- Regression for the niche-subcomp clobber: ByName / synonym fan-out
