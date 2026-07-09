@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- A database holding activities with several products can now be exported to
+  ILCD. Each product becomes its own ILCD process, instead of the whole export
+  being refused. This unblocks exporting databases read from SimaPro CSV, where
+  two unrelated processes can share a name and so look like one multi-product
+  activity.
+
 ## [0.9.0] - 2026-07-06
 
 A characterization-accuracy release. EF 3.1 scores on Agribalyse and ecoinvent

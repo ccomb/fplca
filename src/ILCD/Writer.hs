@@ -8,7 +8,7 @@ The output is a canonical, deterministic ILCD directory tree (and, optionally,
 a zip of it) with four subdirectories:
 
 @
-  processes/      one XML per activity (keyed by activity UUID)
+  processes/      one XML per (activity, product) pair (see 'ilcdProcessUUID')
   flows/          one XML per tech/bio/waste flow
   flowproperties/ one XML per unit group (1:1 with units)
   unitgroups/     one XML per unit
@@ -50,6 +50,8 @@ module ILCD.Writer (
     escapeXml,
     escapeXmlAttr,
     formatDouble,
+    ilcdProcessUUID,
+    sharedActivityUUIDs,
     processXML,
     flowXML,
     flowPropertyXML,
@@ -62,10 +64,12 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
+import qualified Data.UUID.V5 as UUID5
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (joinPath, splitDirectories, (</>))
 
@@ -94,6 +98,41 @@ defaultWriteOptions :: WriteOptions
 defaultWriteOptions = WriteOptions{woTimestamp = Nothing, woGenerator = Nothing}
 
 --------------------------------------------------------------------------------
+-- Process dataset identity
+--------------------------------------------------------------------------------
+
+-- | Namespace for the UUIDs this writer has to mint itself.
+ilcdExportNamespace :: UUID
+ilcdExportNamespace =
+    UUID5.generateNamed UUID5.namespaceURL (BS.unpack (TE.encodeUtf8 "ilcd-export"))
+
+-- | The activity UUIDs carried by more than one @(activity, product)@ entry.
+sharedActivityUUIDs :: SimpleDatabase -> S.Set UUID
+sharedActivityUUIDs db =
+    M.keysSet . M.filter (> (1 :: Int)) . M.fromListWith (+) $
+        [(actUUID, 1) | (actUUID, _) <- M.keys (sdbActivities db)]
+
+{- | The @common:UUID@ — and the filename — of one exported process dataset.
+
+ILCD keys a process by a single dataset UUID, one process per file. An activity
+UUID shared by several @(activity, product)@ entries therefore cannot name them
+all: a multi-output activity, or a name collision in the source format, would
+write every product to the same file. Such an entry gets a UUID derived from its
+pair instead; an unshared activity UUID passes through unchanged.
+
+That condition is what makes the mapping a fixed point of @parse . write@: the
+parser reads @common:UUID@ back as the activity UUID, and every re-imported
+process is single-output, so a second export reproduces the first byte for byte.
+Deriving unconditionally would not — @UUID5(UUID5(a,p),p) /= UUID5(a,p)@.
+-}
+ilcdProcessUUID :: S.Set UUID -> (UUID, UUID) -> UUID
+ilcdProcessUUID sharedActUUIDs (actUUID, prodUUID)
+    | actUUID `S.member` sharedActUUIDs =
+        UUID5.generateNamed ilcdExportNamespace $
+            BS.unpack (TE.encodeUtf8 ("process:" <> uuidText actUUID <> "_" <> uuidText prodUUID))
+    | otherwise = actUUID
+
+--------------------------------------------------------------------------------
 -- Top-level: directory / archive
 --------------------------------------------------------------------------------
 
@@ -109,9 +148,12 @@ the native separator before touching disk.
 ilcdFiles :: WriteOptions -> SimpleDatabase -> [(FilePath, BS.ByteString)]
 ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   where
+    shared = sharedActivityUUIDs db
+
     processes =
-        [ ("processes/" <> uuidStr actUUID <> ".xml", render (processXML opts actUUID act))
-        | ((actUUID, _prodUUID), act) <- M.toAscList (sdbActivities db)
+        [ ("processes/" <> uuidStr dsUUID <> ".xml", render (processXML opts dsUUID act))
+        | (pair, act) <- M.toAscList (sdbActivities db)
+        , let dsUUID = ilcdProcessUUID shared pair
         ]
 
     flows =
@@ -132,13 +174,11 @@ ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
     -- Render the list of lines to canonical UTF-8 bytes.
     render = TE.encodeUtf8 . renderLines
 
-{- | Guard an ILCD export against data the parser cannot read back losslessly:
+{- | Guard an ILCD export against data the parser cannot read back losslessly.
 
-* /Multi-output activities./ ILCD identifies a process by a single dataset UUID
-  with one process per file, keyed here on the activity UUID alone. A
-  multi-output activity — several @(actUUID, prodUUID)@ entries sharing one
-  @actUUID@ — would therefore write two processes to the same filename and the
-  same @common:UUID@, and re-import could only keep one.
+A multi-output activity is /not/ one of those: ILCD keys a process by a single
+dataset UUID, but 'ilcdProcessUUID' hands each @(activity, product)@ entry a
+distinct one, so each product becomes its own process dataset.
 
 * /Non-canonical biosphere media./ 'compartmentBlock' emits @"Emissions to
   <medium>"@ for any non-resource medium, but the parser's @extractMedium@ only
@@ -157,14 +197,13 @@ ilcdFiles opts db = sortOn fst (processes ++ flows ++ flowProps ++ unitGroups)
   (@NaN@\/@Infinity@) that would otherwise shift LCIA scores on re-import.
 
 Rather than silently corrupting any of these, report the first offending flow,
-activity or exchange so the caller can fail loudly. Databases whose activity
-UUIDs are all unique, whose biosphere media are all canonical, whose
-classification levels are all non-empty and whose amounts all re-parse pass
-unchanged.
+activity or exchange so the caller can fail loudly. Databases whose biosphere
+media are all canonical, whose classification levels are all non-empty and whose
+amounts all re-parse pass unchanged.
 -}
 checkILCDExportable :: SimpleDatabase -> Either Text ()
 checkILCDExportable db =
-    case lefts [checkMedia, checkMultiOutput, checkClassifications, checkAmounts] of
+    case lefts [checkMedia, checkClassifications, checkAmounts] of
         [] -> Right ()
         violations -> Left (T.intercalate "\n\n" violations)
   where
@@ -188,20 +227,6 @@ checkILCDExportable db =
         Nothing -> False
         Just c -> canonicalMedium (compartmentName c) `notElem` canonicalMedia
 
-    checkMultiOutput =
-        case M.toList collisions of
-            [] -> Right ()
-            ((actUUID, n) : _) ->
-                Left $
-                    "ILCD export cannot represent multi-output activity \""
-                        <> nameOf actUUID
-                        <> "\" (UUID "
-                        <> uuidText actUUID
-                        <> "): "
-                        <> T.pack (show n)
-                        <> " reference products share one activity UUID, which ILCD keys a process by."
-    counts = M.fromListWith (+) [(actUUID, 1 :: Int) | (actUUID, _prodUUID) <- M.keys (sdbActivities db)]
-    collisions = M.filter (> 1) counts
     nameOf actUUID =
         case [activityName act | ((a, _), act) <- M.toList (sdbActivities db), a == actUUID] of
             (nm : _) -> nm
@@ -301,18 +326,19 @@ allFlows db =
 -- Process XML
 --------------------------------------------------------------------------------
 
-{- | Render one ILCD process dataset for an activity. The reference exchange
-gets @dataSetInternalID@ matching @referenceToReferenceFlow@; remaining
-exchanges follow in their list order, so the parser reads them back in the
-same order it would re-serialize.
+{- | Render one ILCD process dataset for an activity, under the dataset UUID
+'ilcdProcessUUID' assigned it — not necessarily the activity's own UUID, which
+several products may share. The reference exchange gets @dataSetInternalID@
+matching @referenceToReferenceFlow@; remaining exchanges follow in their list
+order, so the parser reads them back in the same order it would re-serialize.
 -}
 processXML :: WriteOptions -> UUID -> Activity -> [Text]
-processXML opts actUUID act =
+processXML opts dsUUID act =
     [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
     , "<processDataSet xmlns=\"http://lca.jrc.it/ILCD/Process\" xmlns:common=\"http://lca.jrc.it/ILCD/Common\">"
     , "  <processInformation>"
     , "    <dataSetInformation>"
-    , elem' "common:UUID" (uuidText actUUID)
+    , elem' "common:UUID" (uuidText dsUUID)
     , "      <name>"
     , attrElem "baseName" [("xml:lang", "en")] (activityName act)
     , "      </name>"
