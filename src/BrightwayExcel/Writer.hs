@@ -64,7 +64,6 @@ module BrightwayExcel.Writer (
     renderCategories,
 ) where
 
-import Codec.Archive.Zip (addEntryToArchive, emptyArchive, fromArchive, toEntry)
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
@@ -78,6 +77,7 @@ import Amount (readAmount)
 import BrightwayExcel.Parser (isResourceCompartment)
 import EcoSpold.Common (showFFloatTrim)
 import Types
+import Zip (zipFiles)
 
 -- ---------------------------------------------------------------------------
 -- Configuration
@@ -126,16 +126,13 @@ renderWorkbook :: WriterConfig -> SimpleDatabase -> Either Text BL.ByteString
 renderWorkbook cfg db = do
     checkBrightwayExportable db
     pure $
-        fromArchive $
-            foldr
-                addEntryToArchive
-                emptyArchive
-                [ toEntry "xl/workbook.xml" 0 (enc workbookXml)
-                , toEntry "xl/_rels/workbook.xml.rels" 0 (enc relsXml)
-                , toEntry "xl/worksheets/sheet1.xml" 0 (enc (sheetXml (sheetRows cfg db)))
-                ]
+        zipFiles
+            [ ("xl/workbook.xml", enc workbookXml)
+            , ("xl/_rels/workbook.xml.rels", enc relsXml)
+            , ("xl/worksheets/sheet1.xml", enc (sheetXml (sheetRows cfg db)))
+            ]
   where
-    enc = BL.fromStrict . TE.encodeUtf8
+    enc = TE.encodeUtf8
 
 {- | Guard a Brightway Excel export against exchanges the writer cannot encode.
 'exchangeRow' resolves each exchange's flow name and unit name from the database

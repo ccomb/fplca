@@ -8,6 +8,10 @@
   being refused. This unblocks exporting databases read from SimaPro CSV, where
   two unrelated processes can share a name and so look like one multi-product
   activity.
+- Exporting a large database to a zipped format (ILCD, EcoSpold 2) no longer
+  stalls. The time spent packing the archive grew with the square of the number
+  of files, so a full Agribalyse ILCD export — some fifty thousand files —
+  exhausted memory and never returned.
 
 ## [0.9.0] - 2026-07-06
 

@@ -18,7 +18,6 @@ module Database.Export (
     parseExportFormat,
 ) where
 
-import qualified Codec.Archive.Zip as Zip
 import Control.Exception (SomeException, try)
 import qualified Data.ByteString.Lazy as BL
 import Data.Text (Text)
@@ -32,6 +31,7 @@ import qualified EcoSpold.Writer2 as ES2
 import qualified ILCD.Writer as ILCD
 import qualified SimaPro.Writer as SP
 import Types (Database, toSimpleDatabase)
+import Zip (zipFiles)
 
 {- | Serialize a database to a single byte stream in the requested format, paired
 with any best-effort approximation warnings. Pure: the multi-file formats are
@@ -83,11 +83,6 @@ exportDatabase fmt db path = case serializeDatabase fmt db of
     renderErr :: SomeException -> Text
     renderErr e = "export failed: " <> T.pack (show e)
 
--- | Pack @(path, text)@ entries into a deterministic zip (epoch-0 mtimes).
+-- | Pack @(path, text)@ entries into a deterministic zip.
 zipText :: [(FilePath, Text)] -> BL.ByteString
-zipText = Zip.fromArchive . foldl addOne Zip.emptyArchive
-  where
-    addOne arc (p, t) =
-        Zip.addEntryToArchive
-            (Zip.toEntry p 0 (BL.fromStrict (TE.encodeUtf8 t)))
-            arc
+zipText = zipFiles . map (fmap TE.encodeUtf8)

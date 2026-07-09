@@ -58,7 +58,6 @@ module ILCD.Writer (
     unitGroupXML,
 ) where
 
-import Codec.Archive.Zip (addEntryToArchive, emptyArchive, fromArchive, toEntry)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (lefts)
@@ -76,6 +75,7 @@ import System.FilePath (joinPath, splitDirectories, (</>))
 import Amount (readAmount)
 import EcoSpold.Common (showFFloatTrim)
 import Types
+import Zip (zipFiles)
 
 --------------------------------------------------------------------------------
 -- Options
@@ -295,21 +295,13 @@ writeILCDDatabase opts dir db =
     -- separator so the on-disk write is correct on Windows too.
     nativePath = joinPath . splitDirectories
 
-{- | Build a deterministic zip 'Archive' of the ILCD package and return its
-serialized bytes. Entry modification times are pinned to epoch 0 so the
-archive bytes are reproducible. Runs 'checkILCDExportable' first and returns its
-'Left' on a database the format cannot represent faithfully, so an unguarded
-caller cannot silently emit a corrupt archive.
+{- | Build a deterministic zip archive of the ILCD package and return its
+serialized bytes. Runs 'checkILCDExportable' first and returns its 'Left' on a
+database the format cannot represent faithfully, so an unguarded caller cannot
+silently emit a corrupt archive.
 -}
 writeILCDArchive :: WriteOptions -> SimpleDatabase -> Either Text BL.ByteString
-writeILCDArchive opts db = do
-    checkILCDExportable db
-    pure (fromArchive (buildArchive (ilcdFiles opts db)))
-  where
-    buildArchive = foldl addOne emptyArchive
-    -- Fixed epoch (0) keeps archive bytes stable across runs.
-    addOne arc (path, bytes) =
-        addEntryToArchive (toEntry path 0 (BL.fromStrict bytes)) arc
+writeILCDArchive opts db = checkILCDExportable db >> pure (zipFiles (ilcdFiles opts db))
 
 --------------------------------------------------------------------------------
 -- Flow enumeration (tech ∪ bio ∪ waste), tagged with their unit id
