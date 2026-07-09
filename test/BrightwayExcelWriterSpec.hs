@@ -36,6 +36,7 @@ import BrightwayExcel.Writer (
     renderWorkbook,
     wasteManifest,
  )
+import Control.Monad ((>=>))
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft, isRight)
 import Data.List (find, sortOn)
@@ -111,8 +112,8 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- names carry all four predefined entities plus accented and CJK
             -- characters proves the two halves are inverses, not that the cells
             -- merely store raw strings.
-            withWritten specialDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten specialDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right parsed -> normalizeParsed parsed `shouldBe` specialNormalized
 
@@ -122,8 +123,8 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- Coproduct. Asserting the parsed roles and amounts proves the
             -- multi-output activity survives, where 'normalizeParsed' (which only
             -- projects reference + Input rows) cannot see the coproduct.
-            withWritten coproductDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten coproductDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
                         [a] -> do
@@ -136,8 +137,8 @@ spec = describe "BrightwayExcel.Writer" $ do
         it "(f) round-trips an empty database to no activities" $
             -- The writer still emits the Database header sheet; the parser reads
             -- it back as a valid, activity-free import rather than erroring.
-            withWritten emptyDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten emptyDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> length acts `shouldBe` 0
 
@@ -145,11 +146,11 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- At 1e15 'formatAmount' crosses from integer to fixed-point rendering;
             -- the parser reads it back through TR.double. The amount must survive
             -- the format switch exactly.
-            withWritten bigAmountDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten bigAmountDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
-                        [a] -> map techAmount [ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a] `shouldBe` [1.0e15]
+                        [a] -> [techAmount ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a] `shouldBe` [1.0e15]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
         it "(h) round-trips exchange-level comments, including the reference product" $
@@ -157,8 +158,8 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- through 'productRowOut' (the same path coproducts take), which once
             -- dropped it. Assert the product, input, and biosphere comments all
             -- survive.
-            withWritten commentDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten commentDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
                         [a] -> do
@@ -175,13 +176,13 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- ingest (g→kg here, scaling 1000→1). So parse(write D) ≠ D for a
             -- non-canonical reference unit — the contract is fixed-point over the
             -- parser's image: a second round-trip reproduces the first exactly.
-            withWritten gramRefDb $ \path ->
-                parseBrightwayExcel gramConfig path >>= \case
+            withWritten gramRefDb $
+                parseBrightwayExcel gramConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right parsed1 -> do
                         refUnitAmount parsed1 `shouldBe` Just ("kg", 1.0)
-                        withWritten (rebuild parsed1) $ \path2 ->
-                            parseBrightwayExcel gramConfig path2 >>= \case
+                        withWritten (rebuild parsed1) $
+                            parseBrightwayExcel gramConfig >=> \case
                                 Left err -> expectationFailure (T.unpack err)
                                 Right parsed2 -> refUnitAmount parsed2 `shouldBe` refUnitAmount parsed1
 
@@ -190,8 +191,8 @@ spec = describe "BrightwayExcel.Writer" $ do
             -- the format allows; the parser reads it back as a one-element list.
             -- A single paragraph is therefore a fixed point — the realistic case,
             -- since the parser's own image has ≤1 element (see 'activityRows').
-            withWritten describedDb $ \path ->
-                parseBrightwayExcel defaultUnitConfig path >>= \case
+            withWritten describedDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, _, _, _, _) -> case acts of
                         [a] -> activityDescription a `shouldBe` ["a milling note"]

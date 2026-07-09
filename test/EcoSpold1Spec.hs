@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module EcoSpold1Spec (spec) where
@@ -394,7 +395,7 @@ spec = do
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right (act, _, _, _, _, _, _) ->
-                    let bios = filter (\e -> case e of BiosphereExchange{} -> True; _ -> False) (exchanges act)
+                    let bios = filter (\case BiosphereExchange{} -> True; _ -> False) (exchanges act)
                      in length bios `shouldBe` 2 -- CO2 output + natural gas input (inputGroup 4)
         it "parses flow with CAS number" $
             case parseWithXeno minimalXml of

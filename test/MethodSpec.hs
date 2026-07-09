@@ -4,6 +4,7 @@
 module MethodSpec (spec) where
 
 import qualified Data.Map.Strict as M
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
@@ -73,7 +74,7 @@ spec = do
                     Left err -> expectationFailure $ "Parse failed: " ++ err
                     Right db -> do
                         let result = lookupSynonymGroup db "carbon dioxide"
-                        result `shouldSatisfy` maybe False (const True)
+                        result `shouldSatisfy` isJust
 
             it "maps 'co2' to same group as 'carbon dioxide' (transitive)" $ do
                 let csv = "name1,name2\ncarbon dioxide,co2\n"
@@ -860,7 +861,7 @@ spec = do
             case parseSimaProMethodCSVBytes csv of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right coll -> do
-                    let ch4 = (methodFactors (head (mcMethods coll))) !! 1
+                    let ch4 = methodFactors (head (mcMethods coll)) !! 1
                     mcfFlowName ch4 `shouldBe` "Methane, fossil"
                     mcfValue ch4 `shouldBe` 29.8
 
@@ -869,7 +870,7 @@ spec = do
             case parseSimaProMethodCSVBytes csv of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right coll -> do
-                    let wu = (mcMethods coll) !! 2
+                    let wu = mcMethods coll !! 2
                     methodName wu `shouldBe` "Water use"
                     methodUnit wu `shouldBe` "m3 depriv."
                     let waterCF = head (methodFactors wu)
@@ -918,7 +919,7 @@ spec = do
             case parseSimaProMethodCSVBytes csv of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right coll -> do
-                    let nh3 = head (methodFactors ((mcMethods coll) !! 1))
+                    let nh3 = head (methodFactors (mcMethods coll !! 1))
                     mcfCAS nh3 `shouldBe` Just "7664-41-7"
 
         it "produces deterministic UUIDs" $ do

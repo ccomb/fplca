@@ -220,7 +220,7 @@ spec = do
             let pidZ = processIdToText db 2
             case getConsumers db "test-db" pidZ emptyConsumer of
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
-                Right cr -> all (not . M.null . crClassifications) (srResults (crrResults cr)) `shouldBe` True
+                Right cr -> not (any (M.null . crClassifications) (srResults (crrResults cr))) `shouldBe` True
 
     describe "Edges on consumers (include-edges)" $ do
         let loadWithIndex = fmap BM25.addBM25Index (loadSampleDatabase "SAMPLE.min3")

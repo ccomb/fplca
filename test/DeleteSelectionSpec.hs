@@ -19,6 +19,7 @@ module DeleteSelectionSpec (spec) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text, isInfixOf)
 import qualified Data.UUID as UUID
@@ -245,7 +246,7 @@ pidFor db offset i = pidFor2 db (mkUUID (offset + 10 * i + 1)) (mkUUID (offset +
 
 pidFor2 :: Database -> UUID -> UUID -> ProcessId
 pidFor2 db actUUID prodUUID =
-    maybe (error "pidFor2: key not found") id (findProcessId db actUUID prodUUID)
+    fromMaybe (error "pidFor2: key not found") (findProcessId db actUUID prodUUID)
 
 installLoaded :: DatabaseManager -> Text -> Database -> IO ()
 installLoaded manager name db = do

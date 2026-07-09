@@ -24,6 +24,7 @@ module WasteTreatmentSignSpec (spec) where
 import Data.List (elemIndex)
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
@@ -40,9 +41,7 @@ import UnitConversion (defaultUnitConfig)
 
 -- | A deterministic UUID from its canonical string form.
 mkUUID :: String -> UUID
-mkUUID s = case UUID.fromString s of
-    Just u -> u
-    Nothing -> UUID.nil
+mkUUID s = fromMaybe UUID.nil (UUID.fromString s)
 
 -- Shared identifiers.
 kgU, co2, wW, yY, tA, pA :: UUID

@@ -46,7 +46,7 @@ spec = describe "per-exchange comments" $ do
     it "comments contain no &-entity artefacts" $
         withFixture $ \(act, _, _, _, _) ->
             let comments = [c | ex <- exchanges act, Just c <- [exchangeComment ex]]
-             in all (not . T.isInfixOf "&") comments `shouldBe` True
+             in not (any (T.isInfixOf "&") comments) `shouldBe` True
 
     -- Critical correctness test: <property> children of an exchange may carry
     -- their own <comment> describing the property (e.g. "dry mass on a kg

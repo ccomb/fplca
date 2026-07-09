@@ -124,10 +124,10 @@ spec = describe "Database.Edit copy primitive" $ do
         -- Force the source solver's lazy factorization via a first solve.
         _ <- solveWithSharedSolver srcSolver (buildDemandVectorFromIndex (dbActivityIndex srcDb) 0)
         -- MatrixFactorization has no Show instance, so assert on the Bool.
-        (isJust <$> getFactorization srcSolver) >>= (`shouldBe` True)
+        getFactorization srcSolver >>= (`shouldBe` True) . isJust
 
         -- A shared MVar would have warmed the copy too; a distinct one stays empty.
-        (isNothing <$> getFactorization copySolver) >>= (`shouldBe` True)
+        getFactorization copySolver >>= (`shouldBe` True) . isNothing
 
     it "refuses to overwrite an existing database name" $ do
         manager <- initDatabaseManager defaultConfig True Nothing

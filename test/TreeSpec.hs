@@ -70,7 +70,7 @@ spec = do
                 case tree of
                     TreeNode _ [(_, _, child)] ->
                         case child of
-                            TreeLoop _ _ _ -> return ()
+                            TreeLoop{} -> return ()
                             _ -> expectationFailure "Expected TreeLoop for Y at depth 1"
                     _ -> expectationFailure "Expected TreeNode for X"
 
@@ -79,7 +79,7 @@ spec = do
                 let Just xUUID = UUID.fromString sampleMin3ActivityX
                     tree = buildLoopAwareTree defaultUnitConfig db xUUID 0
                 case tree of
-                    TreeLoop _ _ _ -> return ()
+                    TreeLoop{} -> return ()
                     _ -> expectationFailure "Expected TreeLoop for X at maxDepth=0"
 
             it "depth=2 — Z becomes a TreeLoop at depth 2" $ do
@@ -89,7 +89,7 @@ spec = do
                 case tree of
                     TreeNode _ [(_, _, TreeNode _ [(_, _, leaf)])] ->
                         case leaf of
-                            TreeLoop _ _ _ -> return ()
+                            TreeLoop{} -> return ()
                             _ -> expectationFailure "Expected TreeLoop for Z at depth 2"
                     _ -> expectationFailure "Unexpected tree shape"
 
@@ -142,10 +142,10 @@ findActivityUUIDByName db name =
 
 treeContainsLoop :: LoopAwareTree -> Bool
 treeContainsLoop (TreeLeaf _) = False
-treeContainsLoop (TreeLoop _ _ _) = True
+treeContainsLoop (TreeLoop{}) = True
 treeContainsLoop (TreeNode _ children) = any (\(_, _, t) -> treeContainsLoop t) children
 
 countNodes :: LoopAwareTree -> Int
 countNodes (TreeLeaf _) = 1
-countNodes (TreeLoop _ _ _) = 1
+countNodes (TreeLoop{}) = 1
 countNodes (TreeNode _ children) = 1 + sum (map (\(_, _, t) -> countNodes t) children)
