@@ -15,6 +15,8 @@
 #   --all               Force clean rebuild
 #   --test              Run tests after building
 #   --coverage          Run tests with coverage and generate HTML report (implies --test)
+#   --werror            Treat warnings as errors (-Werror) when compiling — the
+#                       strict gate CI uses; -Wall-clean is a hard project rule
 #   --static            Build a statically-linked binary
 #   --no-optimize       Skip strip + UPX (preserves dylib load commands so
 #                       downstream tooling like dylibbundler / install_name_tool
@@ -140,6 +142,7 @@ COVERAGE=false
 STATIC_BUILD=false
 SKIP_OPTIMIZE=false
 OPTIMIZE_ONLY=false
+WERROR=false
 
 # -----------------------------------------------------------------------------
 # Parse arguments
@@ -167,6 +170,10 @@ while [[ $# -gt 0 ]]; do
             RUN_TESTS=true
             shift
             ;;
+        --werror)
+            WERROR=true
+            shift
+            ;;
         --static)
             STATIC_BUILD=true
             shift
@@ -186,6 +193,14 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# -Wall-clean is a hard project rule; --werror turns it into a build failure.
+# Kept out of the .cabal file on purpose: a stray warning shouldn't block an
+# everyday local `cabal build`, only the CI gate (and anyone opting in here).
+STRICT_OPTS=()
+if [[ "$WERROR" == "true" ]]; then
+    STRICT_OPTS=(--ghc-options=-Werror)
+fi
 
 echo ""
 log_info "Build configuration:"
@@ -481,7 +496,7 @@ if [[ "$SKIP_OPTIMIZE" == "true" ]]; then
     fi
 fi
 
-cabal build -j
+cabal build -j "${STRICT_OPTS[@]}"
 
 VOLCA_BIN_PATH=$(cabal list-bin exe:volca 2>/dev/null || true)
 if [[ -n "$VOLCA_BIN_PATH" && -f "$VOLCA_BIN_PATH" ]]; then
@@ -505,7 +520,7 @@ if [[ "$RUN_TESTS" == "true" ]]; then
     cd "$SCRIPT_DIR"
     if [[ "$COVERAGE" == "true" ]]; then
         log_info "Coverage enabled — instrumenting code..."
-        cabal test --enable-coverage --test-show-details=streaming
+        cabal test --enable-coverage --test-show-details=streaming "${STRICT_OPTS[@]}"
 
         log_info "Generating coverage report..."
         TIX_FILE=$(find "$SCRIPT_DIR/dist-newstyle" -name "lca-tests.tix" -path "*/hpc/*" 2>/dev/null | head -1)
@@ -551,7 +566,7 @@ if [[ "$RUN_TESTS" == "true" ]]; then
                 export VOLCA_EXE="$VOLCA_EXE_RESOLVED"
             fi
         fi
-        cabal test --test-show-details=streaming "${EXTRA_TEST_OPTS[@]}"
+        cabal test --test-show-details=streaming "${EXTRA_TEST_OPTS[@]}" "${STRICT_OPTS[@]}"
     fi
     log_success "Tests passed"
     echo ""
