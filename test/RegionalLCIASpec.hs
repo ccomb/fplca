@@ -91,6 +91,7 @@ mkActivity loc =
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
+        , activityNativeId = Nothing
         }
 
 -- Triples: (bioRow=0, col=i, value=v) for each activity.

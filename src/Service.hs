@@ -1013,7 +1013,7 @@ Note: This function requires the ProcessId to get the activity UUID
 convertActivityForAPI :: UnitConfig -> Database -> ProcessId -> Activity -> ActivityForAPI
 convertActivityForAPI unitCfg db processId activity =
     let allProducts = case processIdToUUIDs db processId of
-            Just (activityUUID, _) -> getAllProductsForActivity db activityUUID
+            Just (activityUUID, _) -> getAllProductsForActivity db (activityGroupKey activityUUID activity)
             Nothing -> []
         (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
         linkMap = buildCrossDBLinkMap db processId
@@ -1209,10 +1209,13 @@ unknownActivitySummary db pid =
         , prsNativeType = Nothing
         }
 
--- | Get all products (ProcessIds) for an activity UUID using the products index.
-getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
-getAllProductsForActivity db activityUUID =
-    case M.lookup activityUUID (dbActivityProductsIndex db) of
+{- | The coproducts of one source dataset block, as 'ActivitySummary'. Keyed on
+'activityGroupKey', not on the activity UUID alone: SimaPro reuses one process
+name across unrelated blocks, which the UUID hashes to a single value.
+-}
+getAllProductsForActivity :: Database -> (UUID, Maybe NativeProcessId) -> [ActivitySummary]
+getAllProductsForActivity db groupKey =
+    case M.lookup groupKey (dbActivityProductsIndex db) of
         Nothing -> []
         Just processIds ->
             [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)

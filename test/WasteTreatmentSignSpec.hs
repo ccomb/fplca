@@ -68,6 +68,7 @@ emptyActivity =
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
+        , activityNativeId = Nothing
         }
 
 techEx :: UUID -> Double -> TechRole -> UUID -> Exchange

@@ -40,7 +40,7 @@ data InterningTables = InterningTables
     { itProcessIdTable :: !(V.Vector (UUID, UUID))
     , itProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId)
     , itActivityUUIDIndex :: !(M.Map UUID ProcessId)
-    , itActivityProductsIndex :: !(M.Map UUID [ProcessId])
+    , itActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId])
     , itActivities :: !(V.Vector Activity)
     , itActivityCount :: !Int32
     }
@@ -51,7 +51,8 @@ buildInterningTables activityMap =
         { itProcessIdTable = V.fromList [k | (_, k, _) <- indexed]
         , itProcessIdLookup = M.fromList [(k, pid) | (pid, k, _) <- indexed]
         , itActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _), _) <- indexed]
-        , itActivityProductsIndex = M.fromListWith (++) [(actUUID, [pid]) | (pid, (actUUID, _), _) <- indexed]
+        , itActivityProductsIndex =
+            M.fromListWith (++) [(activityGroupKey actUUID act, [pid]) | (pid, (actUUID, _), act) <- indexed]
         , itActivities = V.fromList [act | (_, _, act) <- indexed]
         , itActivityCount = fromIntegral (length indexed)
         }

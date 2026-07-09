@@ -31,6 +31,7 @@ emptyActivity =
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
+        , activityNativeId = Nothing
         }
 
 -- | A production output exchange (isInput=False, isReference=False by default)

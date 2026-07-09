@@ -475,6 +475,7 @@ multiOutputDb =
             Nothing
             Nothing
             Nothing
+            Nothing
 
 -- ---------------------------------------------------------------------------
 -- Feature fixtures (single-output, exercising the recent ILCD writer fixes)
@@ -544,6 +545,7 @@ oneActivityDb bios exs =
             , activityAllocationPercent = Nothing
             , activityAllocationFormula = Nothing
             , activityNativeType = Nothing
+            , activityNativeId = Nothing
             }
 
 refProductEx :: Exchange

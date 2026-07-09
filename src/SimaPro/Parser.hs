@@ -883,6 +883,12 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
     descriptionLines = maybeToList (nonEmptyText pbComment)
     nativeType = SimaProProcessType <$> nonEmptyText pbType
 
+    -- Block identity. The coproducts below share it, so they group together even
+    -- though the activity UUID (a hash of name and location) is not unique: a
+    -- SimaPro "Process name" is truncated to 80 characters and reused verbatim
+    -- across unrelated blocks.
+    nativeId = NativeProcessId <$> nonEmptyText pbIdentifier
+
     makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
     makeActivity prod =
         let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
@@ -921,6 +927,7 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
                     , activityAllocationPercent = Just allocPercent
                     , activityAllocationFormula = allocFormula
                     , activityNativeType = nativeType
+                    , activityNativeId = nativeId
                     }
             allUnits =
                 map

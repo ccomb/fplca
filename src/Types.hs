@@ -453,6 +453,19 @@ data NativeActivityType
         }
     deriving (Show, Eq, Generic, NFData, Store)
 
+{- | The identifier a source format gives the dataset block an activity was read
+from (SimaPro's @Process identifier@ header). Two blocks that happen to share a
+name and a location are still two activities, and 'activityUUID' — a hash of
+name and location — cannot tell them apart; this can. 'Nothing' when the source
+format has no such field, which restores grouping by 'activityUUID' alone.
+
+Not a 'ProcessId': that one is a matrix row index, minted by 'buildInterningTables'.
+This is the source's own string, opaque to us and stable only within one release
+of a database.
+-}
+newtype NativeProcessId = NativeProcessId Text
+    deriving (Show, Eq, Ord, Generic, NFData, Store)
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
@@ -469,8 +482,18 @@ data Activity = Activity
     , activityAllocationPercent :: !(Maybe Double) -- SimaPro multi-product allocation fraction (%, 0..100); Nothing for non-allocated bases
     , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
     , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
+    , activityNativeId :: !(Maybe NativeProcessId) -- Source dataset block this activity was read from; groups the coproducts of one block. Nothing when the source format lacks the field
     }
     deriving (Generic, NFData, Store)
+
+{- | The coproducts of one source dataset block share this key. A SimaPro CSV
+reuses one @Process name@ across unrelated blocks (it is truncated to 80
+characters, and duplicated outright), so the activity UUID alone over-groups
+them; 'activityNativeId' splits them back apart. Formats without a block
+identifier fall back to grouping by activity UUID, as before.
+-}
+activityGroupKey :: UUID -> Activity -> (UUID, Maybe NativeProcessId)
+activityGroupKey actUUID act = (actUUID, activityNativeId act)
 
 -- | LCA computation tree (recursive representation)
 data ActivityTree
@@ -716,7 +739,7 @@ data Database = Database
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int32) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
     , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
-    , dbActivityProductsIndex :: !(M.Map UUID [ProcessId]) -- Activity UUID → all ProcessIds (for multi-product activities)
+    , dbActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId]) -- 'activityGroupKey' → the ProcessIds of one source block (its coproducts)
     , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbTechFlows :: !TechFlowDB -- Technosphere flows by UUID

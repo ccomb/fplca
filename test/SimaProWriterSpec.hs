@@ -595,6 +595,7 @@ emissionDb comp =
             Nothing
             Nothing
             Nothing
+            Nothing
 
 -- ---------------------------------------------------------------------------
 -- Allocation round-trip fixture
@@ -640,6 +641,7 @@ allocationDb =
             (Just 50)
             Nothing
             Nothing
+            Nothing
 
 {- | A 0%-allocated activity: its shared material input is stored at 0 (the parser
 scaled every shared amount by allocFraction = 0 on import). A correct writer emits
@@ -678,6 +680,7 @@ zeroAllocationDb =
             M.empty
             M.empty
             (Just 0)
+            Nothing
             Nothing
             Nothing
 
@@ -723,6 +726,7 @@ commentDb ped cmt =
             Nothing
             Nothing
             Nothing
+            Nothing
 
 {- | One activity with the given name and a single reference product. Exercises
 the metadata-key collision guard: a name equal to a SimaPro key is rejected.
@@ -752,6 +756,7 @@ namedDb name =
             [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
             M.empty
             M.empty
+            Nothing
             Nothing
             Nothing
             Nothing
@@ -808,4 +813,4 @@ guardDb alloc ntype exs =
         }
   where
     act =
-        Activity "guard maker" [] M.empty M.empty "GLO" "kg" exs M.empty M.empty alloc Nothing ntype
+        Activity "guard maker" [] M.empty M.empty "GLO" "kg" exs M.empty M.empty alloc Nothing ntype Nothing

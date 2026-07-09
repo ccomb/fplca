@@ -7,6 +7,8 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import Database.Loader (getReferenceProductUUID)
+import Database.MatrixBuild (InterningTables (..), buildInterningTables)
 import Expr (evaluate, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
@@ -33,6 +35,7 @@ import Types (
     BiosphereFlow,
     Exchange (..),
     NativeActivityType (..),
+    NativeProcessId (..),
     Pedigree (..),
     TechRole (..),
     TechnosphereFlow,
@@ -1130,6 +1133,43 @@ spec = do
             S.fromList (map activityName activities)
                 `shouldBe` S.singleton "Tuna, main product {FR} U"
 
+        it "groups the coproducts of one block, and only those" $ do
+            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so three
+            -- unrelated lorry blocks carry one name and hash to one activityUUID.
+            -- The products index must still keep them apart, because the block
+            -- identifier does.
+            let truncated = "market for transport, freight, lorry with refrigeration machine, 7.5-16 ton, die"
+            activities <-
+                parseIdentifiedBlocksCSV
+                    [ ("TraiEVEA000064241304182", truncated, ["Lorry, EURO5, R134a, freezing {GLO} U;tkm;1;100;not defined;transport;"])
+                    , ("TraiEVEA000064241304183", truncated, ["Lorry, EURO6, R134a, cooling {GLO} U;tkm;1;100;not defined;transport;"])
+                    ]
+            S.fromList (map activityNativeId activities)
+                `shouldBe` S.fromList
+                    [ Just (NativeProcessId "TraiEVEA000064241304182")
+                    , Just (NativeProcessId "TraiEVEA000064241304183")
+                    ]
+            -- The collision this fix deliberately keeps: one UUID, two blocks.
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
+            map length (productGroups activities) `shouldBe` [1, 1]
+
+        it "groups a block's coproducts together under its own identifier" $ do
+            -- The yellowfin tuna block: two coproducts, one "Process identifier",
+            -- one group — the grouping #171 established, now carried by the
+            -- identifier rather than by the shared name.
+            activities <-
+                parseIdentifiedBlocksCSV
+                    [
+                        ( "AGRIBALU000009084602653"
+                        , ""
+                        ,
+                            [ "Tuna, main product {FR} U;kg;1;91;not defined;material;"
+                            , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                            ]
+                        )
+                    ]
+            map length (productGroups activities) `shouldBe` [2]
+
         it "does not blank the whole block when the reference product name is empty" $ do
             -- Malformed export: name-less block whose first Products row has an
             -- empty name cell. The blank must stay confined to that row; other
@@ -1189,6 +1229,50 @@ spec = do
 parseSectionCSV :: [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseSectionCSV sectionLines =
     parseNamedCSV "Test process" sectionLines
+
+{- | Parse several process blocks, each with its own @Process identifier@,
+@Process name@ and @Products@ rows. Activities come back in file order.
+-}
+parseIdentifiedBlocksCSV :: [(BS.ByteString, BS.ByteString, [BS.ByteString])] -> IO [Activity]
+parseIdentifiedBlocksCSV blocks =
+    withSystemTempFile "identified-blocks-test.csv" $ \path handle -> do
+        let header =
+                [ "{SimaPro 9.6.0.1}"
+                , "{CSV separator: semicolon}"
+                , "{Decimal separator: .}"
+                , ""
+                ]
+            block (identifier, procName, productsRows) =
+                [ "Process"
+                , ""
+                , "Process identifier"
+                , identifier
+                , ""
+                , "Category type"
+                , "material"
+                , ""
+                , "Process name"
+                , procName
+                , ""
+                , "Type"
+                , "Unit process"
+                , ""
+                , "Products"
+                ]
+                    ++ productsRows
+                    ++ ["", "End", ""]
+        BS.hPut handle (BS.intercalate "\r\n" (header ++ concatMap block blocks))
+        hClose handle
+        (activities, _, _, _, _) <- parseSimaProCSV defaultUnitConfig path
+        pure activities
+
+{- | The coproduct groups the products index builds, as their sizes, ordered by
+group key. One entry per source block.
+-}
+productGroups :: [Activity] -> [[Int]]
+productGroups activities =
+    map (map fromIntegral) . M.elems . itActivityProductsIndex . buildInterningTables $
+        M.fromList [((generateActivityUUID a, getReferenceProductUUID a), a) | a <- activities]
 
 -- | Build a minimal process CSV with a custom Process name and Products rows.
 parseProductsCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
