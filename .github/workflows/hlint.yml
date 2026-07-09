@@ -25,5 +25,5 @@ jobs:
       - uses: haskell-actions/hlint-setup@v2
         with:
           version: ${{ env.HLINT_VERSION }}
-      - name: Lint src/
-        run: hlint src/
+      - name: Lint src, app, test
+        run: hlint src app test
