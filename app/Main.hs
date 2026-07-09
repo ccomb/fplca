@@ -31,7 +31,7 @@ import CLI.Types
 import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ServerConfig (..), loadConfig)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
 import Progress
 
 -- For server mode
@@ -110,11 +110,18 @@ runCLIWithConfig cliConfig cmd cfgFile = do
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
     executeCommand cliConfig cmd dbManager
 
+{- | HTTP manager for client-mode commands, with the 30 s default response
+timeout lifted: the server legitimately computes for minutes before the first
+byte of a large database export or batch scoring arrives.
+-}
+newClientManager :: IO Manager
+newClientManager = newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutNone}
+
 -- | Run CLI commands via HTTP against a running server (lightweight, no DB loading)
 runCLIViaAPI :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIViaAPI cliConfig cmd cfgFile = do
     config <- loadConfigOrDie cfgFile
-    mgr <- newManager defaultManagerSettings
+    mgr <- newClientManager
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     executeRemoteCommand mgr rc (globalOptions cliConfig) cmd
 
@@ -122,14 +129,14 @@ runCLIViaAPI cliConfig cmd cfgFile = do
 runReplMode :: CLIConfig -> FilePath -> IO ()
 runReplMode cliConfig cfgFile = do
     config <- loadConfigOrDie cfgFile
-    mgr <- newManager defaultManagerSettings
+    mgr <- newClientManager
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     runRepl mgr rc (globalOptions cliConfig) cfgFile
 
 -- | Run stop without config — resolveRemoteConfig falls back to env vars / defaults
 runStopWithoutConfig :: CLIConfig -> IO ()
 runStopWithoutConfig cliConfig = do
-    mgr <- newManager defaultManagerSettings
+    mgr <- newClientManager
     rc <- resolveRemoteConfig (globalOptions cliConfig) Nothing
     executeRemoteCommand mgr rc (globalOptions cliConfig) Stop
 
