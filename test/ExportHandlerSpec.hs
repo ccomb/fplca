@@ -1,9 +1,10 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Tests for the HTTP export handler's error mapping. A failed export must
 surface as the right HTTP status (400 bad format / unexportable data, 404 not
-loaded), never as a 200 body carrying a success flag — the @ExportResponse@ type
-can no longer represent the latter.
+loaded), never as a 200 body carrying a success flag — the response type (raw
+bytes) cannot represent the latter.
 
 The cheapest fixture that still drives the @Servant.runHandler@ boundary is an
 empty 'Database.Manager.DatabaseManager' (no databases loaded), exactly as
@@ -12,19 +13,19 @@ empty 'Database.Manager.DatabaseManager' (no databases loaded), exactly as
 module ExportHandlerSpec (spec) where
 
 import API.DatabaseHandlers (exportDatabaseHandler)
-import API.Types (ExportRequest (..), ExportResponse)
+import API.Types (BinaryContent, ExportRequest (..))
 import App.Env (AppEnv (..), runApp)
 import Config (defaultConfig)
 import Data.Text (Text)
 import Database.Manager (initDatabaseManager)
-import Servant (ServerError, errHTTPCode, runHandler)
+import Servant (Header, Headers, ServerError, errHTTPCode, runHandler)
 import Test.Hspec
 
-{- | Run the export handler against an empty database manager. 'ExportResponse'
+{- | Run the export handler against an empty database manager. The success type
 has no Eq/Show, but the tests only inspect the 'Left', and the @Right _@
 pattern never forces it.
 -}
-runExport :: Text -> Text -> IO (Either ServerError ExportResponse)
+runExport :: Text -> Text -> IO (Either ServerError (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent))
 runExport dbName fmt = do
     dbm <- initDatabaseManager defaultConfig True Nothing
     let env =

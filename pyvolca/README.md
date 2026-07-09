@@ -437,9 +437,10 @@ validated client-side; an unknown value raises VoLCAError before any
 request. Single-file formats carry their bytes directly; EcoSpold 2 /
 ILCD multi-file trees come back zipped.
 
-The engine returns the payload base64-encoded in the ``data`` field;
-this method base64-decodes it and returns the raw bytes. Raises
-VoLCAError on ``success=false`` or a missing ``data`` field.
+The engine streams the payload as raw bytes. Best-effort approximation
+warnings arrive in the ``X-Volca-Export-Warnings`` response header
+(percent-encoded, newline-joined) and are surfaced through
+:mod:`warnings`. Raises VoLCAError on an HTTP error.
 
 ##### `Client.export_to_file(fmt: str, out_path: str, db_name: str | None = None) -> None`
 

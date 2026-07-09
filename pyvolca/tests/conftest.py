@@ -145,6 +145,7 @@ def _make_response(json_body: Any, status: int = 200) -> MagicMock:
     r.content = json.dumps(json_body).encode()
     r.text = json.dumps(json_body)
     r.json.return_value = json_body
+    r.headers = {}
     r.history = []
     r.raise_for_status = MagicMock()
     return r

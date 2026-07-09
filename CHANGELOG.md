@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- Database exports download as raw bytes instead of base64-encoded JSON,
+  matching how uploads already work — a third less data on the wire and far
+  less memory on both ends for big files. Any export approximation warnings
+  now travel in the `X-Volca-Export-Warnings` response header.
+
 ### Fixed
 - A database holding activities with several products can now be exported to
   ILCD. Each product becomes its own ILCD process, instead of the whole export

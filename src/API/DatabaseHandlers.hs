@@ -55,7 +55,6 @@ import Control.Monad (mfilter, void)
 import Control.Monad.Catch (finally)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Lazy as BSL
 import Data.List (isPrefixOf)
 import qualified Data.Map as M
@@ -64,6 +63,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Data.Word (Word64)
+import Network.HTTP.Types.URI (urlEncode)
 import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err404, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import qualified System.Directory
@@ -85,7 +85,6 @@ import API.Types (
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
     ExportRequest (..),
-    ExportResponse (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
@@ -276,21 +275,26 @@ deleteActivitiesHandler dbName req = do
                     ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
                     deleted
 
-{- | Export a loaded database, returning the serialized bytes base64-encoded.
-EcoSpold 2 / ILCD multi-file trees are zipped; single-file formats carry their
-bytes directly. Mirrors the upload endpoint's base64 convention. Failures surface
-as HTTP errors — 400 for an unknown format or data the target format cannot
-represent, 404 for a database that is not loaded — never a 200 with a failure flag.
+{- | Export a loaded database as a raw octet-stream body — the same shape the
+upload endpoint reads, and the only response cheap enough for a multi-hundred-MB
+archive (a base64 JSON envelope costs +33% and four full copies before the
+first byte leaves). EcoSpold 2 / ILCD multi-file trees are zipped; single-file
+formats carry their bytes directly. Best-effort approximation warnings ride the
+@X-Volca-Export-Warnings@ header, percent-encoded because activity names are
+arbitrary Unicode and joined with newlines. Failures surface as HTTP errors —
+400 for an unknown format or data the target format cannot represent, 404 for a
+database that is not loaded — never a 200 with a failure flag.
 -}
-exportDatabaseHandler :: Text -> ExportRequest -> AppM ExportResponse
+exportDatabaseHandler :: Text -> ExportRequest -> AppM (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
 exportDatabaseHandler dbName req = do
     dbManager <- asks aeDbManager
     fmt <- either (httpErr err400) pure (parseExportFormat (exrFormat req))
     mLoaded <- liftIO (getDatabase dbManager dbName)
     ld <- maybe (httpErr err404 ("Database not loaded: " <> dbName)) pure mLoaded
     (bytes, warnings) <- either (httpErr err400) pure (serializeDatabase fmt (ldDatabase ld))
-    pure (ExportResponse (T.decodeUtf8 (B64.encode (BSL.toStrict bytes))) warnings)
+    pure (addHeader (encodeWarnings warnings) (BinaryContent bytes))
   where
+    encodeWarnings = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.intercalate "\n"
     httpErr :: ServerError -> Text -> AppM a
     httpErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
 

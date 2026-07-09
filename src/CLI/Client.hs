@@ -17,7 +17,6 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseMaybe, withArray, withObject)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
@@ -35,14 +34,18 @@ import Network.HTTP.Client (
     Manager,
     Request (method, requestBody, requestHeaders),
     RequestBody (..),
+    Response,
     httpLbs,
     parseRequest,
     responseBody,
+    responseHeaders,
     responseStatus,
     setQueryString,
  )
+import Network.HTTP.Types.Header (HeaderName)
 import Network.HTTP.Types.Status (statusCode)
-import Progress (reportError)
+import Network.HTTP.Types.URI (urlDecode)
+import Progress (ProgressLevel (Warning), reportError, reportProgress)
 import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
@@ -285,28 +288,35 @@ relinkMappingBody depDb csv =
         , "mappingCsv" .= csv
         ]
 
-{- | Remote export: POST the target format, base64-decode the bytes the server
-returns (serialization happens server-side), and write them to @--out@. Mirrors
-the local export's output summary. Failures (bad format, db not loaded, invalid
-base64) surface loudly rather than writing a partial/empty file.
+{- | Remote export: POST the target format and write the raw bytes the server
+returns (serialization happens server-side) to @--out@. Approximation warnings
+arrive percent-encoded in the @X-Volca-Export-Warnings@ header and are
+reported, not fatal. Failures (bad format, db not loaded) surface loudly
+rather than writing a partial/empty file.
 -}
 executeRemoteExport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> DbExportArgs -> IO ()
 executeRemoteExport mgr rc fmt jp args = do
-    resp <- apiPost mgr rc ("/api/v1/db/" ++ T.unpack (deaDb args) ++ "/export") (object ["format" .= deaFormat args])
+    resp <- apiPostRaw mgr rc ("/api/v1/db/" ++ T.unpack (deaDb args) ++ "/export") (object ["format" .= deaFormat args])
     case resp of
         -- A failed export (bad format, db not loaded, unexportable data) arrives
         -- as a non-2xx HTTP status, surfaced here as 'Left'.
         Left err -> reportError err >> exitFailure
-        Right val -> case parseMaybe parseExportData val of
-            Nothing -> reportError "export: malformed server response" >> exitFailure
-            Just b64 -> case B64.decode (T.encodeUtf8 b64) of
-                Left derr -> reportError ("export: invalid base64 from server: " ++ derr) >> exitFailure
-                Right bytes -> do
-                    C8.writeFile (deaOut args) bytes
-                    output fmt jp (Right (object ["database" .= deaDb args, "format" .= deaFormat args, "out" .= deaOut args]))
-  where
-    parseExportData :: Value -> Parser Text
-    parseExportData = withObject "ExportResponse" $ \o -> o .: "data"
+        Right r -> do
+            mapM_ (reportProgress Warning . T.unpack) (exportWarnings r)
+            BL.writeFile (deaOut args) (responseBody r)
+            output fmt jp (Right (object ["database" .= deaDb args, "format" .= deaFormat args, "out" .= deaOut args]))
+
+{- | Decode the @X-Volca-Export-Warnings@ response header: percent-decode, then
+split on the newlines the server joined with. Absent or empty header = no
+warnings.
+-}
+exportWarnings :: Response BL.ByteString -> [Text]
+exportWarnings r =
+    [ w
+    | Just raw <- [lookup "X-Volca-Export-Warnings" (responseHeaders r)]
+    , w <- T.splitOn "\n" (T.decodeUtf8 (urlDecode False raw))
+    , not (T.null w)
+    ]
 
 -- | Build query string from optional parameters
 buildQuery :: [(String, Maybe String)] -> String
@@ -349,7 +359,7 @@ apiUploadFile mgr rc path args = do
                     req0
                         { Network.HTTP.Client.method = "POST"
                         , requestHeaders =
-                            authHeaders ++ [("Content-Type", "application/octet-stream")] ++ requestHeaders req0
+                            authHeaders rc ++ [("Content-Type", "application/octet-stream")] ++ requestHeaders req0
                         , requestBody = body
                         }
         httpLbs req1 mgr
@@ -361,10 +371,6 @@ apiUploadFile mgr rc path args = do
              in if status >= 200 && status < 300
                     then return $ Right $ fromMaybe (object []) (decode respBody)
                     else return $ Left $ formatApiError status respBody
-  where
-    authHeaders = case rcAuth rc of
-        Just pwd -> [("Authorization", "Bearer " <> C8.pack pwd)]
-        Nothing -> []
 
 -- | Build a constant-memory streaming request body from a file on disk.
 fileRequestBody :: FilePath -> IO RequestBody
@@ -482,6 +488,11 @@ formatTable (headers, rows) =
   where
     maxColWidth = 60
 
+authHeaders :: RemoteConfig -> [(HeaderName, BS.ByteString)]
+authHeaders rc = case rcAuth rc of
+    Just pwd -> [("Authorization", "Bearer " <> C8.pack pwd)]
+    Nothing -> []
+
 -- | HTTP GET, POST, DELETE helpers
 apiGet :: Manager -> RemoteConfig -> String -> IO (Either String Value)
 apiGet mgr rc path = apiRequest mgr rc "GET" path Nothing
@@ -492,6 +503,29 @@ apiPost mgr rc path body = apiRequest mgr rc "POST" path (Just body)
 apiDelete :: Manager -> RemoteConfig -> String -> IO (Either String Value)
 apiDelete mgr rc path = apiRequest mgr rc "DELETE" path Nothing
 
+{- | POST a JSON body and return the raw response (bytes + headers), for
+octet-stream endpoints like database export. Shares the error formatting of
+'apiRequest' but skips its JSON decoding.
+-}
+apiPostRaw :: Manager -> RemoteConfig -> String -> Value -> IO (Either String (Response BL.ByteString))
+apiPostRaw mgr rc path body = do
+    result <- try $ do
+        req0 <- parseRequest (rcBaseUrl rc ++ path)
+        httpLbs
+            req0
+                { Network.HTTP.Client.method = "POST"
+                , requestHeaders = authHeaders rc ++ [("Content-Type", "application/json")] ++ requestHeaders req0
+                , requestBody = RequestBodyLBS (encode body)
+                }
+            mgr
+    pure $ case result of
+        Left e -> Left (formatHttpError (rcBaseUrl rc) e)
+        Right resp ->
+            let status = statusCode (responseStatus resp)
+             in if status >= 200 && status < 300
+                    then Right resp
+                    else Left (formatApiError status (responseBody resp))
+
 -- | Core HTTP request helper with error handling
 apiRequest :: Manager -> RemoteConfig -> String -> String -> Maybe Value -> IO (Either String Value)
 apiRequest mgr rc reqMethod path mBody = do
@@ -501,7 +535,7 @@ apiRequest mgr rc reqMethod path mBody = do
         let req1 =
                 req0
                     { Network.HTTP.Client.method = C8.pack reqMethod
-                    , requestHeaders = authHeaders ++ contentHeaders ++ requestHeaders req0
+                    , requestHeaders = authHeaders rc ++ contentHeaders ++ requestHeaders req0
                     }
             req2 = case mBody of
                 Just body -> req1{requestBody = RequestBodyLBS (encode body)}
@@ -516,9 +550,6 @@ apiRequest mgr rc reqMethod path mBody = do
                     then return $ Right $ fromMaybe (object []) (decode body)
                     else return $ Left $ formatApiError status body
   where
-    authHeaders = case rcAuth rc of
-        Just pwd -> [("Authorization", "Bearer " <> C8.pack pwd)]
-        Nothing -> []
     contentHeaders = case mBody of
         Just _ -> [("Content-Type", "application/json")]
         Nothing -> []
