@@ -84,7 +84,7 @@ spec = do
     describe "runBatchImpacts (empty DatabaseManager)" $ do
         it "returns DatabaseNotLoaded when the requested DB is not loaded" $ do
             dbm <- initDatabaseManager defaultConfig True Nothing
-            res <- runBatchImpacts dbm "no-such-db" "no-coll" Nothing ["pidA", "pidB"]
+            res <- runBatchImpacts dbm "no-such-db" "no-coll" Nothing IncludeLongTerm ["pidA", "pidB"]
             case res of
                 Left e -> e `shouldBe` DatabaseNotLoaded "no-such-db"
                 Right _ -> expectationFailure "expected DatabaseNotLoaded; got a successful result"

@@ -1892,9 +1892,10 @@ callScoreActivities dbManager mBaseUrl rid args =
         pids <- except (parseArrayArg "process_ids" (Just "'process_ids' required (array of strings)") args :: Either Text [Text])
         wantedSets <- except (parseArrayArg "scoring_sets" Nothing args :: Either Text [Text])
         let summaryOnly = fromMaybe False (boolArg "summary_only" args)
+            ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
         configured <- liftIO $ configuredScoringSets dbManager coll
         chosen <- except (resolveSingleScoringSet wantedSets configured)
-        res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing pids
+        res <- liftIO $ BI.runBatchImpacts dbManager dbName coll Nothing ltMode pids
         case res of
             Left e -> throwE (batchErrorMsg e)
             Right bir -> pure (toolSuccessJson rid (toColumnarBatch summaryOnly mBaseUrl dbName coll chosen bir))
