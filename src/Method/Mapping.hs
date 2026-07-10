@@ -1171,8 +1171,9 @@ buildMethodTables methodFamily cmap energyDensities mappings =
              in -- A wildcard (unspecified) CF matches any subcompartment except
                 -- the ones the 'lookupCascadeCF' gate excludes on the
                 -- non-regional path — both tiers: a foreign medium (sea/ocean)
-                -- never borrows a freshwater CF, and groundwater borrows no
-                -- surface USEtox CF. An explicit same-sub CF still matches.
+                -- never borrows a freshwater CF, and long-term groundwater
+                -- borrows no surface USEtox CF. An explicit same-sub CF still
+                -- matches.
                 (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily (Subcompartment flowSubN))
                     || cfSubN == flowSubN
 
@@ -1675,11 +1676,15 @@ lookupCascadeCF tables flowDB fid =
             -- The medium-level / CAS / sub-blind fallbacks all stand for a
             -- surface, immediate emission, so gate a resolved one by the flow's
             -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
-            -- at all; a detached sub (groundwater) drops a surface-freshwater-fate
-            -- USEtox CF (CTUe/CTUh) — those methods don't model groundwater — but
-            -- keeps a nutrient/other freshwater CF (phosphate migrates to surface
-            -- water, so the method characterizes it). An explicit exact-sub CF and
-            -- the method's own long-term default are never gated.
+            -- at all; a LONG-TERM groundwater emission drops a
+            -- surface-freshwater-fate USEtox CF (CTUe/CTUh) — the method's
+            -- explicit "groundwater, long-term" zero must win, never the CAS
+            -- bridge. An immediate groundwater emission keeps the fallback
+            -- (SimaPro semantics: an implicit sub inherits the unspecified CF),
+            -- as do nutrient/other freshwater CFs (phosphate migrates to
+            -- surface water, so the method characterizes it). An explicit
+            -- exact-sub CF and the method's own long-term default are never
+            -- gated.
             gate mcf
                 | wildcardReachesSub (mtCFFamily tables) normSub = mcf
                 | otherwise = Nothing
@@ -1794,13 +1799,21 @@ isLongTermSub (Subcompartment s) = "long-term" `T.isInfixOf` s || "long term" `T
 emission a method's unspecified (medium-level) CF stands for, so that CF must
 not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
 
-  * 'isDetachedSub' — emissions to groundwater (immediate or long-term). A
-    surface-freshwater-fate USEtox CF ('USEtoxFamily') does not apply (metals to
-    groundwater are out of scope for ecotoxicity/human toxicity — EF leaves them
-    uncharacterized), but a nutrient/other freshwater CF does (phosphate migrates
-    to surface water, so the method characterizes it). Scoped to groundwater, NOT
-    every long-term sub: a "river, long-term" release is still surface freshwater
-    and stays characterized.
+  * 'isDetachedSub' && 'isLongTermSub' — long-term emissions to groundwater
+    (ecoinvent tailings/landfill leachate). A surface-freshwater-fate USEtox CF
+    ('USEtoxFamily') does not apply: EF methods carry an explicit zero for
+    "groundwater, long-term", and a name-mismatched flow must not borrow the
+    immediate CF through the CAS bridge (that over-counted ecotoxicity by two
+    orders of magnitude on metal-intensive products). An IMMEDIATE groundwater
+    emission is NOT gated: SimaPro subcompartment semantics fall back to the
+    unspecified CF for any sub the method leaves implicit — EF exports zero out
+    only "groundwater, long-term" and ocean explicitly — and compartments.csv
+    already maps the ecoinvent spelling ("ground-") to surface water, so gating
+    the SimaPro spelling would characterize the same emission inconsistently.
+    Nutrient/other freshwater CFs stay ungated either way (phosphate migrates
+    to surface water, so the method characterizes it). Scoped to groundwater,
+    NOT every long-term sub: a "river, long-term" release is still surface
+    freshwater and stays characterized.
   * 'isForeignMediumSub' — the sea/ocean, a different receiving medium
     altogether: a freshwater CF does not apply at all (water released to the sea
     is not freshwater depletion; EF ships a distinct, uncharacterized sea-water
@@ -1822,7 +1835,7 @@ two scoring paths apply the same rule and can't drift.
 wildcardReachesSub :: CFFamily -> Subcompartment -> Bool
 wildcardReachesSub family sub =
     not (isForeignMediumSub sub)
-        && not (isDetachedSub sub && family == USEtoxFamily)
+        && not (isDetachedSub sub && isLongTermSub sub && family == USEtoxFamily)
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is

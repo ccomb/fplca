@@ -429,6 +429,43 @@ spec = do
             -- insertion order must not matter
             score (reverse mappings) `shouldBe` 2.0 * 34.5
 
+    describe "groundwater gate on wildcard fallbacks (read path)" $ do
+        -- EF SimaPro exports leave immediate groundwater implicit (only
+        -- "groundwater, long-term" carries an explicit zero), so SimaPro
+        -- subcompartment semantics apply: an implicit sub inherits the
+        -- unspecified CF. The USEtox gate must therefore block only the
+        -- LONG-TERM groundwater fate — otherwise the method's explicit zero
+        -- would be bypassed via the CAS bridge — and never the immediate one.
+        let cfUns = (mkCFComp "Iron, ion" "water" "(unspecified)" 2108.5){mcfCAS = Just "7439-89-6"}
+            cfLt = mkCFComp "Iron, ion" "water" "groundwater, long-term" 0.0
+            scoreFor fam name mCas sub = do
+                fid <- nextRandom
+                mid <- nextRandom
+                let flow = (mkFlow fid name "water" (Just sub)){bfCAS = mCas}
+                    -- cfUns matched ByCAS on a sibling flow, so it also
+                    -- populates the CAS bridge (mtCasCF).
+                    matched = (mkFlow mid "Iron, ion" "water" Nothing){bfCAS = Just "7439-89-6"}
+                    tables = buildMethodTables fam M.empty M.empty [(cfUns, Just (matched, ByCAS)), (cfLt, Nothing)]
+                    flowDB = M.singleton fid flow
+                pure (loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB (M.singleton fid 1.0) tables))
+
+        it "lets a USEtox wildcard reach river, lake and IMMEDIATE groundwater" $ do
+            scoreFor USEtoxFamily "Iron, ion" Nothing "river" `shouldReturn` 2108.5
+            scoreFor USEtoxFamily "Iron, ion" Nothing "lake" `shouldReturn` 2108.5
+            scoreFor USEtoxFamily "Iron, ion" Nothing "groundwater" `shouldReturn` 2108.5
+
+        it "keeps the method's explicit long-term zero for a USEtox method" $
+            scoreFor USEtoxFamily "Iron, ion" Nothing "groundwater, long-term" `shouldReturn` 0.0
+
+        it "blocks the CAS bridge for a long-term groundwater flow under USEtox" $
+            -- Name-mismatched flow sharing the CAS: without the gate it would
+            -- borrow the immediate 2108.5 and bypass the explicit zero.
+            scoreFor USEtoxFamily "Iron(2+)" (Just "7439-89-6") "groundwater, long-term" `shouldReturn` 0.0
+
+        it "keeps every groundwater fallback for a non-USEtox method" $ do
+            scoreFor OtherCFFamily "Iron, ion" Nothing "groundwater" `shouldReturn` 2108.5
+            scoreFor OtherCFFamily "Iron(2+)" (Just "7439-89-6") "groundwater, long-term" `shouldReturn` 2108.5
+
     describe "inventoryContributions" $ do
         -- Regression: same fallback bug as computeLCIAScoreFromTables.
         it "yields zero contribution when unit conversion fails" $ do
