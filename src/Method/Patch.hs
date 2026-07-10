@@ -19,6 +19,8 @@ module Method.Patch (
 ) where
 
 import Config (CFPatchOp (..), MethodPatch (..), MethodPatchMatch (..))
+import Data.List (mapAccumL)
+import Data.Maybe (maybeToList)
 import qualified Data.Text as T
 import Method.ParserSimaPro (normalizeCAS)
 import Method.Types (Compartment (..), Method (..), MethodCF (..), MethodCollection (..))
@@ -33,11 +35,11 @@ touched — a patch that touches zero is very likely a selector typo, and
 the caller (which has a logging effect) is expected to surface that.
 -}
 applyMethodPatches :: [MethodPatch] -> MethodCollection -> (MethodCollection, [(MethodPatch, Int)])
-applyMethodPatches patches collection0 = foldl step (collection0, []) patches
+applyMethodPatches patches collection0 = mapAccumL step collection0 patches
   where
-    step (collection, stats) patch =
+    step collection patch =
         let (methods', touched) = patchMethods patch (mcMethods collection)
-         in (collection{mcMethods = methods'}, stats ++ [(patch, touched)])
+         in (collection{mcMethods = methods'}, (patch, touched))
 
 patchMethods :: MethodPatch -> [Method] -> ([Method], Int)
 patchMethods patch methods =
@@ -99,14 +101,12 @@ describeMatch :: MethodPatchMatch -> T.Text
 describeMatch sel =
     T.intercalate ", " $
         concat
-            [ ["category=" <> c | c <- toList (mpmCategory sel)]
-            , ["flow-name=" <> f | f <- toList (mpmFlowName sel)]
-            , ["flow-name-prefix=" <> f | f <- toList (mpmFlowNamePrefix sel)]
-            , ["cas=" <> c | c <- toList (mpmCAS sel)]
-            , ["subcompartment-contains=" <> s | s <- toList (mpmSubcompartmentContains sel)]
+            [ ["category=" <> c | c <- maybeToList (mpmCategory sel)]
+            , ["flow-name=" <> f | f <- maybeToList (mpmFlowName sel)]
+            , ["flow-name-prefix=" <> f | f <- maybeToList (mpmFlowNamePrefix sel)]
+            , ["cas=" <> c | c <- maybeToList (mpmCAS sel)]
+            , ["subcompartment-contains=" <> s | s <- maybeToList (mpmSubcompartmentContains sel)]
             ]
-  where
-    toList = maybe [] (: [])
 
 describeOp :: CFPatchOp -> T.Text
 describeOp (ScaleBy s) = "(scale ×" <> T.pack (show s) <> ")"

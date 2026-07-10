@@ -45,6 +45,10 @@ mkMethod category cfs =
         , methodFactors = cfs
         }
 
+-- | Every (flow name, value) pair in the collection, in method and factor order.
+factorValues :: MethodCollection -> [(Text, Double)]
+factorValues c = [(mcfFlowName cf, mcfValue cf) | m <- mcMethods c, cf <- methodFactors m]
+
 emptyMatch :: MethodPatchMatch
 emptyMatch =
     MethodPatchMatch
@@ -106,9 +110,7 @@ spec = do
                         , mpOp = ScaleBy 0.6
                         }
                 (patched, stats) = applyMethodPatches [patch] collection
-                [patchedMethod] = mcMethods patched
-                values = [(mcfFlowName cf, mcfValue cf) | cf <- methodFactors patchedMethod]
-            values `shouldBe` [("Uranium", 336000), ("Uranium ore, 1.11 GJ per kg", 666), ("Coal", 18)]
+            factorValues patched `shouldBe` [("Uranium", 336000), ("Uranium ore, 1.11 GJ per kg", 666), ("Coal", 18)]
             stats `shouldBe` [(patch, 2)]
 
         it "sets matched CFs to a fixed value" $ do
@@ -119,9 +121,7 @@ spec = do
                         , mpOp = SetValueTo 0
                         }
                 (patched, stats) = applyMethodPatches [patch] collection
-                [patchedMethod] = mcMethods patched
-                values = [(mcfFlowName cf, mcfValue cf) | cf <- methodFactors patchedMethod]
-            values `shouldBe` [("Uranium", 560000), ("Uranium ore, 1.11 GJ per kg", 1110), ("Coal", 0)]
+            factorValues patched `shouldBe` [("Uranium", 560000), ("Uranium ore, 1.11 GJ per kg", 1110), ("Coal", 0)]
             stats `shouldBe` [(patch, 1)]
 
         it "reports zero touched CFs for a selector that matches nothing" $ do
@@ -149,6 +149,4 @@ spec = do
                         , mpOp = ScaleBy 0.5
                         }
                 (patched, _) = applyMethodPatches [halveEverything, halveAgain] collection
-                [patchedMethod] = mcMethods patched
-                Just uraniumCF = lookup "Uranium" [(mcfFlowName cf, cf) | cf <- methodFactors patchedMethod]
-            mcfValue uraniumCF `shouldBe` 140000
+            lookup "Uranium" (factorValues patched) `shouldBe` Just 140000
