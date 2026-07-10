@@ -11,7 +11,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel da
 - **Compute** life cycle inventories (LCI) and impact scores (LCIA) — single method or whole collection — with per-flow and per-activity contribution breakdowns
 - **What-if substitutions** — swap an upstream activity (or a cross-database supplier) and recompute inventory and impacts in a single call
 - **Normalize and weight** LCIA results with Raw / Normalized / Weighted view toggle; compute a single-score in Pt when normalization-weighting data is available
-- **Map** method characterization factors to database flows with a 4-step cascade (UUID → CAS → name → synonym) and coverage statistics
+- **Map** method characterization factors to database flows with a 4-step cascade (UUID → name → synonym → CAS) and coverage statistics
 - **Link** databases across nomenclatures (e.g., a sector database referencing Agribalyse)
 - **Upload** databases and method collections via the API, without touching config files
 
@@ -26,13 +26,13 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel da
 - **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config
 - **Normalization and weighting**: Batch LCIA computes normalized and weighted scores per category and a single aggregated score (Pt) when NW data is present in the method collection
 - **Contribution analysis**: Per-flow and per-activity contributions to any LCIA score, ranked by share
-- **Flow mapping engine**: 4-step matching cascade (UUID → CAS → name → synonym) with per-strategy coverage statistics
+- **Flow mapping engine**: 4-step matching cascade (UUID → name → synonym → CAS) with per-strategy coverage statistics
 - **Activity classifications**: ISIC, CPC, and category fields parsed from EcoSpold1/2 and ILCD, with named TOML presets for common filter bundles
 - **Per-exchange comments**: Free-text exchange comments extracted from EcoSpold1/2, SimaPro, and ILCD and surfaced in API responses
 - **Fuzzy search**: Trigram-based typo and stem tolerance on activity and supply-chain name filters
 - **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
 - **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via the API, or toggled independently
-- **Fast cache**: Per-database cache co-located with the source path, with automatic schema-based invalidation; large databases (26k activities) load in ~47s cold, ~3.4s cached
+- **Fast cache**: Per-database cache co-located with the source path, with automatic schema-based invalidation (figures in the Performance table below)
 - **Optional access control**: Single-code login with cookie-based session
 
 ---
@@ -121,6 +121,10 @@ displayName = "Sector DB"
 path = "DBs/sector.CSV"
 depends = ["agribalyse-3.2"]   # loads agribalyse first, then links
 load = true
+default = false                # preselected database in the UI
+deletable = false              # allow deletion via the API
+geography_policy = "global"    # CF regionalization: exact | parent | global
+# locationAliases = { "FR" = "France" }   # per-database location renames
 
 [[methods]]
 name = "EF-3.1"
@@ -128,6 +132,27 @@ path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 
 # SimaPro method CSV exports and tabular CSV are also accepted:
 # path = "DBs/EF3.1_methods.csv"
+
+# Optional scoring sets on a method collection: named variables per impact
+# category, computed expressions, then normalization + weighting factors
+# producing a single score (see "Normalization and weighting" above).
+#   [[methods.scoring]]
+#   name = "my-score"
+#   unit = "Pt"
+#   displayMultiplier = 1e6
+#     [methods.scoring.variables]      # var = exact category name
+#     cch = "Climate change"
+#     [methods.scoring.computed]       # derived variables (expressions)
+#     etf = "2 * etfo + etfi"
+#     [methods.scoring.normalization]  # per-variable factors
+#     cch = 7553.08
+#     [methods.scoring.weighting]
+#     cch = 0.2106
+#
+# global-methods = ["Water use", ...] de-regionalizes the named methods:
+# their region-tagged CFs are dropped so the method's global (unlocated)
+# CF is the single answer — for matching references that flattened
+# spatial factors. A name matching no method logs a warning.
 
 [[flow-synonyms]]
 name = "Default flow synonyms"
@@ -143,6 +168,25 @@ active = true
 name = "Default units"
 path = "data/units.csv"
 active = true
+
+[[energy-densities]]
+name = "Default energy densities"
+path = "data/energy_densities.csv"
+active = true
+
+[[classification-presets]]     # named filter bundles for classifications
+name = "agriculture"
+label = "Agriculture"
+filters = [{ system = "ISIC", value = "01", mode = "contains" }]  # mode: exact | contains
+
+# Single-path reference data (all optional):
+# geographies = "data/geographies.csv"        # code,display_name,parents
+# chem-synonyms = "data/chem_synonyms.csv"    # PubChem snapshot for the suggester
+# substance-edges = "data/substance_edges.csv" # typed flow-correspondence edges
+
+# [hosting] tunes upload/API limits when the engine runs behind a manager:
+# max_uploads, max_upload_mb, api_access, upgrade_upload, upgrade_api,
+# upgrade_vm_size
 ```
 
 The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies.
@@ -265,7 +309,7 @@ Configure it in your MCP client:
 }
 ```
 
-Available tools (auto-derived from a single resource registry shared with the REST API and OpenAPI spec, so the three surfaces never drift):
+Available tools — auto-derived at runtime from the single resource registry (`src/API/Resources.hs`) shared with the REST API and OpenAPI spec, so the three *served* surfaces never drift. This table is a hand-written copy; `volca dump-mcp-tools` prints the authoritative list:
 
 | Tool | Description |
 |------|-------------|
@@ -357,7 +401,7 @@ commands.
 # Summary: how well does a method match a database?
 volca --db agribalyse mapping METHOD_UUID
 
-# See every mapped CF with its match strategy (uuid/cas/name/synonym)
+# See every mapped CF with its match strategy (uuid/name/synonym/cas)
 volca --db agribalyse mapping METHOD_UUID --matched
 
 # List CFs that found no DB flow
@@ -377,6 +421,13 @@ volca --db agribalyse mapping METHOD_UUID --matched --format json
 volca database                                  # list (default)
 volca database upload mydb.7z --name "My DB"    # upload
 volca database delete my-db                     # delete
+
+# Edit and export loaded databases
+volca database copy my-db my-db-v2              # copy under a new name
+volca database relink my-db --to bg-db --mapping aliases.csv
+volca database delete-activities my-db --name "electricity"  # delete filtered set
+volca database export my-db --format simapro --out out.csv
+#   formats: simapro | ecospold1 | ecospold2 | ilcd | brightway
 
 # List, upload, delete method collections
 volca method                                    # list (default)
@@ -421,8 +472,11 @@ volca method delete ef-31                        # delete
 | List databases | `GET /db` | `database` |
 | Upload database | `POST /db/upload` | `database upload FILE --name NAME` |
 | Load / unload | `POST /db/{name}/(load\|unload)` | — (use config `load = true`) |
-| Relink / finalize | `POST /db/{name}/(relink\|finalize)` | — |
+| Relink / finalize | `POST /db/{name}/(relink\|finalize)` | `database relink DB --to DEP --mapping CSV` |
 | Setup / dependencies | `GET /db/{name}/setup`, `POST .../{add,remove}-dependency/{dep}`, `POST .../set-data-path` | — |
+| Copy database | `POST /db/{name}/copy/{newName}` | `database copy SRC NEW_NAME` |
+| Delete activities (filtered set) | `POST /db/{name}/delete` | `database delete-activities DB [filters]` |
+| Export database | `POST /db/{name}/export` | `database export DB --format FMT --out FILE` |
 | Delete database | `DELETE /db/{name}` | `database delete NAME` |
 | **Method Management** | | |
 | List methods | `GET /methods` | `methods` |
@@ -507,7 +561,7 @@ ghcup install ghc 9.12.4 --set
 ghcup install cabal latest
 source ~/.ghcup/env
 
-./build.sh              # Build (sources MUMPS 5.8.1, ~3 min one-time)
+./build.sh              # Build (compiles MUMPS from source, ~3 min one-time)
 ./build.sh --test       # Build and run tests
 ```
 
@@ -563,7 +617,8 @@ VoLCA is licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
 
 Third-party components bundled with or linked into VoLCA are inventoried in
 [NOTICE](NOTICE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). The
-notable ones are MUMPS 5.8.1 (CeCILL-C), BLAS/LAPACK (BSD-3), and a number of
+notable ones are MUMPS (CeCILL-C, version pinned in `versions.env`),
+BLAS/LAPACK (BSD-3), and a number of
 Haskell libraries (predominantly BSD-3 and MIT).
 
 A running engine also exposes the same inventory as JSON at

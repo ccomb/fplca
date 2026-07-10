@@ -47,12 +47,12 @@ spec modules are `*Spec.hs` under `test/` and auto-discovered. New behavior need
 |------|---------|------|
 | Domain | `Types` | Central domain types (Activity, Exchange, Flow, …) |
 | Solve | `Matrix`, `SharedSolver` | Sparse technosphere/biosphere matrices; MUMPS-backed LCI solve |
-| Parsers | `EcoSpold.*`, `SimaPro.*`, `ILCD.*`, `BrightwayExcel.*`, `Method.Parser*` | Database + method format readers |
-| Methods | `Method.Mapping`, `Method.FlowResolver`, `Method.ChemSynonyms` | CF mapping (UUID→CAS→name→synonym cascade), flow resolution |
+| Formats | `EcoSpold.*`, `SimaPro.*`, `ILCD.*`, `BrightwayExcel.*`, `Method.Parser*` | One namespace per database format, each with a `Parser` (wired into `Database.Loader`) and a `Writer` (wired into `Database.Export`); method readers are `Method.Parser*` |
+| Methods | `Method.Mapping`, `Method.FlowResolver`, `Method.ChemSynonyms` | CF mapping (UUID→name→synonym→CAS cascade), flow resolution |
 | Database | `Database.*` (`Loader`, `CrossLinking`, `MatrixBuild`, `Manager`) | Load, cross-link, build matrices, manage lifecycle |
 | Analysis | `Service`, `Service.Aggregate`, `Tree` | Analysis ops, grouping, supply-chain traversal |
 | Search | `Search.BM25`, `Search.Fuzzy`, `Search.Normalize` | Activity/flow search |
-| API | `API.Routes`, `API.MCP` | Servant REST routes and MCP tool surface (shared resource registry) |
+| API | `API.Resources`, `API.Routes`, `API.MCP` | `API.Resources` holds the resource registry (one `Resource` per operation); REST routes, MCP tools and OpenAPI derive from it |
 | CLI | `CLI.*`, `app/Main.hs` | Arg parsing, commands, HTTP client, REPL; entrypoint (server/client/repl modes) |
 
 A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
@@ -60,10 +60,10 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 
 ## Where to start
 
-- **A new MCP tool or REST endpoint** → `API.Routes` holds the shared resource registry that drives *both* REST and MCP; add it once there, not in two places.
-- **A new database format** → a new parser namespace (e.g. `Foo.Parser`), wired into `Database.Loader`.
+- **A new MCP tool or REST endpoint** → `API.Resources` holds the resource registry that drives REST, MCP and OpenAPI; add one `Resource` there (a drift test enforces the wiring), not in N places.
+- **A new database format** → a new namespace with its `Parser` / `Writer` pair (e.g. `Foo.Parser`, `Foo.Writer`), wired into `Database.Loader` and `Database.Export`.
 - **Wrong or empty LCI numbers** → `Database.MatrixBuild` plus `Matrix` / `SharedSolver`; check supplier resolution in `Database.CrossLinking`.
-- **Characterization mismatches** → `Method.Mapping` (the UUID→CAS→name→synonym cascade) and `Method.FlowResolver`.
+- **Characterization mismatches** → `Method.Mapping` (the UUID→name→synonym→CAS cascade) and `Method.FlowResolver`.
 - **Search relevance** → `Search.BM25` / `Search.Fuzzy` / `Search.Normalize`.
 
 ## Engineering rules
@@ -100,6 +100,10 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
   - CI fails any PR with unformatted Haskell.
   - A repo pre-commit hook auto-formats staged `.hs` — enable once per clone: `git config core.hooksPath .githooks`.
   - Claude Code also auto-formats `.hs` on edit (`.claude/settings.json`).
+
+### Documentation
+- **Re-read this file + README before each PR.** Update them when: (a) you hit a statement contradicting the code, (b) a new convention appears, (c) a command or a config key changes. NON-trigger: adding a module, tool, or endpoint that follows the stated conventions — the rules cover it, no list to grow.
+- Never write hand-maintained counts, versions, or enumerations the code already knows — state the naming rule and point at the source of truth (`versions.env`, `API.Resources`, `volca dump-mcp-tools`).
 
 ### Commits & PRs
 - NEVER use `git add -A` — always add specific files explicitly.
