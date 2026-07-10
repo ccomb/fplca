@@ -426,6 +426,7 @@ executeMcUpload fmt manager args = do
                         , mcFormat = Nothing
                         , mcScoringSets = []
                         , mcGlobalMethods = []
+                        , mcPatches = []
                         }
             addMethodCollection manager mc
             reportProgress Info $ "Method uploaded: " ++ T.unpack slug

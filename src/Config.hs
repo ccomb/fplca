@@ -9,6 +9,9 @@ module Config (
     DatabaseConfig (..),
     MethodConfig (..),
     ScoringSetConfig (..),
+    MethodPatch (..),
+    MethodPatchMatch (..),
+    CFPatchOp (..),
     RefDataConfig (..),
     HostingConfig (..),
     ClassificationPreset (..),
@@ -33,7 +36,7 @@ import Control.Monad (forM_, unless, when)
 import Data.List (isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -42,7 +45,7 @@ import GHC.Generics (Generic)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (takeFileName)
-import TOML (DecodeTOML (..), Decoder, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith)
+import TOML (DecodeTOML (..), Decoder, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
 import Types (GeographyPolicy (..))
 
 -- | A single classification filter entry (system + value)
@@ -135,6 +138,62 @@ data MethodConfig = MethodConfig
     CFs are *all* region-tagged would be left with none. Empty = keep every
     method's native regionalization.
     -}
+    , mcPatches :: ![MethodPatch]
+    {- ^ Declarative adjustments applied to this collection's characterization
+    factors right after parsing, before the collection is registered. The
+    equivalent of a Brightway import "strategy", but data instead of code: a
+    pure, idempotent transform of the freshly parsed factors, re-derived from
+    the untouched source file on every reload rather than mutating a persisted
+    store. Empty = the collection is used exactly as parsed.
+    -}
+    }
+    deriving (Show, Eq, Generic)
+
+{- | What a 'MethodPatch' does to a matched CF's value. A sum so a patch is
+either a rescale or a hard override, never an ambiguous combination of both.
+-}
+data CFPatchOp
+    = -- | Multiply the matched CF's value (TOML: @scale = 0.6@).
+      ScaleBy !Double
+    | -- | Replace the matched CF's value outright (TOML: @set-value = 0.0@).
+      SetValueTo !Double
+    deriving (Show, Eq, Generic)
+
+{- | Selector picking which characterization factors a 'MethodPatch' touches.
+Every present field must match (conjunction); a selector with no field set
+is rejected by the decoder — a patch that would touch every CF in every
+method is almost certainly a mistake, not an intent.
+-}
+data MethodPatchMatch = MethodPatchMatch
+    { mpmCategory :: !(Maybe Text)
+    {- ^ Impact category name (TOML: @category@), e.g. \"Resource use, fossils\".
+    For a SimaPro CSV method export this is the per-category 'Method.methodName'
+    (each \"Impact category\" section becomes its own 'Method' sharing the
+    collection's overall methodology name, not this one).
+    -}
+    , mpmFlowName :: !(Maybe Text)
+    -- ^ Exact flow name (TOML: @flow-name@), matched against 'Method.mcfFlowName'.
+    , mpmFlowNamePrefix :: !(Maybe Text)
+    -- ^ Flow name prefix (TOML: @flow-name-prefix@), matched with 'Data.Text.isPrefixOf'.
+    , mpmCAS :: !(Maybe Text)
+    {- ^ CAS registry number (TOML: @cas@), matched against 'Method.mcfCAS' after
+    normalizing both sides the same way (leading zeros in each dash-separated
+    segment are insignificant), so either the raw or the normalized form works.
+    -}
+    , mpmSubcompartmentContains :: !(Maybe Text)
+    {- ^ Case-insensitive substring of the subcompartment (TOML:
+    @subcompartment-contains@), matched against 'Method.mcfCompartment'. A CF
+    with no compartment never matches this field.
+    -}
+    }
+    deriving (Show, Eq, Generic)
+
+-- | One declarative adjustment to a method collection's characterization factors.
+data MethodPatch = MethodPatch
+    { mpDescription :: !(Maybe Text)
+    -- ^ Free-text note on why this patch exists, surfaced in load logs.
+    , mpMatch :: !MethodPatchMatch
+    , mpOp :: !CFPatchOp
     }
     deriving (Show, Eq, Generic)
 
@@ -252,7 +311,32 @@ instance DecodeTOML MethodConfig where
         let mcFormat = Nothing -- Detected later from file content
         mcScoringSets <- fromMaybe [] <$> getFieldOpt "scoring"
         mcGlobalMethods <- fromMaybe [] <$> getFieldOpt "global-methods"
+        mcPatches <- fromMaybe [] <$> getFieldOpt "patches"
         pure MethodConfig{..}
+
+instance DecodeTOML MethodPatchMatch where
+    tomlDecoder = do
+        mpmCategory <- getFieldOpt "category"
+        mpmFlowName <- getFieldOpt "flow-name"
+        mpmFlowNamePrefix <- getFieldOpt "flow-name-prefix"
+        mpmCAS <- getFieldOpt "cas"
+        mpmSubcompartmentContains <- getFieldOpt "subcompartment-contains"
+        when (all isNothing [mpmCategory, mpmFlowName, mpmFlowNamePrefix, mpmCAS, mpmSubcompartmentContains]) $
+            fail "match: at least one selector field must be set (a patch matching every CF is almost certainly a mistake)"
+        pure MethodPatchMatch{..}
+
+instance DecodeTOML MethodPatch where
+    tomlDecoder = do
+        mpDescription <- getFieldOpt "description"
+        mpMatch <- getFieldWith tomlDecoder "match"
+        mScale <- getFieldOpt "scale"
+        mSetValue <- getFieldOpt "set-value"
+        mpOp <- case (mScale, mSetValue) of
+            (Just s, Nothing) -> pure (ScaleBy s)
+            (Nothing, Just v) -> pure (SetValueTo v)
+            (Nothing, Nothing) -> fail "patch: exactly one of 'scale' or 'set-value' is required, neither was set"
+            (Just _, Just _) -> fail "patch: exactly one of 'scale' or 'set-value' is required, both were set"
+        pure MethodPatch{..}
 
 instance DecodeTOML ScoringSetConfig where
     tomlDecoder = do

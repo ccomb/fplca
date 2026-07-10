@@ -62,6 +62,7 @@ library
                      , Method.ParserSimaPro
                      , Method.ParserNW
                      , Method.Mapping
+                     , Method.Patch
                      , Method.ChemSynonyms
                      , Method.FlowResolver
                      , API.Routes
@@ -215,6 +216,7 @@ test-suite lca-tests
                      , InventorySpec
                      , MatrixExportSpec
                      , MethodSpec
+                     , MethodPatchSpec
                      , SimaProParserSpec
                      , BrightwayExcelSpec
                      , BrightwayExcelWriterSpec

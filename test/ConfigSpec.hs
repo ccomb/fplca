@@ -3,8 +3,11 @@
 module ConfigSpec (spec) where
 
 import Config (
+    CFPatchOp (..),
     Config (..),
     MethodConfig (..),
+    MethodPatch (..),
+    MethodPatchMatch (..),
     RefDataConfig (..),
     ScoringSetConfig (..),
     applyDataDir,
@@ -39,6 +42,70 @@ spec = do
             case decodeMethod "name = \"EF\"\npath = \"x.zip\"\n" of
                 Right mc -> mcGlobalMethods mc `shouldBe` []
                 Left e -> expectationFailure (show e)
+
+    describe "MethodConfig patches" $ do
+        let decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
+
+        it "defaults patches to empty when the key is absent" $
+            case decodeMethod "name = \"EF\"\npath = \"x.zip\"\n" of
+                Right mc -> mcPatches mc `shouldBe` []
+                Left e -> expectationFailure (show e)
+
+        it "parses a scale patch with a category + flow-name-prefix selector" $
+            case decodeMethod
+                "name = \"EF\"\npath = \"x.zip\"\n\n\
+                \[[patches]]\n\
+                \description = \"uraniumFRU\"\n\
+                \match = { category = \"Resource use, fossils\", flow-name-prefix = \"Uranium\" }\n\
+                \scale = 0.6\n" of
+                Right mc -> case mcPatches mc of
+                    [patch] -> do
+                        mpDescription patch `shouldBe` Just "uraniumFRU"
+                        mpmCategory (mpMatch patch) `shouldBe` Just "Resource use, fossils"
+                        mpmFlowNamePrefix (mpMatch patch) `shouldBe` Just "Uranium"
+                        mpOp patch `shouldBe` ScaleBy 0.6
+                    ps -> expectationFailure ("expected exactly one patch, got " <> show (length ps))
+                Left e -> expectationFailure (show e)
+
+        it "parses a set-value patch with a subcompartment-contains selector" $
+            case decodeMethod
+                "name = \"EF\"\npath = \"x.zip\"\n\n\
+                \[[patches]]\n\
+                \match = { subcompartment-contains = \"long-term\" }\n\
+                \set-value = 0.0\n" of
+                Right mc -> case mcPatches mc of
+                    [patch] -> do
+                        mpmSubcompartmentContains (mpMatch patch) `shouldBe` Just "long-term"
+                        mpOp patch `shouldBe` SetValueTo 0.0
+                    ps -> expectationFailure ("expected exactly one patch, got " <> show (length ps))
+                Left e -> expectationFailure (show e)
+
+        it "rejects a patch with both scale and set-value" $
+            case decodeMethod
+                "name = \"EF\"\npath = \"x.zip\"\n\n\
+                \[[patches]]\n\
+                \match = { flow-name = \"Uranium\" }\n\
+                \scale = 0.6\n\
+                \set-value = 0.0\n" of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected a decode error for scale + set-value together"
+
+        it "rejects a patch with neither scale nor set-value" $
+            case decodeMethod
+                "name = \"EF\"\npath = \"x.zip\"\n\n\
+                \[[patches]]\n\
+                \match = { flow-name = \"Uranium\" }\n" of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected a decode error when neither scale nor set-value is set"
+
+        it "rejects a patch whose selector matches every CF" $
+            case decodeMethod
+                "name = \"EF\"\npath = \"x.zip\"\n\n\
+                \[[patches]]\n\
+                \match = {}\n\
+                \scale = 0.6\n" of
+                Left _ -> pure ()
+                Right _ -> expectationFailure "expected a decode error for an empty selector"
 
     describe "redirectIntoDataDir" $ do
         it "leaves paths unchanged when VOLCA_DATA_DIR is unset" $

@@ -645,6 +645,7 @@ uploadMethodHandler mName mDesc src =
                             , mcFormat = Just $ formatToText $ urFormat uploadResult
                             , mcScoringSets = []
                             , mcGlobalMethods = []
+                            , mcPatches = []
                             }
                 liftIO $ addMethodCollection dbManager mc
 
