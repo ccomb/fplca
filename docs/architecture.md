@@ -40,9 +40,9 @@ of the system; the CLI and REPL are just thin HTTP clients.
    │ Database.Manager ──► TVar [LoadedDatabase]   ◄── Config (TOML)  │
    │        │                                                        │
    │        ├─ Types.hs        domain model (Activity/Flow/Exchange) │
-   │        ├─ Database.hs     builds the sparse A / B matrices      │
+   │        ├─ Database.MatrixBuild  builds the sparse A / B matrices│
    │        ├─ Matrix + SharedSolver   (I−A)⁻¹·f = s   then   B·s = g│
-   │        ├─ Method.Mapping  LCIA: CF cascade UUID→CAS→name→synonym│
+   │        ├─ Method.Mapping  LCIA: CF cascade UUID→name→synonym→CAS│
    │        ├─ Search          BM25 (full-text) + Fuzzy (trigrams)   │
    │        ├─ Tree / Expr / UnitConversion / SynonymDB              │
    │        └─ CrossLinking    cross-database supplier resolution    │
@@ -80,12 +80,13 @@ of the system; the CLI and REPL are just thin HTTP clients.
 ### 1 — Startup / loading a database
 
 `volca.toml` → `Database.Manager` → for each database: archive extraction →
-format parser → domain model → `Database.hs` assembles the sparse **A** (technosphere)
-and **B** (biosphere) triples → `Data.Store` serialisation into a cache co-located
+format parser → domain model → `Database.MatrixBuild` assembles the sparse **A**
+(technosphere) and **B** (biosphere) triples (`Database.hs` composes the builders
+and adds progress reporting) → `Data.Store` serialisation into a cache co-located
 with the source file.
 
-The cache is invalidated automatically when the schema changes. Measured on
-a +25k activities database: **~50 s cold** vs. **~4 s warm**.
+The cache is invalidated automatically when the schema changes. Cold vs. warm
+figures live in the README's Performance table (single source for benchmarks).
 
 ### 2 — Computing an impact
 
@@ -191,8 +192,8 @@ take the same path with a single multi-RHS solve (`computeInventoryMatrixBatch`)
 
 A method collection ships characterisation factors (CFs) keyed by its own flow
 nomenclature. They must be matched to the loaded database's biosphere flows. The
-match is a **first-hit-wins cascade** (`Method.Mapping`, default `UUID → CAS → Name
-→ Synonym`):
+match is a **first-hit-wins cascade** (`Method.Mapping`, default `UUID → Name
+→ Synonym → CAS`, the CAS number as last resort):
 
 ```
   MethodCF  (one CF from the method collection)        DB biosphere flows
@@ -200,9 +201,9 @@ match is a **first-hit-wins cascade** (`Method.Mapping`, default `UUID → CAS �
        ▼                                                      ▼
    ┌────────────────────  Method.Mapping cascade  ──────────────────────┐
    │  ① ByUUID     CF target UUID == flow UUID      (dbBioFlows)        │
-   │  ② ByCAS      CAS number match                 (dbFlowsByCAS)      │
-   │  ③ ByName     normalised-name match            (dbFlowsByName)     │
-   │  ④ BySynonym  synonym expansion then name match (dbSynonymDB)      │
+   │  ② ByName     normalised-name match            (dbFlowsByName)     │
+   │  ③ BySynonym  synonym expansion then name match (dbSynonymDB)      │
+   │  ④ ByCAS      CAS number match                 (dbFlowsByCAS)      │
    └─────────────────────────────────┬───────────────────────────────────┘
        first strategy that hits wins → (Flow, MatchStrategy)
                                      │  computeMappingStats → coverage %
@@ -215,6 +216,27 @@ match is a **first-hit-wins cascade** (`Method.Mapping`, default `UUID → CAS �
 
 `MethodTables` collapses the cascade and absorbs unit conversion into plain `Map`
 lookups, so scoring itself is a fast dot product over the inventory `g`.
+
+### Normalization, weighting and single scores
+
+Two mechanisms turn per-category LCIA results into comparable numbers:
+
+- **Built-in NW sets** — a method collection may ship its own
+  normalization/weighting data (`mcNormWeightSets`, parsed by
+  `Method.ParserNW`); batch LCIA then returns Raw / Normalized / Weighted
+  views and an aggregated single score (Pt).
+- **Formula-based scoring sets** — configured per collection in TOML
+  (`[[methods.scoring]]`, decoded in `Config`, stored as `mcScoringSets`).
+  `Method.Types.computeFormulaScores` evaluates one against the raw
+  category scores: ① bind short variables to category names, ② resolve
+  computed variables (`Expr` formulas, e.g. `etf = "2 * etfo + etfi"`),
+  ③ apply `raw / normalization × weighting` per variable, ④ evaluate the
+  score formulas over that environment, and scale everything by
+  `displayMultiplier`. Missing data surfaces as an error, never as a
+  silent zero.
+
+Scoring sets are what `list_scoring_sets` / `score_activity` /
+`score_activities` expose over REST and MCP.
 
 ### What-if and cross-database solving
 
@@ -232,6 +254,7 @@ lookups, so scoring itself is a fast dot product over the inventory `g`.
 | Module / folder             | Role                                                                 |
 |------------------------------|----------------------------------------------------------------------|
 | `app/Main.hs`               | Entry point: CLI / server / REPL dispatch                            |
+| `API/Resources.hs`          | Resource registry: one `Resource` per operation; REST, MCP and OpenAPI derive from it |
 | `API/Routes.hs`             | Servant `/api/v1/*` route definitions and handlers                  |
 | `API/Auth.hs`               | Authentication middleware (session cookie, single-code login)        |
 | `API/MCP.hs`                | MCP server: tools exposed to AI assistants                          |
@@ -243,18 +266,18 @@ lookups, so scoring itself is a fast dot product over the inventory `g`.
 | `Database/Loader.hs`        | Loading and dispatch to parsers                                     |
 | `Database/CrossLinking.hs`  | Cross-database supplier resolution, topological order               |
 | `Database/Upload.hs`        | Database upload via the API                                         |
-| `Database.hs`               | Sparse A / B matrix construction, normalisation                     |
+| `Database/MatrixBuild.hs`   | Sparse A / B matrix construction, normalisation (all numerical work) |
+| `Database.hs`               | Composes the matrix builders, adds progress reporting               |
 | `Types.hs`                  | Domain model (Activity, Flow, Exchange, Database) — sum types        |
 | `Matrix.hs`                 | Matrix LCA computations via the MUMPS solver                        |
 | `SharedSolver.hs`           | Lazy thread-safe LU factorisation, caches, back-substitution        |
 | `mumps-hs/`                 | FFI bindings to the MUMPS direct sparse solver (Fortran)            |
-| `EcoSpold/Parser2.hs`       | EcoSpold2 parser (`.spold`)                                         |
-| `EcoSpold/Parser1.hs`       | EcoSpold1 parser (`.xml`)                                           |
-| `SimaPro/Parser.hs`         | SimaPro CSV parser                                                  |
-| `ILCD/Parser.hs`            | ILCD process dataset parser                                         |
-| `BrightwayExcel/Parser.hs`  | Brightway Excel (`.xlsx`) inventory parser                          |
+| `EcoSpold/`, `SimaPro/`, `ILCD/`, `BrightwayExcel/` | One namespace per database format, each with a `Parser` (read, wired into `Database/Loader.hs`) and a `Writer` (export, wired into `Database/Export.hs`) |
 | `Method/Parser*.hs`         | Method collection loading (ILCD, CSV, SimaPro, olca)                |
-| `Method/Mapping.hs`         | CF matching cascade (UUID → CAS → name → synonym), LCIA scoring     |
+| `Method/FlowResolver.hs`    | Parses ILCD flow XMLs to enrich MethodCFs (name, compartment, CAS)  |
+| `Database/Edit.hs`, `Database/Export.hs`, `Database/RelinkMapping.hs` | Database write toolkit: delete/copy, export to any format, relink via alias CSV |
+| `SubstanceRegistry.hs`      | Canonical flow registry: equivalence classes over flow-identity assertions |
+| `Method/Mapping.hs`         | CF matching cascade (UUID → name → synonym → CAS), LCIA scoring     |
 | `Search/BM25.hs`            | BM25 full-text search index                                         |
 | `Search/Fuzzy.hs`           | Trigram fuzzy search                                                |
 | `Tree.hs`                   | Supply-chain tree construction (loop-aware)                         |
