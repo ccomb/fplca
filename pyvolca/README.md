@@ -20,13 +20,14 @@ pyvolca speaks one revision of the engine's JSON wire format; the engine adverti
 | pyvolca | wire | compatible engine |
 |---------|------|-------------------|
 | `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
-| `0.6.x` | `1` | `≥ v0.8.0` |
+| `0.6.0` … `0.7.1` | `1` | `v0.8.0` … `v0.9.0` |
+| `≥ 0.7.2` | `2` | `≥ v0.9.1` |
 
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.7.2** speaks wire format **1** and requires a VoLCA engine **≥ v0.8.0**.
+This build of **pyvolca 0.7.2** speaks wire format **2** and requires a VoLCA engine **≥ v0.9.1**.
 
 <!-- END: compatibility -->
 
