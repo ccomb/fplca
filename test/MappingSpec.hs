@@ -2,6 +2,7 @@
 
 module MappingSpec (spec) where
 
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -11,7 +12,7 @@ import Test.Hspec
 
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
-import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..))
+import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
@@ -428,6 +429,60 @@ spec = do
             score mappings `shouldBe` 2.0 * 34.5
             -- insertion order must not matter
             score (reverse mappings) `shouldBe` 2.0 * 34.5
+
+    describe "groundwater gate on wildcard fallbacks (read path)" $ do
+        -- EF SimaPro exports leave immediate groundwater implicit (only
+        -- "groundwater, long-term" carries an explicit zero), so SimaPro
+        -- subcompartment semantics apply: an implicit sub inherits the
+        -- unspecified CF. The USEtox gate must therefore block only the
+        -- LONG-TERM groundwater fate — otherwise the method's explicit zero
+        -- would be bypassed via the CAS bridge — and never the immediate one.
+        cmap <- runIO $ do
+            csv <- BL.readFile "data/compartments.csv"
+            either (fail . ("compartments.csv: " <>)) pure (buildCompartmentMapFromCSV csv)
+        let cfUns = (mkCFComp "Iron, ion" "water" "(unspecified)" 2108.5){mcfCAS = Just "7439-89-6"}
+            cfLt = mkCFComp "Iron, ion" "water" "groundwater, long-term" 0.0
+            scoreVia cm fam name mCas sub = do
+                fid <- nextRandom
+                mid <- nextRandom
+                let flow = (mkFlow fid name "water" (Just sub)){bfCAS = mCas}
+                    -- cfUns matched ByCAS on a sibling flow, so it also
+                    -- populates the CAS bridge (mtCasCF).
+                    matched = (mkFlow mid "Iron, ion" "water" Nothing){bfCAS = Just "7439-89-6"}
+                    tables = buildMethodTables fam cm M.empty [(cfUns, Just (matched, ByCAS)), (cfLt, Nothing)]
+                    flowDB = M.singleton fid flow
+                pure (loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB (M.singleton fid 1.0) tables))
+            scoreFor = scoreVia M.empty
+
+        it "lets a USEtox wildcard reach river, lake and IMMEDIATE groundwater" $ do
+            scoreFor USEtoxFamily "Iron, ion" Nothing "river" `shouldReturn` 2108.5
+            scoreFor USEtoxFamily "Iron, ion" Nothing "lake" `shouldReturn` 2108.5
+            scoreFor USEtoxFamily "Iron, ion" Nothing "groundwater" `shouldReturn` 2108.5
+
+        it "keeps the method's explicit long-term zero for a USEtox method" $
+            scoreFor USEtoxFamily "Iron, ion" Nothing "groundwater, long-term" `shouldReturn` 0.0
+
+        it "blocks the CAS bridge for a long-term groundwater flow under USEtox" $
+            -- Name-mismatched flow sharing the CAS: without the gate it would
+            -- borrow the immediate 2108.5 and bypass the explicit zero.
+            scoreFor USEtoxFamily "Iron(2+)" (Just "7439-89-6") "groundwater, long-term" `shouldReturn` 0.0
+
+        it "keeps every groundwater fallback for a non-USEtox method" $ do
+            scoreFor OtherCFFamily "Iron, ion" Nothing "groundwater" `shouldReturn` 2108.5
+            scoreFor OtherCFFamily "Iron(2+)" (Just "7439-89-6") "groundwater, long-term" `shouldReturn` 2108.5
+
+        it "lands the ecoinvent spellings on the same gate (compartments.csv)" $ do
+            -- "ground-" / "ground-, long-term" are the ecoinvent spellings of
+            -- the same emissions. compartments.csv must map the immediate one
+            -- to surface water (inherits the wildcard CF, like the SimaPro
+            -- spelling) and the long-term one to "groundwater, long-term"
+            -- (explicit zero wins, CAS bridge blocked) — otherwise the same
+            -- emission scores differently depending on the source database.
+            -- Uses the shipped CSV so the mapping itself is pinned.
+            scoreVia cmap USEtoxFamily "Iron, ion" Nothing "ground-" `shouldReturn` 2108.5
+            scoreVia cmap USEtoxFamily "Iron, ion" Nothing "ground-, long-term" `shouldReturn` 0.0
+            scoreVia cmap USEtoxFamily "Iron(2+)" (Just "7439-89-6") "ground-, long-term" `shouldReturn` 0.0
+            scoreVia cmap OtherCFFamily "Iron(2+)" (Just "7439-89-6") "ground-, long-term" `shouldReturn` 2108.5
 
     describe "inventoryContributions" $ do
         -- Regression: same fallback bug as computeLCIAScoreFromTables.
