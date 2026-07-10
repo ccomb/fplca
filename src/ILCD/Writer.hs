@@ -52,6 +52,7 @@ module ILCD.Writer (
     formatDouble,
     ilcdProcessUUID,
     sharedActivityUUIDs,
+    splitWarnings,
     processXML,
     flowXML,
     flowPropertyXML,
@@ -131,6 +132,27 @@ ilcdProcessUUID sharedActUUIDs (actUUID, prodUUID)
         UUID5.generateNamed ilcdExportNamespace $
             BS.unpack (TE.encodeUtf8 ("process:" <> uuidText actUUID <> "_" <> uuidText prodUUID))
     | otherwise = actUUID
+
+{- | One warning per activity whose products 'ilcdProcessUUID' spreads over
+several process datasets. Every product is kept, but ILCD has no way to say
+the datasets came from one activity, so a re-import yields independent
+single-output activities — the grouping is the one thing the export loses,
+and the caller deserves to hear about it rather than discover it on re-import.
+Empty when every activity UUID is unique.
+-}
+splitWarnings :: SimpleDatabase -> [Text]
+splitWarnings db =
+    [ "multi-output activity \""
+        <> activityName act
+        <> "\" (UUID "
+        <> uuidText actUUID
+        <> "): its "
+        <> T.pack (show (length acts))
+        <> " products export as separate ILCD process datasets; their grouping is lost on re-import"
+    | (actUUID, acts@(act : _ : _)) <- M.toAscList byActivity
+    ]
+  where
+    byActivity = M.fromListWith (++) [(actUUID, [act]) | ((actUUID, _), act) <- M.toAscList (sdbActivities db)]
 
 --------------------------------------------------------------------------------
 -- Top-level: directory / archive

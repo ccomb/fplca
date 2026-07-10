@@ -45,6 +45,7 @@ import ILCD.Writer (
     ilcdFiles,
     ilcdProcessUUID,
     sharedActivityUUIDs,
+    splitWarnings,
     writeILCDArchive,
     writeILCDDatabase,
  )
@@ -295,6 +296,18 @@ spec = describe "ILCD.Writer round-trip" $ do
             dsB `shouldNotBe` moActU
             dsA `shouldNotBe` dsB
             ilcdProcessUUID shared (moActU, moProdA) `shouldBe` dsA
+
+    describe "splitWarnings (multi-output approximation is reported)" $ do
+        it "is empty when every activity UUID is unique" $ do
+            db <- loadFixture
+            splitWarnings db `shouldBe` []
+
+        it "names each split activity and its product count" $
+            case splitWarnings multiOutputDb of
+                [w] -> do
+                    w `shouldSatisfy` T.isInfixOf (UUID.toText moActU)
+                    w `shouldSatisfy` T.isInfixOf "2 products"
+                ws -> expectationFailure ("expected exactly one warning, got " ++ show ws)
 
     describe "multi-output export" $ do
         it "writes one process file per product, not one per activity UUID" $ do

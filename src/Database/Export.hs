@@ -38,11 +38,12 @@ with any best-effort approximation warnings. Pure: the multi-file formats are
 zipped in-memory. Fails loudly for formats without a writer.
 
 The warning list is empty for a faithful export and non-empty when a writer had
-to approximate. Currently only the Brightway writer approximates: it has no waste
-type, so it rewrites /orphan/ waste exchanges as technosphere flows
-(inventory-neutral, but the waste tag is lost on re-import) and reports the
-affected activities. Returning bytes and warnings together shares the one
-'toSimpleDatabase' conversion and keeps them from drifting apart.
+to approximate. Two writers approximate today: Brightway has no waste type, so
+it rewrites /orphan/ waste exchanges as technosphere flows (inventory-neutral,
+but the waste tag is lost on re-import); ILCD keys one process per dataset UUID,
+so a multi-output activity's products export as separate, unlinked datasets
+('ILCD.Writer.splitWarnings'). Returning bytes and warnings together shares the
+one 'toSimpleDatabase' conversion and keeps them from drifting apart.
 -}
 serializeDatabase :: DatabaseFormat -> Database -> Either Text (BL.ByteString, [Text])
 serializeDatabase fmt db = case fmt of
@@ -51,7 +52,7 @@ serializeDatabase fmt db = case fmt of
     SimaProCSV -> noWarn (BL.fromStrict <$> SP.serializeSimaProCSV SP.defaultWriterConfig sdb)
     EcoSpold1 -> noWarn (BL.fromStrict . TE.encodeUtf8 <$> ES1.writeDatabase ES1.canonicalWriterOptions db)
     EcoSpold2 -> noWarn (zipText <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb)
-    ILCDProcess -> noWarn (ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb)
+    ILCDProcess -> (,ILCD.splitWarnings sdb) <$> ILCD.writeILCDArchive ILCD.defaultWriteOptions sdb
     BrightwayExcel -> (,BE.wasteManifest sdb) <$> BE.renderWorkbook BE.defaultWriterConfig sdb
     OpenLcaJsonLd ->
         Left "openLCA JSON-LD export is not supported"
@@ -74,11 +75,14 @@ parseExportFormat raw = case T.toLower (T.strip raw) of
     "brightway" -> Right BrightwayExcel
     other -> Left ("unknown export format: " <> other <> " (expected simapro|ecospold1|ecospold2|ilcd|brightway)")
 
--- | Serialize a database and write it to @path@.
-exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text ())
+{- | Serialize a database and write it to @path@, returning the approximation
+warnings so the caller can report them — a local export approximates exactly as
+much as a remote one.
+-}
+exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text [Text])
 exportDatabase fmt db path = case serializeDatabase fmt db of
     Left err -> pure (Left err)
-    Right (bytes, _warnings) -> either (Left . renderErr) Right <$> try (BL.writeFile path bytes)
+    Right (bytes, warnings) -> either (Left . renderErr) (const (Right warnings)) <$> try (BL.writeFile path bytes)
   where
     renderErr :: SomeException -> Text
     renderErr e = "export failed: " <> T.pack (show e)
