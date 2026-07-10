@@ -119,6 +119,7 @@ fixtureSimple =
             Nothing
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
+            Nothing
     activityB =
         Activity
             "production of B"
@@ -135,6 +136,7 @@ fixtureSimple =
             Nothing
             Nothing
             (Just (EcoSpoldActivityType 2 "Market activity" (Just 1) (Just "Hard link")))
+            Nothing
 
 -- | The fixture as a 'SimpleDatabase' (matches the previous IO-shaped helper).
 loadFixtureSimple :: IO SimpleDatabase
@@ -172,6 +174,7 @@ fixtureDupBio =
             Nothing
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
+            Nothing
 
 {- | A single-activity database wrapping one adversarial exchange. The
 exchange is the only difference between the rejection fixtures, so the export
@@ -203,6 +206,7 @@ fixtureWithExchange ex =
             Nothing
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
+            Nothing
 
 {- | A single-activity database whose biosphere flow carries synonyms, so the
 writer's @\<synonym\>@ emission and the parser's read-back are exercised end to
@@ -235,6 +239,7 @@ fixtureWithBioSynonyms =
             ]
             M.empty
             M.empty
+            Nothing
             Nothing
             Nothing
             Nothing
@@ -284,6 +289,7 @@ fixtureWasteCoproduct =
             Nothing
             Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
+            Nothing
 
 -- | Build a full 'Database' (with matrices) from a 'SimpleDatabase'.
 buildDb :: SimpleDatabase -> IO Database

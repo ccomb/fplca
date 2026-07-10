@@ -39,7 +39,8 @@ variants in the Servant API.
 
 from __future__ import annotations
 
-import base64
+import urllib.parse
+import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -772,9 +773,10 @@ class Client:
         request. Single-file formats carry their bytes directly; EcoSpold 2 /
         ILCD multi-file trees come back zipped.
 
-        The engine returns the payload base64-encoded in the ``data`` field;
-        this method base64-decodes it and returns the raw bytes. Raises
-        VoLCAError on ``success=false`` or a missing ``data`` field.
+        The engine streams the payload as raw bytes. Best-effort approximation
+        warnings arrive in the ``X-Volca-Export-Warnings`` response header
+        (percent-encoded, newline-joined) and are surfaced through
+        :mod:`warnings`. Raises VoLCAError on an HTTP error.
         """
         fmt_norm = fmt.strip().lower()
         if fmt_norm not in _EXPORT_FORMATS:
@@ -783,21 +785,20 @@ class Client:
                 f"(expected {'|'.join(sorted(_EXPORT_FORMATS))})"
             )
         target = self._db(db_name)
-        payload = self._require_success(
-            self._json(
-                self._session.post(
-                    f"{self.base_url}/api/v1/db/{target}/export",
-                    json={"format": fmt_norm},
-                )
-            ),
-            "export_database",
+        resp = self._session.post(
+            f"{self.base_url}/api/v1/db/{target}/export",
+            json={"format": fmt_norm},
         )
-        data = payload.get("data")
-        if data is None:
+        if resp.status_code >= 400:
             raise VoLCAError(
-                "export_database succeeded but the response carried no data field."
+                f"export_database failed (HTTP {resp.status_code}): "
+                f"{resp.text[:500]}"
             )
-        return base64.b64decode(data)
+        header = resp.headers.get("X-Volca-Export-Warnings", "")
+        for line in urllib.parse.unquote(header).split("\n"):
+            if line:
+                warnings.warn(line, stacklevel=2)
+        return resp.content
 
     def export_to_file(
         self, fmt: str, out_path: str, db_name: str | None = None

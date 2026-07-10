@@ -75,6 +75,7 @@ mkActivity name loc exs =
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
+        , activityNativeId = Nothing
         }
 
 refEx :: UUID.UUID -> Exchange

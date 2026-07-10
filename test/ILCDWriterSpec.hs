@@ -43,6 +43,9 @@ import ILCD.Writer (
     escapeXmlAttr,
     formatDouble,
     ilcdFiles,
+    ilcdProcessUUID,
+    sharedActivityUUIDs,
+    splitWarnings,
     writeILCDArchive,
     writeILCDDatabase,
  )
@@ -266,18 +269,64 @@ spec = describe "ILCD.Writer round-trip" $ do
 
     it "emits one process file per activity" $ do
         db <- loadFixture
-        let procFiles = [p | (p, _) <- ilcdFiles defaultWriteOptions db, "processes/" `isPrefixOfFp` p]
-        length procFiles `shouldBe` M.size (sdbActivities db)
+        length (processPaths (ilcdFiles defaultWriteOptions db)) `shouldBe` M.size (sdbActivities db)
 
-    describe "checkILCDExportable (multi-output guard)" $ do
+    describe "checkILCDExportable" $ do
         it "accepts a single-output database" $ do
             db <- loadFixture
             checkILCDExportable db `shouldBe` Right ()
 
-        it "rejects a multi-output activity rather than silently dropping a product" $
-            -- Two reference products share one activity UUID, so both would write
-            -- to the same processes/<actUUID>.xml. The guard must fail loudly.
-            checkILCDExportable multiOutputDb `shouldSatisfy` isLeft
+        it "accepts a multi-output activity, now that each product is its own process" $
+            checkILCDExportable multiOutputDb `shouldBe` Right ()
+
+    describe "ilcdProcessUUID (process dataset identity)" $ do
+        it "leaves an unshared activity UUID alone" $ do
+            db <- loadFixture
+            sharedActivityUUIDs db `shouldBe` S.empty
+            ilcdProcessUUID S.empty (moActU, moProdA) `shouldBe` moActU
+
+        it "sees the shared activity UUID of a multi-output database" $
+            sharedActivityUUIDs multiOutputDb `shouldBe` S.singleton moActU
+
+        it "derives a distinct, deterministic UUID per product of a shared activity" $ do
+            let shared = sharedActivityUUIDs multiOutputDb
+                dsA = ilcdProcessUUID shared (moActU, moProdA)
+                dsB = ilcdProcessUUID shared (moActU, moProdB)
+            dsA `shouldNotBe` moActU
+            dsB `shouldNotBe` moActU
+            dsA `shouldNotBe` dsB
+            ilcdProcessUUID shared (moActU, moProdA) `shouldBe` dsA
+
+    describe "splitWarnings (multi-output approximation is reported)" $ do
+        it "is empty when every activity UUID is unique" $ do
+            db <- loadFixture
+            splitWarnings db `shouldBe` []
+
+        it "names each split activity and its product count" $
+            case splitWarnings multiOutputDb of
+                [w] -> do
+                    w `shouldSatisfy` T.isInfixOf (UUID.toText moActU)
+                    w `shouldSatisfy` T.isInfixOf "2 products"
+                ws -> expectationFailure ("expected exactly one warning, got " ++ show ws)
+
+    describe "multi-output export" $ do
+        it "writes one process file per product, not one per activity UUID" $ do
+            let procFiles = processPaths (ilcdFiles defaultWriteOptions multiOutputDb)
+            length procFiles `shouldBe` 2
+            S.size (S.fromList procFiles) `shouldBe` 2
+
+        it "round-trips both products, structurally" $ do
+            db' <- roundTrip multiOutputDb
+            M.size (sdbActivities db') `shouldBe` 2
+            activityShapes db' `shouldBe` activityShapes multiOutputDb
+
+        it "is idempotent: the derived dataset UUID is a fixed point" $ do
+            -- The re-imported activities are keyed by their derived UUIDs, which
+            -- no longer collide, so the second export mints nothing new.
+            let f0 = ilcdFiles defaultWriteOptions multiOutputDb
+            db' <- roundTrip multiOutputDb
+            sharedActivityUUIDs db' `shouldBe` S.empty
+            ilcdFiles defaultWriteOptions db' `shouldBe` f0
 
     it "produces a parseable ILCD tree with the same activity count" $ do
         db <- loadFixture
@@ -426,40 +475,47 @@ spec = describe "ILCD.Writer round-trip" $ do
 isPrefixOfFp :: String -> FilePath -> Bool
 isPrefixOfFp = isPrefixOf
 
+-- | The @processes/@ entries of an 'ilcdFiles' listing, one per exported process.
+processPaths :: [(FilePath, a)] -> [FilePath]
+processPaths files = [p | (p, _) <- files, "processes/" `isPrefixOfFp` p]
+
 -- ---------------------------------------------------------------------------
 -- Multi-output fixture (two products sharing one activity UUID)
 -- ---------------------------------------------------------------------------
 
-{- | A degenerate database where one activity UUID exposes two reference
-products — the shape an ES2/SimaPro multi-output activity takes internally.
-ILCD cannot represent it (one process per UUID), so 'checkILCDExportable'
-rejects it.
+-- | UUIDs of 'multiOutputDb', named so the dataset-UUID tests can address them.
+moActU, moProdA, moProdB, moUnitU :: UUID
+moActU = read "aaaaaaaa-0000-4000-8000-000000000001"
+moProdA = read "aaaaaaaa-0000-4000-8000-0000000000a1"
+moProdB = read "aaaaaaaa-0000-4000-8000-0000000000b2"
+moUnitU = read "11111111-0000-4000-8000-000000000001"
+
+{- | A database where one activity UUID exposes two reference products — the
+shape an ES2/SimaPro multi-output activity takes internally, and the shape a
+truncated SimaPro process name gives two unrelated blocks. Each product exports
+as its own ILCD process dataset, under the UUID 'ilcdProcessUUID' derives for
+its @(activity, product)@ pair.
 -}
 multiOutputDb :: SimpleDatabase
 multiOutputDb =
     SimpleDatabase
         { sdbActivities =
             M.fromList
-                [ ((actU, prodA), prodAct "co-product A" prodA)
-                , ((actU, prodB), prodAct "co-product B" prodB)
+                [ ((moActU, moProdA), prodAct "co-product A" moProdA)
+                , ((moActU, moProdB), prodAct "co-product B" moProdB)
                 ]
         , sdbTechFlows =
             M.fromList
-                [ (prodA, techFlow prodA "product A")
-                , (prodB, techFlow prodB "product B")
+                [ (moProdA, techFlow moProdA "product A")
+                , (moProdB, techFlow moProdB "product B")
                 ]
         , sdbBioFlows = M.empty
         , sdbWasteFlows = M.empty
-        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        , sdbUnits = M.singleton moUnitU (Unit moUnitU "kg" "kg" "")
         }
   where
-    actU, prodA, prodB, unitU :: UUID
-    actU = read "aaaaaaaa-0000-4000-8000-000000000001"
-    prodA = read "aaaaaaaa-0000-4000-8000-0000000000a1"
-    prodB = read "aaaaaaaa-0000-4000-8000-0000000000b2"
-    unitU = read "11111111-0000-4000-8000-000000000001"
     techFlow :: UUID -> Text -> TechnosphereFlow
-    techFlow fid nm = TechnosphereFlow fid nm unitU M.empty Nothing Nothing
+    techFlow fid nm = TechnosphereFlow fid nm moUnitU M.empty Nothing Nothing
     prodAct :: Text -> UUID -> Activity
     prodAct nm prod =
         Activity
@@ -469,9 +525,10 @@ multiOutputDb =
             M.empty
             "GLO"
             "kg"
-            [TechnosphereExchange prod 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
+            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
             M.empty
             M.empty
+            Nothing
             Nothing
             Nothing
             Nothing
@@ -544,6 +601,7 @@ oneActivityDb bios exs =
             , activityAllocationPercent = Nothing
             , activityAllocationFormula = Nothing
             , activityNativeType = Nothing
+            , activityNativeId = Nothing
             }
 
 refProductEx :: Exchange

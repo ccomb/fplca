@@ -570,6 +570,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
             if T.null (iprProcessType p)
                 then Nothing
                 else Just (ILCDProcessType{iptLabel = iprProcessType p})
+        , activityNativeId = Nothing
         }
   where
     -- Look up the reference exchange's flow unit. Reference exchange is typically

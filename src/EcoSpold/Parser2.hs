@@ -669,7 +669,7 @@ parseWithXeno xmlContent processId = do
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing nativeType
+            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing nativeType Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

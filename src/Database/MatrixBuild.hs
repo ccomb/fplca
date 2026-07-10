@@ -20,7 +20,6 @@ module Database.MatrixBuild (
 import Control.Applicative ((<|>))
 import Data.Foldable (fold)
 import Data.Int (Int32)
-import Data.List (sort)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -31,16 +30,17 @@ import qualified Data.Vector.Unboxed as VU
 import Types
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
 
-{- | Per-process lookup tables built once from the sorted activity-key list.
+{- | Per-process lookup tables built once from the ascending activity-key list.
 
-All fields share a single 'zip' [0..] sortedKeys' traversal, so row order
-and ProcessId ↔ (UUID, UUID) consistency hold by construction.
+All fields share a single 'zip' [0..] (M.toAscList activityMap)' traversal, so
+row order and ProcessId ↔ (UUID, UUID) consistency hold by construction, and the
+activity of each row is the one its key maps to.
 -}
 data InterningTables = InterningTables
     { itProcessIdTable :: !(V.Vector (UUID, UUID))
     , itProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId)
     , itActivityUUIDIndex :: !(M.Map UUID ProcessId)
-    , itActivityProductsIndex :: !(M.Map UUID [ProcessId])
+    , itActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId])
     , itActivities :: !(V.Vector Activity)
     , itActivityCount :: !Int32
     }
@@ -48,16 +48,18 @@ data InterningTables = InterningTables
 buildInterningTables :: M.Map (UUID, UUID) Activity -> InterningTables
 buildInterningTables activityMap =
     InterningTables
-        { itProcessIdTable = V.fromList sortedKeys
-        , itProcessIdLookup = M.fromList [(k, pid) | (pid, k) <- indexedKeys]
-        , itActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _)) <- indexedKeys]
-        , itActivityProductsIndex = M.fromListWith (++) [(actUUID, [pid]) | (pid, (actUUID, _)) <- indexedKeys]
-        , itActivities = V.fromList [activityMap M.! k | k <- sortedKeys]
-        , itActivityCount = fromIntegral (length sortedKeys)
+        { itProcessIdTable = V.fromList [k | (_, k, _) <- indexed]
+        , itProcessIdLookup = M.fromList [(k, pid) | (pid, k, _) <- indexed]
+        , itActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _), _) <- indexed]
+        , itActivityProductsIndex =
+            M.fromListWith (++) [(activityGroupKey actUUID act, [pid]) | (pid, (actUUID, _), act) <- indexed]
+        , itActivities = V.fromList [act | (_, _, act) <- indexed]
+        , itActivityCount = fromIntegral (length indexed)
         }
   where
-    sortedKeys = sort (M.keys activityMap)
-    indexedKeys = zip [0 ..] sortedKeys
+    -- 'M.toAscList' is already sorted on the key, so this is the same row order
+    -- as before, with the activity carried alongside instead of looked up again.
+    indexed = [(pid, k, act) | (pid, (k, act)) <- zip [0 ..] (M.toAscList activityMap)]
 
 {- | Reference-product output unit for each activity (empty when the activity
 has no produced reference exchange — same fallback as the previous inline

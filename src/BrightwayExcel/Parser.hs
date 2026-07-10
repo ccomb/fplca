@@ -335,6 +335,7 @@ rawToActivity cfg ra =
             , activityAllocationPercent = Nothing
             , activityAllocationFormula = Nothing
             , activityNativeType = Nothing
+            , activityNativeId = Nothing
             }
 
 {- | Build the reference-product (or coproduct) exchange from a @production@ row,

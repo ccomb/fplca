@@ -564,7 +564,8 @@ executeDbExport fmt manager args =
                     result <- exportDatabase dbFmt (ldDatabase ld) (deaOut args)
                     case result of
                         Left err -> reportError (T.unpack err) >> exitFailure
-                        Right () -> do
+                        Right warnings -> do
+                            mapM_ (reportProgress Warning . T.unpack) warnings
                             reportProgress Info $ "Exported " ++ T.unpack (deaDb args) ++ " -> " ++ deaOut args
                             outputResult fmt $
                                 object

@@ -4,13 +4,13 @@ These endpoints (copy / delete / relink / export / add-/remove-dependency)
 carry no operationId — they bypass the OpenAPI dispatcher and build their
 URLs directly. They also do not exist in any released engine binary, so these
 tests never touch a live engine: they mock ``Client._session`` and assert on
-the wire shape (URL, JSON body, base64 decoding, format validation, error
+the wire shape (URL, JSON body, raw-bytes handling, format validation, error
 surfacing).
 """
 
 from __future__ import annotations
 
-import base64
+import urllib.parse
 
 import pytest
 
@@ -190,12 +190,22 @@ class TestDependencies:
 # ---------------------------------------------------------------------------
 
 
+def _raw(session, body: bytes, warnings_header: str | None = None) -> None:
+    """Wire the mocked session's POST to return raw export bytes."""
+    from tests.conftest import _make_response
+
+    r = _make_response({})
+    r.content = body
+    if warnings_header is not None:
+        r.headers = {"X-Volca-Export-Warnings": warnings_header}
+    session.post.return_value = r
+
+
 class TestExport:
-    def test_base64_decode_returns_raw_bytes(self, mocked_client):
+    def test_returns_raw_bytes(self, mocked_client):
         client, session = mocked_client
         raw = b"PK\x03\x04 zipped db bytes"
-        _ok(session, {"success": True, "message": "ok",
-                      "data": base64.b64encode(raw).decode()})
+        _raw(session, raw)
         out = client.export_database("ecospold2")
         assert out == raw
         url = session.post.call_args[0][0]
@@ -204,8 +214,7 @@ class TestExport:
 
     def test_format_normalized_before_send(self, mocked_client):
         client, session = mocked_client
-        _ok(session, {"success": True, "message": "ok",
-                      "data": base64.b64encode(b"x").decode()})
+        _raw(session, b"x")
         client.export_database("  SimaPro  ")
         assert session.post.call_args[1]["json"] == {"format": "simapro"}
 
@@ -215,23 +224,31 @@ class TestExport:
             client.export_database("parquet")
         session.post.assert_not_called()
 
-    def test_in_band_failure_raises(self, mocked_client):
+    def test_http_error_raises(self, mocked_client):
         client, session = mocked_client
-        _ok(session, {"success": False, "message": "not loaded", "data": None})
+        from tests.conftest import _make_response
+
+        session.post.return_value = _make_response(
+            {"error": "Database not loaded: testdb"}, status=404
+        )
         with pytest.raises(VoLCAError, match="not loaded"):
             client.export_database("simapro")
 
-    def test_missing_data_raises(self, mocked_client):
+    def test_warnings_header_surfaced(self, mocked_client):
         client, session = mocked_client
-        _ok(session, {"success": True, "message": "ok", "data": None})
-        with pytest.raises(VoLCAError, match="no data field"):
-            client.export_database("simapro")
+        header = urllib.parse.quote("orphan waste in Café crème\nsecond warning")
+        _raw(session, b"x", warnings_header=header)
+        with pytest.warns(UserWarning) as caught:
+            client.export_database("brightway")
+        assert [str(w.message) for w in caught] == [
+            "orphan waste in Café crème",
+            "second warning",
+        ]
 
-    def test_to_file_writes_decoded_bytes(self, mocked_client, tmp_path):
+    def test_to_file_writes_bytes(self, mocked_client, tmp_path):
         client, session = mocked_client
         raw = b"hello bytes"
-        _ok(session, {"success": True, "message": "ok",
-                      "data": base64.b64encode(raw).decode()})
+        _raw(session, raw)
         out = tmp_path / "export.csv"
         client.export_to_file("simapro", str(out))
         assert out.read_bytes() == raw

@@ -92,6 +92,7 @@ library
                      , BrightwayExcel.Parser
                      , BrightwayExcel.Writer
                      , Expr
+                     , Zip
                      , ILCD.Parser
                      , ILCD.Writer
                      , Database.Export
@@ -297,6 +298,7 @@ test-suite lca-tests
                      , DeleteSelectionSpec
                      , ExportSpec
                      , ExportHandlerSpec
+                     , ZipSpec
                      , PropertiesSpec
                      , NativeActivityTypeSpec
                      , WasteCrossDBSpec

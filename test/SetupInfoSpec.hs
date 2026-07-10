@@ -54,6 +54,7 @@ minimalActivity name exs =
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
+        , activityNativeId = Nothing
         }
 
 refExchange :: UUID.UUID -> Exchange
