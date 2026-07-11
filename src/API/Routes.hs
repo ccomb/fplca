@@ -1096,7 +1096,7 @@ breaking change to the JSON wire shape lands (field rename/removal, type
 narrowing, newly-required field). Clients compare it to decide compatibility.
 -}
 currentWireVersion :: Int
-currentWireVersion = 1
+currentWireVersion = 2
 
 getVersion :: AppM Value
 getVersion =

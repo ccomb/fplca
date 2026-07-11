@@ -16,6 +16,10 @@
   scoring a single activity already could.
 
 ### Changed
+- The wire-format revision advertised on `/api/v1/version` is now `2`, because
+  the export download changed shape (below). pyvolca ≥ 0.7.2 requires an engine
+  ≥ v0.9.1 and refuses older ones with a clear message; an older pyvolca gets a
+  warning telling it to upgrade.
 - Database exports download as raw bytes instead of base64-encoded JSON,
   matching how uploads already work — a third less data on the wire and far
   less memory on both ends for big files. Any export approximation warnings

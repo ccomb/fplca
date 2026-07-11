@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .types import ServerVersion
 
-REQUIRED_WIRE = 1
+REQUIRED_WIRE = 2
 """The JSON wire-format revision this pyvolca speaks."""
 
-MIN_ENGINE_HINT = "0.8.0"
+MIN_ENGINE_HINT = "0.9.1"
 """First engine release that advertises :data:`REQUIRED_WIRE`. Used only for the
 error message and the release preflight — it is not, by itself, a runtime gate
 (the engine's ``wireVersion`` is)."""
@@ -50,7 +50,7 @@ def check(sv: ServerVersion) -> None:
         raise VoLCAError(
             f"This engine (v{sv.version}) speaks an older wire than pyvolca "
             f"needs (wire {spoken} < {REQUIRED_WIRE}). Upgrade the engine to "
-            f">= v{MIN_ENGINE_HINT}, or `pip install 'pyvolca<0.6'`."
+            f">= v{MIN_ENGINE_HINT}, or `pip install 'pyvolca<0.7.2'`."
         )
     if w > REQUIRED_WIRE:
         warnings.warn(

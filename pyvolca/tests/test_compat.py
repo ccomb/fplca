@@ -45,7 +45,7 @@ def test_check_rejects_too_old_wire(wire: int | None) -> None:
         _compat.check(_sv(wire))
     # names the engine to upgrade to, and an older-pyvolca fallback
     assert f"v{_compat.MIN_ENGINE_HINT}" in str(exc.value)
-    assert "pyvolca<0.6" in str(exc.value)
+    assert "pyvolca<0.7.2" in str(exc.value)
 
 
 def test_check_message_distinguishes_absent_from_zero() -> None:
