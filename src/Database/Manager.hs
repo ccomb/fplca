@@ -235,6 +235,7 @@ import qualified Method.Parser
 import qualified Method.Parser.OlcaSchema as OlcaSchema
 import Method.ParserCSV (parseMethodCSVBytes, stripBOM)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
+import qualified Method.Patch
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
 
@@ -1032,8 +1033,7 @@ initDatabaseManager config noCache configPath = do
         result <- loadMethodCollectionFromConfig mc
         case result of
             Right (collection0, flowInfo) -> do
-                let scoringSets = map configToScoringSet (Config.mcScoringSets mc)
-                    collection = collection0{Method.Types.mcScoringSets = scoringSets}
+                let (collection, patchStats) = applyMethodConfig mc collection0
                 atomically $ modifyTVar' loadedMethodsVar (M.insert (mcName mc) collection)
                 reportProgress Info $
                     "  [OK] Loaded method: "
@@ -1041,6 +1041,7 @@ initDatabaseManager config noCache configPath = do
                         <> " ("
                         <> show (length (mcMethods collection))
                         <> " impact categories)"
+                warnZeroTouchPatches (mcName mc) patchStats
                 -- Surface a 'global-methods' entry that matches no loaded method:
                 -- the de-regionalization is keyed by method name, so a typo or a
                 -- renamed method would otherwise be ignored in silence and the
@@ -1214,6 +1215,33 @@ configToScoringSet ssc =
         , ssDisplayMultiplier = sscDisplayMultiplier ssc
         }
 
+{- | Fold a 'MethodConfig's post-parse adjustments into a freshly parsed
+collection: inject the configured scoring sets, then apply the declarative
+CF patches ('Config.mcPatches'). Pure — reapplying the same config to the
+same source file always yields the same result, so a reload never
+compounds a patch. Also returns, per patch, how many CFs it touched (for
+the zero-touch warning at the call site).
+-}
+applyMethodConfig :: MethodConfig -> MethodCollection -> (MethodCollection, [(Config.MethodPatch, Int)])
+applyMethodConfig mc collection0 =
+    let scoringSets = map configToScoringSet (Config.mcScoringSets mc)
+        withScoring = collection0{Method.Types.mcScoringSets = scoringSets}
+     in Method.Patch.applyMethodPatches (Config.mcPatches mc) withScoring
+
+{- | Surface a patch that matched no characterization factor: the selector is
+almost certainly wrong (a typo'd category or flow name), and staying silent
+would leave the collection scoring as if the patch were never declared.
+-}
+warnZeroTouchPatches :: Text -> [(Config.MethodPatch, Int)] -> IO ()
+warnZeroTouchPatches collName stats =
+    forM_ [p | (p, n) <- stats, n == 0] $ \patch ->
+        reportProgress Warning $
+            "  [patch] collection "
+                <> T.unpack collName
+                <> ": \""
+                <> T.unpack (Method.Patch.describePatch patch)
+                <> "\" touched 0 characterization factors — check the selector."
+
 -- | Convert a DatabaseFormat to display text for methods
 methodFormatText :: DatabaseFormat -> Text
 methodFormatText SimaProCSV = "SimaPro CSV"
@@ -1237,6 +1265,7 @@ discoverUploadedMethodConfigs = do
                 , mcFormat = Just $ methodFormatText (UploadedDB.umFormat meta)
                 , mcScoringSets = []
                 , mcGlobalMethods = []
+                , mcPatches = []
                 }
 
 -- | Get a database by name
@@ -2998,9 +3027,8 @@ loadMethodCollection manager name = do
                             reportProgress Error $ "  [FAIL] " <> T.unpack name <> ": " <> T.unpack err
                             return $ Left err
                         Right (collection0, flowInfo) -> do
-                            -- Inject scoring sets from TOML config
-                            let scoringSets = map configToScoringSet (Config.mcScoringSets mc)
-                                collection = collection0{Method.Types.mcScoringSets = scoringSets}
+                            -- Inject scoring sets from TOML config, apply declarative CF patches
+                            let (collection, patchStats) = applyMethodConfig mc collection0
                             atomically $ modifyTVar' (dmLoadedMethods manager) (M.insert name collection)
                             clearMethodMappingCache manager
                             let methods = mcMethods collection
@@ -3013,6 +3041,7 @@ loadMethodCollection manager name = do
                                     <> " impact categories, "
                                     <> show totalCFs
                                     <> " characterization factors)"
+                            warnZeroTouchPatches name patchStats
                             -- Auto-extract synonyms from ILCD flow definitions
                             let pairs = extractFromILCDFlows flowInfo
                             autoCreateFlowSynonyms

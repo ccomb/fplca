@@ -491,9 +491,9 @@ pSubstitutions =
         \When empty or absent, the call behaves as a plain GET."
 
 {- | Optional switch to drop delayed long-term emissions before scoring.
-Shared by 'get_impacts' and 'score_activity'. Long-term flows are always
-emissions (never resources), so excluding them never touches regionalized
-water/land categories.
+Shared by 'get_impacts', 'score_activity' and 'score_activities'. Long-term
+flows are always emissions (never resources), so excluding them never
+touches regionalized water/land categories.
 -}
 pExcludeLongTerm :: Param
 pExcludeLongTerm =
@@ -730,6 +730,7 @@ params r = case r of
         , Param "process_ids" "array" Required "Process IDs to score (activityUUID_productUUID). All resolved in one multi-RHS solve."
         , pScoringSetsFilter
         , pSummaryOnly
+        , pExcludeLongTerm
         ]
     ListScoringSets ->
         [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."

@@ -29,7 +29,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Database.Manager (DatabaseManager (..))
-import Method.Mapping (LongTermMode)
+import Method.Mapping (LongTermMode (..))
 import Servant (ServerError (..))
 import qualified Servant
 
@@ -107,10 +107,12 @@ runBatchImpacts ::
     Text ->
     -- | per-(activity, method) top contributors (default 0 — see batchImpactsH)
     Maybe Int ->
+    -- | whether to keep or drop delayed long-term emissions
+    LongTermMode ->
     -- | process_ids to score
     [Text] ->
     IO (Either BatchError BatchImpactsResponse)
-runBatchImpacts dbm dbName coll topFlows pids = do
+runBatchImpacts dbm dbName coll topFlows ltMode pids = do
     let env =
             AppEnv
                 { aeDbManager = dbm
@@ -126,6 +128,7 @@ runBatchImpacts dbm dbName coll topFlows pids = do
                     dbName
                     coll
                     topFlows
+                    ltMode
                     (BatchImpactsRequest{birProcessIds = pids})
     case res of
         Right r -> pure (Right r)

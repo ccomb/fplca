@@ -112,7 +112,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
-                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
+                :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> QueryParam "exclude-long-term" Bool :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
                 -- Database management endpoints
                 :<|> "db" :> Get '[JSON] DatabaseListResponse
                 -- Load/Unload/Delete endpoints
@@ -858,9 +858,10 @@ batchImpactsH ::
     Text ->
     Text ->
     Maybe Int ->
+    LongTermMode ->
     BatchImpactsRequest ->
     AppM BatchImpactsResponse
-batchImpactsH dbName collectionName topFlowsParam req = do
+batchImpactsH dbName collectionName topFlowsParam ltMode req = do
     dbManager <- asks aeDbManager
     (db, sharedSolver) <- requireDatabaseByName dbName
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
@@ -876,7 +877,8 @@ batchImpactsH dbName collectionName topFlowsParam req = do
         invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
         validPidNums = [pidNum | (_, pidNum, _) <- valid]
     t0 <- liftIO getCurrentTime
-    sols <- solutionsWithDeps dbName db sharedSolver validPidNums
+    sols0 <- solutionsWithDeps dbName db sharedSolver validPidNums
+    sols <- liftIO $ mapM (applyLongTermToSolution dbManager ltMode) sols0
     t1 <- liftIO getCurrentTime
     ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName collectionName db) (mcMethods collection)
     let topFlows = max 0 (fromMaybe 0 topFlowsParam)
@@ -1911,8 +1913,9 @@ getClassifications dbName = do
     (db, _) <- requireDatabaseByName dbName
     return $ Service.getClassifications db
 
-postImpactsBatch :: Text -> Text -> Maybe Int -> BatchImpactsRequest -> AppM BatchImpactsResponse
-postImpactsBatch = batchImpactsH
+postImpactsBatch :: Text -> Text -> Maybe Int -> Maybe Bool -> BatchImpactsRequest -> AppM BatchImpactsResponse
+postImpactsBatch dbName collectionName topFlowsParam mExcludeLT =
+    batchImpactsH dbName collectionName topFlowsParam (longTermModeFromExclude (fromMaybe False mExcludeLT))
 
 -- ---------------------------------------------------------------------------
 -- Servant server

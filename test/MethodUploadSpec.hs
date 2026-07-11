@@ -117,6 +117,7 @@ spec = do
                             , mcFormat = Just "openlca-jsonld"
                             , mcScoringSets = []
                             , mcGlobalMethods = []
+                            , mcPatches = []
                             }
                 loaded <- loadMethodCollectionFromConfig mc
                 case loaded of
@@ -178,4 +179,5 @@ spec = do
             , mcFormat = Nothing
             , mcScoringSets = []
             , mcGlobalMethods = []
+            , mcPatches = []
             }

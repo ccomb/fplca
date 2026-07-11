@@ -153,6 +153,16 @@ path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 # their region-tagged CFs are dropped so the method's global (unlocated)
 # CF is the single answer — for matching references that flattened
 # spatial factors. A name matching no method logs a warning.
+#
+# Optional patches adjust matched characterization factors at load time.
+# Selector fields combine with AND; at least one is required. Exactly one
+# of `scale` (multiply) or `set-value` (replace) per patch. A patch that
+# matches no factor logs a warning at load time.
+#   [[methods.patches]]
+#   description = "example: -40% on Uranium in Resource use, fossils"
+#   match = { category = "Resource use, fossils", flow-name-prefix = "Uranium" }
+#   # other selectors: flow-name (exact), cas, subcompartment-contains
+#   scale = 0.6
 
 [[flow-synonyms]]
 name = "Default flow synonyms"

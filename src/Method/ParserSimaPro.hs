@@ -12,6 +12,7 @@ module Method.ParserSimaPro (
     parseSimaProMethodCSV,
     parseSimaProMethodCSVBytes,
     isSimaProMethodCSV,
+    normalizeCAS,
 ) where
 
 import qualified Data.ByteString as BS

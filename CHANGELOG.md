@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- A characterization method declared in the TOML configuration can carry
+  `[[methods.patches]]` blocks: declarative adjustments that rescale or
+  replace the matched characterization factors every time the collection
+  loads. A patch selects factors by impact category, flow name or prefix,
+  CAS number, or subcompartment, and is re-applied to the freshly parsed
+  source file on each load — so reloading never compounds it. A patch that
+  matches no factor is reported at load time instead of being silently
+  ignored.
+- Bulk impact scoring — the `POST /db/{db}/impacts/{collection}` endpoint and
+  the `score_activities` MCP tool — can now exclude long-term emissions, as
+  scoring a single activity already could.
+
 ### Changed
 - Database exports download as raw bytes instead of base64-encoded JSON,
   matching how uploads already work — a third less data on the wire and far
