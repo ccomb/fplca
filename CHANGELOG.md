@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.1] - 2026-07-11
 
 ### Added
 - A characterization method declared in the TOML configuration can carry
