@@ -22,6 +22,15 @@
   now travel in the `X-Volca-Export-Warnings` response header.
 
 ### Fixed
+- Emissions to immediate groundwater are characterized again in ecotoxicity and
+  human toxicity, inheriting the method's unspecified-water factor exactly like
+  releases to a river or a lake. They previously scored zero — on a witness
+  concrete process a single iron-ion flow was worth about 10% of the freshwater
+  ecotoxicity score. Long-term groundwater keeps its explicit zero.
+- Two flow-name synonym bridges (`Flupyrsulfuron-methyl sodium ↔
+  Flupyrsulfuron-methyl`, `Pyrethrins ↔ Pyrethrum`) so EF 3.1 (adapted 1.03)
+  characterizes flows it only lists under a sibling name, instead of silently
+  scoring them zero in freshwater ecotoxicity.
 - A database holding activities with several products can now be exported to
   ILCD. Each product becomes its own ILCD process, instead of the whole export
   being refused. This unblocks exporting databases read from SimaPro CSV, where
