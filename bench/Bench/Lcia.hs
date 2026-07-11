@@ -41,7 +41,6 @@ import Method.Mapping
 import qualified Method.Parser as MP
 import Method.Types (Method (..), MethodCF (..))
 import qualified Method.Types as MT
-import qualified Plugin.Builtin as Builtin
 import Types (
     BiosphereFlow (..),
     Compartment (..),
@@ -197,7 +196,7 @@ buildFixture =
             ]
 
         methods = [mkMethod m [] | m <- [1 .. nMethods]]
-        rawTables = [buildMethodTables M.empty M.empty (mappingsFor s) | s <- [1 .. nMethods]]
+        rawTables = [buildMethodTables OtherCFFamily M.empty M.empty (mappingsFor s) | s <- [1 .. nMethods]]
         filledTables = map (fillBroadcastVector unitCfg unitDB flowDB) rawTables
         setTables = buildMethodSetTables (zip methods filledTables)
 
@@ -335,10 +334,10 @@ registerReal = do
                             pure []
                         Right method -> do
                             putStrLn "[bench] lcia.real.score_method: mapping CFs to flows + filling broadcast..."
-                            mappings <- mapMethodToFlows Builtin.defaultMappers db method
+                            mappings <- mapMethodToFlows db method
                             let unitDB = dbUnits db
                                 flowDB = dbBioFlows db
-                                tables0 = buildMethodTables M.empty M.empty mappings
+                                tables0 = buildMethodTables (cfFamily (methodUnit method)) M.empty M.empty mappings
                                 !tables = fillBroadcastVector UC.defaultUnitConfig unitDB flowDB tables0
                                 !nCFs = length (methodFactors method)
                             putStrLn "[bench] lcia.real.score_method: computing inventory for first product..."
