@@ -53,6 +53,7 @@ from .types import (
     AggregateOp,
     AggregateResult,
     AggregateScope,
+    BatchScores,
     CharacterizationResult,
     ClassificationFilter,
     ClassificationSystem,
@@ -63,16 +64,21 @@ from .types import (
     DatabaseInfo,
     Exchange,
     Flow,
+    FlowDetail,
     FlowMapping,
     InventoryResult,
     LCIABatchResult,
     LCIAResult,
+    MappingStatus,
     MatchMode,
     MatchModeLike,
     Method,
+    MethodDetail,
+    MethodFactor,
     PathResult,
     Preset,
     SearchResults,
+    SensitivityResult,
     ServerVersion,
     Substitution,
     SupplyChain,
@@ -425,6 +431,7 @@ class Client:
         operation_id: str,
         *,
         substitutions: list[SubstitutionLike] | None = None,
+        body: dict | None = None,
         **kwargs: Any,
     ) -> Any:
         """Dispatch an OpenAPI operation by ``operationId``.
@@ -435,9 +442,11 @@ class Client:
         instance's ``self.db`` when the operation expects ``dbName`` and
         it wasn't explicitly passed.
 
-        If ``substitutions`` is given and the spec's path supports POST
-        with a ``SubstitutionRequest`` body, the operation is upgraded
-        from GET to POST.
+        ``body`` is the JSON request body for operations the spec declares
+        as POST (e.g. ``compute_sensitivity``, ``score_activities``). If
+        ``substitutions`` is given instead, the operation is upgraded from
+        GET to POST with a ``SubstitutionRequest`` body — the two are
+        mutually exclusive and ``substitutions`` wins.
         """
         ops = self._load_operations()
         op = ops.get(operation_id)
@@ -504,9 +513,9 @@ class Client:
             url_path = url_path.replace("{" + name + "}", str(value))
         url = self.base_url + url_path
 
-        # Upgrade to POST when substitutions are supplied.
+        # Upgrade to POST when substitutions are supplied; otherwise an
+        # explicit body (spec-declared POST operations) is sent as-is.
         method = op.method
-        body: dict | None = None
         if substitutions:
             method = "POST"
             body = _substitution_body(substitutions)
@@ -1402,6 +1411,61 @@ class Client:
         else:
             r = self._session.get(url)
         return LCIABatchResult.from_json(self._json(r))
+
+    def compute_sensitivity(
+        self,
+        process_id: str,
+        method_id: str,
+        perturbations: list[dict],
+        *,
+        collection: str = "methods",
+    ) -> SensitivityResult:
+        """How much one impact score moves when technosphere links are perturbed.
+
+        Each perturbation is a dict
+        ``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
+        ``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
+        so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
+        plus one :class:`PerturbedResult` per perturbation — each carrying
+        either the perturbed impact and its delta, or an ``error`` string when
+        that perturbation could not be resolved.
+        """
+        return SensitivityResult.from_json(
+            self._call(
+                "compute_sensitivity",
+                process_id=process_id,
+                collection=collection,
+                method_id=method_id,
+                body={"perturbations": perturbations},
+            )
+        )
+
+    def score_activities(
+        self,
+        process_ids: list[str],
+        *,
+        collection: str = "methods",
+        top_flows: int | None = None,
+        exclude_long_term: bool | None = None,
+    ) -> BatchScores:
+        """Score many processes in one call (every category of a collection each).
+
+        Returns a :class:`BatchScores`: ``results`` holds one
+        :class:`ScoredActivity` per process the engine could compute, while
+        ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
+        them, a partial result is not an error. ``top_flows`` caps the top
+        contributors per category; ``exclude_long_term`` drops long-term
+        emissions from the totals.
+        """
+        return BatchScores.from_json(
+            self._call(
+                "score_activities",
+                collection=collection,
+                top_flows=top_flows,
+                exclude_long_term=exclude_long_term,
+                body={"processIds": process_ids},
+            )
+        )
 
     # -- Methods --
 
