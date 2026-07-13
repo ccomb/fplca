@@ -860,6 +860,7 @@ class Client:
         resp = self._session.post(
             f"{self.base_url}/api/v1/db/{target}/export",
             json={"format": fmt_norm},
+            headers={"Accept": "application/octet-stream"},
         )
         if resp.status_code >= 400:
             raise VoLCAError(
