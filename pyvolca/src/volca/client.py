@@ -541,6 +541,10 @@ class Client:
         if substitutions:
             method = "POST"
             body = _substitution_body(substitutions)
+        elif body is not None and method not in ("POST", "PUT"):
+            raise VoLCAError(
+                f"operation {operation_id!r} is {method} and takes no JSON body"
+            )
 
         # Send.
         if method == "GET":
