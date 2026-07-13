@@ -139,6 +139,24 @@ client-side so a typo fails before the round-trip with the same message
 shape the engine would have returned."""
 
 
+_REF_DATA_KINDS = frozenset({"flow-synonyms", "compartment-mappings", "units"})
+"""Reference-data families sharing the same ``/api/v1/{kind}`` URL scheme.
+
+Each family exposes list / load / unload / delete / upload at the same
+paths, so the client's reference-data methods take the ``kind`` as an
+argument instead of cloning five methods per family."""
+
+
+def _ref_kind(kind: str) -> str:
+    """Validate a reference-data ``kind``, or raise before any request."""
+    if kind not in _REF_DATA_KINDS:
+        raise VoLCAError(
+            f"unknown reference data kind: {kind!r} "
+            f"(expected {'|'.join(sorted(_REF_DATA_KINDS))})"
+        )
+    return kind
+
+
 _FORMATTED_SCALARS = (str, int, float)
 
 
@@ -1550,6 +1568,208 @@ class Client:
             method_id=method_id,
             limit=limit,
         ))
+
+    # -- Method collections --
+    #
+    # A method collection is an uploaded ILCD method file staged and loaded
+    # independently of any database. Same list/load/unload/delete/upload shape
+    # as reference data below, but its own endpoint family.
+
+    def list_method_collections(self) -> list[dict]:
+        """List every method collection the engine knows (loaded or staged).
+
+        Each entry carries ``name``, ``displayName``, ``status``,
+        ``methodCount`` and ``format``.
+        """
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/method-collections")
+        )
+        return payload["methods"]
+
+    def load_method_collection(self, name: str) -> dict:
+        """Load a staged method collection so its methods become available."""
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/method-collections/{name}/load")
+        )
+        return self._require_success(payload, "load_method_collection")
+
+    def unload_method_collection(self, name: str) -> dict:
+        """Unload a method collection from memory (the staged file is kept)."""
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/method-collections/{name}/unload"
+            )
+        )
+        return self._require_success(payload, "unload_method_collection")
+
+    def delete_method_collection(self, name: str) -> dict:
+        """Delete a method collection: unload it and remove its staged file."""
+        payload = self._json(
+            self._session.delete(f"{self.base_url}/api/v1/method-collections/{name}")
+        )
+        return self._require_success(payload, "delete_method_collection")
+
+    def upload_method_collection(
+        self,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload an ILCD method file as a staged method collection.
+
+        ``source`` is a path to the method archive (or its raw ``bytes``).
+        Same streamed-body + query-param shape as :meth:`upload_database`;
+        returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
+        """
+        return self._upload(
+            "/api/v1/method-collections/upload",
+            source,
+            name,
+            description,
+            "upload_method_collection",
+        )
+
+    # -- Reference data (flow synonyms, compartment mappings, units) --
+    #
+    # Three families, one URL scheme (/api/v1/{kind}/...), so these methods
+    # take the family as a ``kind`` argument. ``kind`` is one of
+    # "flow-synonyms", "compartment-mappings", "units" — validated up front.
+
+    def list_reference_data(self, kind: str) -> list[dict]:
+        """List reference-data sets of one ``kind`` (loaded, staged, or built-in).
+
+        Each entry carries ``name``, ``displayName``, ``status``, ``isAuto``
+        (a built-in bundled set) and ``entryCount``.
+        """
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/{_ref_kind(kind)}")
+        )
+        return payload["items"]
+
+    def load_reference_data(self, kind: str, name: str) -> dict:
+        """Load a staged reference-data set of ``kind`` into memory."""
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}/load")
+        )
+        return self._require_success(payload, "load_reference_data")
+
+    def unload_reference_data(self, kind: str, name: str) -> dict:
+        """Unload a reference-data set of ``kind`` from memory."""
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}/unload"
+            )
+        )
+        return self._require_success(payload, "unload_reference_data")
+
+    def delete_reference_data(self, kind: str, name: str) -> dict:
+        """Delete a reference-data set of ``kind`` and remove its staged file."""
+        payload = self._json(
+            self._session.delete(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}")
+        )
+        return self._require_success(payload, "delete_reference_data")
+
+    def upload_reference_data(
+        self,
+        kind: str,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload a reference-data CSV of ``kind`` as a staged set.
+
+        ``source`` is a path to the CSV (or its raw ``bytes``). Same
+        streamed-body + query-param shape as :meth:`upload_database`.
+        """
+        return self._upload(
+            f"/api/v1/{_ref_kind(kind)}/upload",
+            source,
+            name,
+            description,
+            "upload_reference_data",
+        )
+
+    def get_synonym_groups(self, name: str) -> list[list[str]]:
+        """Return the synonym groups of a flow-synonyms set (lists of aliases)."""
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/flow-synonyms/{name}/groups")
+        )
+        return payload["groups"]
+
+    def download_flow_synonyms(self, name: str) -> bytes:
+        """Download a flow-synonyms set as its raw CSV bytes.
+
+        Raises VoLCAError on an HTTP error (e.g. the set does not exist).
+        """
+        resp = self._session.get(
+            f"{self.base_url}/api/v1/flow-synonyms/{name}/download"
+        )
+        if resp.status_code >= 400:
+            raise VoLCAError(
+                f"download_flow_synonyms failed (HTTP {resp.status_code}): "
+                f"{resp.text[:500]}",
+                status_code=resp.status_code,
+                body=resp.text,
+            )
+        return resp.content
+
+    # -- Flow, method & instance detail --
+
+    def get_flow(self, flow_id: str, db_name: str | None = None) -> FlowDetail:
+        """Detail of one flow: its record, unit, and how many exchanges use it."""
+        target = self._db(db_name)
+        return FlowDetail.from_json(
+            self._json(self._session.get(f"{self.base_url}/api/v1/db/{target}/flow/{flow_id}"))
+        )
+
+    def get_flow_activities(
+        self, flow_id: str, db_name: str | None = None
+    ) -> list[Activity]:
+        """Activities that produce or consume a given flow."""
+        target = self._db(db_name)
+        raw = self._json(
+            self._session.get(f"{self.base_url}/api/v1/db/{target}/flow/{flow_id}/activities")
+        )
+        return [Activity.from_json(a) for a in raw]
+
+    def get_method(self, method_id: str) -> MethodDetail:
+        """Detail of one LCIA method: unit, category, methodology, factor count."""
+        return MethodDetail.from_json(
+            self._json(self._session.get(f"{self.base_url}/api/v1/method/{method_id}"))
+        )
+
+    def get_method_factors(self, method_id: str) -> list[MethodFactor]:
+        """The characterization factors of a method (flow, direction, value)."""
+        raw = self._json(
+            self._session.get(f"{self.base_url}/api/v1/method/{method_id}/factors")
+        )
+        return [MethodFactor.from_json(f) for f in raw]
+
+    def get_mapping_status(
+        self, method_id: str, db_name: str | None = None
+    ) -> MappingStatus:
+        """How well a method's factors map onto a database's biosphere flows.
+
+        Reports the cascade breakdown (matched by UUID / CAS / name / synonym),
+        the ``coverage`` fraction, and the ``unmapped_flows`` still without a CF.
+        """
+        target = self._db(db_name)
+        return MappingStatus.from_json(
+            self._json(
+                self._session.get(
+                    f"{self.base_url}/api/v1/db/{target}/method/{method_id}/mapping"
+                )
+            )
+        )
+
+    def get_stats(self) -> dict:
+        """Return the engine's runtime statistics (memory use, loaded sizes).
+
+        Keys are already snake_case on the wire, so this returns the raw dict.
+        """
+        return self._json(self._session.get(f"{self.base_url}/api/v1/stats"))
 
 
 def _resolve_wire_name(py_name: str, op: _Operation) -> str | None:
