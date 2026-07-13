@@ -353,6 +353,12 @@ class TestDispatcher:
         with pytest.raises(VoLCAError, match="Unknown operationId"):
             client.call("does_not_exist")
 
+    def test_body_on_get_operation_raises(self, mocked_client):
+        client, session = mocked_client
+        with pytest.raises(VoLCAError, match="takes no JSON body"):
+            client.call("list_databases", body={"x": 1})
+        session.get.assert_not_called()
+
     def test_unknown_kwarg_raises(self, mocked_client, make_response):
         client, session = mocked_client
         session.get.return_value = make_response({"dlrDatabases": []})

@@ -406,6 +406,18 @@ Returns the raw JSON (no dataclass wrapping). Use this for
 operations that don't have an ergonomic wrapper yet, or for new
 endpoints added after the installed pyvolca was released.
 
+##### `Client.compute_sensitivity(process_id: str, method_id: str, perturbations: list[dict], *, collection: str = 'methods') -> SensitivityResult`
+
+How much one impact score moves when technosphere links are perturbed.
+
+Each perturbation is a dict
+``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
+``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
+so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
+plus one :class:`PerturbedResult` per perturbation — each carrying
+either the perturbed impact and its delta, or an ``error`` string when
+that perturbation could not be resolved.
+
 ##### `Client.copy_database(new_name: str, db_name: str | None = None) -> dict`
 
 Copy a loaded database in memory under a new name.
@@ -429,6 +441,27 @@ Returns the ``DeleteSelectionResponse`` dict
 (``{"success", "message", "deleted"}``); raises VoLCAError on
 ``success=false``.
 
+##### `Client.delete_database(db_name: str | None = None) -> dict`
+
+Delete a database entirely: unload it and remove its uploaded files.
+
+Returns the ``ActivateResponse`` dict; raises VoLCAError on
+``success=false``.
+
+##### `Client.delete_method_collection(name: str) -> dict`
+
+Delete a method collection: unload it and remove its staged file.
+
+##### `Client.delete_reference_data(kind: RefDataKind, name: str) -> dict`
+
+Delete a reference-data set of ``kind`` and remove its staged file.
+
+##### `Client.download_flow_synonyms(name: str) -> bytes`
+
+Download a flow-synonyms set as its raw CSV bytes.
+
+Raises VoLCAError on an HTTP error (e.g. the set does not exist).
+
 ##### `Client.export_database(fmt: str, db_name: str | None = None) -> bytes`
 
 Export a loaded database, returning the serialized bytes.
@@ -446,6 +479,14 @@ warnings arrive in the ``X-Volca-Export-Warnings`` response header
 ##### `Client.export_to_file(fmt: str, out_path: str, db_name: str | None = None) -> None`
 
 Export a database (see :meth:`export_database`) and write it to a file.
+
+##### `Client.finalize_database(db_name: str | None = None) -> dict`
+
+Build matrices for a staged database and load it (``ActivateResponse``).
+
+Call after dependencies resolve (:meth:`get_setup` reports
+``isReady``). Raises VoLCAError if the engine reports ``success=false``
+(e.g. unresolved suppliers).
 
 ##### `Client.get_activity(process_id: str) -> ActivityDetail`
 
@@ -498,6 +539,14 @@ Returns a :class:`ContributingFlows`. Caveat: the engine does not
 report the total flow count, so pyvolca cannot derive ``has_more``
 from the response. Pass a generous ``limit`` if you need exhaustive
 coverage and inspect ``share_pct`` totals.
+
+##### `Client.get_flow(flow_id: str, db_name: str | None = None) -> FlowDetail`
+
+Detail of one flow: its record, unit, and how many exchanges use it.
+
+##### `Client.get_flow_activities(flow_id: str, db_name: str | None = None) -> list[Activity]`
+
+Activities that produce or consume a given flow.
 
 ##### `Client.get_flow_mapping(method_id: str) -> FlowMapping`
 
@@ -556,6 +605,21 @@ Args:
         otherwise — the engine doesn't paginate this endpoint.)
     substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
 
+##### `Client.get_mapping_status(method_id: str, db_name: str | None = None) -> MappingStatus`
+
+How well a method's factors map onto a database's biosphere flows.
+
+Reports the cascade breakdown (matched by UUID / CAS / name / synonym),
+the ``coverage`` fraction, and the ``unmapped_flows`` still without a CF.
+
+##### `Client.get_method(method_id: str) -> MethodDetail`
+
+Detail of one LCIA method: unit, category, methodology, factor count.
+
+##### `Client.get_method_factors(method_id: str) -> list[MethodFactor]`
+
+The characterization factors of a method (flow, direction, value).
+
 ##### `Client.get_outputs(process_id: str) -> list[Exchange]`
 
 Return the output exchanges of an activity. See :meth:`get_inputs` for notes.
@@ -567,6 +631,21 @@ Find the shortest upstream path from process to first activity whose name matche
 Returns a PathResult whose path is ordered root → target. Each step
 includes cumulative_quantity, scaling_factor, and (except the root)
 local_step_ratio.
+
+##### `Client.get_setup(db_name: str | None = None) -> dict`
+
+Setup status of a staged or loaded database (``DatabaseSetupInfo``).
+
+Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
+and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
+(declared deps), ``dataPath`` / ``availablePaths`` (the selected data
+file and the alternatives — see :meth:`set_data_path`), ``completeness``.
+
+##### `Client.get_stats()`
+
+Return the engine's runtime statistics (memory use, loaded sizes).
+
+Keys are already snake_case on the wire, so this returns the raw dict.
 
 ##### `Client.get_supply_chain(process_id: str, *, name: str | None = None, location: str | None = None, limit: int | None = None, min_quantity: float | None = None, max_depth: int | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, substitutions: list[SubstitutionLike] | None = None, include_edges: bool | None = None) -> SupplyChain`
 
@@ -587,6 +666,10 @@ Args:
         suppliers. Accepts :class:`Substitution` (preferred) or the
         legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
         is optional — omit it for a global swap.
+
+##### `Client.get_synonym_groups(name: str) -> list[list[str]]`
+
+Return the synonym groups of a flow-synonyms set (lists of aliases).
 
 ##### `Client.get_tree(process_id: str) -> dict`
 
@@ -620,6 +703,13 @@ The typed entries carry ``depends_on``, so callers can derive
 cross-DB dependency sets from declared topology rather than
 hardcoding allowlists.
 
+##### `Client.list_method_collections()`
+
+List every method collection the engine knows (loaded or staged).
+
+Each entry carries ``name``, ``displayName``, ``status``,
+``methodCount`` and ``format``.
+
 ##### `Client.list_methods()`
 
 List every LCIA method available in the engine.
@@ -636,12 +726,27 @@ Each :class:`Preset` carries its ``filters`` (list of
 :class:`PresetFilter` triples). Apply by passing ``preset=p.name``
 to filtering endpoints.
 
+##### `Client.list_reference_data(kind: RefDataKind) -> list[dict]`
+
+List reference-data sets of one ``kind`` (loaded, staged, or built-in).
+
+Each entry carries ``name``, ``displayName``, ``status``, ``isAuto``
+(a built-in bundled set) and ``entryCount``.
+
 ##### `Client.load_database(db_name: str) -> dict`
 
 Load a database into memory so it answers queries.
 
 Declared dependencies are loaded first; has no effect if the
 database is already loaded.
+
+##### `Client.load_method_collection(name: str) -> dict`
+
+Load a staged method collection so its methods become available.
+
+##### `Client.load_reference_data(kind: RefDataKind, name: str) -> dict`
+
+Load a staged reference-data set of ``kind`` into memory.
 
 ##### `Client.refresh_stubs()`
 
@@ -673,6 +778,17 @@ Read a mapping CSV file and call :meth:`relink` with its text.
 Remove ``dep_name`` from the target database's dependencies.
 
 Returns the updated ``DatabaseSetupInfo`` dict.
+
+##### `Client.score_activities(process_ids: list[str], *, collection: str = 'methods', top_flows: int | None = None, exclude_long_term: bool | None = None) -> BatchScores`
+
+Score many processes in one call (every category of a collection each).
+
+Returns a :class:`BatchScores`: ``results`` holds one
+:class:`ScoredActivity` per process the engine could compute, while
+``not_found`` / ``invalid`` list the ids it could not resolve — inspect
+them, a partial result is not an error. ``top_flows`` caps the top
+contributors per category; ``exclude_long_term`` drops long-term
+emissions from the totals.
 
 ##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
 
@@ -722,11 +838,61 @@ Args:
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.
 
+##### `Client.set_data_path(path: str, db_name: str | None = None) -> dict`
+
+Choose which data file a staged multi-file archive should use.
+
+``path`` must be one of the ``availablePaths`` reported by
+:meth:`get_setup`, relative to the upload directory. Returns the
+updated ``DatabaseSetupInfo`` dict.
+
 ##### `Client.unload_database(db_name: str) -> dict`
 
 Unload a database from memory to free RAM. The disk copy is kept.
 
 Refused if another loaded database still depends on it.
+
+##### `Client.unload_method_collection(name: str) -> dict`
+
+Unload a method collection from memory (the staged file is kept).
+
+##### `Client.unload_reference_data(kind: RefDataKind, name: str) -> dict`
+
+Unload a reference-data set of ``kind`` from memory.
+
+##### `Client.upload_database(source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
+
+Upload a database archive; stage it under a generated slug.
+
+``source`` is a path to a ZIP / CSV / XLSX archive (or its raw
+``bytes``); ``name`` is the display name. The engine auto-detects the
+format (EcoSpold 1/2, SimaPro CSV, ILCD, OpenLCA JSON-LD, Brightway
+Excel) and stages the database without loading it.
+
+Returns the ``UploadResponse`` dict
+(``{"success", "message", "slug", "format"}``); ``slug`` is the name
+every later call targets. Then inspect :meth:`get_setup`, wire missing
+dependencies with :meth:`add_dependency`, and call
+:meth:`finalize_database` to build matrices and load it.
+
+Raises VoLCAError on any rejection (uploads disabled on the plan, size
+cap exceeded, unreadable archive) — the engine reports these in-band
+with HTTP 200 and ``success=false``.
+
+##### `Client.upload_method_collection(source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
+
+Upload an ILCD method file as a staged method collection.
+
+``source`` is a path to the method archive (or its raw ``bytes``).
+Same streamed-body + query-param shape as :meth:`upload_database`;
+returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
+
+##### `Client.upload_reference_data(kind: RefDataKind, source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
+
+Upload a reference-data CSV of ``kind`` as a staged set.
+
+``source`` is a path to the CSV (or its raw ``bytes``). Same
+streamed-body + query-param shape as :meth:`upload_database`.
 
 ##### `Client.use(db_name: str) -> 'Client'`
 
@@ -991,6 +1157,21 @@ was set; empty otherwise.
 | `filtered_count` | `int` | — |
 | `groups` | `list[AggregateGroup]` | list() |
 
+### `BatchScores`
+
+Result of :meth:`Client.score_activities` scoring many processes at once.
+
+``results`` carries one :class:`ScoredActivity` per process the engine
+computed; ``not_found`` and ``invalid`` list the process ids it could not
+resolve. A non-empty ``not_found``/``invalid`` is a partial result to
+inspect, not a failure.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `results` | `list[ScoredActivity]` | — |
+| `not_found` | `list[str]` | — |
+| `invalid` | `list[str]` | — |
+
 ### `BiosphereExchange`
 
 An exchange with the environment (resource extraction or emission).
@@ -1220,6 +1401,21 @@ Emitted inside ``LCIAResult.top_contributors``.
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
 
+### `FlowDetail`
+
+Detail of one flow, returned by :meth:`Client.get_flow`.
+
+``flow`` is the raw flow record — a tagged union (technosphere product,
+biosphere flow, waste flow, or unresolved) whose shape depends on its
+kind — kept as a dict rather than forced into one dataclass.
+``usage_count`` is how many exchanges reference it.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow` | `dict` | — |
+| `unit_name` | `str` | — |
+| `usage_count` | `int` | — |
+
 ### `FlowMapping`
 
 CF-coverage report for one method against the current database.
@@ -1372,6 +1568,34 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 | `weighted_score` | `float \| None` | None |
 | `top_contributors` | `list[FlowContribution]` | list() |
 
+### `MappingStatus`
+
+How a method's factors map onto a database's biosphere flows.
+
+Returned by :meth:`Client.get_mapping_status`. The ``mapped_by_*`` counts
+break the match cascade down by stage (UUID, then CAS, then name, then
+synonym); ``coverage`` is the matched percentage (0–100), and
+``unmapped_flows`` lists the factors still without a database flow.
+
+Parsed by hand rather than via the snake-case mixin because the acronym
+runs (``mappedByUUID``, ``mappedByCAS``, ``dbBiosphereCount``) do not
+survive the generic camelCase→snake_case conversion.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method_id` | `str` | — |
+| `method_name` | `str` | — |
+| `total_factors` | `int` | — |
+| `mapped_by_uuid` | `int` | — |
+| `mapped_by_cas` | `int` | — |
+| `mapped_by_name` | `int` | — |
+| `mapped_by_synonym` | `int` | — |
+| `unmapped` | `int` | — |
+| `coverage` | `float` | — |
+| `db_biosphere_count` | `int` | — |
+| `unique_db_flows_matched` | `int` | — |
+| `unmapped_flows` | `list[UnmappedFlow]` | — |
+
 ### `Method`
 
 One LCIA method, returned by :meth:`Client.list_methods`.
@@ -1389,6 +1613,37 @@ is the parent method collection (e.g. ``"ef-31"``), forwarded to
 | `unit` | `str` | — |
 | `factor_count` | `int` | — |
 | `collection` | `str` | — |
+
+### `MethodDetail`
+
+Detail of one LCIA method, returned by :meth:`Client.get_method`.
+
+``factor_count`` is the number of characterization factors; ``methodology``
+and ``description`` are free-text metadata the source may or may not carry.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `id` | `str` | — |
+| `name` | `str` | — |
+| `unit` | `str` | — |
+| `category` | `str` | — |
+| `factor_count` | `int` | — |
+| `description` | `str \| None` | None |
+| `methodology` | `str \| None` | None |
+
+### `MethodFactor`
+
+One characterization factor of a method (:meth:`Client.get_method_factors`).
+
+``direction`` is the flow direction the factor applies to; ``value`` is the
+factor in the method's unit per the flow's unit.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow_ref` | `str` | — |
+| `flow_name` | `str` | — |
+| `direction` | `str` | — |
+| `value` | `float` | — |
 
 ### `PathResult`
 
@@ -1418,6 +1673,23 @@ emits camelCase keys (``processId``, ``activityName``,
 | `scaling_factor` | `float` | — |
 | `local_step_ratio` | `float \| None` | None |
 
+### `PerturbedResult`
+
+One perturbation outcome from :meth:`Client.compute_sensitivity`.
+
+The engine flattens an ``Either`` on the wire: a success carries
+``impact`` and ``delta_impact`` (with ``error`` None), a failure carries
+``error`` (with the other two None). ``perturbation`` echoes the request
+entry — including its ``label`` if one was supplied — so results correlate
+without an out-of-band index.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `perturbation` | `dict` | — |
+| `impact` | `LCIAResult \| None` | — |
+| `delta_impact` | `float \| None` | — |
+| `error` | `str \| None` | — |
+
 ### `Preset`
 
 A named classification preset declared in the engine config.
@@ -1441,6 +1713,19 @@ One filter triple inside a :class:`Preset`.
 | `system` | `str` | — |
 | `value` | `str` | — |
 | `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
+
+### `ScoredActivity`
+
+One process's batch impacts inside a :class:`BatchScores`.
+
+``impacts`` is the same :class:`LCIABatchResult` that
+:meth:`Client.get_impacts_batch` returns for a single process.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `process_id` | `str` | — |
+| `activity_name` | `str` | — |
+| `impacts` | `LCIABatchResult` | — |
 
 ### `ScoringIndicator`
 
@@ -1493,6 +1778,18 @@ materialise eagerly if you prefer.
 ##### `page_size`
 
 Server-applied limit (page size for further fetches).
+
+### `SensitivityResult`
+
+Sensitivity analysis: baseline impact plus one entry per perturbation.
+
+Returned by :meth:`Client.compute_sensitivity`. ``perturbed`` preserves
+the order of the requested perturbations.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `baseline` | `LCIAResult` | — |
+| `perturbed` | `list[PerturbedResult]` | — |
 
 ### `ServerVersion`
 
@@ -1632,6 +1929,16 @@ True for reference roles (``REFERENCE_PRODUCT`` / ``REFERENCE_INPUT``).
 The reference exchange is the one that defines the activity's
 functional unit — the basis the LCA result is normalised to.
 
+### `UnmappedFlow`
+
+A method factor with no matching database flow (in :class:`MappingStatus`).
+
+| Field | Type | Default |
+|-------|------|---------|
+| `flow_ref` | `str` | — |
+| `flow_name` | `str` | — |
+| `direction` | `str` | — |
+
 ### `WasteExchange`
 
 An exchange of a waste flow with a treatment activity.
@@ -1698,6 +2005,10 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
+
+### `RefDataKind`
+
+Type alias: `Literal['flow-synonyms', 'compartment-mappings', 'units']`.
 
 <!-- END: api-reference -->
 

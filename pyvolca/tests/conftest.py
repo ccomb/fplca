@@ -118,6 +118,28 @@ def fixture_spec() -> dict[str, Any]:
             "/api/v1/presets": {
                 "get": {"operationId": "list_presets", "parameters": []},
             },
+            "/api/v1/db/{dbName}/activity/{processId}/sensitivity/{collection}/{methodId}": {
+                "post": {
+                    "operationId": "compute_sensitivity",
+                    "parameters": [
+                        {"name": "dbName", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {"name": "processId", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {"name": "collection", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {"name": "methodId", "in": "path", "required": True, "schema": {"type": "string"}},
+                    ],
+                },
+            },
+            "/api/v1/db/{dbName}/impacts/{collection}": {
+                "post": {
+                    "operationId": "score_activities",
+                    "parameters": [
+                        {"name": "dbName", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {"name": "collection", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {"name": "top-flows", "in": "query", "required": False, "schema": {"type": "integer"}},
+                        {"name": "exclude-long-term", "in": "query", "required": False, "schema": {"type": "boolean"}},
+                    ],
+                },
+            },
         },
     }
 

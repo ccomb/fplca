@@ -373,6 +373,95 @@ class LCIABatchResult:
         )
 
 
+@dataclass
+class PerturbedResult:
+    """One perturbation outcome from :meth:`Client.compute_sensitivity`.
+
+    The engine flattens an ``Either`` on the wire: a success carries
+    ``impact`` and ``delta_impact`` (with ``error`` None), a failure carries
+    ``error`` (with the other two None). ``perturbation`` echoes the request
+    entry — including its ``label`` if one was supplied — so results correlate
+    without an out-of-band index.
+    """
+
+    perturbation: dict
+    impact: "LCIAResult | None"
+    delta_impact: "float | None"
+    error: "str | None"
+
+    @classmethod
+    def from_json(cls, d: dict) -> "PerturbedResult":
+        raw_impact = d.get("impact")
+        return cls(
+            perturbation=d["perturbation"],
+            impact=LCIAResult.from_json(raw_impact) if raw_impact is not None else None,
+            delta_impact=d.get("deltaImpact"),
+            error=d.get("error"),
+        )
+
+
+@dataclass
+class SensitivityResult:
+    """Sensitivity analysis: baseline impact plus one entry per perturbation.
+
+    Returned by :meth:`Client.compute_sensitivity`. ``perturbed`` preserves
+    the order of the requested perturbations.
+    """
+
+    baseline: LCIAResult
+    perturbed: list[PerturbedResult]
+
+    @classmethod
+    def from_json(cls, d: dict) -> "SensitivityResult":
+        return cls(
+            baseline=LCIAResult.from_json(d["baseline"]),
+            perturbed=[PerturbedResult.from_json(p) for p in d["perturbed"]],
+        )
+
+
+@dataclass
+class ScoredActivity:
+    """One process's batch impacts inside a :class:`BatchScores`.
+
+    ``impacts`` is the same :class:`LCIABatchResult` that
+    :meth:`Client.get_impacts_batch` returns for a single process.
+    """
+
+    process_id: str
+    activity_name: str
+    impacts: LCIABatchResult
+
+
+@dataclass
+class BatchScores:
+    """Result of :meth:`Client.score_activities` scoring many processes at once.
+
+    ``results`` carries one :class:`ScoredActivity` per process the engine
+    computed; ``not_found`` and ``invalid`` list the process ids it could not
+    resolve. A non-empty ``not_found``/``invalid`` is a partial result to
+    inspect, not a failure.
+    """
+
+    results: list[ScoredActivity]
+    not_found: list[str]
+    invalid: list[str]
+
+    @classmethod
+    def from_json(cls, d: dict) -> "BatchScores":
+        return cls(
+            results=[
+                ScoredActivity(
+                    process_id=r["processId"],
+                    activity_name=r["activityName"],
+                    impacts=LCIABatchResult.from_json(r["impacts"]),
+                )
+                for r in d["results"]
+            ],
+            not_found=d["notFound"],
+            invalid=d["invalid"],
+        )
+
+
 class MatchMode(_StrEnum):
     """How a :class:`ClassificationFilter` value is compared against the entry.
 
@@ -1537,4 +1626,112 @@ class InventoryResult:
             resource_flows=meta["resourceFlows"],
             flows=[InventoryFlow.from_json(f) for f in d.get("flows", [])],
             statistics=InventoryStatistics.from_json(d["statistics"]),
+        )
+
+
+@dataclass
+class FlowDetail:
+    """Detail of one flow, returned by :meth:`Client.get_flow`.
+
+    ``flow`` is the raw flow record — a tagged union (technosphere product,
+    biosphere flow, waste flow, or unresolved) whose shape depends on its
+    kind — kept as a dict rather than forced into one dataclass.
+    ``usage_count`` is how many exchanges reference it.
+    """
+
+    flow: dict
+    unit_name: str
+    usage_count: int
+
+    @classmethod
+    def from_json(cls, d: dict) -> "FlowDetail":
+        return cls(
+            flow=d["flow"],
+            unit_name=d["unitName"],
+            usage_count=d["usageCount"],
+        )
+
+
+@dataclass
+class MethodDetail(FromJson):
+    """Detail of one LCIA method, returned by :meth:`Client.get_method`.
+
+    ``factor_count`` is the number of characterization factors; ``methodology``
+    and ``description`` are free-text metadata the source may or may not carry.
+    """
+
+    id: str
+    name: str
+    unit: str
+    category: str
+    factor_count: int
+    description: "str | None" = None
+    methodology: "str | None" = None
+
+
+@dataclass
+class MethodFactor(FromJson):
+    """One characterization factor of a method (:meth:`Client.get_method_factors`).
+
+    ``direction`` is the flow direction the factor applies to; ``value`` is the
+    factor in the method's unit per the flow's unit.
+    """
+
+    flow_ref: str
+    flow_name: str
+    direction: str
+    value: float
+
+
+@dataclass
+class UnmappedFlow(FromJson):
+    """A method factor with no matching database flow (in :class:`MappingStatus`)."""
+
+    flow_ref: str
+    flow_name: str
+    direction: str
+
+
+@dataclass
+class MappingStatus:
+    """How a method's factors map onto a database's biosphere flows.
+
+    Returned by :meth:`Client.get_mapping_status`. The ``mapped_by_*`` counts
+    break the match cascade down by stage (UUID, then CAS, then name, then
+    synonym); ``coverage`` is the matched percentage (0–100), and
+    ``unmapped_flows`` lists the factors still without a database flow.
+
+    Parsed by hand rather than via the snake-case mixin because the acronym
+    runs (``mappedByUUID``, ``mappedByCAS``, ``dbBiosphereCount``) do not
+    survive the generic camelCase→snake_case conversion.
+    """
+
+    method_id: str
+    method_name: str
+    total_factors: int
+    mapped_by_uuid: int
+    mapped_by_cas: int
+    mapped_by_name: int
+    mapped_by_synonym: int
+    unmapped: int
+    coverage: float
+    db_biosphere_count: int
+    unique_db_flows_matched: int
+    unmapped_flows: list[UnmappedFlow]
+
+    @classmethod
+    def from_json(cls, d: dict) -> "MappingStatus":
+        return cls(
+            method_id=d["methodId"],
+            method_name=d["methodName"],
+            total_factors=d["totalFactors"],
+            mapped_by_uuid=d["mappedByUUID"],
+            mapped_by_cas=d["mappedByCAS"],
+            mapped_by_name=d["mappedByName"],
+            mapped_by_synonym=d["mappedBySynonym"],
+            unmapped=d["unmapped"],
+            coverage=d["coverage"],
+            db_biosphere_count=d["dbBiosphereCount"],
+            unique_db_flows_matched=d["uniqueDbFlowsMatched"],
+            unmapped_flows=[UnmappedFlow.from_json(u) for u in d["unmappedFlows"]],
         )

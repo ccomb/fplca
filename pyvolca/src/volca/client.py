@@ -43,7 +43,7 @@ import urllib.parse
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import requests
 
@@ -53,6 +53,7 @@ from .types import (
     AggregateOp,
     AggregateResult,
     AggregateScope,
+    BatchScores,
     CharacterizationResult,
     ClassificationFilter,
     ClassificationSystem,
@@ -63,16 +64,21 @@ from .types import (
     DatabaseInfo,
     Exchange,
     Flow,
+    FlowDetail,
     FlowMapping,
     InventoryResult,
     LCIABatchResult,
     LCIAResult,
+    MappingStatus,
     MatchMode,
     MatchModeLike,
     Method,
+    MethodDetail,
+    MethodFactor,
     PathResult,
     Preset,
     SearchResults,
+    SensitivityResult,
     ServerVersion,
     Substitution,
     SupplyChain,
@@ -131,6 +137,28 @@ _EXPORT_FORMATS = frozenset(
 Mirrors the engine's ``parseExportFormat`` (case-folded). Validated
 client-side so a typo fails before the round-trip with the same message
 shape the engine would have returned."""
+
+
+RefDataKind = Literal["flow-synonyms", "compartment-mappings", "units"]
+"""Reference-data families sharing the same ``/api/v1/{kind}`` URL scheme.
+
+Each family exposes list / load / unload / delete / upload at the same
+paths, so the client's reference-data methods take the ``kind`` as an
+argument instead of cloning five methods per family. The Literal lets
+pyright reject a typo at check time; ``_ref_kind`` still validates at
+runtime for untyped callers."""
+
+_REF_DATA_KINDS = frozenset(get_args(RefDataKind))
+
+
+def _ref_kind(kind: str) -> str:
+    """Validate a reference-data ``kind``, or raise before any request."""
+    if kind not in _REF_DATA_KINDS:
+        raise VoLCAError(
+            f"unknown reference data kind: {kind!r} "
+            f"(expected {'|'.join(sorted(_REF_DATA_KINDS))})"
+        )
+    return kind
 
 
 _FORMATTED_SCALARS = (str, int, float)
@@ -425,6 +453,7 @@ class Client:
         operation_id: str,
         *,
         substitutions: list[SubstitutionLike] | None = None,
+        body: dict | None = None,
         **kwargs: Any,
     ) -> Any:
         """Dispatch an OpenAPI operation by ``operationId``.
@@ -435,9 +464,11 @@ class Client:
         instance's ``self.db`` when the operation expects ``dbName`` and
         it wasn't explicitly passed.
 
-        If ``substitutions`` is given and the spec's path supports POST
-        with a ``SubstitutionRequest`` body, the operation is upgraded
-        from GET to POST.
+        ``body`` is the JSON request body for operations the spec declares
+        as POST (e.g. ``compute_sensitivity``, ``score_activities``). If
+        ``substitutions`` is given instead, the operation is upgraded from
+        GET to POST with a ``SubstitutionRequest`` body — the two are
+        mutually exclusive and ``substitutions`` wins.
         """
         ops = self._load_operations()
         op = ops.get(operation_id)
@@ -504,12 +535,16 @@ class Client:
             url_path = url_path.replace("{" + name + "}", str(value))
         url = self.base_url + url_path
 
-        # Upgrade to POST when substitutions are supplied.
+        # Upgrade to POST when substitutions are supplied; otherwise an
+        # explicit body (spec-declared POST operations) is sent as-is.
         method = op.method
-        body: dict | None = None
         if substitutions:
             method = "POST"
             body = _substitution_body(substitutions)
+        elif body is not None and method not in ("POST", "PUT"):
+            raise VoLCAError(
+                f"operation {operation_id!r} is {method} and takes no JSON body"
+            )
 
         # Send.
         if method == "GET":
@@ -680,6 +715,43 @@ class Client:
             )
         return payload
 
+    def _upload(
+        self,
+        url_path: str,
+        source: str | Path | bytes,
+        name: str,
+        description: str | None,
+        action: str,
+    ) -> dict:
+        """POST an octet-stream upload; metadata travels in query params.
+
+        ``source`` is a filesystem path (streamed from disk by ``requests``,
+        never fully read into memory) or raw ``bytes``. Shared by every
+        upload endpoint — databases, method collections, and each reference
+        data family — since they all take the same query-param + streamed
+        body shape.
+
+        The engine reports rejections in-band (HTTP 200 with
+        ``success=false``: missing name, plan cap reached, file too large,
+        extraction failure), so failures surface through _require_success
+        rather than an HTTP error.
+        """
+        params: dict = {"name": name}
+        if description:
+            params["description"] = description
+        headers = {"Content-Type": "application/octet-stream"}
+        url = f"{self.base_url}{url_path}"
+        if isinstance(source, bytes):
+            payload = self._json(
+                self._session.post(url, params=params, data=source, headers=headers)
+            )
+        else:
+            with open(source, "rb") as fh:
+                payload = self._json(
+                    self._session.post(url, params=params, data=fh, headers=headers)
+                )
+        return self._require_success(payload, action)
+
     def copy_database(self, new_name: str, db_name: str | None = None) -> dict:
         """Copy a loaded database in memory under a new name.
 
@@ -830,6 +902,90 @@ class Client:
                 f"{self.base_url}/api/v1/db/{target}/remove-dependency/{dep_name}"
             )
         )
+
+    # -- Upload & staged-database lifecycle --
+    #
+    # An uploaded database lands *staged*: extracted and format-detected, but
+    # not loaded. The path from archive to a usable database is
+    #   upload_database → get_setup (see what deps are missing) →
+    #   add_dependency (wire each) → finalize_database (build matrices, load).
+    # set_data_path picks the data file when the archive holds several.
+
+    def upload_database(
+        self,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload a database archive; stage it under a generated slug.
+
+        ``source`` is a path to a ZIP / CSV / XLSX archive (or its raw
+        ``bytes``); ``name`` is the display name. The engine auto-detects the
+        format (EcoSpold 1/2, SimaPro CSV, ILCD, OpenLCA JSON-LD, Brightway
+        Excel) and stages the database without loading it.
+
+        Returns the ``UploadResponse`` dict
+        (``{"success", "message", "slug", "format"}``); ``slug`` is the name
+        every later call targets. Then inspect :meth:`get_setup`, wire missing
+        dependencies with :meth:`add_dependency`, and call
+        :meth:`finalize_database` to build matrices and load it.
+
+        Raises VoLCAError on any rejection (uploads disabled on the plan, size
+        cap exceeded, unreadable archive) — the engine reports these in-band
+        with HTTP 200 and ``success=false``.
+        """
+        return self._upload(
+            "/api/v1/db/upload", source, name, description, "upload_database"
+        )
+
+    def get_setup(self, db_name: str | None = None) -> dict:
+        """Setup status of a staged or loaded database (``DatabaseSetupInfo``).
+
+        Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
+        and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
+        (declared deps), ``dataPath`` / ``availablePaths`` (the selected data
+        file and the alternatives — see :meth:`set_data_path`), ``completeness``.
+        """
+        target = self._db(db_name)
+        return self._json(self._session.get(f"{self.base_url}/api/v1/db/{target}/setup"))
+
+    def set_data_path(self, path: str, db_name: str | None = None) -> dict:
+        """Choose which data file a staged multi-file archive should use.
+
+        ``path`` must be one of the ``availablePaths`` reported by
+        :meth:`get_setup`, relative to the upload directory. Returns the
+        updated ``DatabaseSetupInfo`` dict.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/set-data-path", json={"path": path}
+            )
+        )
+
+    def finalize_database(self, db_name: str | None = None) -> dict:
+        """Build matrices for a staged database and load it (``ActivateResponse``).
+
+        Call after dependencies resolve (:meth:`get_setup` reports
+        ``isReady``). Raises VoLCAError if the engine reports ``success=false``
+        (e.g. unresolved suppliers).
+        """
+        target = self._db(db_name)
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/db/{target}/finalize")
+        )
+        return self._require_success(payload, "finalize_database")
+
+    def delete_database(self, db_name: str | None = None) -> dict:
+        """Delete a database entirely: unload it and remove its uploaded files.
+
+        Returns the ``ActivateResponse`` dict; raises VoLCAError on
+        ``success=false``.
+        """
+        target = self._db(db_name)
+        payload = self._json(self._session.delete(f"{self.base_url}/api/v1/db/{target}"))
+        return self._require_success(payload, "delete_database")
 
     def list_presets(self) -> list[Preset]:
         """List classification presets configured in this instance.
@@ -1282,6 +1438,61 @@ class Client:
             r = self._session.get(url)
         return LCIABatchResult.from_json(self._json(r))
 
+    def compute_sensitivity(
+        self,
+        process_id: str,
+        method_id: str,
+        perturbations: list[dict],
+        *,
+        collection: str = "methods",
+    ) -> SensitivityResult:
+        """How much one impact score moves when technosphere links are perturbed.
+
+        Each perturbation is a dict
+        ``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
+        ``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
+        so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
+        plus one :class:`PerturbedResult` per perturbation — each carrying
+        either the perturbed impact and its delta, or an ``error`` string when
+        that perturbation could not be resolved.
+        """
+        return SensitivityResult.from_json(
+            self._call(
+                "compute_sensitivity",
+                process_id=process_id,
+                collection=collection,
+                method_id=method_id,
+                body={"perturbations": perturbations},
+            )
+        )
+
+    def score_activities(
+        self,
+        process_ids: list[str],
+        *,
+        collection: str = "methods",
+        top_flows: int | None = None,
+        exclude_long_term: bool | None = None,
+    ) -> BatchScores:
+        """Score many processes in one call (every category of a collection each).
+
+        Returns a :class:`BatchScores`: ``results`` holds one
+        :class:`ScoredActivity` per process the engine could compute, while
+        ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
+        them, a partial result is not an error. ``top_flows`` caps the top
+        contributors per category; ``exclude_long_term`` drops long-term
+        emissions from the totals.
+        """
+        return BatchScores.from_json(
+            self._call(
+                "score_activities",
+                collection=collection,
+                top_flows=top_flows,
+                exclude_long_term=exclude_long_term,
+                body={"processIds": process_ids},
+            )
+        )
+
     # -- Methods --
 
     def list_methods(self) -> list[Method]:
@@ -1365,6 +1576,208 @@ class Client:
             method_id=method_id,
             limit=limit,
         ))
+
+    # -- Method collections --
+    #
+    # A method collection is an uploaded ILCD method file staged and loaded
+    # independently of any database. Same list/load/unload/delete/upload shape
+    # as reference data below, but its own endpoint family.
+
+    def list_method_collections(self) -> list[dict]:
+        """List every method collection the engine knows (loaded or staged).
+
+        Each entry carries ``name``, ``displayName``, ``status``,
+        ``methodCount`` and ``format``.
+        """
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/method-collections")
+        )
+        return payload["methods"]
+
+    def load_method_collection(self, name: str) -> dict:
+        """Load a staged method collection so its methods become available."""
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/method-collections/{name}/load")
+        )
+        return self._require_success(payload, "load_method_collection")
+
+    def unload_method_collection(self, name: str) -> dict:
+        """Unload a method collection from memory (the staged file is kept)."""
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/method-collections/{name}/unload"
+            )
+        )
+        return self._require_success(payload, "unload_method_collection")
+
+    def delete_method_collection(self, name: str) -> dict:
+        """Delete a method collection: unload it and remove its staged file."""
+        payload = self._json(
+            self._session.delete(f"{self.base_url}/api/v1/method-collections/{name}")
+        )
+        return self._require_success(payload, "delete_method_collection")
+
+    def upload_method_collection(
+        self,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload an ILCD method file as a staged method collection.
+
+        ``source`` is a path to the method archive (or its raw ``bytes``).
+        Same streamed-body + query-param shape as :meth:`upload_database`;
+        returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
+        """
+        return self._upload(
+            "/api/v1/method-collections/upload",
+            source,
+            name,
+            description,
+            "upload_method_collection",
+        )
+
+    # -- Reference data (flow synonyms, compartment mappings, units) --
+    #
+    # Three families, one URL scheme (/api/v1/{kind}/...), so these methods
+    # take the family as a ``kind`` argument. ``kind`` is one of
+    # "flow-synonyms", "compartment-mappings", "units" — validated up front.
+
+    def list_reference_data(self, kind: RefDataKind) -> list[dict]:
+        """List reference-data sets of one ``kind`` (loaded, staged, or built-in).
+
+        Each entry carries ``name``, ``displayName``, ``status``, ``isAuto``
+        (a built-in bundled set) and ``entryCount``.
+        """
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/{_ref_kind(kind)}")
+        )
+        return payload["items"]
+
+    def load_reference_data(self, kind: RefDataKind, name: str) -> dict:
+        """Load a staged reference-data set of ``kind`` into memory."""
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}/load")
+        )
+        return self._require_success(payload, "load_reference_data")
+
+    def unload_reference_data(self, kind: RefDataKind, name: str) -> dict:
+        """Unload a reference-data set of ``kind`` from memory."""
+        payload = self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}/unload"
+            )
+        )
+        return self._require_success(payload, "unload_reference_data")
+
+    def delete_reference_data(self, kind: RefDataKind, name: str) -> dict:
+        """Delete a reference-data set of ``kind`` and remove its staged file."""
+        payload = self._json(
+            self._session.delete(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}")
+        )
+        return self._require_success(payload, "delete_reference_data")
+
+    def upload_reference_data(
+        self,
+        kind: RefDataKind,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload a reference-data CSV of ``kind`` as a staged set.
+
+        ``source`` is a path to the CSV (or its raw ``bytes``). Same
+        streamed-body + query-param shape as :meth:`upload_database`.
+        """
+        return self._upload(
+            f"/api/v1/{_ref_kind(kind)}/upload",
+            source,
+            name,
+            description,
+            "upload_reference_data",
+        )
+
+    def get_synonym_groups(self, name: str) -> list[list[str]]:
+        """Return the synonym groups of a flow-synonyms set (lists of aliases)."""
+        payload = self._json(
+            self._session.get(f"{self.base_url}/api/v1/flow-synonyms/{name}/groups")
+        )
+        return payload["groups"]
+
+    def download_flow_synonyms(self, name: str) -> bytes:
+        """Download a flow-synonyms set as its raw CSV bytes.
+
+        Raises VoLCAError on an HTTP error (e.g. the set does not exist).
+        """
+        resp = self._session.get(
+            f"{self.base_url}/api/v1/flow-synonyms/{name}/download"
+        )
+        if resp.status_code >= 400:
+            raise VoLCAError(
+                f"download_flow_synonyms failed (HTTP {resp.status_code}): "
+                f"{resp.text[:500]}",
+                status_code=resp.status_code,
+                body=resp.text,
+            )
+        return resp.content
+
+    # -- Flow, method & instance detail --
+
+    def get_flow(self, flow_id: str, db_name: str | None = None) -> FlowDetail:
+        """Detail of one flow: its record, unit, and how many exchanges use it."""
+        target = self._db(db_name)
+        return FlowDetail.from_json(
+            self._json(self._session.get(f"{self.base_url}/api/v1/db/{target}/flow/{flow_id}"))
+        )
+
+    def get_flow_activities(
+        self, flow_id: str, db_name: str | None = None
+    ) -> list[Activity]:
+        """Activities that produce or consume a given flow."""
+        target = self._db(db_name)
+        raw = self._json(
+            self._session.get(f"{self.base_url}/api/v1/db/{target}/flow/{flow_id}/activities")
+        )
+        return [Activity.from_json(a) for a in raw]
+
+    def get_method(self, method_id: str) -> MethodDetail:
+        """Detail of one LCIA method: unit, category, methodology, factor count."""
+        return MethodDetail.from_json(
+            self._json(self._session.get(f"{self.base_url}/api/v1/method/{method_id}"))
+        )
+
+    def get_method_factors(self, method_id: str) -> list[MethodFactor]:
+        """The characterization factors of a method (flow, direction, value)."""
+        raw = self._json(
+            self._session.get(f"{self.base_url}/api/v1/method/{method_id}/factors")
+        )
+        return [MethodFactor.from_json(f) for f in raw]
+
+    def get_mapping_status(
+        self, method_id: str, db_name: str | None = None
+    ) -> MappingStatus:
+        """How well a method's factors map onto a database's biosphere flows.
+
+        Reports the cascade breakdown (matched by UUID / CAS / name / synonym),
+        the ``coverage`` fraction, and the ``unmapped_flows`` still without a CF.
+        """
+        target = self._db(db_name)
+        return MappingStatus.from_json(
+            self._json(
+                self._session.get(
+                    f"{self.base_url}/api/v1/db/{target}/method/{method_id}/mapping"
+                )
+            )
+        )
+
+    def get_stats(self) -> dict:
+        """Return the engine's runtime statistics (memory use, loaded sizes).
+
+        Keys are already snake_case on the wire, so this returns the raw dict.
+        """
+        return self._json(self._session.get(f"{self.base_url}/api/v1/stats"))
 
 
 def _resolve_wire_name(py_name: str, op: _Operation) -> str | None:
