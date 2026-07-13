@@ -4,7 +4,7 @@ See https://volca.run/docs/guides/pyvolca/ for the full guide.
 """
 
 from ._download import DownloadError, Installed, download
-from .client import Client, VoLCAError
+from .client import Client, RefDataKind, VoLCAError
 from .compare import ActivityDiff, ActivityDiffRow, compare_activities
 from .server import Server
 from .types import (
@@ -113,6 +113,7 @@ __all__ = [
     "PerturbedResult",
     "Preset",
     "PresetFilter",
+    "RefDataKind",
     "ScoredActivity",
     "ScoringIndicator",
     "SearchResults",

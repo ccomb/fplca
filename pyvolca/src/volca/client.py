@@ -43,7 +43,7 @@ import urllib.parse
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import requests
 
@@ -139,12 +139,16 @@ client-side so a typo fails before the round-trip with the same message
 shape the engine would have returned."""
 
 
-_REF_DATA_KINDS = frozenset({"flow-synonyms", "compartment-mappings", "units"})
+RefDataKind = Literal["flow-synonyms", "compartment-mappings", "units"]
 """Reference-data families sharing the same ``/api/v1/{kind}`` URL scheme.
 
 Each family exposes list / load / unload / delete / upload at the same
 paths, so the client's reference-data methods take the ``kind`` as an
-argument instead of cloning five methods per family."""
+argument instead of cloning five methods per family. The Literal lets
+pyright reject a typo at check time; ``_ref_kind`` still validates at
+runtime for untyped callers."""
+
+_REF_DATA_KINDS = frozenset(get_args(RefDataKind))
 
 
 def _ref_kind(kind: str) -> str:
@@ -1636,7 +1640,7 @@ class Client:
     # take the family as a ``kind`` argument. ``kind`` is one of
     # "flow-synonyms", "compartment-mappings", "units" — validated up front.
 
-    def list_reference_data(self, kind: str) -> list[dict]:
+    def list_reference_data(self, kind: RefDataKind) -> list[dict]:
         """List reference-data sets of one ``kind`` (loaded, staged, or built-in).
 
         Each entry carries ``name``, ``displayName``, ``status``, ``isAuto``
@@ -1647,14 +1651,14 @@ class Client:
         )
         return payload["items"]
 
-    def load_reference_data(self, kind: str, name: str) -> dict:
+    def load_reference_data(self, kind: RefDataKind, name: str) -> dict:
         """Load a staged reference-data set of ``kind`` into memory."""
         payload = self._json(
             self._session.post(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}/load")
         )
         return self._require_success(payload, "load_reference_data")
 
-    def unload_reference_data(self, kind: str, name: str) -> dict:
+    def unload_reference_data(self, kind: RefDataKind, name: str) -> dict:
         """Unload a reference-data set of ``kind`` from memory."""
         payload = self._json(
             self._session.post(
@@ -1663,7 +1667,7 @@ class Client:
         )
         return self._require_success(payload, "unload_reference_data")
 
-    def delete_reference_data(self, kind: str, name: str) -> dict:
+    def delete_reference_data(self, kind: RefDataKind, name: str) -> dict:
         """Delete a reference-data set of ``kind`` and remove its staged file."""
         payload = self._json(
             self._session.delete(f"{self.base_url}/api/v1/{_ref_kind(kind)}/{name}")
@@ -1672,7 +1676,7 @@ class Client:
 
     def upload_reference_data(
         self,
-        kind: str,
+        kind: RefDataKind,
         source: str | Path | bytes,
         name: str,
         *,

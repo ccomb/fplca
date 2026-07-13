@@ -452,7 +452,7 @@ Returns the ``ActivateResponse`` dict; raises VoLCAError on
 
 Delete a method collection: unload it and remove its staged file.
 
-##### `Client.delete_reference_data(kind: str, name: str) -> dict`
+##### `Client.delete_reference_data(kind: RefDataKind, name: str) -> dict`
 
 Delete a reference-data set of ``kind`` and remove its staged file.
 
@@ -726,7 +726,7 @@ Each :class:`Preset` carries its ``filters`` (list of
 :class:`PresetFilter` triples). Apply by passing ``preset=p.name``
 to filtering endpoints.
 
-##### `Client.list_reference_data(kind: str) -> list[dict]`
+##### `Client.list_reference_data(kind: RefDataKind) -> list[dict]`
 
 List reference-data sets of one ``kind`` (loaded, staged, or built-in).
 
@@ -744,7 +744,7 @@ database is already loaded.
 
 Load a staged method collection so its methods become available.
 
-##### `Client.load_reference_data(kind: str, name: str) -> dict`
+##### `Client.load_reference_data(kind: RefDataKind, name: str) -> dict`
 
 Load a staged reference-data set of ``kind`` into memory.
 
@@ -856,7 +856,7 @@ Refused if another loaded database still depends on it.
 
 Unload a method collection from memory (the staged file is kept).
 
-##### `Client.unload_reference_data(kind: str, name: str) -> dict`
+##### `Client.unload_reference_data(kind: RefDataKind, name: str) -> dict`
 
 Unload a reference-data set of ``kind`` from memory.
 
@@ -887,7 +887,7 @@ Upload an ILCD method file as a staged method collection.
 Same streamed-body + query-param shape as :meth:`upload_database`;
 returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
 
-##### `Client.upload_reference_data(kind: str, source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
+##### `Client.upload_reference_data(kind: RefDataKind, source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
 
 Upload a reference-data CSV of ``kind`` as a staged set.
 
@@ -2005,6 +2005,10 @@ Returns:
 ### `Exchange`
 
 Type alias: `Union[TechnosphereExchange, BiosphereExchange, WasteExchange]`.
+
+### `RefDataKind`
+
+Type alias: `Literal['flow-synonyms', 'compartment-mappings', 'units']`.
 
 <!-- END: api-reference -->
 
