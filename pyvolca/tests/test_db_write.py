@@ -211,6 +211,9 @@ class TestExport:
         url = session.post.call_args[0][0]
         assert url == "http://test.local/api/v1/db/testdb/export"
         assert session.post.call_args[1]["json"] == {"format": "ecospold2"}
+        assert session.post.call_args[1]["headers"] == {
+            "Accept": "application/octet-stream"
+        }
 
     def test_format_normalized_before_send(self, mocked_client):
         client, session = mocked_client
