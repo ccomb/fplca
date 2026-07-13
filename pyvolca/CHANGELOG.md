@@ -18,6 +18,29 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.8.0] - 2026-07-14
+
+### Added
+
+- **Upload a database from Python.** `upload_database` streams an archive to a
+  running engine, then `get_setup`, `set_data_path`, `finalize_database`, and
+  `delete_database` drive it through the staged setup — a notebook can now feed
+  the engine and score against its own data without leaving Python.
+- **Batch and sensitivity analysis** to match the MCP tools: `score_activities`
+  scores many processes at once, `compute_sensitivity` varies an input and
+  reports the swing. Both return typed results (`BatchScores`,
+  `SensitivityResult`).
+- **Method collections** — list, load, unload, delete, and upload the
+  characterization-method sets the engine applies.
+- **Reference data** — read and manage flow synonyms, compartment mappings, and
+  units (selected by a validated `kind`), plus synonym groups and a CSV export.
+- **Detail lookups** — `get_flow`, `get_flow_activities`, `get_method`,
+  `get_method_factors`, `get_mapping_status`, and `get_stats` for inspecting a
+  single flow, method, or the loaded databases.
+
+The client now covers the engine's full HTTP surface, closing a gap where 25 of
+roughly 60 endpoints were reachable.
+
 ## [0.7.2] - 2026-07-08
 
 ### Added
