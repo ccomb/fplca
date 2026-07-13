@@ -680,6 +680,43 @@ class Client:
             )
         return payload
 
+    def _upload(
+        self,
+        url_path: str,
+        source: str | Path | bytes,
+        name: str,
+        description: str | None,
+        action: str,
+    ) -> dict:
+        """POST an octet-stream upload; metadata travels in query params.
+
+        ``source`` is a filesystem path (streamed from disk by ``requests``,
+        never fully read into memory) or raw ``bytes``. Shared by every
+        upload endpoint — databases, method collections, and each reference
+        data family — since they all take the same query-param + streamed
+        body shape.
+
+        The engine reports rejections in-band (HTTP 200 with
+        ``success=false``: missing name, plan cap reached, file too large,
+        extraction failure), so failures surface through _require_success
+        rather than an HTTP error.
+        """
+        params: dict = {"name": name}
+        if description:
+            params["description"] = description
+        headers = {"Content-Type": "application/octet-stream"}
+        url = f"{self.base_url}{url_path}"
+        if isinstance(source, bytes):
+            payload = self._json(
+                self._session.post(url, params=params, data=source, headers=headers)
+            )
+        else:
+            with open(source, "rb") as fh:
+                payload = self._json(
+                    self._session.post(url, params=params, data=fh, headers=headers)
+                )
+        return self._require_success(payload, action)
+
     def copy_database(self, new_name: str, db_name: str | None = None) -> dict:
         """Copy a loaded database in memory under a new name.
 
@@ -830,6 +867,90 @@ class Client:
                 f"{self.base_url}/api/v1/db/{target}/remove-dependency/{dep_name}"
             )
         )
+
+    # -- Upload & staged-database lifecycle --
+    #
+    # An uploaded database lands *staged*: extracted and format-detected, but
+    # not loaded. The path from archive to a usable database is
+    #   upload_database → get_setup (see what deps are missing) →
+    #   add_dependency (wire each) → finalize_database (build matrices, load).
+    # set_data_path picks the data file when the archive holds several.
+
+    def upload_database(
+        self,
+        source: str | Path | bytes,
+        name: str,
+        *,
+        description: str | None = None,
+    ) -> dict:
+        """Upload a database archive; stage it under a generated slug.
+
+        ``source`` is a path to a ZIP / CSV / XLSX archive (or its raw
+        ``bytes``); ``name`` is the display name. The engine auto-detects the
+        format (EcoSpold 1/2, SimaPro CSV, ILCD, OpenLCA JSON-LD, Brightway
+        Excel) and stages the database without loading it.
+
+        Returns the ``UploadResponse`` dict
+        (``{"success", "message", "slug", "format"}``); ``slug`` is the name
+        every later call targets. Then inspect :meth:`get_setup`, wire missing
+        dependencies with :meth:`add_dependency`, and call
+        :meth:`finalize_database` to build matrices and load it.
+
+        Raises VoLCAError on any rejection (uploads disabled on the plan, size
+        cap exceeded, unreadable archive) — the engine reports these in-band
+        with HTTP 200 and ``success=false``.
+        """
+        return self._upload(
+            "/api/v1/db/upload", source, name, description, "upload_database"
+        )
+
+    def get_setup(self, db_name: str | None = None) -> dict:
+        """Setup status of a staged or loaded database (``DatabaseSetupInfo``).
+
+        Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
+        and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
+        (declared deps), ``dataPath`` / ``availablePaths`` (the selected data
+        file and the alternatives — see :meth:`set_data_path`), ``completeness``.
+        """
+        target = self._db(db_name)
+        return self._json(self._session.get(f"{self.base_url}/api/v1/db/{target}/setup"))
+
+    def set_data_path(self, path: str, db_name: str | None = None) -> dict:
+        """Choose which data file a staged multi-file archive should use.
+
+        ``path`` must be one of the ``availablePaths`` reported by
+        :meth:`get_setup`, relative to the upload directory. Returns the
+        updated ``DatabaseSetupInfo`` dict.
+        """
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/set-data-path", json={"path": path}
+            )
+        )
+
+    def finalize_database(self, db_name: str | None = None) -> dict:
+        """Build matrices for a staged database and load it (``ActivateResponse``).
+
+        Call after dependencies resolve (:meth:`get_setup` reports
+        ``isReady``). Raises VoLCAError if the engine reports ``success=false``
+        (e.g. unresolved suppliers).
+        """
+        target = self._db(db_name)
+        payload = self._json(
+            self._session.post(f"{self.base_url}/api/v1/db/{target}/finalize")
+        )
+        return self._require_success(payload, "finalize_database")
+
+    def delete_database(self, db_name: str | None = None) -> dict:
+        """Delete a database entirely: unload it and remove its uploaded files.
+
+        Returns the ``ActivateResponse`` dict; raises VoLCAError on
+        ``success=false``.
+        """
+        target = self._db(db_name)
+        payload = self._json(self._session.delete(f"{self.base_url}/api/v1/db/{target}"))
+        return self._require_success(payload, "delete_database")
 
     def list_presets(self) -> list[Preset]:
         """List classification presets configured in this instance.
