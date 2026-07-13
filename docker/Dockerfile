@@ -1,4 +1,4 @@
-# Volca Docker image: fully-static musl binary on Alpine.
+# VoLCA Docker image: fully-static musl binary on Alpine.
 #
 # The binary is statically linked against musl libc, so it runs on any Linux
 # distro without a runtime libc dependency. Used both as a server image and
