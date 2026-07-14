@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- A scoring integrity error (a regionalized score whose tables are internally
+  inconsistent — mismatched lengths, absent weights) now fails the request
+  with a 500 instead of silently scoring the category 0. A consumer could not
+  tell that 0 from a real score. Coverage gaps are unaffected: an unmapped
+  flow still contributes nothing and is reported as before. In sensitivity
+  responses the error lands on the affected perturbation entry, which already
+  carries per-entry errors.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added

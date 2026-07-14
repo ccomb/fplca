@@ -586,6 +586,27 @@ batchedScoresFor dbManager _dbName collection _db sol methods = do
                 hier
                 perDb
 
+{- | Resolve a method's precomputed batched score. A 'Left' here is a scoring
+integrity error (mismatched table lengths, absent weights — never a mere
+coverage gap, see 'computeRegionalizedLCIAScore'): it must reach the caller
+as an error, never collapse to a 0 the consumer cannot tell from a real
+score. A method missing from the map is the same kind of error — the map is
+built from the very method list being scored.
+-}
+resolveBatchedScore :: Method -> M.Map UUID (Either Text Double) -> Either Text Double
+resolveBatchedScore method scoreMap =
+    case M.lookup (methodId method) scoreMap of
+        Nothing -> Left ("[LCIA " <> methodName method <> "] missing from the batched score set")
+        Just (Left err) -> Left ("[LCIA " <> methodName method <> "] " <> err)
+        Just (Right s) -> Right s
+
+{- | Surface a scoring integrity error as a 500: the collection's tables are
+inconsistent and the score is not computable — a silent 0 would be worse
+than the failure.
+-}
+scoringError :: Text -> AppM a
+scoringError err = throwError err500{errBody = BSL.fromStrict (T.encodeUtf8 err)}
+
 {- | Pre-warm per-(db, method) cached tables so subsequent 'batchedScoresFor'
 and 'inventoryContributions' calls hit a warm cache.
 -}
@@ -610,7 +631,7 @@ computeCategoryResult ::
     Int ->
     Maybe (Either Text Double) ->
     Method ->
-    IO LCIAResult
+    IO (Either Text LCIAResult)
 computeCategoryResult dbManager dbName collection db sol activity topFlows precomputedScore method = do
     unitCfg <- getMergedUnitConfig dbManager
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
@@ -618,66 +639,66 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
     tables <- DM.mapMethodToTablesCached dbManager dbName collection db method
     let inventory = SharedSolver.csInventory sol
     let stats = computeMappingStats mappings
-    score <- case precomputedScore of
-        Just (Right s) -> evaluate s
-        Just (Left err) -> do
-            reportProgress Warning $
-                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-            evaluate (0 :: Double)
+    -- A Left is a scoring integrity error (see 'resolveBatchedScore') — it
+    -- propagates instead of collapsing to a 0 the consumer can't tell from a
+    -- real score.
+    scoreE <- case precomputedScore of
+        Just e -> traverse evaluate e
         Nothing ->
             if M.null (mtRegionalizedCF tables)
-                then evaluate $ loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
+                then Right <$> evaluate (loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables))
                 else do
                     hier <- DM.getLocationHierarchy dbManager
                     perDb <-
                         forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
                             tbls <- DM.mapMethodToTablesCached dbManager n collection d method
                             pure (d, sv, tbls)
-                    case sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb of
-                        Right s -> evaluate s
-                        Left err -> do
-                            reportProgress Warning $
-                                "[LCIA " <> T.unpack (methodName method) <> "] " <> T.unpack err
-                            evaluate (0 :: Double)
-    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
-        functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
-        (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
-        contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-        topContribs = take topFlows contribs
-        topContributors =
-            [ FlowContributionEntry
-                { fcoFlowName = bfName f
-                , fcoContribution = c
-                , fcoSharePct = if score /= 0 then c / score * 100 else 0
-                , fcoFlowId = UUID.toText (bfId f)
-                , fcoCategory = bfCompartmentName f
-                , fcoCompartment = bfCompartmentSub f
-                , fcoCfValue = cfVal
-                }
-            | (f, cfVal, c) <- topContribs
-            ]
-    unless (null unknownUuids) $
-        reportProgress Warning $
-            "[LCIA "
-                <> T.unpack (methodName method)
-                <> "] "
-                <> show (length unknownUuids)
-                <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
-                <> show (take 3 unknownUuids)
-    pure
-        LCIAResult
-            { lrMethodId = methodId method
-            , lrMethodName = methodName method
-            , lrCategory = methodCategory method
-            , lrDamageCategory = methodCategory method
-            , lrScore = score
-            , lrUnit = methodUnit method
-            , lrNormalizedScore = Nothing
-            , lrWeightedScore = Nothing
-            , lrMappedFlows = msTotal stats - msUnmatched stats
-            , lrFunctionalUnit = functionalUnit
-            , lrTopContributors = topContributors
-            }
+                    traverse evaluate (sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb)
+    case scoreE of
+        Left err -> pure (Left ("[LCIA " <> methodName method <> "] " <> err))
+        Right score -> buildResult unitCfg mFlows mUnits inventory tables stats score
+  where
+    buildResult unitCfg mFlows mUnits inventory tables stats score = do
+        let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
+            functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+            (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
+            contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
+            topContribs = take topFlows contribs
+            topContributors =
+                [ FlowContributionEntry
+                    { fcoFlowName = bfName f
+                    , fcoContribution = c
+                    , fcoSharePct = if score /= 0 then c / score * 100 else 0
+                    , fcoFlowId = UUID.toText (bfId f)
+                    , fcoCategory = bfCompartmentName f
+                    , fcoCompartment = bfCompartmentSub f
+                    , fcoCfValue = cfVal
+                    }
+                | (f, cfVal, c) <- topContribs
+                ]
+        unless (null unknownUuids) $
+            reportProgress Warning $
+                "[LCIA "
+                    <> T.unpack (methodName method)
+                    <> "] "
+                    <> show (length unknownUuids)
+                    <> " inventory flow UUID(s) absent from merged FlowDB — characterization incomplete. Samples: "
+                    <> show (take 3 unknownUuids)
+        pure $
+            Right
+                LCIAResult
+                    { lrMethodId = methodId method
+                    , lrMethodName = methodName method
+                    , lrCategory = methodCategory method
+                    , lrDamageCategory = methodCategory method
+                    , lrScore = score
+                    , lrUnit = methodUnit method
+                    , lrNormalizedScore = Nothing
+                    , lrWeightedScore = Nothing
+                    , lrMappedFlows = msTotal stats - msUnmatched stats
+                    , lrFunctionalUnit = functionalUnit
+                    , lrTopContributors = topContributors
+                    }
 
 {- | Batch fast path: scores via 'batchedScoresFor', then build LCIAResult
 records straight from the precomputed contexts. Skips the per-pid
@@ -696,7 +717,7 @@ buildLCIABatchResultCached ::
     SharedSolver.CrossDBSolution ->
     [MethodCtx] ->
     Int ->
-    IO LCIABatchResult
+    IO (Either Text LCIABatchResult)
 buildLCIABatchResultCached dbManager dbName collectionName db actPid activity collection sol ctxs topFlows = do
     let damageCats = mcDamageCategories collection
         nwSets = mcNormWeightSets collection
@@ -733,18 +754,10 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
         functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
         mkResultIO ctx = do
             let method = mctxMethod ctx
-            score <- case M.lookup (methodId method) scoreMap of
-                Just (Right s) -> pure s
-                Just (Left err) -> do
-                    reportProgress Warning $
-                        "[LCIA "
-                            <> T.unpack (methodName method)
-                            <> "] pid="
-                            <> show actPid
-                            <> ": "
-                            <> T.unpack err
-                    pure 0
-                Nothing -> pure 0
+            case resolveBatchedScore method scoreMap of
+                Left err -> pure (Left (err <> " (pid=" <> T.pack (show actPid) <> ")"))
+                Right score -> Right <$> mkResultForScore ctx method score
+        mkResultForScore ctx method score = do
             topContributors <- case mUnitCfg of
                 Nothing -> pure []
                 Just unitCfg -> do
@@ -780,11 +793,14 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
                         , lrFunctionalUnit = functionalUnit
                         , lrTopContributors = topContributors
                         }
-    results <- traverse mkResultIO ctxs
-    let rawScoreMap = rawScoreMapByName results
-    (scoringResults, scoringIndicators) <-
-        computeAllScoringSets (mcScoringSets collection) rawScoreMap
-    pure (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators (Service.buildCutoffWaste db activity))
+    resultsE <- sequence <$> traverse mkResultIO ctxs
+    case resultsE of
+        Left err -> pure (Left err)
+        Right results -> do
+            let rawScoreMap = rawScoreMapByName results
+            (scoringResults, scoringIndicators) <-
+                computeAllScoringSets (mcScoringSets collection) rawScoreMap
+            pure (Right (mkLCIABatchResult results mNW nwSets scoringResults (mcScoringSets collection) scoringIndicators (Service.buildCutoffWaste db activity)))
 
 {- | Top-level LCIA batch entry point — AppM-returning. Used by the Servant
 routes (via thin where-aliases) and by API.BatchImpacts.
@@ -824,11 +840,12 @@ activityLCIABatchH dbName processIdText collectionName mSub ltMode = do
                 reportProgress Info $
                     "  Inventory UUIDs: " <> intercalate ", " (map UUID.toString $ M.keys inventory)
     scoreMap <- liftIO $ batchedScoresFor dbManager dbName collectionName db sol methods
-    rawResults <-
+    rawResultsE <-
         liftIO $
             mapConcurrently
-                (\m -> computeCategoryResult dbManager dbName collectionName db sol activity 5 (M.lookup (methodId m) scoreMap) m)
+                (\m -> computeCategoryResult dbManager dbName collectionName db sol activity 5 (Just (resolveBatchedScore m scoreMap)) m)
                 methods
+    rawResults <- either scoringError pure (sequence rawResultsE)
     let results = map (enrichWithNW dcLookup mNW) rawResults
         rawScoreMap = rawScoreMapByName rawResults
     (scoringResults, scoringIndicators) <- liftIO $ computeAllScoringSets scoringSets rawScoreMap
@@ -883,14 +900,19 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
     ctxs <- liftIO $ mapConcurrently (prepMethodCtx dbManager dbName collectionName db) (mcMethods collection)
     let topFlows = max 0 (fromMaybe 0 topFlowsParam)
     let mkEntry ((pidText, pidNum, activity), sol) = do
-            impacts <- buildLCIABatchResultCached dbManager dbName collectionName db pidNum activity collection sol ctxs topFlows
-            pure
-                BatchImpactsEntry
-                    { bieProcessId = pidText
-                    , bieActivityName = activityName activity
-                    , bieImpacts = impacts
-                    }
-    entries <- liftIO $ mapM mkEntry (zip valid sols)
+            impactsE <- buildLCIABatchResultCached dbManager dbName collectionName db pidNum activity collection sol ctxs topFlows
+            pure $
+                fmap
+                    ( \impacts ->
+                        BatchImpactsEntry
+                            { bieProcessId = pidText
+                            , bieActivityName = activityName activity
+                            , bieImpacts = impacts
+                            }
+                    )
+                    impactsE
+    entriesE <- liftIO $ mapM mkEntry (zip valid sols)
+    entries <- either scoringError pure (sequence entriesE)
     t2 <- liftIO getCurrentTime
     liftIO $
         reportProgress Info $
@@ -1444,7 +1466,8 @@ activityLCIACore dbName processIdText collectionName methodIdText topFlowsParam 
     method <- loadMethodInCollection collectionName methodIdText
     (processId, activity) <- resolveOrThrow db processIdText
     sol <- crossDBSolutionFor dbName db sharedSolver processId mSub
-    result <- liftIO $ computeCategoryResult dbManager dbName collectionName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+    resultE <- liftIO $ computeCategoryResult dbManager dbName collectionName db sol activity (fromMaybe 5 topFlowsParam) Nothing method
+    result <- either scoringError pure resultE
     when (isNothing mSub) $ liftIO $ logLCIAResult result method
     pure result
 
@@ -1491,17 +1514,20 @@ postActivitySensitivity dbName processIdText collectionName methodIdText senReq 
                 case eSol of
                     Left err -> pure (PerturbedEntry p (Left err))
                     Right sol -> do
-                        lcia <- computeCategoryResult dbManager dbName collectionName db sol activity 5 Nothing method
-                        pure (PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia)))
+                        eLcia <- computeCategoryResult dbManager dbName collectionName db sol activity 5 Nothing method
+                        pure $ case eLcia of
+                            Left err -> PerturbedEntry p (Left err)
+                            Right lcia -> PerturbedEntry p (Right (lcia, lrScore lcia - lrScore baselineLcia))
     eBaselineSol <- liftIO $ scaleToSolution baselineX
     baselineSol <-
         either
             (\err -> throwError err422{errBody = BSL.fromStrict $ T.encodeUtf8 err})
             pure
             eBaselineSol
-    baselineLcia <-
+    eBaselineLcia <-
         liftIO $
             computeCategoryResult dbManager dbName collectionName db baselineSol activity 5 Nothing method
+    baselineLcia <- either scoringError pure eBaselineLcia
     perturbed <-
         liftIO $
             mapConcurrently (buildEntry baselineLcia) perResults
