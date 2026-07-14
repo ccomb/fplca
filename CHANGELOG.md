@@ -3,9 +3,10 @@
 ## [Unreleased]
 
 ### Added
-- `server --port 0 --desktop` now asks the OS to bind an available port and
-  prints the actual `VOLCA_PORT=N` only after the listening socket is reserved.
-  Launchers can therefore avoid reserve-then-release port races.
+- `server --port 0 --desktop` now asks the OS to bind an available loopback
+  port and prints the actual `VOLCA_PORT=N` only after the listening socket is
+  reserved. Launchers can therefore avoid reserve-then-release port races.
+  With port 0 the server is only reachable from the local machine.
 
 ## [0.9.1] - 2026-07-11
 
