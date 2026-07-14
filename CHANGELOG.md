@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `server --port 0 --desktop` now asks the OS to bind an available port and
+  prints the actual `VOLCA_PORT=N` only after the listening socket is reserved.
+  Launchers can therefore avoid reserve-then-release port races.
+
 ## [0.9.1] - 2026-07-11
 
 ### Added

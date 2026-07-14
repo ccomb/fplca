@@ -8,6 +8,7 @@ name (the common case: running a script from a source checkout that has a
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from unittest import mock
 
@@ -57,3 +58,56 @@ def test_find_binary_raises_when_nothing_found(tmp_path: Path, monkeypatch):
         srv = Server(config="absent.toml", binary="volca")
         with pytest.raises(FileNotFoundError):
             srv._find_binary()
+
+
+def test_auto_port_preserves_explicit_zero_compatibility(tmp_path: Path):
+    config = tmp_path / "volca.toml"
+    config.write_text("[server]\nport = 8123\n")
+
+    assert Server(config=str(config)).port == 8123
+    assert Server(config=str(config), port=0).port == 8123
+    assert Server(config=str(config), port="auto").port == 0
+
+
+def test_await_bound_port_accepts_engine_announcement():
+    process = mock.Mock()
+    process.stdout = io.StringIO("VOLCA_PORT=43123\n")
+    process.poll.return_value = None
+    srv = Server(config="absent.toml", port="auto")
+    srv._process = process
+
+    srv._await_bound_port(wait_timeout=1)
+
+    assert srv.port == 43123
+
+
+@pytest.mark.parametrize("line", ["VOLCA_PORT=0\n", "VOLCA_PORT=70000\n"])
+def test_await_bound_port_rejects_invalid_port(line: str):
+    process = mock.Mock()
+    process.stdout = io.StringIO(line)
+    process.poll.return_value = None
+    srv = Server(config="absent.toml", port="auto")
+    srv._process = process
+
+    with pytest.raises(RuntimeError, match="invalid port"):
+        srv._await_bound_port(wait_timeout=1)
+
+
+def test_start_dynamic_port_uses_desktop_announcement(monkeypatch):
+    process = mock.Mock()
+    process.stdout = io.StringIO("VOLCA_PORT=43123\n")
+    process.poll.return_value = None
+    srv = Server(config="absent.toml", port="auto")
+    monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
+    monkeypatch.setattr(srv, "is_alive", lambda: True)
+    check_wire = mock.Mock()
+    monkeypatch.setattr(srv, "_check_wire", check_wire)
+
+    with mock.patch("volca.server.subprocess.Popen", return_value=process) as popen:
+        srv.start(wait_timeout=1)
+
+    command = popen.call_args.args[0]
+    assert command[-1] == "--desktop"
+    assert command[command.index("--port") + 1] == "0"
+    assert srv.port == 43123
+    check_wire.assert_called_once_with()

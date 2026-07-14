@@ -198,7 +198,7 @@ serverParser = Server <$> serverOptionsParser
 
 serverOptionsParser :: Parser ServerOptions
 serverOptionsParser = do
-    serverPort <- optIntOpt "port" (Just 'p') "PORT" "Server port (overrides [server].port from config; default: 8080)"
+    serverPort <- optIntOpt "port" (Just 'p') "PORT" "Server port (0=OS-assigned; overrides [server].port; default: 8080)"
     serverLoadDbs <-
         optional $
             option dbListReader (long "load" <> metavar "DB1,DB2,..." <> help "Comma-separated list of databases to load at startup (overrides config load=true)")

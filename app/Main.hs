@@ -50,7 +50,7 @@ import Network.HTTP.Types (status200)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Middleware, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
 import Network.Wai.Application.Static (StaticSettings, defaultWebAppSettings, ssIndices, staticApp)
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setPort, setTimeout)
+import Network.Wai.Handler.Warp (defaultSettings, openFreePort, runSettings, runSettingsSocket, setPort, setTimeout)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
@@ -229,7 +229,6 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
     let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
         staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
-    logServerStartup serverOpts port password
     (lastRequestRef, idleActiveRef) <- setupIdleTimeout serverOpts
     baseApp <-
         createServerApp
@@ -243,8 +242,15 @@ runServerWithConfig cliConfig serverOpts cfgFile = do
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
                 wrapWithMiddleware password lastRequestRef idleActiveRef baseApp
-        settings = setTimeout 600 (setPort port defaultSettings)
-    runSettings settings finalApp
+        settings = setTimeout 600 defaultSettings
+    if port == 0
+        then do
+            (boundPort, socket) <- openFreePort
+            logServerStartup serverOpts boundPort password
+            runSettingsSocket settings socket finalApp
+        else do
+            logServerStartup serverOpts port password
+            runSettings (setPort port settings) finalApp
 
 {- | Run config load-only mode (load all databases from config and exit)
 Useful for cache generation, validation, and benchmarking
