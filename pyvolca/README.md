@@ -2016,7 +2016,7 @@ Type alias: `Literal['flow-synonyms', 'compartment-mappings', 'units']`.
 
 - Full guide and tutorials: <https://volca.run/docs/python/>
 - VoLCA engine: <https://github.com/ccomb/volca>
-- Examples folder: [`examples/`](examples/)
+- Runnable examples: <https://www.volca.run/examples/>
 
 ## License
 
