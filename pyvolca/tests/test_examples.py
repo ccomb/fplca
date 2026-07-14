@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-EXAMPLE = Path(__file__).parents[2] / "examples" / "convert_database.py"
+EXAMPLE = Path(__file__).parents[1] / "examples" / "convert_database.py"
 
 
 def load_example():
