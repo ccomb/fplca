@@ -92,7 +92,9 @@ still validates it and honours VOLCA_DATA_DIR.
 -}
 loadConfigOrDie :: Maybe FilePath -> IO Config
 loadConfigOrDie mCfgFile = do
-    mapM_ (\cfgFile -> reportProgress Info $ "Loading configuration from: " ++ cfgFile) mCfgFile
+    reportProgress Info $ case mCfgFile of
+        Just cfgFile -> "Loading configuration from: " ++ cfgFile
+        Nothing -> "No --config given, running on built-in defaults (no databases)"
     configResult <- loadConfigOrDefault mCfgFile
     case configResult of
         Left err -> do
@@ -148,6 +150,20 @@ applyLoadOverride :: ServerOptions -> Config -> Config
 applyLoadOverride serverOpts config = case serverLoadDbs serverOpts of
     Nothing -> config
     Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
+
+{- | Warn for each --load name that matches no configured database: the
+override silently loads nothing for it — guaranteed when running on the
+built-in defaults, which configure no databases at all.
+-}
+warnUnknownLoadNames :: ServerOptions -> Config -> IO ()
+warnUnknownLoadNames serverOpts config =
+    mapM_ warn unknown
+  where
+    known = map dcName (cfgDatabases config)
+    unknown = concatMap (filter (`notElem` known)) (serverLoadDbs serverOpts)
+    warn name =
+        reportProgress Warning $
+            "--load " ++ T.unpack name ++ " matches no configured database; nothing will be loaded for it"
 
 -- | Log loaded databases (allows starting with none for BYOL mode).
 logLoadedDatabases :: DatabaseManager -> IO ()
@@ -222,10 +238,11 @@ uploadSizeLimitMiddleware hostingConfig =
             (pure . uploadBodyCeiling hostingConfig . pathInfo)
             defaultRequestSizeLimitSettings
 
--- | Run server with multi-database configuration file
+-- | Run the server: on a configuration file when given, else on built-in defaults.
 runServerWithConfig :: CLIConfig -> ServerOptions -> Maybe FilePath -> IO ()
 runServerWithConfig cliConfig serverOpts mCfgFile = do
     config <- applyLoadOverride serverOpts <$> loadConfigOrDie mCfgFile
+    warnUnknownLoadNames serverOpts config
     reportProgress Info "Initializing database manager..."
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) mCfgFile
     logLoadedDatabases dbManager
