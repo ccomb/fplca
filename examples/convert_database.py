@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import tempfile
 import urllib.parse
@@ -44,7 +45,7 @@ def export_bytes(client, server, fmt):
     try:
         return client.export_database(fmt)
     except VoLCAError as error:
-        if "HTTP 406" not in str(error):
+        if not str(error).startswith("export_database failed (HTTP 406)"):
             raise
         request = urllib.request.Request(
             f"{server.base_url}/api/v1/db/{client.db}/export",
@@ -95,45 +96,29 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="volca-convert-") as raw:
         root, port, password = Path(raw), free_port(), secrets.token_urlsafe(32)
+        db_name = safe_slug(source.stem)
+        local_source = root / source.name
+        shutil.copy2(source, local_source)
         config = root / "volca.toml"
-        config.write_text(f'[server]\nhost="127.0.0.1"\nport={port}\npassword="{password}"\n')
-        previous_data_dir = os.environ.get("VOLCA_DATA_DIR")
-        os.environ["VOLCA_DATA_DIR"] = raw
-        try:
-            with Server(config=str(config), binary=str(installed.binary)) as server:
-                client = Client(server.base_url, password=server.password)
-                uploaded = client.upload_database(source, source.stem)
-                client.db = safe_slug(uploaded["slug"])
-                loaded = False
-                try:
-                    setup = client.get_setup()
-                    if not setup["isReady"]:
-                        raise RuntimeError(
-                            "database needs dependencies: "
-                            + ", ".join(setup["missingSuppliers"])
-                        )
-                    client.finalize_database()
-                    loaded = True
-                    outputs = {
-                        fmt: out / (client.db + EXT[fmt])
-                        for fmt in dict.fromkeys(args.format)
-                    }
-                    if not args.force:
-                        existing = [path for path in outputs.values() if os.path.lexists(path)]
-                        if existing:
-                            raise FileExistsError(existing[0])
-                    for fmt, output in outputs.items():
-                        publish(export_bytes(client, server, fmt), output, args.force)
-                        print(f"{fmt}: {output}")
-                finally:
-                    if loaded:
-                        client.unload_database(client.db)
-                    client.delete_database()
-        finally:
-            if previous_data_dir is None:
-                os.environ.pop("VOLCA_DATA_DIR", None)
-            else:
-                os.environ["VOLCA_DATA_DIR"] = previous_data_dir
+        config.write_text(
+            f'[server]\nhost="127.0.0.1"\nport={port}\npassword="{password}"\n\n'
+            f'[[databases]]\nname={json.dumps(db_name)}\n'
+            f'path={json.dumps(str(local_source))}\nload=false\n'
+        )
+        with Server(config=str(config), binary=str(installed.binary)) as server:
+            client = Client(server.base_url, db=db_name, password=server.password)
+            client.load_database(db_name)
+            outputs = {
+                fmt: out / (db_name + EXT[fmt])
+                for fmt in dict.fromkeys(args.format)
+            }
+            if not args.force:
+                existing = [path for path in outputs.values() if os.path.lexists(path)]
+                if existing:
+                    raise FileExistsError(existing[0])
+            for fmt, output in outputs.items():
+                publish(export_bytes(client, server, fmt), output, args.force)
+                print(f"{fmt}: {output}")
 
 
 if __name__ == "__main__":
