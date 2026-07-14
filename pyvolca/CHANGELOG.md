@@ -18,13 +18,26 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
-## [Unreleased]
+## [0.8.1] - 2026-07-14
 
 ### Added
 
-- `Server(port="auto")` now uses the engine's atomic OS-assigned port mode and
-  reads the bound port from `VOLCA_PORT=N`; managed servers no longer need to
-  select a port with a reserve-then-release race.
+- `Server(port="auto")` asks the engine (v0.9.2 or newer) to bind an
+  OS-assigned loopback port atomically and reads the bound port from
+  `VOLCA_PORT=N`; managed servers no longer need to select a port with a
+  reserve-then-release race.
+
+### Fixed
+
+- Binary database exports work again: 0.8.0 forgot to send the
+  `Accept: application/octet-stream` header the engine's raw-bytes export
+  requires, so every `export_database` call failed with HTTP 406. The client
+  now sends it.
+
+### Changed
+
+- The runnable examples left this repository — they now live at
+  <https://www.volca.run/examples/>.
 
 ## [0.8.0] - 2026-07-14
 
