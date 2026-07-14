@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The `name=` filter on the supply-chain and consumers endpoints (REST and
+  MCP) now filters. A name matching nothing previously disabled the filter
+  and returned every entry — with a matching `filteredActivities` count — so
+  a caller could not tell "no match" from "no filter". It now returns an
+  empty result.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added
