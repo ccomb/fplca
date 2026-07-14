@@ -27,9 +27,12 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Test.Hspec
 
+import API.Types (DeleteSelectionRequest (..))
 import Config (DatabaseConfig (..), defaultConfig)
+import Data.Aeson (eitherDecode)
 import Database (buildDatabaseWithMatrices)
 import Database.Edit (
+    DeleteRequest (..),
     DeleteSelection (..),
     deleteActivities,
     deleteActivitiesInDB,
@@ -56,6 +59,20 @@ import Types (
     processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
+
+-- | Empty 'DeleteRequest'; tests tweak only the fields they need.
+emptyDelete :: DeleteRequest
+emptyDelete =
+    DeleteRequest
+        { drName = Nothing
+        , drLocation = Nothing
+        , drProduct = Nothing
+        , drClassifications = []
+        , drExactName = False
+        , drKeep = []
+        , drExtra = []
+        , drIds = Nothing
+        }
 
 spec :: Spec
 spec = describe "Database.Edit delete-by-selection primitive" $ do
@@ -171,13 +188,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "edit-me"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    [foodA] -- keep
-                    [] -- extra
+                    emptyDelete{drClassifications = [("category", "food", False)], drKeep = [foodA]}
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
                 Right deleted -> do
@@ -197,20 +208,14 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "edit-me-2"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    ["not-a-real-process-id"]
-                    []
+                    emptyDelete{drClassifications = [("category", "food", False)], drKeep = ["not-a-real-process-id"]}
             case r of
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected unknown keep id to fail"
 
         it "fails when the database is not loaded" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
-            r <- deleteActivitiesInDB manager "ghost" Nothing Nothing Nothing [] False [] []
+            r <- deleteActivitiesInDB manager "ghost" emptyDelete
             r `shouldBe` Left "Database not loaded: ghost"
 
         it "refuses to delete while a loaded database depends on it" $ do
@@ -226,16 +231,57 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "base"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    []
-                    []
+                    emptyDelete{drClassifications = [("category", "food", False)]}
             case r of
                 Left err -> err `shouldSatisfy` isInfixOf "still required by"
                 Right _ -> expectationFailure "expected delete to be refused while a dependent is loaded"
+
+    describe "deleteActivitiesInDB (delete exactly these ids)" $ do
+        it "deletes exactly the listed process ids, no base filter" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1000)
+            installLoaded manager "by-ids" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1001) (mkUUID 1001))
+            r <- deleteActivitiesInDB manager "by-ids" emptyDelete{drIds = Just [foodA]}
+            case r of
+                Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
+                Right deleted -> do
+                    deleted `shouldBe` 1
+                    loaded <- readTVarIO (dmLoadedDbs manager)
+                    let db' = ldDatabase (loaded M.! "by-ids")
+                    dbActivityCount db' `shouldBe` 2
+                    map activityName (V.toList (dbActivities db'))
+                        `shouldNotSatisfy` elem "food-A"
+
+        it "refuses ids combined with a filter field" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1100)
+            installLoaded manager "by-ids-2" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1101) (mkUUID 1101))
+            r <-
+                deleteActivitiesInDB
+                    manager
+                    "by-ids-2"
+                    emptyDelete{drIds = Just [foodA], drClassifications = [("category", "food", False)]}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "cannot be combined"
+                Right _ -> expectationFailure "expected ids+filter to be refused"
+
+        it "fails loudly on an unknown id" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1200)
+            installLoaded manager "by-ids-3" db
+            r <- deleteActivitiesInDB manager "by-ids-3" emptyDelete{drIds = Just ["not-a-real-process-id"]}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "Unknown process id"
+                Right _ -> expectationFailure "expected unknown id to fail"
+
+    describe "DeleteSelectionRequest wire compatibility" $ do
+        it "decodes a request without the ids key (old clients)" $ do
+            let json = "{\"classifications\":[],\"exact\":false,\"keep\":[],\"extra\":[]}"
+            case eitherDecode json :: Either String DeleteSelectionRequest of
+                Left err -> expectationFailure ("decode failed: " <> err)
+                Right req -> dsqIds req `shouldBe` Nothing
 
 -- ---------------------------------------------------------------------------
 -- Helpers

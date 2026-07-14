@@ -103,7 +103,7 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
-import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
 import Database.Export (parseExportFormat, serializeDatabase)
 import Database.Manager (
     DatabaseLoadStatus (..),
@@ -256,13 +256,16 @@ deleteActivitiesHandler dbName req = do
             deleteActivitiesInDB
                 dbManager
                 dbName
-                (nonBlank (dsqName req))
-                (nonBlank (dsqLocation req))
-                (nonBlank (dsqProduct req))
-                classFilters
-                (fromMaybe False (dsqExact req))
-                (dsqKeep req)
-                (dsqExtra req)
+                DeleteRequest
+                    { drName = nonBlank (dsqName req)
+                    , drLocation = nonBlank (dsqLocation req)
+                    , drProduct = nonBlank (dsqProduct req)
+                    , drClassifications = classFilters
+                    , drExactName = fromMaybe False (dsqExact req)
+                    , drKeep = dsqKeep req
+                    , drExtra = dsqExtra req
+                    , drIds = dsqIds req
+                    }
     case result of
         -- A failed delete is a client error (bad filter, unknown DB, loaded
         -- dependents). Surface it as 4xx so a raw HTTP client can't read the

@@ -167,6 +167,7 @@ deleteActivitiesArgsParser =
         <*> switch (long "exact" <> help "Exact (case-insensitive) name match instead of token-contains")
         <*> many (textOpt "keep" Nothing "PID" "Process id (activityUUID_productUUID) to spare from deletion (repeatable)")
         <*> many (textOpt "add" Nothing "PID" "Process id to add to deletion (repeatable)")
+        <*> many (textOpt "id" Nothing "PID" "Delete exactly this process id (repeatable, excludes the filter options)")
 
 -- | Method command parser with optional subcommand (defaults to list)
 methodParser :: Parser Command

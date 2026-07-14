@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Delete-activities accepts an `ids` list to delete exactly the named
+  processes, on the API (`"ids": [...]`) and the CLI (repeatable `--id`).
+  Previously the only selection mode was a filter, so deleting a known list
+  of processes required a deliberately unsatisfiable filter plus the `extra`
+  list. `ids` cannot be combined with filter fields — an ambiguous request
+  is refused, not guessed at.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added

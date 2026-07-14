@@ -17,7 +17,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (copyDatabase, deleteActivitiesInDB)
+import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
 import Database.Export (exportDatabase, parseExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
@@ -467,13 +467,16 @@ executeDbDeleteActivities fmt manager args = do
         deleteActivitiesInDB
             manager
             (ddaDb args)
-            (ddaName args)
-            (ddaLocation args)
-            (ddaProduct args)
-            classFilters
-            (ddaExact args)
-            (ddaKeep args)
-            (ddaExtra args)
+            DeleteRequest
+                { drName = ddaName args
+                , drLocation = ddaLocation args
+                , drProduct = ddaProduct args
+                , drClassifications = classFilters
+                , drExactName = ddaExact args
+                , drKeep = ddaKeep args
+                , drExtra = ddaExtra args
+                , drIds = if null (ddaIds args) then Nothing else Just (ddaIds args)
+                }
     case result of
         Left err -> do
             reportError $ "Delete failed: " ++ T.unpack err
