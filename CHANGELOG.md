@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.2] - 2026-07-14
 
 ### Added
 - `server --port 0 --desktop` now asks the OS to bind an available loopback
