@@ -20,6 +20,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
+import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (asum)
 import Data.List (find, intercalate, sortBy, sortOn)
@@ -641,21 +642,23 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
     let stats = computeMappingStats mappings
     -- A Left is a scoring integrity error (see 'resolveBatchedScore') — it
     -- propagates instead of collapsing to a 0 the consumer can't tell from a
-    -- real score.
+    -- real score. A precomputed Left arrives already labeled by
+    -- 'resolveBatchedScore'; only the locally computed one is labeled here.
     scoreE <- case precomputedScore of
         Just e -> traverse evaluate e
         Nothing ->
-            if M.null (mtRegionalizedCF tables)
-                then Right <$> evaluate (loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables))
-                else do
-                    hier <- DM.getLocationHierarchy dbManager
-                    perDb <-
-                        forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
-                            tbls <- DM.mapMethodToTablesCached dbManager n collection d method
-                            pure (d, sv, tbls)
-                    traverse evaluate (sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb)
+            fmap (first (("[LCIA " <> methodName method <> "] ") <>)) $
+                if M.null (mtRegionalizedCF tables)
+                    then Right <$> evaluate (loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables))
+                    else do
+                        hier <- DM.getLocationHierarchy dbManager
+                        perDb <-
+                            forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
+                                tbls <- DM.mapMethodToTablesCached dbManager n collection d method
+                                pure (d, sv, tbls)
+                        traverse evaluate (sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb)
     case scoreE of
-        Left err -> pure (Left ("[LCIA " <> methodName method <> "] " <> err))
+        Left err -> pure (Left err)
         Right score -> buildResult unitCfg mFlows mUnits inventory tables stats score
   where
     buildResult unitCfg mFlows mUnits inventory tables stats score = do
@@ -912,6 +915,9 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
                     )
                     impactsE
     entriesE <- liftIO $ mapM mkEntry (zip valid sols)
+    -- All-or-nothing on purpose: an integrity error is a property of the
+    -- (db, method) tables, not of one activity, so every entry would fail
+    -- identically. Unresolvable pids stay per-entry (birNotFound/birInvalid).
     entries <- either scoringError pure (sequence entriesE)
     t2 <- liftIO getCurrentTime
     liftIO $
