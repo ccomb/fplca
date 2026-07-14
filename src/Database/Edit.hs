@@ -47,6 +47,7 @@ import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (finally)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
+import Data.Maybe (isJust)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -468,12 +469,13 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
                                 <> ". Unload dependents first."
                 -- The two selection modes are exclusive: ids name the set
                 -- verbatim, filters compute it. A request carrying both is
-                -- ambiguous, so it is refused rather than guessed at.
+                -- ambiguous, so it is refused rather than guessed at — exact
+                -- included, since it only modifies name/classification matching.
                 hasFilter =
-                    any (/= Nothing) [nameP, geoP, prodP] || not (null classFilters)
+                    any isJust [nameP, geoP, prodP] || not (null classFilters) || exactMatch
                 selectionE = case mIds of
                     Just ids
-                        | hasFilter -> Left "ids cannot be combined with name/location/product/classification filters"
+                        | hasFilter -> Left "ids cannot be combined with name/location/product/classification/exact filters"
                         | otherwise -> traverse (resolvePid db) ids
                     Nothing -> Right (filteredProcessIds db nameP geoP prodP classFilters exactMatch)
             case guardDeps *> ((,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE) of

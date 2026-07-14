@@ -294,6 +294,16 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Left err -> err `shouldSatisfy` isInfixOf "Unknown process id"
                 Right _ -> expectationFailure "expected unknown id to fail"
 
+        it "refuses ids combined with exact (it would silently do nothing)" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1300)
+            installLoaded manager "by-ids-4" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1301) (mkUUID 1301))
+            r <- deleteActivitiesInDB manager "by-ids-4" emptyDelete{drIds = Just [foodA], drExactName = True}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "cannot be combined"
+                Right _ -> expectationFailure "expected ids+exact to be refused"
+
         it "composes ids with keep and extra: (ids ∪ extra) \\ keep" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
             db <- buildOrFail (classifiedDB 1400)
