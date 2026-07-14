@@ -62,6 +62,22 @@ def test_pyvolca_080_export_fallback_surfaces_warnings():
         server.server_close()
 
 
+def test_export_fallback_only_handles_the_known_406_prefix():
+    example = load_example()
+
+    class Client:
+        db = "database"
+
+        def export_database(self, _fmt):
+            raise example.VoLCAError("another failure whose body mentions HTTP 406")
+
+    managed = type(
+        "Server", (), {"base_url": "http://127.0.0.1:1", "password": "x"}
+    )()
+    with pytest.raises(example.VoLCAError, match="another failure"):
+        example.export_bytes(Client(), managed, "ilcd")
+
+
 def test_converter_uses_only_public_pyvolca_lifecycle():
     source = EXAMPLE.read_text()
     tree = ast.parse(source)
@@ -78,20 +94,13 @@ def test_converter_uses_only_public_pyvolca_lifecycle():
     }
 
     assert {"Client", "Server", "download"} <= imported
+    assert {"load_database", "export_database"} <= calls
     assert {
         "upload_database",
-        "get_setup",
         "finalize_database",
-        "export_database",
         "unload_database",
         "delete_database",
-    } <= calls
+    }.isdisjoint(calls)
+    assert "[[databases]]" in source
     assert "._session" not in source
     assert "import requests" not in source
-    unload_calls = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "unload_database"
-    ]
-    assert unload_calls and all(call.args for call in unload_calls)
