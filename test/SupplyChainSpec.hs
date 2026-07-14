@@ -178,6 +178,16 @@ spec = do
             scrFilteredActivities (buildWithName db rootPid supplyVec (Just "zzznomatch"))
                 `shouldBe` 0
 
+        it "punctuation-only name query returns zero entries" $ do
+            -- "???" survives the blank check but tokenizes to nothing, so
+            -- its expansion is empty: a query that matches nothing, not an
+            -- absent filter.
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            scrFilteredActivities (buildWithName db rootPid supplyVec (Just "???"))
+                `shouldBe` 0
+
         it "preserves depth sort order across filtered entries" $ do
             db <- loadWithIndex
             let rootPid = 0 :: ProcessId

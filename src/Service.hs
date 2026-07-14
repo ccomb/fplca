@@ -832,9 +832,11 @@ bm25Retrieve db queryText = do
              in Just [(pid, a) | (pid, _, a) <- sorted]
 
 {- | Set of ProcessIds whose name fuzzy-matches the query, using the same
-semantics as @/activities@ BM25 search. @Nothing@ signals \"no filter\":
-either the query tokenizes to nothing or the database has no BM25 index
-(only happens in bare test fixtures; production DBs always carry one).
+semantics as @/activities@ BM25 search. @Nothing@ means the retrieval could
+not run — no BM25 index (only bare test fixtures; production DBs always
+carry one) or a query whose fuzzy expansion is empty. What that means is
+the caller's call: 'nameFilterSet' treats a present-but-unmatchable query
+as \"reject every pid\", never as \"no filter\".
 -}
 bm25MatchingPids :: Database -> Text -> Maybe IS.IntSet
 bm25MatchingPids db =
