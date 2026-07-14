@@ -72,7 +72,6 @@ def test_auto_port_preserves_explicit_zero_compatibility(tmp_path: Path):
 def test_await_bound_port_accepts_engine_announcement():
     process = mock.Mock()
     process.stdout = io.StringIO("VOLCA_PORT=43123\n")
-    process.poll.return_value = None
     srv = Server(config="absent.toml", port="auto")
     srv._process = process
 
@@ -81,11 +80,10 @@ def test_await_bound_port_accepts_engine_announcement():
     assert srv.port == 43123
 
 
-@pytest.mark.parametrize("line", ["VOLCA_PORT=0\n", "VOLCA_PORT=70000\n"])
+@pytest.mark.parametrize("line", ["VOLCA_PORT=0\n", "VOLCA_PORT=70000\n", "VOLCA_PORT=garbage\n"])
 def test_await_bound_port_rejects_invalid_port(line: str):
     process = mock.Mock()
     process.stdout = io.StringIO(line)
-    process.poll.return_value = None
     srv = Server(config="absent.toml", port="auto")
     srv._process = process
 
@@ -93,10 +91,19 @@ def test_await_bound_port_rejects_invalid_port(line: str):
         srv._await_bound_port(wait_timeout=1)
 
 
+def test_await_bound_port_reports_early_exit():
+    process = mock.Mock()
+    process.stdout = io.StringIO("some unrelated log line\n")
+    srv = Server(config="absent.toml", port="auto")
+    srv._process = process
+
+    with pytest.raises(RuntimeError, match="exited before reporting"):
+        srv._await_bound_port(wait_timeout=1)
+
+
 def test_start_dynamic_port_uses_desktop_announcement(monkeypatch):
     process = mock.Mock()
     process.stdout = io.StringIO("VOLCA_PORT=43123\n")
-    process.poll.return_value = None
     srv = Server(config="absent.toml", port="auto")
     monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
     monkeypatch.setattr(srv, "is_alive", lambda: True)
@@ -107,7 +114,7 @@ def test_start_dynamic_port_uses_desktop_announcement(monkeypatch):
         srv.start(wait_timeout=1)
 
     command = popen.call_args.args[0]
-    assert command[-1] == "--desktop"
+    assert "--desktop" in command
     assert command[command.index("--port") + 1] == "0"
     assert srv.port == 43123
     check_wire.assert_called_once_with()

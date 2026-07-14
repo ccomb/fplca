@@ -1,7 +1,6 @@
 """Server lifecycle management for VoLCA."""
 
 import os
-import queue
 import shutil
 import subprocess
 import threading
@@ -148,32 +147,29 @@ class Server:
         if process is None or process.stdout is None:
             raise RuntimeError("dynamic-port server has no stdout pipe")
 
-        lines: queue.Queue[str | None] = queue.Queue()
+        announced: list[str] = []
 
         def read_stdout() -> None:
             assert process.stdout is not None
             for line in process.stdout:
-                lines.put(line)
-            lines.put(None)
+                if line.startswith("VOLCA_PORT="):
+                    announced.append(line.removeprefix("VOLCA_PORT=").strip())
+                    return
 
-        threading.Thread(target=read_stdout, daemon=True).start()
-        deadline = time.monotonic() + wait_timeout
-        while (remaining := deadline - time.monotonic()) > 0:
-            if process.poll() is not None:
-                raise RuntimeError("VoLCA exited before reporting its bound port")
-            try:
-                line = lines.get(timeout=min(0.1, remaining))
-            except queue.Empty:
-                continue
-            if line is None:
-                raise RuntimeError("VoLCA closed stdout before reporting its bound port")
-            if line.startswith("VOLCA_PORT="):
-                port = int(line.removeprefix("VOLCA_PORT=").strip())
-                if not 1 <= port <= 65535:
-                    raise RuntimeError(f"VoLCA reported an invalid port: {port}")
-                self.port = port
-                return
-        raise TimeoutError(f"Server did not report its bound port within {wait_timeout}s")
+        # The engine's death closes stdout, which ends the thread; the join
+        # carries the timeout. No need to watch the process separately.
+        reader = threading.Thread(target=read_stdout, daemon=True)
+        reader.start()
+        reader.join(wait_timeout)
+        if reader.is_alive():
+            raise TimeoutError(f"Server did not report its bound port within {wait_timeout}s")
+        if not announced:
+            raise RuntimeError("VoLCA exited before reporting its bound port")
+        raw = announced[0]
+        port = int(raw) if raw.isdigit() else 0
+        if not 1 <= port <= 65535:
+            raise RuntimeError(f"VoLCA reported an invalid port: {raw}")
+        self.port = port
 
     def start(self, idle_timeout: int = 300, wait_timeout: int = 120) -> None:
         """Spawn the engine process if it is not already serving, and wait until ready.
@@ -208,7 +204,7 @@ class Server:
             stdout=subprocess.PIPE if dynamic_port else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=self._subprocess_env(),
-            text=dynamic_port,
+            text=True,
         )
 
         if dynamic_port:
