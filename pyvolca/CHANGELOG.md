@@ -18,6 +18,14 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [Unreleased]
+
+### Added
+
+- `Server(port="auto")` now uses the engine's atomic OS-assigned port mode and
+  reads the bound port from `VOLCA_PORT=N`; managed servers no longer need to
+  select a port with a reserve-then-release race.
+
 ## [0.8.0] - 2026-07-14
 
 ### Added

@@ -1,10 +1,13 @@
 """Server lifecycle management for VoLCA."""
 
 import os
+import queue
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
+from typing import Literal
 
 import requests
 
@@ -26,14 +29,16 @@ class Server:
             activities = client.search_activities(name="at plant")
     """
 
-    def __init__(self, config: str = "volca.toml", port: int = 0, binary: str = "volca"):
+    def __init__(self, config: str = "volca.toml", port: int | Literal["auto"] = 0, binary: str = "volca"):
         """Configure (but don't start) a managed VoLCA server.
 
         Args:
             config: Path to the engine TOML. Read for ``server.port`` and
                 ``server.password``. Missing file is tolerated — defaults
                 are used.
-            port: Override the port. ``0`` means "read from config (or 8080)".
+            port: Override the configured port. ``"auto"`` asks the engine to
+                bind an OS-assigned free port atomically. ``0`` reads the
+                config (or uses 8080), preserving the original API.
             binary: Name or path of the volca binary. Looked up on PATH if
                 not absolute.
         """
@@ -44,7 +49,7 @@ class Server:
         # Read port and password from config
         cfg = self._read_config()
         server_cfg = cfg.get("server", {})
-        self.port = port or server_cfg.get("port", 8080)
+        self.port = 0 if port == "auto" else port or server_cfg.get("port", 8080)
         self.password = server_cfg.get("password", "")
 
     @property
@@ -137,6 +142,39 @@ class Server:
 
         _compat.check(Client(self.base_url, password=self.password).get_version())
 
+    def _await_bound_port(self, wait_timeout: int) -> None:
+        """Read the engine's machine-readable port after it has bound port 0."""
+        process = self._process
+        if process is None or process.stdout is None:
+            raise RuntimeError("dynamic-port server has no stdout pipe")
+
+        lines: queue.Queue[str | None] = queue.Queue()
+
+        def read_stdout() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        threading.Thread(target=read_stdout, daemon=True).start()
+        deadline = time.monotonic() + wait_timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            if process.poll() is not None:
+                raise RuntimeError("VoLCA exited before reporting its bound port")
+            try:
+                line = lines.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                continue
+            if line is None:
+                raise RuntimeError("VoLCA closed stdout before reporting its bound port")
+            if line.startswith("VOLCA_PORT="):
+                port = int(line.removeprefix("VOLCA_PORT=").strip())
+                if not 1 <= port <= 65535:
+                    raise RuntimeError(f"VoLCA reported an invalid port: {port}")
+                self.port = port
+                return
+        raise TimeoutError(f"Server did not report its bound port within {wait_timeout}s")
+
     def start(self, idle_timeout: int = 300, wait_timeout: int = 120) -> None:
         """Spawn the engine process if it is not already serving, and wait until ready.
 
@@ -148,7 +186,8 @@ class Server:
 
         No-op if a healthy server is already reachable on ``base_url``.
         """
-        if self.is_alive():
+        dynamic_port = self.port == 0
+        if not dynamic_port and self.is_alive():
             # A server is already up — we didn't spawn it, so verify the wire
             # but leave it running on a mismatch; it isn't ours to stop.
             self._check_wire()
@@ -162,12 +201,22 @@ class Server:
             "--port", str(self.port),
             "--idle-timeout", str(idle_timeout),
         ]
+        if dynamic_port:
+            cmd.append("--desktop")
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if dynamic_port else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=self._subprocess_env(),
+            text=dynamic_port,
         )
+
+        if dynamic_port:
+            try:
+                self._await_bound_port(wait_timeout)
+            except Exception:
+                self.stop()
+                raise
 
         # Poll until server is ready
         deadline = time.monotonic() + wait_timeout
