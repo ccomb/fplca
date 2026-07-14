@@ -166,7 +166,7 @@ class Server:
         if not announced:
             raise RuntimeError("VoLCA exited before reporting its bound port")
         raw = announced[0]
-        port = int(raw) if raw.isdigit() else 0
+        port = int(raw) if raw.isdecimal() else 0
         if not 1 <= port <= 65535:
             raise RuntimeError(f"VoLCA reported an invalid port: {raw}")
         self.port = port

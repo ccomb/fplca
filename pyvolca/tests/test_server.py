@@ -80,7 +80,9 @@ def test_await_bound_port_accepts_engine_announcement():
     assert srv.port == 43123
 
 
-@pytest.mark.parametrize("line", ["VOLCA_PORT=0\n", "VOLCA_PORT=70000\n", "VOLCA_PORT=garbage\n"])
+@pytest.mark.parametrize(
+    "line", ["VOLCA_PORT=0\n", "VOLCA_PORT=70000\n", "VOLCA_PORT=garbage\n", "VOLCA_PORT=²\n"]
+)
 def test_await_bound_port_rejects_invalid_port(line: str):
     process = mock.Mock()
     process.stdout = io.StringIO(line)
