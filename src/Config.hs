@@ -20,6 +20,7 @@ module Config (
     -- * Loading
     loadConfig,
     loadConfigFile,
+    loadConfigOrDefault,
 
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
@@ -416,6 +417,17 @@ loadConfig path = do
     case result of
         Left err -> pure $ Left err
         Right cfg -> pure $ validateConfig (applyDataDir mDataDir cfg)
+
+{- | Resolve the effective configuration: parse the file when a path is given,
+otherwise fall back to 'defaultConfig'. Both paths honour VOLCA_DATA_DIR and
+run 'validateConfig' — an explicit path that does not exist still fails
+loudly, while no path at all means "all defaults, no databases".
+-}
+loadConfigOrDefault :: Maybe FilePath -> IO (Either Text Config)
+loadConfigOrDefault (Just path) = loadConfig path
+loadConfigOrDefault Nothing = do
+    mDataDir <- lookupEnv "VOLCA_DATA_DIR"
+    pure $ validateConfig (applyDataDir mDataDir defaultConfig)
 
 {- | Redirect a "data/<rest>" path to "$VOLCA_DATA_DIR/<rest>".
 Returns the input unchanged when the env var is unset, or when the path
