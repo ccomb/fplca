@@ -743,6 +743,54 @@ data RelinkRequest = RelinkRequest
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkRequest)
 
+-- | One consuming process of a supplier-gap entry.
+data GapConsumerAPI = GapConsumerAPI
+    { gcaProcessId :: Text
+    , gcaActivityName :: Text
+    , gcaProductName :: Text
+    , gcaLocation :: Text
+    , gcaEdges :: Int
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapConsumerAPI)
+
+{- | One supplier gap, aggregated per (product name, location, unit) so
+@demandSum@ never mixes units. @reason@ carries the stable blocker code
+('Types.blockerReasonDetail'), plus @dangling_source_identity@ for inputs whose
+named source activity no dependency ships, and @unlinked_waste_input@ for
+treatment-side waste inputs with no internal producer.
+-}
+data GapEntryAPI = GapEntryAPI
+    { gaeName :: Text
+    , gaeLocation :: Text
+    , gaeUnit :: Text
+    , gaeReason :: Text
+    , gaeDetail :: Maybe Text
+    , gaeEdges :: Int
+    , gaeConsumers :: Int
+    , gaeDemandSum :: Double
+    , gaeTopConsumers :: [GapConsumerAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapEntryAPI)
+
+{- | Supplier-gap report of a database: everything still unsupplied after
+internal resolution and cross-DB linking, aggregated and ranked by demanding
+edges — the work list for switching or completing a background dependency.
+-}
+data GapReportAPI = GapReportAPI
+    { graDbName :: Text
+    , graTotalInputs :: Int
+    , graInternalLinks :: Int
+    , graCrossDBLinks :: Int
+    , graUnresolvedEdges :: Int
+    , graUnresolvedProducts :: Int
+    , graCompleteness :: Double
+    , graGaps :: [GapEntryAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapReportAPI)
+
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded {dlrName :: Text}
@@ -770,10 +818,12 @@ data DeleteClassFilter = DeleteClassFilter
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteClassFilter)
 
-{- | Request for delete-by-selection. The filter fields select the whole
-matching set (pagination ignored); @dsqKeep@ spares matched process ids and
-@dsqExtra@ adds ones the filter missed. Process ids are the canonical
-@activityUUID_productUUID@ strings the UI/CLI carry, not matrix indices.
+{- | Request for delete-by-selection. Two exclusive selection modes: the
+filter fields select the whole matching set (pagination ignored), or @dsqIds@
+names the set exactly — the filter fields must then be absent. @dsqKeep@
+spares selected process ids and @dsqExtra@ adds ones the selection missed.
+Process ids are the canonical @activityUUID_productUUID@ strings the UI/CLI
+carry, not matrix indices.
 -}
 data DeleteSelectionRequest = DeleteSelectionRequest
     { dsqName :: Maybe Text -- Filter by activity name
@@ -783,6 +833,7 @@ data DeleteSelectionRequest = DeleteSelectionRequest
     , dsqExact :: Maybe Bool -- Exact name match (default False)
     , dsqKeep :: [Text] -- Process-id strings to spare from deletion
     , dsqExtra :: [Text] -- Process-id strings to add to deletion
+    , dsqIds :: Maybe [Text] -- Delete exactly these process ids (no filter fields allowed)
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionRequest)

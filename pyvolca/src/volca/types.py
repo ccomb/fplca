@@ -1168,12 +1168,16 @@ class AggregateScope(_StrEnum):
 
     ``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
     upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
-    biosphere flows in the supply chain.
+    biosphere flows in the supply chain. ``CONSUMPTION`` — every scaled
+    technosphere edge (who consumes what, in scaled units); the scope that
+    answers "total X consumed upstream" without double counting, via
+    ``filter_consumer_not``.
     """
 
     DIRECT = "direct"
     SUPPLY_CHAIN = "supply_chain"
     BIOSPHERE = "biosphere"
+    CONSUMPTION = "consumption"
 
 
 class AggregateOp(_StrEnum):

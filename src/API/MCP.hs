@@ -35,6 +35,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
+import API.DatabaseHandlers (gapReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -360,6 +361,7 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     "score_activity" -> callScoreActivity dbManager mBaseUrl rid args
     "score_activities" -> callScoreActivities dbManager mBaseUrl rid args
     "list_scoring_sets" -> callListScoringSets dbManager rid args
+    "get_gap_report" -> callGetGapReport dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -739,6 +741,7 @@ callAggregate dbManager rid args (db, solver) =
                     Left err -> return $ toolError rid err
                     Right fn -> case filterExchangeTypeFromArg of
                         Left err -> return $ toolError rid err
+                        Right filterExchangeType | Just msg <- Agg.exchangeTypeScopeError scope filterExchangeType -> return $ toolError rid msg
                         Right filterExchangeType -> do
                             let params =
                                     Agg.AggregateParams
@@ -752,6 +755,9 @@ callAggregate dbManager rid args (db, solver) =
                                         , Agg.apFilterClassifications =
                                             mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
                                         , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                        , Agg.apFilterConsumer = textArg "filter_consumer" args
+                                        , Agg.apFilterConsumerNot =
+                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
                                         , Agg.apFilterExchangeType = filterExchangeType
                                         , Agg.apFilterIsReference = boolArg "filter_is_reference" args
                                         , Agg.apGroupBy = textArg "group_by" args
@@ -768,7 +774,8 @@ callAggregate dbManager rid args (db, solver) =
         Just "direct" -> Right Agg.ScopeDirect
         Just "supply_chain" -> Right Agg.ScopeSupplyChain
         Just "biosphere" -> Right Agg.ScopeBiosphere
-        Nothing -> Left "Missing required parameter: scope (direct | supply_chain | biosphere)"
+        Just "consumption" -> Right Agg.ScopeConsumption
+        Nothing -> Left "Missing required parameter: scope (direct | supply_chain | biosphere | consumption)"
         Just other -> Left ("Invalid scope: " <> other)
     aggFnFromArg = case textArg "aggregate" args of
         Nothing -> Right Agg.AggSum
@@ -1296,6 +1303,16 @@ callListMethods dbManager rid = do
                 )
                 loadedMethods
     return $ toolSuccessJson rid $ object ["methods" .= summaries]
+
+{- | Supplier-gap report: what is still unsupplied after cross-DB linking.
+Same wire shape as the REST endpoint ('gapReportToAPI'), so both surfaces
+stay in lock-step.
+-}
+callGetGapReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callGetGapReport dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    report <- ExceptT (DM.databaseGapReport dbManager dbName)
+    return $ toolSuccessJson rid (toJSON (gapReportToAPI (intArg "limit" args) report))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do

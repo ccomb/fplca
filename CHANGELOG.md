@@ -3,13 +3,48 @@
 ## [Unreleased]
 
 ### Fixed
+- `exact=true` on the activity search now applies to the `product=` filter
+  too: it becomes a case-insensitive equality check on the reference product
+  name, as it already was for names and geographies. Previously the flag was
+  silently ignored for products, so an exact search could return near-miss
+  substring matches.
 - The `name=` filter on the supply-chain and consumers endpoints (REST and
   MCP) now filters. A name matching nothing previously disabled the filter
   and returned every entry — with a matching `filteredActivities` count — so
   a caller could not tell "no match" from "no filter". It now returns an
   empty result.
+- A scoring integrity error (a regionalized score whose tables are internally
+  inconsistent — mismatched lengths, absent weights) now fails the request
+  with a 500 instead of silently scoring the category 0. A consumer could not
+  tell that 0 from a real score. Coverage gaps are unaffected: an unmapped
+  flow still contributes nothing and is reported as before. In sensitivity
+  responses the error lands on the affected perturbation entry, which already
+  carries per-entry errors.
 
 ### Added
+- A supplier-gap report: `GET /db/{db}/gap-report` and the `get_gap_report`
+  MCP tool list everything a database still demands but nothing supplies,
+  after internal resolution and cross-database linking. Each missing product
+  (name, location, unit) carries the blocking reason, how many consumer edges
+  demand it, the distinct consumers, the total demanded amount, and the top
+  consuming processes. It is the natural read right after a relink: it answers
+  "what is missing to switch this database's background dependency?" without
+  rebuilding the list by hand from the linking statistics. An optional `limit`
+  keeps only the biggest gaps; the header counts always cover the full report.
+- Delete-activities accepts an `ids` list to delete exactly the named
+  processes, on the API (`"ids": [...]`) and the CLI (repeatable `--id`).
+  Previously the only selection mode was a filter, so deleting a known list
+  of processes required a deliberately unsatisfiable filter plus the `extra`
+  list. `ids` cannot be combined with filter fields — an ambiguous request
+  is refused, not guessed at.
+- EcoSpold 2 `mathematicalRelation` formulas are now read. Dataset
+  `<parameter>` variables are kept on the activity (value and raw formula),
+  and each exchange formula is checked against the dataset's parameters and
+  exchange variables as a consistency control. The amount stored in the file
+  always stays authoritative: a formula that evaluates to a different value
+  is reported as a divergence warning at load time, and the formulas that
+  cannot be evaluated (unsupported functions, cross-dataset references) are
+  summarized in one warning per dataset instead of being silently ignored.
 - `volca server` starts without `--config`: it runs on the built-in defaults
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An
@@ -18,6 +53,14 @@
   compartment, location, and unit. A method routinely holds several factors
   for one substance name — emitted to air vs. water, or one per region — and
   without these fields such rows looked like duplicates.
+- The `aggregate` primitive gains a `consumption` scope that answers "how much
+  of X is consumed across the whole upstream chain" — total electricity or
+  heat feeding a product, grass eaten by cattle. Each row is one scaled
+  consumer→supplier link, so filtering by the consuming activity
+  (`filter_consumer`, `filter_consumer_not`) avoids the double counting that
+  summing cumulative production would give (for example counting the same
+  electricity once per voltage level). Grouping by `consumer_name` shows who
+  consumes what. Available on the REST endpoint, the MCP tool, and pyvolca.
 
 ## [0.9.2] - 2026-07-14
 

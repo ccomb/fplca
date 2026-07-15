@@ -71,6 +71,7 @@ data Resource
     | ScoreActivity
     | ScoreActivities
     | ListScoringSets
+    | GetGapReport
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -152,6 +153,7 @@ apiPath r = case r of
     ScoreActivity -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "impacts", "{collection}"])
     ScoreActivities -> Just (POST, ["db", "{dbName}", "impacts", "{collection}"])
     ListScoringSets -> Nothing -- MCP-only: scoring sets are configuration metadata, no REST equivalent yet
+    GetGapReport -> Just (GET, ["db", "{dbName}", "gap-report"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -194,6 +196,7 @@ mcpName r = case r of
     ScoreActivity -> "score_activity"
     ScoreActivities -> "score_activities"
     ListScoringSets -> "list_scoring_sets"
+    GetGapReport -> "get_gap_report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -232,6 +235,7 @@ cliName r = case r of
     ScoreActivity -> "score-activity"
     ScoreActivities -> "score-activities"
     ListScoringSets -> "scoring-sets"
+    GetGapReport -> "gap-report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -302,6 +306,16 @@ description r = case r of
         \  - Mass breakdown of direct inputs: scope=direct, is_input=true, filter_unit=kg, group_by=name\n\
         \  - Total energy across the supply chain: scope=supply_chain, max_depth=2, filter_classification=[\"Category type=energy:exact\"]\n\
         \  - Largest pasture occupation flow: scope=biosphere, filter_name=Occupation, pasture, group_by=name\n\
+        \  - Total upstream electricity without double counting: scope=consumption, filter_name=electricity, filter_consumer_not=electricity\n\
+        \  - Grass eaten by cattle across the whole chain: scope=consumption, filter_name=grass, filter_consumer=cattle\n\
+        \\n\
+        \scope=supply_chain rows are cumulative productions: when a filtered product \
+        \feeds another filtered product (electricity high→medium→low voltage), their \
+        \sum double-counts the chain. scope=consumption has one row per scaled \
+        \technosphere edge (product, supplier, consumer), so its sums are actual \
+        \consumption events; the default total is gross throughput — exclude \
+        \intra-family edges with filter_consumer_not to get the amount delivered \
+        \outside the filtered family. Byproduct edges keep their negative sign.\n\
         \\n\
         \The filter_classification parameter accepts a list of strings in \"System=Value[:exact]\" form (default mode is 'contains')."
     GetSupplyChain ->
@@ -310,7 +324,9 @@ description r = case r of
         \scaled amount relative to the functional unit (scaling_factor × root \
         \reference product amount). To get the per-step yield ratio between two \
         \connected entries, divide the supplier's scaling_factor by the consumer's \
-        \scaling_factor."
+        \scaling_factor. Summing quantities across entries that feed each other \
+        \(electricity high→medium→low voltage) double-counts the chain — use \
+        \aggregate with scope=consumption for upstream totals."
     GetInventory ->
         "LCA / ACV — compute the Life Cycle Inventory (LCI): biosphere flows \
         \(emissions and resource extractions) for an activity's full supply chain. \
@@ -432,6 +448,15 @@ description r = case r of
         \factors, and the score \
         \formulas. Use the returned set names as keys when interpreting \
         \score_activity / score_activities responses."
+    GetGapReport ->
+        "LCA / ACV — supplier-gap report of a database: every input demand \
+        \still unsupplied after internal resolution and cross-database \
+        \linking, aggregated per (product, location, unit) and ranked by \
+        \demanding edges. Each gap carries the blocking reason, the number of \
+        \consumer edges and distinct consumers, the total demanded amount, \
+        \and the top consuming processes. Answers 'what is missing to switch \
+        \or complete this database's background dependency?' — typically read \
+        \right after a relink."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -585,7 +610,7 @@ params r = case r of
     Aggregate ->
         [ pDatabase
         , pProcessId
-        , Param "scope" "string" Required "direct | supply_chain | biosphere"
+        , Param "scope" "string" Required "direct | supply_chain | biosphere | consumption"
         , Param "is_input" "boolean" Optional "Only for scope=direct — true=inputs only, false=outputs only"
         , Param "max_depth" "integer" Optional "Only for scope=supply_chain — max hops from the root activity"
         , Param "filter_name" "string" Optional "Case-insensitive substring on flow/activity name"
@@ -593,9 +618,11 @@ params r = case r of
         , Param "filter_unit" "string" Optional "Exact unit name"
         , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expanded and merged into filter_classification."
         , Param "filter_classification" "array" Optional "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode"
-        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere — filter by upstream activity name"
+        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption — filter by supplier activity name"
+        , Param "filter_consumer" "string" Optional "Only for scope=consumption — case-insensitive substring on the consuming activity's name"
+        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption — comma-separated consumer-name exclude list (each item is a substring; a name containing a comma cannot be expressed)"
         , Param "filter_is_reference" "boolean" Optional "Filter by reference-product flag (typically for outputs)"
-        , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name"
+        , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name | consumer_name"
         , Param "aggregate" "string" Optional "sum_quantity | count | share (default: sum_quantity)"
         ]
     GetSupplyChain ->
@@ -734,4 +761,8 @@ params r = case r of
         ]
     ListScoringSets ->
         [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."
+        ]
+    GetGapReport ->
+        [ pDatabase
+        , pLimit "Max gap entries to return, biggest first (default: all). The header counts always cover the full report, so a truncated list stays countable."
         ]

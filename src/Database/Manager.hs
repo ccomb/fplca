@@ -87,6 +87,7 @@ module Database.Manager (
     getStagedDatabase,
     getDatabaseSetupInfo,
     buildLoadedSetupInfo,
+    databaseGapReport,
     addDependencyToStaged,
     removeDependencyFromStaged,
     setDataPath,
@@ -205,6 +206,7 @@ import Types (
     UnitDB,
     bfCompartmentName,
     bfCompartmentSub,
+    blockerReasonDetail,
     computeMinimalSelectedDeps,
     crossDBBySource,
     crossDBRedundantSources,
@@ -215,7 +217,6 @@ import Types (
     exchangeFlowId,
     exchangeIsReference,
     initializeRuntimeFields,
-    locationKindCode,
     toSimpleDatabase,
     unresolvedCount,
  )
@@ -2283,6 +2284,20 @@ getStagedDatabase manager dbName = do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     return $ M.lookup dbName stagedDbs
 
+{- | Supplier-gap report for a loaded or staged database — what is still
+missing to fully supply its demands from the pinned dependencies, aggregated
+per (product, location, unit) with the consumers that demand it.
+-}
+databaseGapReport :: DatabaseManager -> Text -> IO (Either Text Loader.GapReport)
+databaseGapReport manager dbName = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    pure $ case (M.lookup dbName loadedDbs, M.lookup dbName stagedDbs) of
+        (Just loaded, _) -> Right (Loader.gapReportForLoaded dbName (ldDatabase loaded))
+        (Nothing, Just staged) ->
+            Right (Loader.gapReportForStaged dbName (sdSimpleDB staged) (sdLinkingStats staged))
+        (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
+
 data StageAction = AlreadyDone | NeedToStage
 
 {- | Get setup info for a database (for the setup page)
@@ -2393,12 +2408,7 @@ buildStagedSetupInfo staged configs indexedDbs =
         -- Convert missing products to MissingSupplier with reason/detail
         missingSuppliers = take 10 $ map blockerToMissingSupplier (sdMissingProducts staged)
         blockerToMissingSupplier (name, cnt, blocker) =
-            let (reason, detail) = case blocker of
-                    NoNameMatch -> ("no_name_match", Nothing)
-                    UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
-                    LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act kind ->
-                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
+            let (reason, detail) = blockerReasonDetail blocker
              in MissingSupplier name cnt Nothing reason detail
         -- Combined dependencies list (selected + redundant + available, alpha sorted)
         dependencies =
@@ -2458,12 +2468,7 @@ buildLoadedSetupInfo config db configs indexedDbs =
                 then 100.0 * fromIntegral resolved / fromIntegral totalInputs
                 else 100.0
         blockerToMissingSupplier (name, (cnt, blocker)) =
-            let (reason, detail) = case blocker of
-                    NoNameMatch -> ("no_name_match", Nothing)
-                    UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
-                    LocationUnavailable loc -> ("location_unavailable", Just loc)
-                    LocationRejectedByPolicy req act kind ->
-                        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
+            let (reason, detail) = blockerReasonDetail blocker
              in MissingSupplier name cnt Nothing reason detail
         statsSuppliers = map blockerToMissingSupplier (M.toList (cdlUnresolvedProducts stats))
         danglingSuppliers =

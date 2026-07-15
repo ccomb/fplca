@@ -1209,6 +1209,8 @@ class Client:
         preset: str | None = None,
         filter_classification: list[ClassificationFilter] | None = None,
         filter_target_name: str | None = None,
+        filter_consumer: str | None = None,
+        filter_consumer_not: list[str] | str | None = None,
         filter_is_reference: bool | None = None,
         group_by: str | None = None,
         aggregate: AggregateOp | str | None = None,
@@ -1217,11 +1219,31 @@ class Client:
 
         Args:
             scope: :class:`AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
-                / ``BIOSPHERE``) or the equivalent wire string. Strings are
-                accepted for one-liner ergonomics but bypass static checking.
+                / ``BIOSPHERE`` / ``CONSUMPTION``) or the equivalent wire
+                string. Strings are accepted for one-liner ergonomics but
+                bypass static checking. ``CONSUMPTION`` rows are scaled
+                technosphere edges — use it for "total X consumed upstream"
+                questions. Net electricity without grid double counting::
+
+                    aggregate(pid, "consumption", filter_name="electricity",
+                              filter_consumer_not=["electricity"])
+
+                Grass eaten by cattle across the whole chain::
+
+                    aggregate(pid, "consumption", filter_name="grass",
+                              filter_consumer="cattle")
+            filter_consumer: substring match on the consuming activity's name
+                (``CONSUMPTION`` scope only).
+            filter_consumer_not: exclude edges whose consumer name contains
+                any of these substrings (list or comma-separated string).
+                Items always split on commas on the wire, so a name that
+                itself contains a comma ("electricity production, hard
+                coal") becomes two independent substrings — use a
+                comma-free fragment of the name instead.
             group_by: omit for a single-bucket result (just the totals).
                 Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
                 ``"unit"``, ``"location"``, ``"target_name"``,
+                ``"consumer_name"`` (``CONSUMPTION`` scope),
                 ``"classification.<system>"``.
             aggregate: :class:`AggregateOp` member or wire string
                 (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
@@ -1239,6 +1261,10 @@ class Client:
             filter_name_not_csv: str | None = ",".join(filter_name_not)
         else:
             filter_name_not_csv = filter_name_not
+        if isinstance(filter_consumer_not, list):
+            filter_consumer_not_csv: str | None = ",".join(filter_consumer_not)
+        else:
+            filter_consumer_not_csv = filter_consumer_not
         raw = self._call(
             "aggregate",
             process_id=process_id,
@@ -1251,6 +1277,8 @@ class Client:
             preset=preset,
             filter_classification=filter_strings,
             filter_target_name=filter_target_name,
+            filter_consumer=filter_consumer,
+            filter_consumer_not=filter_consumer_not_csv,
             filter_is_reference=filter_is_reference,
             group_by=group_by,
             aggregate=aggregate,

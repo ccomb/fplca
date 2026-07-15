@@ -232,7 +232,7 @@ applyStructuredFilters ::
     Maybe Text ->
     -- | classification filters
     [(Text, Text, Bool)] ->
-    -- | exactMatch (affects geo equality)
+    -- | exactMatch (geo and product filters become case-insensitive equality)
     Bool ->
     [(ProcessId, Activity)] ->
     [(ProcessId, Activity)]
@@ -265,6 +265,9 @@ applyStructuredFilters db geoParam productParam classFilters exactMatch candidat
         productFiltered = case productParam of
             Nothing -> geoFiltered
             Just prod
+                | exactMatch ->
+                    let prodFold = T.toCaseFold prod
+                     in [(pid, a) | (pid, a) <- geoFiltered, any ((== prodFold) . T.toCaseFold) (getProductNames a)]
                 | M.null pidx ->
                     [(pid, a) | (pid, a) <- geoFiltered, allWordsMatch prod getProductNames a]
                 | otherwise ->

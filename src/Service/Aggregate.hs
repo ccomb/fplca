@@ -15,16 +15,20 @@ module Service.Aggregate (
     AggregateFn (..),
     ExchangeKind (..),
     exchangeKindOf,
+    exchangeTypeScopeError,
     emptyAggregateParams,
     aggregate,
 ) where
 
 import qualified Data.List as L
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 
 import API.Types (
     ActivitySummary (..),
@@ -37,7 +41,7 @@ import API.Types (
     SupplyChainResponse (..),
     apiFlowName,
  )
-import Matrix (buildDemandVectorFromIndex)
+import Matrix (activityNormalizationFactor, buildDemandVectorFromIndex)
 import Service (
     ActivityFilterCore (..),
     ServiceError (..),
@@ -45,6 +49,8 @@ import Service (
     buildSupplyChainFromScalingVectorCrossDB,
     convertToInventoryExport,
     getActivityExchangeDetails,
+    getReferenceProductAmount,
+    getReferenceProductName,
     resolveActivityAndProcessId,
  )
 import SharedSolver (DepSolverLookup, SharedSolver, computeInventoryMatrixWithDepsCached, solveWithSharedSolver)
@@ -53,13 +59,20 @@ import Types (
     Activity,
     BioFlowDB,
     BiosphereFlow (..),
+    CrossDBLink (..),
     Database (..),
     Exchange (..),
+    SparseTriple (..),
     UnitDB,
+    activityClassification,
+    activityLocation,
+    activityName,
+    activityUnit,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsInput,
     exchangeIsReference,
+    processIdToText,
  )
 import UnitConversion (UnitConfig)
 
@@ -67,7 +80,7 @@ import UnitConversion (UnitConfig)
 -- Parameters
 -- ---------------------------------------------------------------------------
 
-data AggScope = ScopeDirect | ScopeSupplyChain | ScopeBiosphere
+data AggScope = ScopeDirect | ScopeSupplyChain | ScopeBiosphere | ScopeConsumption
     deriving (Eq, Show)
 
 {- | Local discriminator for filtering by exchange variant. Mirrors the
@@ -84,6 +97,20 @@ exchangeKindOf TechnosphereExchange{} = KindTechnosphere
 exchangeKindOf BiosphereExchange{} = KindBiosphere
 exchangeKindOf WasteExchange{} = KindWaste
 
+{- | Why a filter_exchange_type value cannot be combined with the given
+scope — 'Nothing' when the combination is legal. Shared by the REST and
+MCP surfaces so both reject identically instead of one silently
+no-opping the filter.
+-}
+exchangeTypeScopeError :: AggScope -> Maybe ExchangeKind -> Maybe Text
+exchangeTypeScopeError scope mKind = case mKind of
+    Nothing -> Nothing
+    Just _ -> case scope of
+        ScopeDirect -> Nothing
+        ScopeBiosphere -> Just "filter_exchange_type is redundant with scope=biosphere"
+        ScopeSupplyChain -> Just "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"
+        ScopeConsumption -> Just "filter_exchange_type is not supported with scope=consumption (all edges are technosphere)"
+
 data AggregateFn = AggSum | AggCount | AggShare
     deriving (Eq, Show)
 
@@ -98,7 +125,9 @@ data AggregateParams = AggregateParams
     , apFilterNameNot :: [Text] -- case-insensitive substrings (exclude-list)
     , apFilterUnit :: Maybe Text -- exact unit name
     , apFilterClassifications :: [ClassEntry]
-    , apFilterTargetName :: Maybe Text -- only ScopeDirect technosphere
+    , apFilterTargetName :: Maybe Text -- ScopeDirect technosphere / ScopeConsumption (supplier)
+    , apFilterConsumer :: Maybe Text -- only ScopeConsumption — case-insensitive substring
+    , apFilterConsumerNot :: [Text] -- only ScopeConsumption — exclude-list
     , apFilterExchangeType :: Maybe ExchangeKind -- only ScopeDirect
     , apFilterIsReference :: Maybe Bool
     , apGroupBy :: Maybe Text
@@ -117,6 +146,8 @@ emptyAggregateParams s =
         , apFilterUnit = Nothing
         , apFilterClassifications = []
         , apFilterTargetName = Nothing
+        , apFilterConsumer = Nothing
+        , apFilterConsumerNot = []
         , apFilterExchangeType = Nothing
         , apFilterIsReference = Nothing
         , apGroupBy = Nothing
@@ -134,8 +165,9 @@ data AggRow = AggRow
     , rowQuantity :: !Double
     , rowIsInput :: !(Maybe Bool)
     , rowIsReference :: !(Maybe Bool)
-    , rowTargetName :: !(Maybe Text) -- only direct technosphere
-    , rowLocation :: !(Maybe Text) -- only supply_chain
+    , rowTargetName :: !(Maybe Text) -- direct technosphere / consumption (supplier)
+    , rowConsumerName :: !(Maybe Text) -- only consumption
+    , rowLocation :: !(Maybe Text) -- only supply_chain / consumption
     , rowExchangeType :: !(Maybe ExchangeKind) -- only direct / biosphere
     , rowClassifications :: !(M.Map Text Text)
     }
@@ -186,6 +218,16 @@ aggregate unitConfig flowDB unitDB db dbName solver depLookup pidText params =
                             let inventory = SharedSolver.csInventory sol
                                 export = convertToInventoryExport db flowDB unitDB processId activity inventory
                              in return $ Right $ reduce params (rowsFromBiosphere export)
+                ScopeConsumption -> do
+                    -- ponytail: reuses the biosphere solve, whose inventory half is
+                    -- discarded here; a scaling-only cross-DB walk is the upgrade
+                    -- path if profiling ever complains.
+                    solE <- computeInventoryMatrixWithDepsCached unitConfig depLookup db dbName solver processId
+                    case solE of
+                        Left err -> return (Left (MatrixError err))
+                        Right sol ->
+                            let rootRefAmount = getReferenceProductAmount activity
+                             in return $ Right $ reduce params (rowsFromConsumption rootRefAmount (SharedSolver.csScalings sol))
   where
     emptyFilter maxD =
         SupplyChainFilter
@@ -221,6 +263,7 @@ rowsFromDirect db act =
             , rowIsInput = Just (exchangeIsInput ex)
             , rowIsReference = Just (exchangeIsReference ex)
             , rowTargetName = fmap prsActivityName target
+            , rowConsumerName = Nothing
             , rowLocation = fmap prsLocation target
             , rowExchangeType = Just (exchangeKindOf ex)
             , rowClassifications = M.empty
@@ -239,6 +282,7 @@ rowsFromSupplyChain response =
             , rowIsInput = Nothing
             , rowIsReference = Nothing
             , rowTargetName = Nothing
+            , rowConsumerName = Nothing
             , rowLocation = Just (sceLocation e)
             , rowExchangeType = Nothing
             , rowClassifications = sceClassifications e
@@ -257,10 +301,97 @@ rowsFromBiosphere export =
             , rowIsInput = Just (not isEmission)
             , rowIsReference = Nothing
             , rowTargetName = Nothing
+            , rowConsumerName = Nothing
             , rowLocation = Nothing
             , rowExchangeType = Just KindBiosphere
             , rowClassifications = M.empty
             }
+
+{- | One row per scaled technosphere edge across the whole chain: for each
+coefficient A[supplier, consumer] whose consumer has a non-zero scaling
+s_consumer, the quantity is @coefficient × s_consumer × multiplier@ — the
+total amount of the supplier's product consumed by that consumer for the
+functional unit. Summing filtered edges never double-counts a
+transformation chain the way summing cumulative supply-chain productions
+does, because each consumption event is one row.
+
+Signs pass through untouched: inputs are stored positive, byproduct
+outputs negative, and treatment-convention columns flip both the
+coefficient and the scaling, so their product stays sign-correct.
+Filtering on positive values here would silently drop real inputs of
+treatment activities.
+
+Cross-DB bridge edges (consumer in one DB, supplier in a dependency) are
+not matrix triples; they are folded in from 'dbCrossDBLinks' with the
+same demand formula as 'Matrix.accumulateDepDemandsWith'. Their
+supplier-side fields that live in the dependency database (target name,
+classifications) are left empty rather than resolved — a classification
+or target-name filter therefore never matches a bridge edge.
+-}
+rowsFromConsumption :: Double -> NonEmpty (Text, Database, VU.Vector Double) -> [AggRow]
+rowsFromConsumption rootRefAmount ((rootDbName, rootDb, rootScaling) :| deps) =
+    dbRows False rootDbName rootDb rootScaling rootRefAmount
+        <> concatMap (\(depName, depDb, depScaling) -> dbRows True depName depDb depScaling 1.0) deps
+  where
+    dbRows qualifyPids dbN db' s mult =
+        internalEdges qualifyPids dbN db' s mult <> bridgeEdges db' s mult
+
+    -- Matrix indices double as ProcessIds, same convention as
+    -- 'Service.collectSupplyChainEntries'.
+    internalEdges qualifyPids dbN db' s mult =
+        VU.foldr step [] (dbTechnosphereTriples db')
+      where
+        step (SparseTriple supplierIdx consumerIdx v) acc =
+            let sj = s VU.! fromIntegral consumerIdx
+             in if sj == 0 then acc else mkEdge supplierIdx consumerIdx v sj : acc
+        mkEdge supplierIdx consumerIdx v sj =
+            let supplier = dbActivities db' V.! fromIntegral supplierIdx
+                consumer = dbActivities db' V.! fromIntegral consumerIdx
+                pidText = processIdToText db' (fromIntegral supplierIdx)
+             in AggRow
+                    { rowName = fromMaybe (activityName supplier) (getReferenceProductName (dbTechFlows db') supplier)
+                    , rowFlowId = if qualifyPids then dbN <> "::" <> pidText else pidText
+                    , rowUnit = activityUnit supplier
+                    , rowQuantity = v * sj * mult
+                    , rowIsInput = Nothing
+                    , rowIsReference = Nothing
+                    , rowTargetName = Just (activityName supplier)
+                    , rowConsumerName = Just (activityName consumer)
+                    , rowLocation = Just (activityLocation supplier)
+                    , rowExchangeType = Nothing
+                    , rowClassifications = activityClassification supplier
+                    }
+
+    bridgeEdges db' s mult =
+        mapMaybe bridgeRow (dbCrossDBLinks db')
+      where
+        bridgeRow link = do
+            consumerPid <- M.lookup (cdlConsumerActUUID link, cdlConsumerProdUUID link) (dbProcessIdLookup db')
+            let consumerIdx = fromIntegral (dbActivityIndex db' V.! fromIntegral consumerPid)
+                sj = s VU.! consumerIdx
+                consumer = dbActivities db' V.! fromIntegral consumerPid
+            if sj == 0
+                then Nothing
+                else
+                    Just
+                        AggRow
+                            { rowName = cdlFlowName link
+                            , rowFlowId =
+                                cdlSourceDatabase link
+                                    <> "::"
+                                    <> UUID.toText (cdlSupplierActUUID link)
+                                    <> "_"
+                                    <> UUID.toText (cdlSupplierProdUUID link)
+                            , rowUnit = cdlExchangeUnit link
+                            , rowQuantity = cdlCoefficient link * sj / activityNormalizationFactor db' consumerPid * mult
+                            , rowIsInput = Nothing
+                            , rowIsReference = Nothing
+                            , rowTargetName = Nothing
+                            , rowConsumerName = Just (activityName consumer)
+                            , rowLocation = Just (cdlLocation link)
+                            , rowExchangeType = Nothing
+                            , rowClassifications = M.empty
+                            }
 
 -- ---------------------------------------------------------------------------
 -- Filter / group / reduce pipeline
@@ -274,6 +405,8 @@ filterRow p r =
         && nameNotOk
         && unitOk
         && targetOk
+        && consumerOk
+        && consumerNotOk
         && exchangeTypeOk
         && classOk
   where
@@ -296,6 +429,14 @@ filterRow p r =
         Just q -> case rowTargetName r of
             Just t -> contains q t
             Nothing -> False
+    consumerOk = case apFilterConsumer p of
+        Nothing -> True
+        Just q -> case rowConsumerName r of
+            Just c -> contains q c
+            Nothing -> False
+    consumerNotOk = case rowConsumerName r of
+        Nothing -> True -- row lacks the attribute → the exclude-list can't hit it
+        Just c -> not (any (`contains` c) (apFilterConsumerNot p))
     exchangeTypeOk = case apFilterExchangeType p of
         Nothing -> True
         Just want -> case rowExchangeType r of
@@ -318,6 +459,7 @@ groupKey key r = case key of
     "unit" -> rowUnit r
     "location" -> fromMaybe "" (rowLocation r)
     "target_name" -> fromMaybe "" (rowTargetName r)
+    "consumer_name" -> fromMaybe "" (rowConsumerName r)
     other
         | Just sys <- T.stripPrefix "classification." other ->
             fromMaybe "" (M.lookup sys (rowClassifications r))
@@ -366,6 +508,7 @@ scopeText :: AggScope -> Text
 scopeText ScopeDirect = "direct"
 scopeText ScopeSupplyChain = "supply_chain"
 scopeText ScopeBiosphere = "biosphere"
+scopeText ScopeConsumption = "consumption"
 
 homogeneousUnit :: [AggRow] -> Maybe Text
 homogeneousUnit [] = Nothing

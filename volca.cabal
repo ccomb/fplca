@@ -277,12 +277,14 @@ test-suite lca-tests
                      , MCPEnrichSpec
                      , MCPColumnarSpec
                      , NormalizeSpec
+                     , StructuredFiltersSpec
                      , BM25Spec
                      , FuzzySpec
                      , NestedSubstitutionSpec
                      , SubstitutionSpec
                      , SensitivitySpec
                      , CrossDBSubstitutionSpec
+                     , GapReportSpec
                      , GlobalSubstitutionSpec
                      , DatabaseStatusSpec
                      , DependencyChoiceSpec

@@ -224,7 +224,7 @@ GET    /api/v1/db/{dbName}/activity/{processId}/supply-chain             Flat su
 POST   /api/v1/db/{dbName}/activity/{processId}/supply-chain             Same, with substitutions applied
 GET    /api/v1/db/{dbName}/activity/{processId}/consumers                Downstream activities consuming this one
 GET    /api/v1/db/{dbName}/activity/{processId}/path-to?target=          Shortest supply-chain path to a target activity
-GET    /api/v1/db/{dbName}/activity/{processId}/aggregate                SQL-style group/filter on exchanges, supply chain, or biosphere
+GET    /api/v1/db/{dbName}/activity/{processId}/aggregate                SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges
 
 # Inventory and impacts
 GET    /api/v1/db/{dbName}/activity/{processId}/inventory                Life cycle inventory (LCI)
@@ -253,6 +253,7 @@ POST   /api/v1/db/upload                                                 Upload 
 POST   /api/v1/db/{dbName}/load                                          Load a configured database
 POST   /api/v1/db/{dbName}/unload                                        Unload (keep config, free memory)
 POST   /api/v1/db/{dbName}/relink                                        Re-resolve cross-DB links (optional JSON body: depDb + mappingCsv for an alias relink)
+GET    /api/v1/db/{dbName}/gap-report                                    Supplier-gap report (what is still unsupplied after linking)
 POST   /api/v1/db/{dbName}/finalize                                      Finalize cross-DB linking
 DELETE /api/v1/db/{dbName}                                               Delete a database
 GET    /api/v1/db/{dbName}/setup                                         Setup info (path, dependencies)
@@ -331,7 +332,7 @@ Available tools — auto-derived at runtime from the single resource registry (`
 | `search_activities` | Search by name, geography, product, classification, or preset |
 | `search_flows` | Search biosphere flows |
 | `get_activity` | Activity details and exchanges (with comments) |
-| `aggregate` | SQL-style group/filter on exchanges, supply chain, or biosphere |
+| `aggregate` | SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges |
 | `get_supply_chain` | Flat upstream activity list with quantities and filters |
 | `get_consumers` | Downstream activities that consume a given activity |
 | `get_path_to` | Shortest supply-chain path from one activity to another |
@@ -436,6 +437,7 @@ volca database delete my-db                     # delete
 volca database copy my-db my-db-v2              # copy under a new name
 volca database relink my-db --to bg-db --mapping aliases.csv
 volca database delete-activities my-db --name "electricity"  # delete filtered set
+volca database delete-activities my-db --id UUID_UUID --id UUID_UUID  # delete exactly these
 volca database export my-db --format simapro --out out.csv
 #   formats: simapro | ecospold1 | ecospold2 | ilcd | brightway
 
@@ -485,7 +487,7 @@ volca method delete ef-31                        # delete
 | Relink / finalize | `POST /db/{name}/(relink\|finalize)` | `database relink DB --to DEP --mapping CSV` |
 | Setup / dependencies | `GET /db/{name}/setup`, `POST .../{add,remove}-dependency/{dep}`, `POST .../set-data-path` | — |
 | Copy database | `POST /db/{name}/copy/{newName}` | `database copy SRC NEW_NAME` |
-| Delete activities (filtered set) | `POST /db/{name}/delete` | `database delete-activities DB [filters]` |
+| Delete activities (by filter or ids) | `POST /db/{name}/delete` | `database delete-activities DB [filters\|--id …]` |
 | Export database | `POST /db/{name}/export` | `database export DB --format FMT --out FILE` |
 | Delete database | `DELETE /db/{name}` | `database delete NAME` |
 | **Method Management** | | |

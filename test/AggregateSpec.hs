@@ -2,23 +2,29 @@
 
 {- | Tests for "Service.Aggregate".
 
-The aggregate API is documented but had zero direct test coverage. We
-exercise it end-to-end against SAMPLE.min3, focusing on ScopeDirect (no
-MUMPS solve required) and ScopeBiosphere (driven by mkSolverFromDb), with
-emphasis on the filter / group-by / aggregate-function semantics that the
-HTTP layer relies on for correctness.
+Exercised end-to-end against SAMPLE.min3 — a three-step chain where
+activity X consumes 0.6 kg of product Y per kg of product X, and Y
+consumes 0.4 kg of product Z per kg of Y, so the scaling vector for one
+kg of X is (1, 0.6, 0.24). ScopeDirect needs no MUMPS solve; the other
+scopes are driven by mkSolverFromDb. Emphasis on the filter / group-by /
+aggregate-function semantics that the HTTP layer relies on for
+correctness.
 -}
 module AggregateSpec (spec) where
 
+import qualified Data.Map.Strict as MS
+import Data.Maybe (isJust)
 import qualified Data.Set as S
+import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Test.Hspec
 
 import qualified API.Types as API
 import qualified Service.Aggregate as Agg
 import qualified SharedSolver as SS
-import TestHelpers (loadSampleDatabase, mkSolverFromDb)
-import Types (Database (..), processIdToText)
+import TestHelpers (loadSampleDatabase, mkDepLookupFromMap, mkSolverFromDb)
+import Types (CrossDBLink (..), Database (..), processIdToText)
 import qualified Types
 import qualified UnitConversion as UC
 
@@ -31,7 +37,15 @@ runAgg ::
     Database ->
     Agg.AggregateParams ->
     IO API.Aggregation
-runAgg db params = do
+runAgg = runAggWith noDeps
+
+-- Same, with a real dep-DB lookup for cross-database chains.
+runAggWith ::
+    SS.DepSolverLookup ->
+    Database ->
+    Agg.AggregateParams ->
+    IO API.Aggregation
+runAggWith depLookup db params = do
     solver <- mkSolverFromDb db "test"
     -- ProcessId is the activity's index in dbActivities; for SAMPLE.min3 the
     -- first activity has ProcessId 0, which is what we use here.
@@ -44,7 +58,7 @@ runAgg db params = do
             db
             "test"
             solver
-            noDeps
+            depLookup
             pidText
             params
     case result of
@@ -58,6 +72,51 @@ direct = Agg.emptyAggregateParams Agg.ScopeDirect
 
 biosphere :: Agg.AggregateParams
 biosphere = Agg.emptyAggregateParams Agg.ScopeBiosphere
+
+supplyChain :: Agg.AggregateParams
+supplyChain = Agg.emptyAggregateParams Agg.ScopeSupplyChain
+
+consumption :: Agg.AggregateParams
+consumption = Agg.emptyAggregateParams Agg.ScopeConsumption
+
+-- 0.6 and 0.4 are not exact in binary; compare within a tolerance.
+shouldBeCloseTo :: Double -> Double -> Expectation
+shouldBeCloseTo actual expected =
+    actual `shouldSatisfy` (\x -> abs (x - expected) < 1e-9)
+
+{- | SAMPLE.min3 loaded twice: the root copy gains one synthetic bridge
+link — activity Y consumes 0.5 unit of the dep copy's product Y per unit
+output — so a single aggregate call exercises internal edges, the bridge
+edge, and dep-DB internal edges at once. Scalings: root (1, 0.6, 0.24),
+bridge demand 0.5 × 0.6 = 0.3, dep (0, 0.3, 0.12).
+-}
+loadLinkedPair :: IO (Database, SS.DepSolverLookup)
+loadLinkedPair = do
+    base <- loadSampleDatabase "SAMPLE.min3"
+    depDb <- loadSampleDatabase "SAMPLE.min3"
+    depSolver <- mkSolverFromDb depDb "dep"
+    yPid <- case V.findIndex (\a -> Types.activityName a == "production of product Y") (dbActivities base) of
+        Just i -> pure i
+        Nothing -> expectationFailure "SAMPLE.min3 lost its product Y activity" >> error "unreachable"
+    let (yAct, yProd) = dbProcessIdTable base V.! yPid -- same UUIDs in both copies
+        link =
+            CrossDBLink
+                { cdlConsumerActUUID = yAct
+                , cdlConsumerProdUUID = yProd
+                , cdlConsumerFlowId = UUID.nil
+                , cdlSupplierActUUID = yAct
+                , cdlSupplierProdUUID = yProd
+                , cdlCoefficient = 0.5
+                , cdlExchangeUnit = Types.activityUnit (dbActivities base V.! yPid)
+                , cdlFlowName = "product Y"
+                , cdlLocation = "GLO"
+                , cdlSourceDatabase = "dep"
+                , cdlTiedAlternatives = []
+                }
+    pure
+        ( base{dbCrossDBLinks = [link]}
+        , mkDepLookupFromMap (MS.singleton "dep" (depDb, depSolver))
+        )
 
 spec :: Spec
 spec = do
@@ -76,7 +135,7 @@ spec = do
             Agg.apFilterClassifications direct `shouldBe` []
             Agg.apIsInput direct `shouldBe` Nothing
 
-    describe "ScopeDirect on SAMPLE.min3 (cement → sand/gravel)" $ do
+    describe "ScopeDirect on SAMPLE.min3 (X ← Y ← Z chain)" $ do
         it "echoes the scope text in the result" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
             agg <- runAgg db direct
@@ -152,6 +211,113 @@ spec = do
                 distinctUnits = length . S.fromList $ map Types.exchangeUnitId (Types.exchanges firstAct)
             length (API.aggGroups agg) `shouldSatisfy` (<= distinctUnits)
             length (API.aggGroups agg) `shouldSatisfy` (>= 1)
+
+    describe "ScopeSupplyChain on SAMPLE.min3" $ do
+        it "lists cumulative production per upstream product (root excluded)" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db supplyChain
+            API.aggScope agg `shouldBe` "supply_chain"
+            API.aggFilteredCount agg `shouldBe` 2
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.84
+            API.aggFilteredUnit agg `shouldBe` Just "kg"
+
+        it "max_depth=1 keeps only the direct supplier" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db supplyChain{Agg.apMaxDepth = Just 1}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.6
+
+    describe "ScopeConsumption on SAMPLE.min3" $ do
+        it "yields one row per scaled technosphere edge" $ do
+            -- Edges: Y→X (0.6 × s_X=1) and Z→Y (0.4 × s_Y=0.6).
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption
+            API.aggScope agg `shouldBe` "consumption"
+            API.aggFilteredCount agg `shouldBe` 2
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.84
+            API.aggFilteredUnit agg `shouldBe` Just "kg"
+
+        it "filter_consumer restricts to what the matching activities eat (grass-by-cows shape)" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterConsumer = Just "product Y"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "filter_consumer_not excludes edges into the matching consumers" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterConsumerNot = ["product Y"]}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.6
+
+        it "filter_name matches the supplier's reference product" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterName = Just "product Z"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "filter_target_name matches the supplier activity's name" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterTargetName = Just "production of product Z"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "group_by=consumer_name buckets edges by eater, largest first" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apGroupBy = Just "consumer_name"}
+            map API.aggKey (API.aggGroups agg)
+                `shouldBe` ["production of product X", "production of product Y"]
+            case API.aggGroups agg of
+                [gx, gy] -> do
+                    API.aggQuantity gx `shouldBeCloseTo` 0.6
+                    API.aggQuantity gy `shouldBeCloseTo` 0.24
+                other -> expectationFailure ("expected 2 groups, got " <> show (length other))
+
+        it "filter_consumer on ScopeDirect matches nothing (rows carry no consumer)" $ do
+            -- Pins the "attribute absent → filter excludes" semantics, the
+            -- same rule filter_target_name already follows.
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db direct{Agg.apFilterConsumer = Just "product"}
+            API.aggFilteredCount agg `shouldBe` 0
+
+    describe "ScopeConsumption across databases (bridge links)" $ do
+        it "sums internal, bridge, and dep-DB edges" $ do
+            -- Root edges 0.6 + 0.24, bridge 0.5 × s_Y = 0.3, dep edge
+            -- 0.4 × 0.3 = 0.12.
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption
+            API.aggFilteredCount agg `shouldBe` 4
+            API.aggFilteredTotal agg `shouldBeCloseTo` 1.26
+
+        it "matches the cumulative supply_chain total (two independent paths)" $ do
+            (rootDb, depLookup) <- loadLinkedPair
+            aggC <- runAggWith depLookup rootDb consumption
+            aggS <- runAggWith depLookup rootDb supplyChain
+            API.aggFilteredTotal aggC `shouldBeCloseTo` API.aggFilteredTotal aggS
+
+        it "group_by=flow_id qualifies the bridge and dep-side suppliers with the dep name" $ do
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption{Agg.apGroupBy = Just "flow_id"}
+            let keys = map API.aggKey (API.aggGroups agg)
+            length keys `shouldBe` 4
+            length (filter ("dep::" `T.isPrefixOf`) keys) `shouldBe` 2
+
+        it "filter_consumer spans databases" $ do
+            -- Consumers named "…product Y": root Y eats Z (0.24) and the
+            -- bridge (0.3); dep Y eats dep Z (0.12).
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption{Agg.apFilterConsumer = Just "product Y"}
+            API.aggFilteredCount agg `shouldBe` 3
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.66
+
+    describe "exchangeTypeScopeError (shared REST/MCP guard)" $ do
+        it "allows the filter on scope=direct and an absent filter everywhere" $ do
+            Agg.exchangeTypeScopeError Agg.ScopeDirect (Just Agg.KindTechnosphere) `shouldBe` Nothing
+            Agg.exchangeTypeScopeError Agg.ScopeConsumption Nothing `shouldBe` Nothing
+
+        it "rejects the filter on every non-direct scope" $ do
+            Agg.exchangeTypeScopeError Agg.ScopeBiosphere (Just Agg.KindBiosphere) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeSupplyChain (Just Agg.KindWaste) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeConsumption (Just Agg.KindTechnosphere) `shouldSatisfy` isJust
 
     describe "ScopeBiosphere on SAMPLE.min3" $ do
         it "echoes the biosphere scope text" $ do
