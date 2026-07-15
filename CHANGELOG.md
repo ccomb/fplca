@@ -28,6 +28,14 @@
   of processes required a deliberately unsatisfiable filter plus the `extra`
   list. `ids` cannot be combined with filter fields — an ambiguous request
   is refused, not guessed at.
+- EcoSpold 2 `mathematicalRelation` formulas are now read. Dataset
+  `<parameter>` variables are kept on the activity (value and raw formula),
+  and each exchange formula is checked against the dataset's parameters and
+  exchange variables as a consistency control. The amount stored in the file
+  always stays authoritative: a formula that evaluates to a different value
+  is reported as a divergence warning at load time, and the formulas that
+  cannot be evaluated (unsupported functions, cross-dataset references) are
+  summarized in one warning per dataset instead of being silently ignored.
 - `volca server` starts without `--config`: it runs on the built-in defaults
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An

@@ -477,8 +477,8 @@ data Activity = Activity
     , activityLocation :: !Text -- Location code (e.g. FR, RER)
     , activityUnit :: !Text -- Reference unit
     , exchanges :: ![Exchange] -- List of exchanges
-    , activityParams :: !(M.Map Text Double) -- Resolved SimaPro parameter values
-    , activityParamExprs :: !(M.Map Text Text) -- Raw SimaPro parameter expressions (for re-evaluation)
+    , activityParams :: !(M.Map Text Double) -- Resolved dataset parameter values (SimaPro parameters, EcoSpold2 <parameter> variables)
+    , activityParamExprs :: !(M.Map Text Text) -- Raw parameter expressions/formulas keyed like activityParams (for inspection and re-evaluation)
     , activityAllocationPercent :: !(Maybe Double) -- SimaPro multi-product allocation fraction (%, 0..100); Nothing for non-allocated bases
     , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
     , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
