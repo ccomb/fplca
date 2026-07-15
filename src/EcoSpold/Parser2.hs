@@ -9,7 +9,7 @@ import Amount (readAmount)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -123,8 +123,9 @@ data ElementaryData = ElementaryData
 
 {- | Dataset-local formula metadata carried by an exchange: its own
 @variableName@ (referencable from other formulas in the same dataset) and its
-@mathematicalRelation@ (re-evaluated once the whole dataset is parsed, since
-the variables it references may be declared after it in the file).
+@mathematicalRelation@ (checked against the stored amount once the whole
+dataset is parsed, since the variables it references may be declared after it
+in the file).
 -}
 data ExchangeFormula = ExchangeFormula
     { efVariableName :: !(Maybe Text)
@@ -398,58 +399,49 @@ finishExchange unit warns st =
         , psWarnings = warns ++ psWarnings st
         }
 
--- | Replace an exchange's amount, whatever its variant.
-setAmount :: Double -> Exchange -> Exchange
-setAmount v ex = case ex of
-    TechnosphereExchange{} -> ex{techAmount = v}
-    BiosphereExchange{} -> ex{bioAmount = v}
-    WasteExchange{} -> ex{waAmount = v}
+{- | Check exchange @mathematicalRelation@ formulas against the dataset-local
+environment: the dataset's @\<parameter\>@ variables plus every exchange's own
+@variableName@ bound to its stored amount.
 
-{- | Re-evaluate exchange @mathematicalRelation@ formulas against the
-dataset-local environment: the dataset's @\<parameter\>@ variables plus every
-exchange's own @variableName@ bound to its stored amount. Stored amounts are
-already evaluated in EcoSpold2 sources, so binding them directly needs no
-fixpoint iteration.
-
-A formula that evaluates replaces the stored amount (normally to the same
-value — a divergence means the stored amount was stale and is reported). One
-that doesn't evaluate — unknown variable, unsupported function, cross-dataset
-reference — keeps the stored amount and yields a warning: never zero, never a
-crash.
+The stored amount always stays authoritative. EcoSpold2 sources carry
+pre-evaluated amounts, and this evaluator only supports a subset of the
+formula language (no @UnitConversion@, no cross-dataset @Ref@) with
+SimaPro-flavoured semantics, so its result serves as a consistency check, not
+a replacement. A formula that evaluates to a different value is reported as a
+divergence; the formulas that cannot be evaluated at all are summarized in a
+single warning per dataset — real EcoSpold2 databases use unsupported
+functions heavily, and one line per exchange would flood the load log.
 -}
-evaluateFormulas :: M.Map Text Double -> [(Exchange, ExchangeFormula)] -> ([Exchange], [String])
-evaluateFormulas params pairs = (map fst resolved, mapMaybe snd resolved)
+validateFormulas :: M.Map Text Double -> [(Exchange, ExchangeFormula)] -> [String]
+validateFormulas params pairs = divergences ++ unevaluableSummary
   where
     -- Left-biased union: a <parameter> wins over an exchange variable of the same name.
     env = M.union params (M.fromList [(v, exchangeAmount ex) | (ex, ef) <- pairs, Just v <- [efVariableName ef]])
-    resolved = map apply pairs
-    apply (ex, ef) = case efMathRel ef of
-        Nothing -> (ex, Nothing)
-        Just rel -> case Expr.evaluate env (Expr.normalizeExpr '.' rel) of
-            Right v -> (setAmount v ex, mismatchWarning rel v ex)
-            Left _ ->
-                ( ex
-                , Just $
-                    "[WARNING] Cannot evaluate mathematicalRelation \""
-                        ++ T.unpack rel
-                        ++ "\" for exchange flow "
-                        ++ UUID.toString (exchangeFlowId ex)
-                        ++ " - keeping stored amount "
-                        ++ show (exchangeAmount ex)
-                )
-    mismatchWarning rel v ex
-        | nearlyEqual v (exchangeAmount ex) = Nothing
-        | otherwise =
-            Just $
-                "[WARNING] mathematicalRelation \""
-                    ++ T.unpack rel
-                    ++ "\" for exchange flow "
-                    ++ UUID.toString (exchangeFlowId ex)
-                    ++ " evaluates to "
-                    ++ show v
-                    ++ " but the dataset stores amount "
-                    ++ show (exchangeAmount ex)
-                    ++ " - using the formula result"
+    checked = [(ex, rel, Expr.evaluate env (Expr.normalizeExpr '.' rel)) | (ex, ef) <- pairs, Just rel <- [efMathRel ef]]
+    divergences =
+        [ "[WARNING] mathematicalRelation \""
+            ++ T.unpack rel
+            ++ "\" for exchange flow "
+            ++ UUID.toString (exchangeFlowId ex)
+            ++ " evaluates to "
+            ++ show v
+            ++ " but the dataset stores amount "
+            ++ show (exchangeAmount ex)
+            ++ " - keeping the stored amount"
+        | (ex, rel, Right v) <- checked
+        , not (nearlyEqual v (exchangeAmount ex))
+        ]
+    unevaluableSummary = case [(ex, rel) | (ex, rel, Left _) <- checked] of
+        [] -> []
+        unevaluable@((ex, rel) : _) ->
+            [ "[WARNING] "
+                ++ show (length unevaluable)
+                ++ " mathematicalRelation formula(s) could not be evaluated (e.g. \""
+                ++ T.unpack rel
+                ++ "\" on exchange flow "
+                ++ UUID.toString (exchangeFlowId ex)
+                ++ ") - keeping the stored amounts"
+            ]
     nearlyEqual a b = abs (a - b) <= 1e-9 * max 1 (max (abs a) (abs b))
 
 -- | Xeno SAX parser implementation
@@ -746,8 +738,10 @@ parseWithXeno xmlContent processId = do
                 add d = if T.null txt then d else d{edSubcompartments = txt : edSubcompartments d}
              in onExchange id add state
         -- A <parameter> is referencable from formulas only through its
-        -- variableName; its amount is pre-evaluated in the source, so an
-        -- entry without either has nothing to contribute and is skipped.
+        -- variableName; its amount is pre-evaluated in the source. An entry
+        -- with no variableName has nothing to contribute and is skipped; one
+        -- with a variableName but no usable amount is dropped with a warning,
+        -- since formulas referencing it will fail to evaluate downstream.
         | isElement tagName "parameter" =
             let PendingParam var amt rel = psPendingParam state
                 committed = case (nonEmptyText var, amt) of
@@ -756,7 +750,13 @@ parseWithXeno xmlContent processId = do
                             { psParams = M.insert v a (psParams state)
                             , psParamExprs = maybe (psParamExprs state) (\r -> M.insert v r (psParamExprs state)) (nonEmptyText rel)
                             }
-                    (_, _) -> state
+                    (Just v, Nothing) ->
+                        state
+                            { psWarnings =
+                                ("[WARNING] Ignoring <parameter> \"" ++ T.unpack v ++ "\" - missing or unparseable amount")
+                                    : psWarnings state
+                            }
+                    (Nothing, _) -> state
              in popText committed{psPendingParam = emptyPendingParam}
         | isElement tagName "classificationSystem" =
             (popText state){psPendingClassSystem = T.strip (accumText state)}
@@ -785,9 +785,10 @@ parseWithXeno xmlContent processId = do
             description = reverse (psDescription st) -- Reverse to get correct order
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
-            (resolvedExchanges, formulaWarns) = evaluateFormulas (psParams st) (reverse (psExchanges st))
+            pairs = reverse (psExchanges st)
+            formulaWarns = validateFormulas (psParams st) pairs
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit resolvedExchanges (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing
+            activity = Activity name description M.empty (psClassifications st) location refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

@@ -188,16 +188,19 @@ spec = describe "per-exchange comments" $ do
     -- -----------------------------------------------------------------------
     -- mathematicalRelation formulas: <parameter> variables plus exchange
     -- variableNames form a dataset-local environment; an exchange's
-    -- mathematicalRelation is re-evaluated against it. An unresolvable
-    -- formula keeps the stored amount and warns — never zero, never a crash.
+    -- mathematicalRelation is checked against it as a consistency control.
+    -- The stored amount always stays authoritative — a divergence or an
+    -- unresolvable formula warns, never changes a number, never crashes.
     -- -----------------------------------------------------------------------
     describe "mathematicalRelation formulas" $ do
-        it "evaluates an exchange formula from parameters and exchange variables" $
+        it "keeps the stored amount when the formula evaluates to a different value" $
             withFormulaFixture $ \(act, _, _, _, _) ->
-                -- fuel_input(2.0) * 2 + production(1.0) = 5.0, overriding the stale stored 4.0.
-                -- The nested <property>'s own mathematicalRelation ("9999") must not leak in.
+                -- fuel_input(2.0) * 2 + production(1.0) = 5.0 diverges from the
+                -- stored 4.0; the stored amount wins (the divergence warning is
+                -- asserted below, proving the nested <property>'s own
+                -- mathematicalRelation "9999" did not leak into the evaluation).
                 [exchangeAmount e | e@TechnosphereExchange{techRole = Input} <- exchanges act]
-                    `shouldBe` [5.0]
+                    `shouldBe` [4.0]
 
         it "stores <parameter> values and raw formulas on the activity" $
             withFormulaFixture $ \(act, _, _, _, _) -> do
@@ -209,13 +212,19 @@ spec = describe "per-exchange comments" $ do
                 [exchangeAmount e | e@BiosphereExchange{} <- exchanges act]
                     `shouldBe` [3.0]
 
-        it "warns on an unresolvable formula and on a stored/evaluated mismatch" $ do
+        it "does not keep a <parameter> without a usable amount" $
+            withFormulaFixture $ \(act, _, _, _, _) ->
+                M.member "ghost" (activityParams act) `shouldBe` False
+
+        it "warns on divergence, on unresolvable formulas (aggregated), and on a dropped parameter" $ do
             (since, _) <- getLogLines 0
             withFormulaFixture $ \_ -> pure ()
             (_, newLines) <- getLogLines since
-            any ("Cannot evaluate mathematicalRelation \"missing_var * 2\"" `isInfixOf`) newLines
+            any ("evaluates to 5.0 but the dataset stores amount 4.0 - keeping the stored amount" `isInfixOf`) newLines
                 `shouldBe` True
-            any ("evaluates to 5.0 but the dataset stores amount 4.0" `isInfixOf`) newLines
+            any ("1 mathematicalRelation formula(s) could not be evaluated (e.g. \"missing_var * 2\"" `isInfixOf`) newLines
+                `shouldBe` True
+            any ("Ignoring <parameter> \"ghost\"" `isInfixOf`) newLines
                 `shouldBe` True
 
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and
@@ -366,14 +375,15 @@ withWasteReferenceFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [W
 withWasteReferenceFixture k =
     parseWasteReference >>= either (expectationFailure . ("Parse failed: " ++)) k
 
-{- | Synthetic dataset exercising mathematicalRelation evaluation:
+{- | Synthetic dataset exercising mathematicalRelation checking:
   - a reference output carrying variableName="production" (amount 1.0)
-  - a fuel input whose stored amount (4.0) is stale next to its formula
+  - a fuel input whose stored amount (4.0) diverges from its formula
     "fuel_input * 2 + production" (= 5.0); its nested <property> carries its
     own variableName/mathematicalRelation which must NOT leak onto the exchange
   - an emission whose formula references an unknown variable (kept at 3.0)
   - a <parameter> (fuel_input = 2.0, formula "4.0 / 2") placed AFTER the
     exchanges, as the EcoSpold2 schema orders flowData
+  - a <parameter> with a variableName but no amount, dropped with a warning
 -}
 formulaXml :: BS.ByteString
 formulaXml =
@@ -418,6 +428,9 @@ formulaXml =
     \      <parameter parameterId=\"par-1\" variableName=\"fuel_input\" amount=\"2.0\" mathematicalRelation=\"4.0 / 2\">\n\
     \        <name xml:lang=\"en\">fuel input</name>\n\
     \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \      </parameter>\n\
+    \      <parameter parameterId=\"par-2\" variableName=\"ghost\">\n\
+    \        <name xml:lang=\"en\">ghost parameter</name>\n\
     \      </parameter>\n\
     \    </flowData>\n\
     \  </activityDataset>\n\
