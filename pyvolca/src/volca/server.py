@@ -28,13 +28,21 @@ class Server:
             activities = client.search_activities(name="at plant")
     """
 
-    def __init__(self, config: str = "volca.toml", port: int | Literal["auto"] = 0, binary: str = "volca"):
+    def __init__(
+        self,
+        config: str | None = "volca.toml",
+        port: int | Literal["auto"] = 0,
+        binary: str = "volca",
+    ):
         """Configure (but don't start) a managed VoLCA server.
 
         Args:
-            config: Path to the engine TOML. Read for ``server.port`` and
-                ``server.password``. Missing file is tolerated — defaults
-                are used.
+            config: Path to the engine TOML, read for ``server.port`` and
+                ``server.password``. ``None`` starts the engine without any
+                config file — built-in defaults, no databases (needs an
+                engine >= v0.9.3). A path that does not exist makes
+                :meth:`start` fail loudly: a typo must never silently become
+                "all defaults".
             port: Override the configured port. ``"auto"`` asks the engine to
                 bind an OS-assigned free port atomically. ``0`` reads the
                 config (or uses 8080), preserving the original API.
@@ -60,7 +68,14 @@ class Server:
         return f"http://localhost:{self.port}"
 
     def _read_config(self) -> dict:
-        """Read the TOML config file."""
+        """Read the TOML config file; ``{}`` when running config-less.
+
+        A missing file also reads as ``{}`` here — port and password get
+        their defaults — but :meth:`start` still refuses to spawn against a
+        path that does not exist.
+        """
+        if self.config is None:
+            return {}
         try:
             with open(self.config, "rb") as f:
                 return tomllib.load(f)
@@ -141,6 +156,19 @@ class Server:
 
         _compat.check(Client(self.base_url, password=self.password).get_version())
 
+    def _early_exit(self, code: int, doing: str) -> RuntimeError:
+        """Fail-fast error for an engine that died before ``doing``.
+
+        The likeliest config-less cause is an engine too old to run without
+        ``--config``, hence the version hint.
+        """
+        hint = (
+            " Running without a config file needs an engine >= v0.9.3."
+            if self.config is None
+            else ""
+        )
+        return RuntimeError(f"Engine exited with code {code} before {doing}.{hint}")
+
     def _await_bound_port(self, wait_timeout: int) -> None:
         """Read the engine's machine-readable port after it has bound port 0."""
         process = self._process
@@ -164,7 +192,8 @@ class Server:
         if reader.is_alive():
             raise TimeoutError(f"Server did not report its bound port within {wait_timeout}s")
         if not announced:
-            raise RuntimeError("VoLCA exited before reporting its bound port")
+            # EOF on stdout without an announcement means the engine died.
+            raise self._early_exit(process.wait(timeout=5), "reporting its bound port")
         raw = announced[0]
         port = int(raw) if raw.isdecimal() else 0
         if not 1 <= port <= 65535:
@@ -190,9 +219,15 @@ class Server:
             return
 
         binary = self._find_binary()
-        cmd = [
-            binary,
-            "--config", self.config,
+        if self.config is not None and not Path(self.config).is_file():
+            raise FileNotFoundError(
+                f"Config file not found: {self.config!r}. Pass config=None to "
+                "run on the engine's built-in defaults (engine >= v0.9.3)."
+            )
+        cmd = [binary]
+        if self.config is not None:
+            cmd += ["--config", self.config]
+        cmd += [
             "server",
             "--port", str(self.port),
             "--idle-timeout", str(idle_timeout),
@@ -226,6 +261,11 @@ class Server:
                     self.stop()
                     raise
                 return
+            code = self._process.poll()
+            if code is not None:
+                # Fail now, not at the readiness timeout.
+                self._process = None
+                raise self._early_exit(code, "becoming ready")
             time.sleep(0.5)
 
         raise TimeoutError(
