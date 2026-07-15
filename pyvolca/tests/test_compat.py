@@ -58,15 +58,16 @@ def test_check_message_distinguishes_absent_from_zero() -> None:
     assert "wire 0" in str(zero_exc.value)
 
 
-def test_check_is_silent_on_exact_wire() -> None:
+@pytest.mark.parametrize("wire", [_compat.REQUIRED_WIRE, _compat.KNOWN_WIRE])
+def test_check_is_silent_on_known_wires(wire: int) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any warning would fail the test
-        _compat.check(_sv(_compat.REQUIRED_WIRE))  # neither raises nor warns
+        _compat.check(_sv(wire))  # neither raises nor warns
 
 
 def test_check_warns_on_newer_wire() -> None:
     with pytest.warns(UserWarning, match="upgrade pyvolca"):
-        _compat.check(_sv(_compat.REQUIRED_WIRE + 1))
+        _compat.check(_sv(_compat.KNOWN_WIRE + 1))
 
 
 @pytest.mark.parametrize("wire", [None, 0])
@@ -109,6 +110,19 @@ def test_refresh_stubs_is_gated(make_response) -> None:
     with pytest.raises(VoLCAError):
         c.refresh_stubs()
     assert session.get.call_count == 1  # version checked; openapi.json never fetched
+
+
+def test_refresh_stubs_rechecks_the_wire(make_response, monkeypatch) -> None:
+    """The documented "engine was upgraded" path must re-read the live wire:
+    a client that first met an older engine would otherwise keep refusing
+    wire-gated capabilities from a stale cache after an in-place upgrade."""
+    monkeypatch.setattr("volca._stub_gen.write_stubs_for_spec", lambda spec: None)
+    c, session = _client_with_version(make_response, wire=_compat.REQUIRED_WIRE)
+    c._ensure_compatible()
+    assert c._server_wire == _compat.REQUIRED_WIRE
+    session.get.return_value = make_response(_version_body(_compat.KNOWN_WIRE))
+    c.refresh_stubs()
+    assert c._server_wire == _compat.KNOWN_WIRE
 
 
 def test_ensure_compatible_is_one_shot(make_response) -> None:

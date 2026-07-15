@@ -18,6 +18,24 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [Unreleased]
+
+### Added
+
+- `delete_activities(ids=[...])` deletes exactly the named processes — no more
+  deliberately unsatisfiable filter plus `extra`. Needs an engine speaking
+  wire revision 3 (>= v0.9.3): an older one would silently drop the unknown
+  key and read the request as an empty filter ("everything"), so pyvolca
+  refuses to send it there instead of letting the engine guess. `keep` and
+  `extra` compose with `ids`; the filter arguments do not.
+
+### Changed
+
+- pyvolca now understands wire revision 3 while still accepting wire-2
+  engines (v0.9.1 / v0.9.2): everything works against them except the
+  revision-gated `ids` selection, which fails with a clear message. An
+  engine newer than wire 3 still triggers the upgrade warning.
+
 ## [0.8.1] - 2026-07-14
 
 ### Added
