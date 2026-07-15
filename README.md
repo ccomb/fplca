@@ -355,7 +355,7 @@ Authentication uses the same password as the REST API.
 
 | Option | Description |
 |--------|-------------|
-| `--config FILE` | TOML config file for multi-database setup |
+| `--config FILE` | TOML config file for multi-database setup (optional for `server` and `stop`, which run on built-in defaults without it) |
 | `--url URL` | Server URL (default: from config; or set `VOLCA_URL`) |
 | `--password PWD` | Server password (or set `VOLCA_PASSWORD`) |
 | `--db NAME` | Database name to query |
