@@ -16,7 +16,7 @@ import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (evaluate)
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, mfilter, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
@@ -1030,7 +1030,7 @@ cfToAPI cf =
             MT.Input -> "Input"
             MT.Output -> "Output"
         , mfaValue = mcfValue cf
-        , mfaUnit = mcfUnit cf
+        , mfaUnit = mfilter (not . T.null) (Just (mcfUnit cf))
         , mfaCompartment = compartmentPath <$> mcfCompartment cf
         , mfaLocation = mcfConsumerLocation cf
         }

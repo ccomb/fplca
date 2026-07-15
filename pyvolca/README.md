@@ -1640,7 +1640,8 @@ factor in the method's unit per the flow's unit. A method routinely holds
 several factors sharing one ``flow_name`` — the same substance emitted to
 air vs. water, or one regionalized factor per ``location`` — so
 ``compartment``, ``location`` and ``unit`` are what tell them apart.
-Engines older than wire additions may omit them (``None``).
+Each is ``None`` when the source method does not carry that axis, or
+when the engine predates these fields.
 
 | Field | Type | Default |
 |-------|------|---------|

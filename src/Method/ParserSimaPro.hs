@@ -395,7 +395,12 @@ mkCompartment comp sub =
         subcomp =
             let s = decodeBS (BS8.strip sub)
              in if s == "(unspecified)" then "" else s
-     in Just (Compartment medium subcomp "")
+     in -- An empty compartment column must yield no compartment at all: a
+        -- 'Compartment "" sub ""' would wrongly constrain flow matching and
+        -- leak an empty path onto the API.
+        if T.null medium
+            then Nothing
+            else Just (Compartment medium subcomp "")
 
 normalizeCAS :: Text -> Maybe Text
 normalizeCAS cas

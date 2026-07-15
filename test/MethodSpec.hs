@@ -819,7 +819,11 @@ spec = do
             mfaCompartment toWaterLongTerm `shouldBe` Just "water/unspecified/long-term"
             mfaCompartment inFrance `shouldBe` Nothing
             mfaLocation inFrance `shouldBe` Just "FR"
-            mfaUnit toAir `shouldBe` "kg"
+            mfaUnit toAir `shouldBe` Just "kg"
+
+        it "emits no unit rather than an empty one when the source method states none" $ do
+            let unitless = MethodCF (UUID.fromWords 1 2 3 4) "Ammonia" Output 1.0 Nothing Nothing "" Nothing
+            mfaUnit (cfToAPI unitless) `shouldBe` Nothing
 
     describe "SimaPro Method CSV Parser" $ do
         it "detects SimaPro method CSV format" $ do
@@ -870,6 +874,18 @@ spec = do
                     mcfValue co2 `shouldBe` 1.0
                     mcfDirection co2 `shouldBe` Output
                     mcfCAS co2 `shouldBe` Just "124-38-9"
+
+        it "drops the compartment when the compartment column is empty" $ do
+            let csv =
+                    "{SimaPro 10.2.0.0}\r\n{methods}\r\n{CSV separator: Semicolon}\r\n{Decimal separator: .}\r\n\r\n\
+                    \Method\r\n\r\nName\r\nTest\r\n\r\n\
+                    \Impact category\r\nClimate change;kg CO2 eq\r\n\r\n\
+                    \Substances\r\n;;Mystery substance;;1;kg\r\n\r\nEnd\r\n"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right coll -> do
+                    let cfs = methodFactors (head (mcMethods coll))
+                    map mcfCompartment cfs `shouldBe` [Nothing]
 
         it "parses Methane CF = 29.8" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"

@@ -459,7 +459,7 @@ data MethodFactorAPI = MethodFactorAPI
     , mfaFlowName :: Text -- Flow name
     , mfaDirection :: Text -- "Input" or "Output"
     , mfaValue :: Double -- CF value
-    , mfaUnit :: Text -- CF reference unit (e.g. "kg", "kBq")
+    , mfaUnit :: Maybe Text -- CF reference unit (e.g. "kg", "kBq"); Nothing when the source method states none
     , mfaCompartment :: Maybe Text -- e.g. "air/urban air", "water/unspecified/long-term"
     , mfaLocation :: Maybe Text -- Consumer location for regionalized CFs
     }
