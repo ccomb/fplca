@@ -504,7 +504,7 @@ Returns a :class:`CharacterizationResult` carrying ``matches`` (total
 rows the filter selected) and ``shown`` (rows actually returned under
 ``limit``). Check ``result.has_more`` to detect truncation.
 
-##### `Client.get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, include_edges: bool = False) -> ConsumersResponse`
+##### `Client.get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, sort: str | None = None, order: str | None = None, include_edges: bool = False) -> ConsumersResponse`
 
 Find all activities that transitively consume this supplier.
 
@@ -513,6 +513,9 @@ Args:
     classification_filters: ClassificationFilter entries restricting
         the results. Multiple filters are AND-combined by the server.
         Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
+    sort: Sort key — ``"name"``, ``"location"``, ``"product"``,
+        ``"amount"``, or ``"unit"``. Default orders by depth.
+    order: ``"desc"`` to reverse; ascending otherwise.
     include_edges: When True, the response carries every technosphere
         edge whose endpoints are both reachable from the supplier.
         Callers can walk these to reconstruct supplier→consumer paths
@@ -647,7 +650,7 @@ Return the engine's runtime statistics (memory use, loaded sizes).
 
 Keys are already snake_case on the wire, so this returns the raw dict.
 
-##### `Client.get_supply_chain(process_id: str, *, name: str | None = None, location: str | None = None, limit: int | None = None, min_quantity: float | None = None, max_depth: int | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, substitutions: list[SubstitutionLike] | None = None, include_edges: bool | None = None) -> SupplyChain`
+##### `Client.get_supply_chain(process_id: str, *, name: str | None = None, location: str | None = None, limit: int | None = None, min_quantity: float | None = None, max_depth: int | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, sort: str | None = None, order: str | None = None, substitutions: list[SubstitutionLike] | None = None, include_edges: bool | None = None) -> SupplyChain`
 
 Get the flat supply chain of an activity.
 
@@ -661,6 +664,10 @@ Args:
     classification_filters: Restrict entries to those matching any
         of the given ClassificationFilter triples. Multiple filters
         are AND-combined by the server.
+    sort: Sort key — ``"name"``, ``"location"``, ``"unit"``,
+        ``"depth"``, ``"consumers"``, or ``"amount"``. Default
+        orders by descending absolute quantity.
+    order: ``"desc"`` to reverse; ascending otherwise.
     substitutions: When provided, the call is upgraded to POST and
         the scaling vector is recomputed with the substituted
         suppliers. Accepts :class:`Substitution` (preferred) or the
@@ -790,7 +797,7 @@ them, a partial result is not an error. ``top_flows`` caps the top
 contributors per category; ``exclude_long_term`` drops long-term
 emissions from the totals.
 
-##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, exact: bool = False) -> SearchResults[Activity]`
+##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None, exact: bool = False) -> SearchResults[Activity]`
 
 Search activities in the current database.
 
@@ -819,12 +826,15 @@ Args:
         Alone (no ``page``) means "page 1 with this size".
     limit: Wire-level cap on returned items. Prefer ``page_size``.
     offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
+    sort: Sort key — ``"name"`` or ``"location"``. When set, results
+        are ordered lexicographically instead of by relevance.
+    order: ``"desc"`` to reverse; ascending otherwise.
     exact: When True, ``name`` and ``product`` are matched exactly.
 
 Returns:
     :class:`SearchResults[Activity]` — iterable across all pages.
 
-##### `Client.search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None) -> SearchResults[Flow]`
+##### `Client.search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None) -> SearchResults[Flow]`
 
 Search flows (technosphere products and biosphere flows) in the current database.
 
@@ -837,6 +847,8 @@ Args:
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.
+    sort: Sort key — ``"name"`` (default), ``"category"``, or ``"unit"``.
+    order: ``"desc"`` to reverse; ascending otherwise.
 
 ##### `Client.set_data_path(path: str, db_name: str | None = None) -> dict`
 

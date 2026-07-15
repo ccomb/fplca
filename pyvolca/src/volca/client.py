@@ -1013,6 +1013,8 @@ class Client:
         page_size: int | None = None,
         limit: int | None = None,
         offset: int | None = None,
+        sort: str | None = None,
+        order: str | None = None,
         exact: bool = False,
     ) -> SearchResults[Activity]:
         """Search activities in the current database.
@@ -1042,6 +1044,9 @@ class Client:
                 Alone (no ``page``) means "page 1 with this size".
             limit: Wire-level cap on returned items. Prefer ``page_size``.
             offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
+            sort: Sort key — ``"name"`` or ``"location"``. When set, results
+                are ordered lexicographically instead of by relevance.
+            order: ``"desc"`` to reverse; ascending otherwise.
             exact: When True, ``name`` and ``product`` are matched exactly.
 
         Returns:
@@ -1060,6 +1065,8 @@ class Client:
                 if classification_match is not None
                 else None
             ),
+            sort=sort,
+            order=order,
             exact=exact,
         )
 
@@ -1077,6 +1084,8 @@ class Client:
         page_size: int | None = None,
         limit: int | None = None,
         offset: int | None = None,
+        sort: str | None = None,
+        order: str | None = None,
     ) -> SearchResults[Flow]:
         """Search flows (technosphere products and biosphere flows) in the current database.
 
@@ -1089,11 +1098,15 @@ class Client:
             page / page_size: Web-style pagination; convert to wire-level
                 ``offset`` / ``limit``.
             limit / offset: Wire-level escape hatch.
+            sort: Sort key — ``"name"`` (default), ``"category"``, or ``"unit"``.
+            order: ``"desc"`` to reverse; ascending otherwise.
         """
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
 
         def fetch(o: int, l: int | None) -> dict:
-            return self._call("search_flows", q=query, limit=l, offset=o)
+            return self._call(
+                "search_flows", q=query, sort=sort, order=order, limit=l, offset=o
+            )
 
         raw = fetch(wire_offset, wire_limit)
         return SearchResults.from_raw(raw, parse=Flow.from_json, fetch=fetch)
@@ -1153,6 +1166,8 @@ class Client:
         max_depth: int | None = None,
         preset: str | None = None,
         classification_filters: list[ClassificationFilter] | None = None,
+        sort: str | None = None,
+        order: str | None = None,
         substitutions: list[SubstitutionLike] | None = None,
         include_edges: bool | None = None,
     ) -> SupplyChain:
@@ -1168,6 +1183,10 @@ class Client:
             classification_filters: Restrict entries to those matching any
                 of the given ClassificationFilter triples. Multiple filters
                 are AND-combined by the server.
+            sort: Sort key — ``"name"``, ``"location"``, ``"unit"``,
+                ``"depth"``, ``"consumers"``, or ``"amount"``. Default
+                orders by descending absolute quantity.
+            order: ``"desc"`` to reverse; ascending otherwise.
             substitutions: When provided, the call is upgraded to POST and
                 the scaling vector is recomputed with the substituted
                 suppliers. Accepts :class:`Substitution` (preferred) or the
@@ -1189,6 +1208,8 @@ class Client:
             classification=classifications or None,
             classification_value=classification_values or None,
             classification_mode=classification_modes or None,
+            sort=sort,
+            order=order,
             include_edges=include_edges,
             substitutions=substitutions,
         )
@@ -1273,6 +1294,8 @@ class Client:
         limit: int | None = None,
         offset: int | None = None,
         max_depth: int | None = None,
+        sort: str | None = None,
+        order: str | None = None,
         include_edges: bool = False,
     ) -> ConsumersResponse:
         """Find all activities that transitively consume this supplier.
@@ -1282,6 +1305,9 @@ class Client:
             classification_filters: ClassificationFilter entries restricting
                 the results. Multiple filters are AND-combined by the server.
                 Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
+            sort: Sort key — ``"name"``, ``"location"``, ``"product"``,
+                ``"amount"``, or ``"unit"``. Default orders by depth.
+            order: ``"desc"`` to reverse; ascending otherwise.
             include_edges: When True, the response carries every technosphere
                 edge whose endpoints are both reachable from the supplier.
                 Callers can walk these to reconstruct supplier→consumer paths
@@ -1306,6 +1332,8 @@ class Client:
             classification_value=classification_values or None,
             classification_mode=classification_modes or None,
             max_depth=max_depth,
+            sort=sort,
+            order=order,
             include_edges=include_edges,
         )
 
