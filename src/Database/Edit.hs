@@ -39,6 +39,7 @@ module Database.Edit (
     deleteActivitiesWith,
     resolveDeleteSelection,
     DeleteSelection (..),
+    DeleteRequest (..),
     deleteActivitiesInDB,
 ) where
 
@@ -46,6 +47,7 @@ import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (finally)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
+import Data.Maybe (isJust)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -407,28 +409,40 @@ resolvePid db queryText =
         Just (a, p) -> findProcessId db a p
         Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
 
+{- | One delete-by-selection request against a loaded database. Two exclusive
+selection modes: the filter fields select the whole matching set (@drIds =
+Nothing@), or @drIds@ names the set exactly — every filter field must then be
+absent, so a request can never silently mean two things. @drKeep@ spares and
+@drExtra@ adds explicit process ids in both modes.
+-}
+data DeleteRequest = DeleteRequest
+    { drName :: Maybe Text
+    , drLocation :: Maybe Text
+    , drProduct :: Maybe Text
+    , drClassifications :: [(Text, Text, Bool)]
+    , drExactName :: Bool
+    , drKeep :: [Text]
+    , drExtra :: [Text]
+    , drIds :: Maybe [Text]
+    }
+
 {- | Delete a selection from a loaded database, in place under the same name.
 
-Resolves the filter to its full matching set, resolves the explicit
-keep/extra process-id strings, applies the adjustments, deletes + rebuilds
-with the manager's merged unit config, re-attaches runtime indexes with the
-merged synonym DB, swaps a fresh solver in, and updates the loaded / indexed
-registry maps. Returns the number of activities removed. Fails (Left) when the
-database is not loaded, a keep/extra id is unknown, or the rebuild reports an
-inconsistency.
+Resolves the selection ('drIds' verbatim, else the filter's full matching
+set), resolves the explicit keep/extra process-id strings, applies the
+adjustments, deletes + rebuilds with the manager's merged unit config,
+re-attaches runtime indexes with the merged synonym DB, swaps a fresh solver
+in, and updates the loaded / indexed registry maps. Returns the number of
+activities removed. Fails (Left) when the database is not loaded, an
+ids/keep/extra id is unknown, 'drIds' is combined with filter fields, or the
+rebuild reports an inconsistency.
 -}
 deleteActivitiesInDB ::
     DatabaseManager ->
     Text -> -- database name
-    Maybe Text -> -- filter: name
-    Maybe Text -> -- filter: location
-    Maybe Text -> -- filter: product
-    [(Text, Text, Bool)] -> -- filter: classification
-    Bool -> -- exact name match
-    [Text] -> -- explicit keep (process-id strings)
-    [Text] -> -- explicit extra (process-id strings)
+    DeleteRequest ->
     IO (Either Text Int)
-deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch keep extra =
+deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = geoP, drProduct = prodP, drClassifications = classFilters, drExactName = exactMatch, drKeep = keep, drExtra = extra, drIds = mIds} =
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
@@ -453,11 +467,21 @@ deleteActivitiesInDB manager dbName nameP geoP prodP classFilters exactMatch kee
                                 <> ": still required by "
                                 <> T.intercalate ", " dependents
                                 <> ". Unload dependents first."
-            case guardDeps *> ((,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra) of
+                -- The two selection modes are exclusive: ids name the set
+                -- verbatim, filters compute it. A request carrying both is
+                -- ambiguous, so it is refused rather than guessed at — exact
+                -- included, since it only modifies name/classification matching.
+                hasFilter =
+                    any isJust [nameP, geoP, prodP] || not (null classFilters) || exactMatch
+                selectionE = case mIds of
+                    Just ids
+                        | hasFilter -> Left "ids cannot be combined with name/location/product/classification/exact filters"
+                        | otherwise -> traverse (resolvePid db) ids
+                    Nothing -> Right (filteredProcessIds db nameP geoP prodP classFilters exactMatch)
+            case guardDeps *> ((,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE) of
                 Left err -> pure $ Left err
-                Right (keepPids, extraPids) -> do
-                    let filtered = filteredProcessIds db nameP geoP prodP classFilters exactMatch
-                        toDelete =
+                Right (keepPids, extraPids, filtered) -> do
+                    let toDelete =
                             resolveDeleteSelection
                                 DeleteSelection{dsFiltered = filtered, dsKeep = keepPids, dsExtra = extraPids}
                     unitConfig <- getMergedUnitConfig manager

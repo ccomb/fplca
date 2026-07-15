@@ -27,9 +27,14 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Test.Hspec
 
+import API.Types (DeleteSelectionRequest (..))
+import CLI.Client (deleteSelectionBody)
+import CLI.Types (DbDeleteArgs (..))
 import Config (DatabaseConfig (..), defaultConfig)
+import Data.Aeson (eitherDecode, encode)
 import Database (buildDatabaseWithMatrices)
 import Database.Edit (
+    DeleteRequest (..),
     DeleteSelection (..),
     deleteActivities,
     deleteActivitiesInDB,
@@ -56,6 +61,36 @@ import Types (
     processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
+
+-- | Empty CLI delete args; tests tweak only the fields they need.
+emptyDeleteArgs :: DbDeleteArgs
+emptyDeleteArgs =
+    DbDeleteArgs
+        { ddaDb = "db"
+        , ddaName = Nothing
+        , ddaLocation = Nothing
+        , ddaProduct = Nothing
+        , ddaClassSystem = Nothing
+        , ddaClassValue = Nothing
+        , ddaExact = False
+        , ddaKeep = []
+        , ddaExtra = []
+        , ddaIds = []
+        }
+
+-- | Empty 'DeleteRequest'; tests tweak only the fields they need.
+emptyDelete :: DeleteRequest
+emptyDelete =
+    DeleteRequest
+        { drName = Nothing
+        , drLocation = Nothing
+        , drProduct = Nothing
+        , drClassifications = []
+        , drExactName = False
+        , drKeep = []
+        , drExtra = []
+        , drIds = Nothing
+        }
 
 spec :: Spec
 spec = describe "Database.Edit delete-by-selection primitive" $ do
@@ -171,13 +206,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "edit-me"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    [foodA] -- keep
-                    [] -- extra
+                    emptyDelete{drClassifications = [("category", "food", False)], drKeep = [foodA]}
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
                 Right deleted -> do
@@ -197,20 +226,14 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "edit-me-2"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    ["not-a-real-process-id"]
-                    []
+                    emptyDelete{drClassifications = [("category", "food", False)], drKeep = ["not-a-real-process-id"]}
             case r of
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected unknown keep id to fail"
 
         it "fails when the database is not loaded" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
-            r <- deleteActivitiesInDB manager "ghost" Nothing Nothing Nothing [] False [] []
+            r <- deleteActivitiesInDB manager "ghost" emptyDelete
             r `shouldBe` Left "Database not loaded: ghost"
 
         it "refuses to delete while a loaded database depends on it" $ do
@@ -226,16 +249,116 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 deleteActivitiesInDB
                     manager
                     "base"
-                    Nothing
-                    Nothing
-                    Nothing
-                    [("category", "food", False)]
-                    False
-                    []
-                    []
+                    emptyDelete{drClassifications = [("category", "food", False)]}
             case r of
                 Left err -> err `shouldSatisfy` isInfixOf "still required by"
                 Right _ -> expectationFailure "expected delete to be refused while a dependent is loaded"
+
+    describe "deleteActivitiesInDB (delete exactly these ids)" $ do
+        it "deletes exactly the listed process ids, no base filter" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1000)
+            installLoaded manager "by-ids" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1001) (mkUUID 1001))
+            r <- deleteActivitiesInDB manager "by-ids" emptyDelete{drIds = Just [foodA]}
+            case r of
+                Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
+                Right deleted -> do
+                    deleted `shouldBe` 1
+                    loaded <- readTVarIO (dmLoadedDbs manager)
+                    let db' = ldDatabase (loaded M.! "by-ids")
+                    dbActivityCount db' `shouldBe` 2
+                    map activityName (V.toList (dbActivities db'))
+                        `shouldNotSatisfy` elem "food-A"
+
+        it "refuses ids combined with a filter field" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1100)
+            installLoaded manager "by-ids-2" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1101) (mkUUID 1101))
+            r <-
+                deleteActivitiesInDB
+                    manager
+                    "by-ids-2"
+                    emptyDelete{drIds = Just [foodA], drClassifications = [("category", "food", False)]}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "cannot be combined"
+                Right _ -> expectationFailure "expected ids+filter to be refused"
+
+        it "fails loudly on an unknown id" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1200)
+            installLoaded manager "by-ids-3" db
+            r <- deleteActivitiesInDB manager "by-ids-3" emptyDelete{drIds = Just ["not-a-real-process-id"]}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "Unknown process id"
+                Right _ -> expectationFailure "expected unknown id to fail"
+
+        it "refuses ids combined with exact (it would silently do nothing)" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1300)
+            installLoaded manager "by-ids-4" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1301) (mkUUID 1301))
+            r <- deleteActivitiesInDB manager "by-ids-4" emptyDelete{drIds = Just [foodA], drExactName = True}
+            case r of
+                Left err -> err `shouldSatisfy` isInfixOf "cannot be combined"
+                Right _ -> expectationFailure "expected ids+exact to be refused"
+
+        it "composes ids with keep and extra: (ids ∪ extra) \\ keep" $ do
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1400)
+            installLoaded manager "by-ids-5" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1401) (mkUUID 1401))
+                foodB = processIdToText db (pidFor2 db (mkUUID 1411) (mkUUID 1411))
+                energ = processIdToText db (pidFor2 db (mkUUID 1421) (mkUUID 1421))
+            r <-
+                deleteActivitiesInDB
+                    manager
+                    "by-ids-5"
+                    emptyDelete{drIds = Just [foodA, foodB], drKeep = [foodA], drExtra = [energ]}
+            case r of
+                Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
+                Right deleted -> do
+                    deleted `shouldBe` 2 -- foodB and energy; foodA kept
+                    loaded <- readTVarIO (dmLoadedDbs manager)
+                    let db' = ldDatabase (loaded M.! "by-ids-5")
+                    map activityName (V.toList (dbActivities db')) `shouldBe` ["food-A"]
+
+        it "deletes only the extras when ids is the empty selection" $ do
+            -- The official replacement for the old "unsatisfiable filter +
+            -- extra" hack: an empty ids selection plus explicit extras.
+            manager <- initDatabaseManager defaultConfig True Nothing
+            db <- buildOrFail (classifiedDB 1500)
+            installLoaded manager "by-ids-6" db
+            let foodA = processIdToText db (pidFor2 db (mkUUID 1501) (mkUUID 1501))
+            r <- deleteActivitiesInDB manager "by-ids-6" emptyDelete{drIds = Just [], drExtra = [foodA]}
+            case r of
+                Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
+                Right deleted -> deleted `shouldBe` 1
+
+    describe "DeleteSelectionRequest wire compatibility" $ do
+        it "decodes a request without the ids key (old clients)" $ do
+            let json = "{\"classifications\":[],\"exact\":false,\"keep\":[],\"extra\":[]}"
+            case eitherDecode json :: Either String DeleteSelectionRequest of
+                Left err -> expectationFailure ("decode failed: " <> err)
+                Right req -> dsqIds req `shouldBe` Nothing
+
+        it "CLI --id values reach the server as the ids selection" $ do
+            -- The CLI builds this body by hand (CLI.Client.deleteSelectionBody);
+            -- a dropped field here silently falls back to filter mode, whose
+            -- empty filter selects the WHOLE database. Pin the contract.
+            let args = emptyDeleteArgs{ddaIds = ["pid-a", "pid-b"]}
+            case eitherDecode (encode (deleteSelectionBody args)) :: Either String DeleteSelectionRequest of
+                Left err -> expectationFailure ("decode failed: " <> err)
+                Right req -> dsqIds req `shouldBe` Just ["pid-a", "pid-b"]
+
+        it "CLI filter mode still sends no ids (old servers keep working)" $ do
+            let args = emptyDeleteArgs{ddaName = Just "electricity"}
+            case eitherDecode (encode (deleteSelectionBody args)) :: Either String DeleteSelectionRequest of
+                Left err -> expectationFailure ("decode failed: " <> err)
+                Right req -> do
+                    dsqIds req `shouldBe` Nothing
+                    dsqName req `shouldBe` Just "electricity"
 
 -- ---------------------------------------------------------------------------
 -- Helpers
