@@ -28,6 +28,13 @@ Then paste the rendered block at the top of this file and tighten wording.
   key and read the request as an empty filter ("everything"), so pyvolca
   refuses to send it there instead of letting the engine guess. `keep` and
   `extra` compose with `ids`; the filter arguments do not.
+- `Server(config=None)` starts the engine without any config file — built-in
+  defaults, no databases (needs an engine >= v0.9.3). Scripts that only
+  upload or convert no longer have to write an empty TOML. A config *path*
+  that does not exist now fails loudly at `start()` instead of the engine
+  dying behind the scenes — a typo must never silently become "all defaults".
+- `Server.start()` fails fast with the exit code when the spawned engine dies
+  before serving, instead of hanging until the readiness timeout.
 
 ### Changed
 

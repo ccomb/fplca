@@ -103,10 +103,12 @@ def test_await_bound_port_reports_early_exit():
         srv._await_bound_port(wait_timeout=1)
 
 
-def test_start_dynamic_port_uses_desktop_announcement(monkeypatch):
+def test_start_dynamic_port_uses_desktop_announcement(monkeypatch, tmp_path: Path):
+    config = tmp_path / "volca.toml"
+    config.write_text("")
     process = mock.Mock()
     process.stdout = io.StringIO("VOLCA_PORT=43123\n")
-    srv = Server(config="absent.toml", port="auto")
+    srv = Server(config=str(config), port="auto")
     monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
     monkeypatch.setattr(srv, "is_alive", lambda: True)
     check_wire = mock.Mock()
@@ -120,3 +122,45 @@ def test_start_dynamic_port_uses_desktop_announcement(monkeypatch):
     assert command[command.index("--port") + 1] == "0"
     assert srv.port == 43123
     check_wire.assert_called_once_with()
+
+
+def test_start_config_none_omits_the_flag(monkeypatch):
+    process = mock.Mock()
+    process.stdout = io.StringIO("VOLCA_PORT=43123\n")
+    srv = Server(config=None, port="auto")
+    monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
+    monkeypatch.setattr(srv, "is_alive", lambda: True)
+    monkeypatch.setattr(srv, "_check_wire", mock.Mock())
+
+    with mock.patch("volca.server.subprocess.Popen", return_value=process) as popen:
+        srv.start(wait_timeout=1)
+
+    command = popen.call_args.args[0]
+    assert "--config" not in command
+
+
+def test_start_refuses_a_missing_config_path(monkeypatch):
+    # A typo'd path must fail loudly, never silently become "all defaults".
+    srv = Server(config="absent.toml")
+    monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
+    monkeypatch.setattr(srv, "is_alive", lambda: False)
+
+    with mock.patch("volca.server.subprocess.Popen") as popen:
+        with pytest.raises(FileNotFoundError, match="config=None"):
+            srv.start(wait_timeout=1)
+    popen.assert_not_called()
+
+
+def test_start_reports_early_engine_exit_with_config_hint(monkeypatch):
+    # Fixed-port path: the engine dies at once (e.g. an engine too old for
+    # config-less startup) — start() must fail now with the hint, not hang
+    # until the readiness timeout.
+    process = mock.Mock()
+    process.poll.return_value = 1
+    srv = Server(config=None, port=8199)
+    monkeypatch.setattr(srv, "_find_binary", lambda: "/tmp/volca")
+    monkeypatch.setattr(srv, "is_alive", lambda: False)
+
+    with mock.patch("volca.server.subprocess.Popen", return_value=process):
+        with pytest.raises(RuntimeError, match="engine >= v0.9.3"):
+            srv.start(wait_timeout=5)

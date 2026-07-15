@@ -980,7 +980,7 @@ Usage::
         client = Client(base_url=srv.base_url, db="agribalyse-3.2", password=srv.password)
         activities = client.search_activities(name="at plant")
 
-**Constructor**: `Server(config: str = 'volca.toml', port: Union[int, Literal['auto']] = 0, binary: str = 'volca')`
+**Constructor**: `Server(config: str | None = 'volca.toml', port: Union[int, Literal['auto']] = 0, binary: str = 'volca')`
 
 #### Properties
 

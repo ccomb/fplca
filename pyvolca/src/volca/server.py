@@ -28,13 +28,21 @@ class Server:
             activities = client.search_activities(name="at plant")
     """
 
-    def __init__(self, config: str = "volca.toml", port: int | Literal["auto"] = 0, binary: str = "volca"):
+    def __init__(
+        self,
+        config: str | None = "volca.toml",
+        port: int | Literal["auto"] = 0,
+        binary: str = "volca",
+    ):
         """Configure (but don't start) a managed VoLCA server.
 
         Args:
-            config: Path to the engine TOML. Read for ``server.port`` and
-                ``server.password``. Missing file is tolerated — defaults
-                are used.
+            config: Path to the engine TOML, read for ``server.port`` and
+                ``server.password``. ``None`` starts the engine without any
+                config file — built-in defaults, no databases (needs an
+                engine >= v0.9.3). A path that does not exist makes
+                :meth:`start` fail loudly: a typo must never silently become
+                "all defaults".
             port: Override the configured port. ``"auto"`` asks the engine to
                 bind an OS-assigned free port atomically. ``0`` reads the
                 config (or uses 8080), preserving the original API.
@@ -60,7 +68,14 @@ class Server:
         return f"http://localhost:{self.port}"
 
     def _read_config(self) -> dict:
-        """Read the TOML config file."""
+        """Read the TOML config file; ``{}`` when running config-less.
+
+        A missing file also reads as ``{}`` here — port and password get
+        their defaults — but :meth:`start` still refuses to spawn against a
+        path that does not exist.
+        """
+        if self.config is None:
+            return {}
         try:
             with open(self.config, "rb") as f:
                 return tomllib.load(f)
@@ -190,9 +205,15 @@ class Server:
             return
 
         binary = self._find_binary()
-        cmd = [
-            binary,
-            "--config", self.config,
+        if self.config is not None and not Path(self.config).is_file():
+            raise FileNotFoundError(
+                f"Config file not found: {self.config!r}. Pass config=None to "
+                "run on the engine's built-in defaults (engine >= v0.9.3)."
+            )
+        cmd = [binary]
+        if self.config is not None:
+            cmd += ["--config", self.config]
+        cmd += [
             "server",
             "--port", str(self.port),
             "--idle-timeout", str(idle_timeout),
@@ -226,6 +247,20 @@ class Server:
                     self.stop()
                     raise
                 return
+            code = self._process.poll()
+            if code is not None:
+                # The engine died before serving — fail now, not at the
+                # timeout. The likeliest config-less cause is an engine too
+                # old to run without --config.
+                self._process = None
+                hint = (
+                    " Running without a config file needs an engine >= v0.9.3."
+                    if self.config is None
+                    else ""
+                )
+                raise RuntimeError(
+                    f"Engine exited with code {code} before becoming ready.{hint}"
+                )
             time.sleep(0.5)
 
         raise TimeoutError(
