@@ -253,6 +253,7 @@ POST   /api/v1/db/upload                                                 Upload 
 POST   /api/v1/db/{dbName}/load                                          Load a configured database
 POST   /api/v1/db/{dbName}/unload                                        Unload (keep config, free memory)
 POST   /api/v1/db/{dbName}/relink                                        Re-resolve cross-DB links (optional JSON body: depDb + mappingCsv for an alias relink)
+GET    /api/v1/db/{dbName}/gap-report                                    Supplier-gap report (what is still unsupplied after linking)
 POST   /api/v1/db/{dbName}/finalize                                      Finalize cross-DB linking
 DELETE /api/v1/db/{dbName}                                               Delete a database
 GET    /api/v1/db/{dbName}/setup                                         Setup info (path, dependencies)

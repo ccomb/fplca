@@ -22,6 +22,15 @@
   carries per-entry errors.
 
 ### Added
+- A supplier-gap report: `GET /db/{db}/gap-report` and the `get_gap_report`
+  MCP tool list everything a database still demands but nothing supplies,
+  after internal resolution and cross-database linking. Each missing product
+  (name, location, unit) carries the blocking reason, how many consumer edges
+  demand it, the distinct consumers, the total demanded amount, and the top
+  consuming processes. It is the natural read right after a relink: it answers
+  "what is missing to switch this database's background dependency?" without
+  rebuilding the list by hand from the linking statistics. An optional `limit`
+  keeps only the biggest gaps; the header counts always cover the full report.
 - Delete-activities accepts an `ids` list to delete exactly the named
   processes, on the API (`"ids": [...]`) and the CLI (repeatable `--id`).
   Previously the only selection mode was a filter, so deleting a known list

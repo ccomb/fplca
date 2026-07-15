@@ -16,6 +16,8 @@ module API.DatabaseHandlers (
     loadDatabaseHandler,
     unloadDatabaseHandler,
     relinkDatabaseHandler,
+    gapReportHandler,
+    gapReportToAPI,
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
@@ -85,6 +87,9 @@ import API.Types (
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
     ExportRequest (..),
+    GapConsumerAPI (..),
+    GapEntryAPI (..),
+    GapReportAPI (..),
     LoadDatabaseResponse (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
@@ -102,9 +107,11 @@ import Data.Aeson (Value, toJSON)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
 import Database.Export (parseExportFormat, serializeDatabase)
+import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
@@ -120,6 +127,7 @@ import Database.Manager (
     addFlowSynonyms,
     addMethodCollection,
     addUnitDefs,
+    databaseGapReport,
     finalizeDatabase,
     getDatabase,
     getDatabaseSetupInfo,
@@ -155,7 +163,7 @@ import Database.Upload (
     handleUpload,
  )
 import qualified Database.UploadedDatabase as UploadedDB
-import Types (Database (..), GeographyPolicy (..), unresolvedCount)
+import Types (Database (..), GeographyPolicy (..), blockerReasonDetail, unresolvedCount)
 
 -- | List all databases
 getDatabases :: AppM DatabaseListResponse
@@ -222,6 +230,62 @@ relinkDatabaseHandler dbName req = do
                         , rrCrossDBLinks = rresCrossDBLinks r
                         , rrDependsOn = rresDepsLoaded r
                         }
+
+{- | Supplier-gap report for a loaded or staged database: everything still
+unsupplied after internal resolution and cross-DB linking. The natural
+follow-up read after a relink — POST relink, then GET gap-report.
+-}
+gapReportHandler :: Text -> Maybe Int -> AppM GapReportAPI
+gapReportHandler dbName mLimit = do
+    dbManager <- asks aeDbManager
+    res <- liftIO $ databaseGapReport dbManager dbName
+    case res of
+        Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right report -> return (gapReportToAPI mLimit report)
+
+{- | Project the domain gap report onto its wire shape, keeping at most
+@limit@ gap entries (they are ranked by demanding edges, so a cap keeps the
+biggest gaps). The header counts always cover the full report, so a truncated
+list stays countable — never a silent cap.
+-}
+gapReportToAPI :: Maybe Int -> Loader.GapReport -> GapReportAPI
+gapReportToAPI mLimit r =
+    GapReportAPI
+        { graDbName = Loader.grDbName r
+        , graTotalInputs = Loader.grTotalInputs r
+        , graInternalLinks = Loader.grInternalLinks r
+        , graCrossDBLinks = Loader.grCrossDBLinks r
+        , graUnresolvedEdges = Loader.grUnresolvedEdges r
+        , graUnresolvedProducts = Loader.grUnresolvedProducts r
+        , graCompleteness = Loader.grCompleteness r
+        , graGaps = map entryToAPI (maybe id take mLimit (Loader.grGaps r))
+        }
+  where
+    entryToAPI e =
+        let (reason, detail) = gapReasonDetail (Loader.geReason e)
+         in GapEntryAPI
+                { gaeName = Loader.geFlowName e
+                , gaeLocation = Loader.geLocation e
+                , gaeUnit = Loader.geUnit e
+                , gaeReason = reason
+                , gaeDetail = detail
+                , gaeEdges = Loader.geEdges e
+                , gaeConsumers = Loader.geConsumers e
+                , gaeDemandSum = Loader.geDemandSum e
+                , gaeTopConsumers = map consumerToAPI (Loader.geTopConsumers e)
+                }
+    consumerToAPI c =
+        GapConsumerAPI
+            { gcaProcessId = UUID.toText (Loader.gcActUUID c) <> "_" <> UUID.toText (Loader.gcProdUUID c)
+            , gcaActivityName = Loader.gcActivityName c
+            , gcaProductName = Loader.gcProductName c
+            , gcaLocation = Loader.gcLocation c
+            , gcaEdges = Loader.gcEdges c
+            }
+    gapReasonDetail gr = case gr of
+        Loader.GapBlocked blocker -> blockerReasonDetail blocker
+        Loader.GapDanglingIdentity -> ("dangling_source_identity", Nothing)
+        Loader.GapWasteInput -> ("unlinked_waste_input", Nothing)
 
 {- | Copy a loaded database under a new name. The copy is an independent
 in-memory database registered under @newName@; the source is untouched.
