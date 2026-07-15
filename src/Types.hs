@@ -1165,6 +1165,19 @@ never drift apart.
 instance ToJSON LocationKind where
     toJSON = toJSON . locationKindCode
 
+{- | Stable wire (reason code, optional detail) of a 'LinkBlocker' — single
+source of truth shared by the setup page's missing-supplier list and the
+supplier-gap report, so the two surfaces can never name the same blocker
+differently.
+-}
+blockerReasonDetail :: LinkBlocker -> (Text, Maybe Text)
+blockerReasonDetail blocker = case blocker of
+    NoNameMatch -> ("no_name_match", Nothing)
+    UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
+    LocationUnavailable loc -> ("location_unavailable", Just loc)
+    LocationRejectedByPolicy req act kind ->
+        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
+
 instance FromJSON LocationKind where
     parseJSON v = do
         s <- parseJSON v

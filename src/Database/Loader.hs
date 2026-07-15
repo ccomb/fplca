@@ -56,6 +56,15 @@ module Database.Loader (
     collectDanglingProductNames,
     collectStagedDanglingProductNames,
 
+    -- * Supplier-gap report
+    GapReason (..),
+    GapEdge (..),
+    GapConsumer (..),
+    GapEntry (..),
+    GapReport (..),
+    gapReportForLoaded,
+    gapReportForStaged,
+
     -- * Internal Linking
     fixSimaProActivityLinks,
 
@@ -109,6 +118,7 @@ import Database.CrossLinking (
     SupplierEntry (..),
     WasteTreatmentMatch (..),
     defaultLinkingThreshold,
+    extractBracketedLocation,
     extractProductPrefixes,
     findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
@@ -1469,6 +1479,233 @@ collectStagedDanglingProductNames db links =
         , Just _ <- [exchangeActivityLinkId ex]
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
         ]
+
+-- ---------------------------------------------------------------------------
+-- Supplier-gap report
+-- ---------------------------------------------------------------------------
+
+{- | Why one supplier demand is left unsupplied after internal resolution and
+cross-DB linking.
+-}
+data GapReason
+    = -- | Nil-link input the attribute matcher could not place, with its blocker.
+      GapBlocked !LinkBlocker
+    | {- | Non-nil source identity no dependency ships, and no attribute match
+      rescued it — a partial import referencing activities it doesn't carry.
+      -}
+      GapDanglingIdentity
+    | {- | Waste input (treatment side): never a cross-DB demand, so an
+      internally unlinked one is a genuine gap.
+      -}
+      GapWasteInput
+    deriving (Show, Eq)
+
+-- | One consumer edge left unsupplied — the unit of the supplier-gap report.
+data GapEdge = GapEdge
+    { gapFlowName :: !T.Text
+    , gapLocation :: !T.Text
+    -- ^ Effective requested location ("" when the demand names none)
+    , gapUnit :: !T.Text
+    , gapAmount :: !Double
+    , gapConsumerAct :: !UUID.UUID
+    , gapConsumerProd :: !UUID.UUID
+    , gapReason :: !GapReason
+    }
+    deriving (Show, Eq)
+
+-- | One consuming process of a gap entry, with how many of its edges hit it.
+data GapConsumer = GapConsumer
+    { gcActUUID :: !UUID.UUID
+    , gcProdUUID :: !UUID.UUID
+    , gcActivityName :: !T.Text
+    , gcProductName :: !T.Text
+    , gcLocation :: !T.Text
+    , gcEdges :: !Int
+    }
+    deriving (Show, Eq)
+
+{- | Aggregate over one (flow name, location, unit) key of the gap report.
+Unit is part of the key so 'geDemandSum' never mixes units.
+-}
+data GapEntry = GapEntry
+    { geFlowName :: !T.Text
+    , geLocation :: !T.Text
+    , geUnit :: !T.Text
+    , geReason :: !GapReason
+    , geEdges :: !Int
+    , geConsumers :: !Int
+    , geDemandSum :: !Double
+    , geTopConsumers :: ![GapConsumer]
+    }
+    deriving (Show, Eq)
+
+-- | Supplier-gap report: header arithmetic plus the aggregated gap entries.
+data GapReport = GapReport
+    { grDbName :: !T.Text
+    , grTotalInputs :: !Int
+    , grInternalLinks :: !Int
+    , grCrossDBLinks :: !Int
+    , grUnresolvedEdges :: !Int
+    , grUnresolvedProducts :: !Int
+    , grCompleteness :: !Double
+    , grGaps :: ![GapEntry]
+    }
+    deriving (Show, Eq)
+
+{- | Shared gap-edge scan: every supplier demand with no internal producer,
+minus per-triple cross-DB coverage. The per-triple accounting mirrors
+'tallyDangling' (count-based: a partially covered triple drops its covered
+occurrences in scan order), so edge counts stay consistent with the dangling
+scans.
+-}
+gapEdgesWith ::
+    (Exchange -> Bool) ->
+    SimpleDatabase ->
+    [CrossDBLink] ->
+    CrossDBLinkingStats ->
+    [GapEdge]
+gapEdgesWith hasProducer db links stats =
+    concatMap surplus (M.toList byTriple)
+  where
+    covered = crossDBCoveredCounts links
+    surplus (triple, es) = drop (M.findWithDefault 0 triple covered) es
+    byTriple =
+        M.fromListWith
+            (flip (<>))
+            [ ((actUUID, prodUUID, exchangeFlowId ex), [edge])
+            | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
+            , ex <- exchanges act
+            , isSupplierDemand ex
+            , not (hasProducer ex)
+            , Just edge <- [mkGapEdge db stats actUUID prodUUID ex]
+            ]
+
+{- | Describe one unsupplied demand. Biosphere exchanges are never demands
+('isSupplierDemand'), hence 'Nothing'. A missing flow entry doesn't hide the
+edge: the flow UUID stands in for the name so the report stays countable.
+-}
+mkGapEdge ::
+    SimpleDatabase ->
+    CrossDBLinkingStats ->
+    UUID.UUID ->
+    UUID.UUID ->
+    Exchange ->
+    Maybe GapEdge
+mkGapEdge db stats actUUID prodUUID ex = case ex of
+    TechnosphereExchange{} ->
+        let name = flowNameOr tfName (sdbTechFlows db)
+            reason = case exchangeActivityLinkId ex of
+                Nothing -> GapBlocked (maybe NoNameMatch snd (M.lookup name (cdlUnresolvedProducts stats)))
+                Just _ -> GapDanglingIdentity
+         in Just (edge name reason)
+    WasteExchange{} -> Just (edge (flowNameOr wfName (sdbWasteFlows db)) GapWasteInput)
+    BiosphereExchange{} -> Nothing
+  where
+    flowNameOr nameOf flows =
+        maybe (UUID.toText (exchangeFlowId ex)) nameOf (M.lookup (exchangeFlowId ex) flows)
+    edge name reason =
+        GapEdge
+            { gapFlowName = name
+            , gapLocation =
+                let loc = exchangeLocation ex
+                 in if T.null loc then extractBracketedLocation name else loc
+            , gapUnit = getUnitNameForExchange (sdbUnits db) ex
+            , gapAmount = exchangeAmount ex
+            , gapConsumerAct = actUUID
+            , gapConsumerProd = prodUUID
+            , gapReason = reason
+            }
+
+-- | Consumers shown per gap entry — the tail is countable via 'geConsumers'.
+topConsumerCap :: Int
+topConsumerCap = 20
+
+{- | Group gap edges by (flow name, location, unit), sorted by edge count
+descending. Within a group the reason with the richest diagnostic wins
+('GapBlocked' over 'GapDanglingIdentity' over 'GapWasteInput'). Consumer
+processes are named from the database, most-demanding first.
+-}
+gapEntries :: SimpleDatabase -> [GapEdge] -> [GapEntry]
+gapEntries db edges =
+    sortOn (Down . geEdges) (map entry (M.toList byKey))
+  where
+    byKey =
+        M.fromListWith
+            (flip (<>))
+            [((gapFlowName e, gapLocation e, gapUnit e), [e]) | e <- edges]
+    reasonRank r = case r of
+        GapBlocked _ -> 0 :: Int
+        GapDanglingIdentity -> 1
+        GapWasteInput -> 2
+    strongerReason a b = if reasonRank a <= reasonRank b then a else b
+    entry ((name, loc, unit), es) =
+        let consumers =
+                M.fromListWith (+) [((gapConsumerAct e, gapConsumerProd e), 1 :: Int) | e <- es]
+         in GapEntry
+                { geFlowName = name
+                , geLocation = loc
+                , geUnit = unit
+                , geReason = foldr (strongerReason . gapReason) GapWasteInput es
+                , geEdges = length es
+                , geConsumers = M.size consumers
+                , geDemandSum = sum (map gapAmount es)
+                , geTopConsumers =
+                    [ consumerOf a p n
+                    | ((a, p), n) <- take topConsumerCap (sortOn (Down . snd) (M.toList consumers))
+                    ]
+                }
+    consumerOf a p n =
+        GapConsumer
+            { gcActUUID = a
+            , gcProdUUID = p
+            , gcActivityName = maybe (UUID.toText a) activityName (M.lookup (a, p) (sdbActivities db))
+            , gcProductName = maybe (UUID.toText p) tfName (M.lookup p (sdbTechFlows db))
+            , gcLocation = maybe "" activityLocation (M.lookup (a, p) (sdbActivities db))
+            , gcEdges = n
+            }
+
+{- | Assemble the report. Header counts reuse the setup-page predicates
+('countTotalTechInputs' / 'countUnlinkedExchanges'); 'grUnresolvedEdges' is the
+edge-accurate count (per-triple coverage), so it can sit below the setup page's
+coarse @unlinked - crossDBLinks@ difference when waste-output links exist.
+-}
+buildGapReport :: T.Text -> SimpleDatabase -> Int -> [GapEdge] -> GapReport
+buildGapReport dbName db nLinks edges =
+    let total = countTotalTechInputs db
+        unlinked = countUnlinkedExchanges db
+        entries = gapEntries db edges
+     in GapReport
+            { grDbName = dbName
+            , grTotalInputs = total
+            , grInternalLinks = max 0 (total - unlinked)
+            , grCrossDBLinks = nLinks
+            , grUnresolvedEdges = length edges
+            , grUnresolvedProducts = length entries
+            , grCompleteness =
+                if total > 0
+                    then 100 * fromIntegral (total - length edges) / fromIntegral total
+                    else 100
+            , grGaps = entries
+            }
+
+-- | Supplier-gap report of a loaded database ('findProducer' honours process links).
+gapReportForLoaded :: T.Text -> Database -> GapReport
+gapReportForLoaded dbName db =
+    let sdb = toSimpleDatabase db
+        edges =
+            gapEdgesWith
+                (isJust . findProducer (dbProcessIdLookup db))
+                sdb
+                (dbCrossDBLinks db)
+                (dbLinkingStats db)
+     in buildGapReport dbName sdb (length (dbCrossDBLinks db)) edges
+
+{- | Staged-path counterpart of 'gapReportForLoaded', against the staged
+database's just-computed links and stats.
+-}
+gapReportForStaged :: T.Text -> SimpleDatabase -> CrossDBLinkingStats -> GapReport
+gapReportForStaged dbName sdb stats =
+    buildGapReport dbName sdb (crossDBLinksCount stats) (gapEdgesWith (hasInternalProducer sdb) sdb (cdlLinks stats) stats)
 
 {- | Per-run linking environment: the cross-DB context, the consumer database's
 own activity-key set (for the internal-resolution gate), and its flow tables.

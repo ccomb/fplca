@@ -75,3 +75,16 @@ spec = describe "MCP database load/unload tools" $ do
         resp <- call "unload_database"
         isError resp `shouldBe` True
         resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    describe "gap-report tool" $ do
+        it "is advertised with a required 'database' parameter" $
+            fmap requiredOf (toolByName "get_gap_report") `shouldBe` Just ["database"]
+
+        it "is routed by callTool (no 'Unknown tool' gap)" $ do
+            resp <- call "get_gap_report"
+            resultText resp `shouldSatisfy` maybe False (not . T.isPrefixOf "Unknown tool:")
+
+        it "surfaces the engine error for an unknown database" $ do
+            resp <- call "get_gap_report"
+            isError resp `shouldBe` True
+            resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)

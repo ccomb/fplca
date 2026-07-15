@@ -71,6 +71,7 @@ data Resource
     | ScoreActivity
     | ScoreActivities
     | ListScoringSets
+    | GetGapReport
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -152,6 +153,7 @@ apiPath r = case r of
     ScoreActivity -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "impacts", "{collection}"])
     ScoreActivities -> Just (POST, ["db", "{dbName}", "impacts", "{collection}"])
     ListScoringSets -> Nothing -- MCP-only: scoring sets are configuration metadata, no REST equivalent yet
+    GetGapReport -> Just (GET, ["db", "{dbName}", "gap-report"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -194,6 +196,7 @@ mcpName r = case r of
     ScoreActivity -> "score_activity"
     ScoreActivities -> "score_activities"
     ListScoringSets -> "list_scoring_sets"
+    GetGapReport -> "get_gap_report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -232,6 +235,7 @@ cliName r = case r of
     ScoreActivity -> "score-activity"
     ScoreActivities -> "score-activities"
     ListScoringSets -> "scoring-sets"
+    GetGapReport -> "gap-report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -432,6 +436,15 @@ description r = case r of
         \factors, and the score \
         \formulas. Use the returned set names as keys when interpreting \
         \score_activity / score_activities responses."
+    GetGapReport ->
+        "LCA / ACV — supplier-gap report of a database: every input demand \
+        \still unsupplied after internal resolution and cross-database \
+        \linking, aggregated per (product, location, unit) and ranked by \
+        \demanding edges. Each gap carries the blocking reason, the number of \
+        \consumer edges and distinct consumers, the total demanded amount, \
+        \and the top consuming processes. Answers 'what is missing to switch \
+        \or complete this database's background dependency?' — typically read \
+        \right after a relink."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -734,4 +747,7 @@ params r = case r of
         ]
     ListScoringSets ->
         [ Param "collection" "string" Optional "Method collection name. If omitted, returns scoring sets across all loaded collections, grouped by collection."
+        ]
+    GetGapReport ->
+        [ pDatabase
         ]

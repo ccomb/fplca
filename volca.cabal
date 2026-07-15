@@ -283,6 +283,7 @@ test-suite lca-tests
                      , SubstitutionSpec
                      , SensitivitySpec
                      , CrossDBSubstitutionSpec
+                     , GapReportSpec
                      , GlobalSubstitutionSpec
                      , DatabaseStatusSpec
                      , DependencyChoiceSpec

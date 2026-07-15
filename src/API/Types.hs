@@ -735,6 +735,54 @@ data RelinkRequest = RelinkRequest
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped RelinkRequest)
 
+-- | One consuming process of a supplier-gap entry.
+data GapConsumerAPI = GapConsumerAPI
+    { gcaProcessId :: Text
+    , gcaActivityName :: Text
+    , gcaProductName :: Text
+    , gcaLocation :: Text
+    , gcaEdges :: Int
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapConsumerAPI)
+
+{- | One supplier gap, aggregated per (product name, location, unit) so
+@demandSum@ never mixes units. @reason@ carries the stable blocker code
+('Types.blockerReasonDetail'), plus @dangling_source_identity@ for inputs whose
+named source activity no dependency ships, and @unlinked_waste_input@ for
+treatment-side waste inputs with no internal producer.
+-}
+data GapEntryAPI = GapEntryAPI
+    { gaeName :: Text
+    , gaeLocation :: Text
+    , gaeUnit :: Text
+    , gaeReason :: Text
+    , gaeDetail :: Maybe Text
+    , gaeEdges :: Int
+    , gaeConsumers :: Int
+    , gaeDemandSum :: Double
+    , gaeTopConsumers :: [GapConsumerAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapEntryAPI)
+
+{- | Supplier-gap report of a database: everything still unsupplied after
+internal resolution and cross-DB linking, aggregated and ranked by demanding
+edges — the work list for switching or completing a background dependency.
+-}
+data GapReportAPI = GapReportAPI
+    { graDbName :: Text
+    , graTotalInputs :: Int
+    , graInternalLinks :: Int
+    , graCrossDBLinks :: Int
+    , graUnresolvedEdges :: Int
+    , graUnresolvedProducts :: Int
+    , graCompleteness :: Double
+    , graGaps :: [GapEntryAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapReportAPI)
+
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded {dlrName :: Text}

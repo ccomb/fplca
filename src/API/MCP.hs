@@ -35,6 +35,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
+import API.DatabaseHandlers (gapReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -360,6 +361,7 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     "score_activity" -> callScoreActivity dbManager mBaseUrl rid args
     "score_activities" -> callScoreActivities dbManager mBaseUrl rid args
     "list_scoring_sets" -> callListScoringSets dbManager rid args
+    "get_gap_report" -> callGetGapReport dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1296,6 +1298,16 @@ callListMethods dbManager rid = do
                 )
                 loadedMethods
     return $ toolSuccessJson rid $ object ["methods" .= summaries]
+
+{- | Supplier-gap report: what is still unsupplied after cross-DB linking.
+Same wire shape as the REST endpoint ('gapReportToAPI'), so both surfaces
+stay in lock-step.
+-}
+callGetGapReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callGetGapReport dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    report <- ExceptT (DM.databaseGapReport dbManager dbName)
+    return $ toolSuccessJson rid (toJSON (gapReportToAPI report))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do
