@@ -346,7 +346,10 @@ What the ``/aggregate`` primitive groups over.
 
 ``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
 upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
-biosphere flows in the supply chain.
+biosphere flows in the supply chain. ``CONSUMPTION`` — every scaled
+technosphere edge (who consumes what, in scaled units); the scope that
+answers "total X consumed upstream" without double counting, via
+``filter_consumer_not``.
 
 ### `BioDirection`
 
@@ -383,17 +386,33 @@ Declare ``dep_name`` as a dependency of the target database.
 Returns the engine's ``DatabaseSetupInfo`` dict describing the updated
 dependency topology.
 
-##### `Client.aggregate(process_id: str, scope: AggregateScope | str, *, is_input: bool | None = None, max_depth: int | None = None, filter_name: str | None = None, filter_name_not: list[str] | str | None = None, filter_unit: str | None = None, preset: str | None = None, filter_classification: list[ClassificationFilter] | None = None, filter_target_name: str | None = None, filter_is_reference: bool | None = None, group_by: str | None = None, aggregate: AggregateOp | str | None = None) -> AggregateResult`
+##### `Client.aggregate(process_id: str, scope: AggregateScope | str, *, is_input: bool | None = None, max_depth: int | None = None, filter_name: str | None = None, filter_name_not: list[str] | str | None = None, filter_unit: str | None = None, preset: str | None = None, filter_classification: list[ClassificationFilter] | None = None, filter_target_name: str | None = None, filter_consumer: str | None = None, filter_consumer_not: list[str] | str | None = None, filter_is_reference: bool | None = None, group_by: str | None = None, aggregate: AggregateOp | str | None = None) -> AggregateResult`
 
 SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
 
 Args:
     scope: :class:`AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
-        / ``BIOSPHERE``) or the equivalent wire string. Strings are
-        accepted for one-liner ergonomics but bypass static checking.
+        / ``BIOSPHERE`` / ``CONSUMPTION``) or the equivalent wire
+        string. Strings are accepted for one-liner ergonomics but
+        bypass static checking. ``CONSUMPTION`` rows are scaled
+        technosphere edges — use it for "total X consumed upstream"
+        questions. Net electricity without grid double counting::
+
+            aggregate(pid, "consumption", filter_name="electricity",
+                      filter_consumer_not=["electricity"])
+
+        Grass eaten by cattle across the whole chain::
+
+            aggregate(pid, "consumption", filter_name="grass",
+                      filter_consumer="cattle")
+    filter_consumer: substring match on the consuming activity's name
+        (``CONSUMPTION`` scope only).
+    filter_consumer_not: exclude edges whose consumer name contains
+        any of these substrings (list or comma-separated string).
     group_by: omit for a single-bucket result (just the totals).
         Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
         ``"unit"``, ``"location"``, ``"target_name"``,
+        ``"consumer_name"`` (``CONSUMPTION`` scope),
         ``"classification.<system>"``.
     aggregate: :class:`AggregateOp` member or wire string
         (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
