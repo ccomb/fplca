@@ -1135,10 +1135,14 @@ getOpenApiSpec = return $ toJSON volcaOpenApi
 
 {- | Wire-format revision advertised on /api/v1/version. BUMP this whenever a
 breaking change to the JSON wire shape lands (field rename/removal, type
-narrowing, newly-required field). Clients compare it to decide compatibility.
+narrowing, newly-required field) — or when an additive capability is unsafe
+to probe blindly, so clients need a discriminator (revision 3: the delete
+@ids@ selection, which an older engine would ignore and fall back to the
+whole filtered set). Clients compare it to decide compatibility and to gate
+such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 2
+currentWireVersion = 3
 
 getVersion :: AppM Value
 getVersion =

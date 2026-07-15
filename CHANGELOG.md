@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.3] - 2026-07-15
+
+### Changed
+- The wire-format revision advertised on `/api/v1/version` is now `3`. Nothing
+  breaks: every wire change in this release is additive, and existing clients
+  keep working (pyvolca 0.8.x prints at most an upgrade hint). The revision
+  exists so a client can tell whether the engine understands the new delete
+  `ids` selection — an older engine would silently ignore the unknown key and
+  treat the request as an empty filter, i.e. "everything", which is exactly
+  the kind of guess a destructive operation must never make.
 
 ### Fixed
 - `exact=true` on the activity search now applies to the `product=` filter
