@@ -34,7 +34,8 @@ Then paste the rendered block at the top of this file and tighten wording.
   that does not exist now fails loudly at `start()` instead of the engine
   dying behind the scenes — a typo must never silently become "all defaults".
 - `Server.start()` fails fast with the exit code when the spawned engine dies
-  before serving, instead of hanging until the readiness timeout.
+  before serving, instead of hanging until the readiness timeout — in both
+  fixed-port and `port="auto"` modes.
 
 ### Changed
 

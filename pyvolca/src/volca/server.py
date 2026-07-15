@@ -156,6 +156,19 @@ class Server:
 
         _compat.check(Client(self.base_url, password=self.password).get_version())
 
+    def _early_exit(self, code: int, doing: str) -> RuntimeError:
+        """Fail-fast error for an engine that died before ``doing``.
+
+        The likeliest config-less cause is an engine too old to run without
+        ``--config``, hence the version hint.
+        """
+        hint = (
+            " Running without a config file needs an engine >= v0.9.3."
+            if self.config is None
+            else ""
+        )
+        return RuntimeError(f"Engine exited with code {code} before {doing}.{hint}")
+
     def _await_bound_port(self, wait_timeout: int) -> None:
         """Read the engine's machine-readable port after it has bound port 0."""
         process = self._process
@@ -179,7 +192,8 @@ class Server:
         if reader.is_alive():
             raise TimeoutError(f"Server did not report its bound port within {wait_timeout}s")
         if not announced:
-            raise RuntimeError("VoLCA exited before reporting its bound port")
+            # EOF on stdout without an announcement means the engine died.
+            raise self._early_exit(process.wait(timeout=5), "reporting its bound port")
         raw = announced[0]
         port = int(raw) if raw.isdecimal() else 0
         if not 1 <= port <= 65535:
@@ -249,18 +263,9 @@ class Server:
                 return
             code = self._process.poll()
             if code is not None:
-                # The engine died before serving — fail now, not at the
-                # timeout. The likeliest config-less cause is an engine too
-                # old to run without --config.
+                # Fail now, not at the readiness timeout.
                 self._process = None
-                hint = (
-                    " Running without a config file needs an engine >= v0.9.3."
-                    if self.config is None
-                    else ""
-                )
-                raise RuntimeError(
-                    f"Engine exited with code {code} before becoming ready.{hint}"
-                )
+                raise self._early_exit(code, "becoming ready")
             time.sleep(0.5)
 
         raise TimeoutError(

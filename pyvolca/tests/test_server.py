@@ -96,10 +96,24 @@ def test_await_bound_port_rejects_invalid_port(line: str):
 def test_await_bound_port_reports_early_exit():
     process = mock.Mock()
     process.stdout = io.StringIO("some unrelated log line\n")
+    process.wait.return_value = 1
     srv = Server(config="absent.toml", port="auto")
     srv._process = process
 
-    with pytest.raises(RuntimeError, match="exited before reporting"):
+    with pytest.raises(RuntimeError, match="code 1 before reporting"):
+        srv._await_bound_port(wait_timeout=1)
+
+
+def test_await_bound_port_early_exit_hints_config_less():
+    # port="auto" is the canonical config-less invocation — an engine too old
+    # to run without --config must get the version hint on this path too.
+    process = mock.Mock()
+    process.stdout = io.StringIO("")
+    process.wait.return_value = 1
+    srv = Server(config=None, port="auto")
+    srv._process = process
+
+    with pytest.raises(RuntimeError, match="engine >= v0.9.3"):
         srv._await_bound_port(wait_timeout=1)
 
 
