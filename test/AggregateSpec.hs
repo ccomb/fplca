@@ -2,11 +2,13 @@
 
 {- | Tests for "Service.Aggregate".
 
-The aggregate API is documented but had zero direct test coverage. We
-exercise it end-to-end against SAMPLE.min3, focusing on ScopeDirect (no
-MUMPS solve required) and ScopeBiosphere (driven by mkSolverFromDb), with
-emphasis on the filter / group-by / aggregate-function semantics that the
-HTTP layer relies on for correctness.
+Exercised end-to-end against SAMPLE.min3 — a three-step chain where
+activity X consumes 0.6 kg of product Y per kg of product X, and Y
+consumes 0.4 kg of product Z per kg of Y, so the scaling vector for one
+kg of X is (1, 0.6, 0.24). ScopeDirect needs no MUMPS solve; the other
+scopes are driven by mkSolverFromDb. Emphasis on the filter / group-by /
+aggregate-function semantics that the HTTP layer relies on for
+correctness.
 -}
 module AggregateSpec (spec) where
 
@@ -59,6 +61,17 @@ direct = Agg.emptyAggregateParams Agg.ScopeDirect
 biosphere :: Agg.AggregateParams
 biosphere = Agg.emptyAggregateParams Agg.ScopeBiosphere
 
+supplyChain :: Agg.AggregateParams
+supplyChain = Agg.emptyAggregateParams Agg.ScopeSupplyChain
+
+consumption :: Agg.AggregateParams
+consumption = Agg.emptyAggregateParams Agg.ScopeConsumption
+
+-- 0.6 and 0.4 are not exact in binary; compare within a tolerance.
+shouldBeCloseTo :: Double -> Double -> Expectation
+shouldBeCloseTo actual expected =
+    actual `shouldSatisfy` (\x -> abs (x - expected) < 1e-9)
+
 spec :: Spec
 spec = do
     describe "emptyAggregateParams defaults (regression gates)" $ do
@@ -76,7 +89,7 @@ spec = do
             Agg.apFilterClassifications direct `shouldBe` []
             Agg.apIsInput direct `shouldBe` Nothing
 
-    describe "ScopeDirect on SAMPLE.min3 (cement → sand/gravel)" $ do
+    describe "ScopeDirect on SAMPLE.min3 (X ← Y ← Z chain)" $ do
         it "echoes the scope text in the result" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
             agg <- runAgg db direct
@@ -152,6 +165,73 @@ spec = do
                 distinctUnits = length . S.fromList $ map Types.exchangeUnitId (Types.exchanges firstAct)
             length (API.aggGroups agg) `shouldSatisfy` (<= distinctUnits)
             length (API.aggGroups agg) `shouldSatisfy` (>= 1)
+
+    describe "ScopeSupplyChain on SAMPLE.min3" $ do
+        it "lists cumulative production per upstream product (root excluded)" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db supplyChain
+            API.aggScope agg `shouldBe` "supply_chain"
+            API.aggFilteredCount agg `shouldBe` 2
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.84
+            API.aggFilteredUnit agg `shouldBe` Just "kg"
+
+        it "max_depth=1 keeps only the direct supplier" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db supplyChain{Agg.apMaxDepth = Just 1}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.6
+
+    describe "ScopeConsumption on SAMPLE.min3" $ do
+        it "yields one row per scaled technosphere edge" $ do
+            -- Edges: Y→X (0.6 × s_X=1) and Z→Y (0.4 × s_Y=0.6).
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption
+            API.aggScope agg `shouldBe` "consumption"
+            API.aggFilteredCount agg `shouldBe` 2
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.84
+            API.aggFilteredUnit agg `shouldBe` Just "kg"
+
+        it "filter_consumer restricts to what the matching activities eat (grass-by-cows shape)" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterConsumer = Just "product Y"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "filter_consumer_not excludes edges into the matching consumers" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterConsumerNot = ["product Y"]}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.6
+
+        it "filter_name matches the supplier's reference product" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterName = Just "product Z"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "filter_target_name matches the supplier activity's name" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apFilterTargetName = Just "production of product Z"}
+            API.aggFilteredCount agg `shouldBe` 1
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.24
+
+        it "group_by=consumer_name buckets edges by eater, largest first" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db consumption{Agg.apGroupBy = Just "consumer_name"}
+            map API.aggKey (API.aggGroups agg)
+                `shouldBe` ["production of product X", "production of product Y"]
+            case API.aggGroups agg of
+                [gx, gy] -> do
+                    API.aggQuantity gx `shouldBeCloseTo` 0.6
+                    API.aggQuantity gy `shouldBeCloseTo` 0.24
+                other -> expectationFailure ("expected 2 groups, got " <> show (length other))
+
+        it "filter_consumer on ScopeDirect matches nothing (rows carry no consumer)" $ do
+            -- Pins the "attribute absent → filter excludes" semantics, the
+            -- same rule filter_target_name already follows.
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db direct{Agg.apFilterConsumer = Just "product"}
+            API.aggFilteredCount agg `shouldBe` 0
 
     describe "ScopeBiosphere on SAMPLE.min3" $ do
         it "echoes the biosphere scope text" $ do

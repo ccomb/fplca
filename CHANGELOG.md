@@ -27,6 +27,14 @@
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An
   explicit `--config` path that does not exist still fails loudly.
+- The `aggregate` primitive gains a `consumption` scope that answers "how much
+  of X is consumed across the whole upstream chain" — total electricity or
+  heat feeding a product, grass eaten by cattle. Each row is one scaled
+  consumer→supplier link, so filtering by the consuming activity
+  (`filter_consumer`, `filter_consumer_not`) avoids the double counting that
+  summing cumulative production would give (for example counting the same
+  electricity once per voltage level). Grouping by `consumer_name` shows who
+  consumes what. Available on the REST endpoint, the MCP tool, and pyvolca.
 
 ## [0.9.2] - 2026-07-14
 

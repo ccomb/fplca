@@ -86,6 +86,8 @@ type LCAAPI =
                     :> QueryParam "preset" Text
                     :> QueryParams "filter_classification" Text
                     :> QueryParam "filter_target_name" Text
+                    :> QueryParam "filter_consumer" Text
+                    :> QueryParam "filter_consumer_not" Text
                     :> QueryParam "filter_exchange_type" Text
                     :> QueryParam "filter_is_reference" Bool
                     :> QueryParam "group_by" Text
@@ -1405,11 +1407,13 @@ getActivityAggregate ::
     [Text] ->
     Maybe Text ->
     Maybe Text ->
+    Maybe Text ->
+    Maybe Text ->
     Maybe Bool ->
     Maybe Text ->
     Maybe Text ->
     AppM Aggregation
-getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnameParam fnameNotParam funitParam presetParam fclassParams ftargetParam fexchangeTypeParam freferenceParam groupByParam aggregateParam = do
+getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnameParam fnameNotParam funitParam presetParam fclassParams ftargetParam fconsumerParam fconsumerNotParam fexchangeTypeParam freferenceParam groupByParam aggregateParam = do
     dbManager <- asks aeDbManager
     presets <- asks aeClassificationPresets
     (db, sharedSolver) <- requireDatabaseByName dbName
@@ -1417,7 +1421,8 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
             Just "direct" -> V.Success Agg.ScopeDirect
             Just "supply_chain" -> V.Success Agg.ScopeSupplyChain
             Just "biosphere" -> V.Success Agg.ScopeBiosphere
-            _ -> V.failure "scope must be one of: direct | supply_chain | biosphere"
+            Just "consumption" -> V.Success Agg.ScopeConsumption
+            _ -> V.failure "scope must be one of: direct | supply_chain | biosphere | consumption"
         parseExType = \case
             Nothing -> V.Success Nothing
             Just "technosphere" -> V.Success (Just Agg.KindTechnosphere)
@@ -1439,6 +1444,8 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
             throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}
         (Just _, Agg.ScopeSupplyChain) ->
             throwError err400{errBody = "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"}
+        (Just _, Agg.ScopeConsumption) ->
+            throwError err400{errBody = "filter_exchange_type is not supported with scope=consumption (all edges are technosphere)"}
         _ -> return ()
     let presetFilters = expandPreset presets presetParam
         explicitFilters = mapMaybe parseClassFilter fclassParams
@@ -1452,6 +1459,8 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
                 , Agg.apFilterUnit = funitParam
                 , Agg.apFilterClassifications = presetFilters ++ explicitFilters
                 , Agg.apFilterTargetName = ftargetParam
+                , Agg.apFilterConsumer = fconsumerParam
+                , Agg.apFilterConsumerNot = maybe [] (map T.strip . T.splitOn ",") fconsumerNotParam
                 , Agg.apFilterExchangeType = exchangeType
                 , Agg.apFilterIsReference = freferenceParam
                 , Agg.apGroupBy = groupByParam
