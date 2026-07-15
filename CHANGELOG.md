@@ -2,7 +2,27 @@
 
 ## [Unreleased]
 
+### Fixed
+- The `name=` filter on the supply-chain and consumers endpoints (REST and
+  MCP) now filters. A name matching nothing previously disabled the filter
+  and returned every entry — with a matching `filteredActivities` count — so
+  a caller could not tell "no match" from "no filter". It now returns an
+  empty result.
+- A scoring integrity error (a regionalized score whose tables are internally
+  inconsistent — mismatched lengths, absent weights) now fails the request
+  with a 500 instead of silently scoring the category 0. A consumer could not
+  tell that 0 from a real score. Coverage gaps are unaffected: an unmapped
+  flow still contributes nothing and is reported as before. In sensitivity
+  responses the error lands on the affected perturbation entry, which already
+  carries per-entry errors.
+
 ### Added
+- Delete-activities accepts an `ids` list to delete exactly the named
+  processes, on the API (`"ids": [...]`) and the CLI (repeatable `--id`).
+  Previously the only selection mode was a filter, so deleting a known list
+  of processes required a deliberately unsatisfiable filter plus the `extra`
+  list. `ids` cannot be combined with filter fields — an ambiguous request
+  is refused, not guessed at.
 - EcoSpold 2 `mathematicalRelation` formulas are now read. Dataset
   `<parameter>` variables are kept on the activity (value and raw formula),
   and each exchange formula is checked against the dataset's parameters and

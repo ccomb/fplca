@@ -117,6 +117,7 @@ data DbDeleteArgs = DbDeleteArgs
     , ddaExact :: Bool
     , ddaKeep :: [Text]
     , ddaExtra :: [Text]
+    , ddaIds :: [Text] -- Delete exactly these process ids (@--id@, excludes filters)
     }
     deriving (Eq, Show, Generic)
 

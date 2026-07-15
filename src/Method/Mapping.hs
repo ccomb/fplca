@@ -1625,15 +1625,12 @@ coverage DB just contributes its partial score to the sum. The build-time
 WARN + 'rawMissingPairs' per @(db, method)@ is the single source of truth
 for what's missing — score time stays quiet.
 
-Per-DB 'Left' is tolerated for genuine integrity errors (scaling/weights
-length mismatch, weights absent on a regionalized method): that DB drops
-to a 0 contribution and the function keeps summing the rest, preserving
-the partial answer over the other DBs.
-
-Returns 'Left' only when 'every' triple's score is 'Left' — i.e. every
-participating DB hit an integrity error and there is no salvageable
-contribution. The concatenated error messages are surfaced so the caller
-can act on them.
+A per-DB 'Left' is a genuine integrity error (scaling/weights length
+mismatch, weights absent on a regionalized method — never a coverage gap)
+and fails the whole sum: dropping that DB to a 0 contribution would return
+a silently undercounted total the consumer cannot tell from a real score.
+The concatenated per-DB error messages are surfaced so the caller can act
+on them.
 -}
 sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
@@ -1647,11 +1644,9 @@ sumRegionalizedLCIAScoreCrossDB ::
     Either Text Double
 sumRegionalizedLCIAScoreCrossDB unitCfg unitDB flowDB hier triples =
     let results = [computeRegionalizedLCIAScore unitCfg unitDB flowDB db sv hier t | (db, sv, t) <- triples]
-        oks = rights results
-        errs = lefts results
-     in case (oks, errs) of
-            ([], es) | not (null es) -> Left (T.intercalate "; " es)
-            _ -> Right (sum oks)
+     in case lefts results of
+            [] -> Right (sum (rights results))
+            es -> Left (T.intercalate "; " es)
 
 {- | Cascade CF lookup: UUID → exact (name, medium, subcomp) → fallback (name, medium).
 The same logic is baked into 'mtBroadcast' once unit conversion is available;

@@ -762,10 +762,12 @@ data DeleteClassFilter = DeleteClassFilter
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteClassFilter)
 
-{- | Request for delete-by-selection. The filter fields select the whole
-matching set (pagination ignored); @dsqKeep@ spares matched process ids and
-@dsqExtra@ adds ones the filter missed. Process ids are the canonical
-@activityUUID_productUUID@ strings the UI/CLI carry, not matrix indices.
+{- | Request for delete-by-selection. Two exclusive selection modes: the
+filter fields select the whole matching set (pagination ignored), or @dsqIds@
+names the set exactly — the filter fields must then be absent. @dsqKeep@
+spares selected process ids and @dsqExtra@ adds ones the selection missed.
+Process ids are the canonical @activityUUID_productUUID@ strings the UI/CLI
+carry, not matrix indices.
 -}
 data DeleteSelectionRequest = DeleteSelectionRequest
     { dsqName :: Maybe Text -- Filter by activity name
@@ -775,6 +777,7 @@ data DeleteSelectionRequest = DeleteSelectionRequest
     , dsqExact :: Maybe Bool -- Exact name match (default False)
     , dsqKeep :: [Text] -- Process-id strings to spare from deletion
     , dsqExtra :: [Text] -- Process-id strings to add to deletion
+    , dsqIds :: Maybe [Text] -- Delete exactly these process ids (no filter fields allowed)
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionRequest)

@@ -6,6 +6,7 @@ module CLI.Client (
     executeRemoteCommand,
     apiGet,
     apiPost,
+    deleteSelectionBody,
 ) where
 
 import CLI.Types
@@ -269,6 +270,7 @@ deleteSelectionBody args =
         , "exact" .= ddaExact args
         , "keep" .= ddaKeep args
         , "extra" .= ddaExtra args
+        , "ids" .= (if null (ddaIds args) then Nothing else Just (ddaIds args))
         ]
   where
     classifications = case (ddaClassSystem args, ddaClassValue args) of
