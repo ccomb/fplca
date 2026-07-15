@@ -668,6 +668,9 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     -- do not (and no 'UpperLocationUsed' warning — the widening is
     -- deliberate). A designated location nothing supplies is a loud
     -- curated-mapping error, never a silent fallback to the generic cascade.
+    -- The stored score still rates the supplier against the consumer's own
+    -- location, so a pinned cross-location link can carry a score below the
+    -- threshold — expected, since the designation overrode the ranking.
     designatedAt targetName targetLoc candidates =
         case filter ((== targetLoc) . seLocation . snd) candidates of
             [] -> CrossDBNotLinked (AliasTargetMissing targetName (Just targetLoc))
