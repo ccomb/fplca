@@ -460,9 +460,14 @@ class Client:
         Useful when the engine is upgraded without reinstalling pyvolca.
 
         This is the explicit "the engine was upgraded" path — the likeliest
-        place to meet a wire mismatch — so it runs the same one-shot gate as
-        :meth:`_load_operations`, refusing a spec pyvolca can't decode.
+        place to meet a wire *change* — so it forgets the cached wire and
+        re-runs the gate against the live engine before fetching a spec
+        pyvolca can't decode. Without the reset, a client that first met an
+        older engine would keep refusing wire-gated capabilities after an
+        in-place upgrade.
         """
+        self._checked = False
+        self._server_wire = None
         self._ensure_compatible()
         spec = self._json(self._session.get(f"{self.base_url}/api/v1/openapi.json"))
         self._operations = _parse_spec(spec)

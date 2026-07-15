@@ -112,6 +112,19 @@ def test_refresh_stubs_is_gated(make_response) -> None:
     assert session.get.call_count == 1  # version checked; openapi.json never fetched
 
 
+def test_refresh_stubs_rechecks_the_wire(make_response, monkeypatch) -> None:
+    """The documented "engine was upgraded" path must re-read the live wire:
+    a client that first met an older engine would otherwise keep refusing
+    wire-gated capabilities from a stale cache after an in-place upgrade."""
+    monkeypatch.setattr("volca._stub_gen.write_stubs_for_spec", lambda spec: None)
+    c, session = _client_with_version(make_response, wire=_compat.REQUIRED_WIRE)
+    c._ensure_compatible()
+    assert c._server_wire == _compat.REQUIRED_WIRE
+    session.get.return_value = make_response(_version_body(_compat.KNOWN_WIRE))
+    c.refresh_stubs()
+    assert c._server_wire == _compat.KNOWN_WIRE
+
+
 def test_ensure_compatible_is_one_shot(make_response) -> None:
     c, session = _client_with_version(make_response, wire=_compat.REQUIRED_WIRE)
     c._ensure_compatible()
