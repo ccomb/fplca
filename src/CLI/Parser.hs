@@ -57,7 +57,7 @@ cliParser = CLIConfig <$> globalOptionsParser <*> optional commandParser
 -- | Global options parser (applied before commands)
 globalOptionsParser :: Parser GlobalOptions
 globalOptionsParser = do
-    configFile <- optStrOpt "config" (Just 'c') "FILE" "TOML config file (required)"
+    configFile <- optStrOpt "config" (Just 'c') "FILE" "TOML config file (server and stop run on built-in defaults without it; other commands require it)"
     dbName <- optTextOpt "db" Nothing "NAME" "Database name to query (from config file)"
     methodsDir <- optStrOpt "methods" Nothing "PATH" "Directory containing ILCD method XML files for LCIA"
     format <-

@@ -9,6 +9,12 @@
   a caller could not tell "no match" from "no filter". It now returns an
   empty result.
 
+### Added
+- `volca server` starts without `--config`: it runs on the built-in defaults
+  with no databases, ready to receive uploads or API-driven loads. Launchers
+  no longer have to write an empty TOML file just to satisfy the flag. An
+  explicit `--config` path that does not exist still fails loudly.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added
