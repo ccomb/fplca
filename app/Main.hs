@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ServerConfig (..), loadConfig)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ServerConfig (..), loadConfigOrDefault)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -78,7 +78,7 @@ main = do
     case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
         (Just DumpOpenApi, _) -> BSL.putStrLn (encode volcaOpenApi)
         (Just DumpMcpTools, _) -> BSL.putStrLn (encode toolDefinitions)
-        (Just (Server serverOpts), Just cfgFile) -> runServerWithConfig cliConfig serverOpts cfgFile
+        (Just (Server serverOpts), mCfgFile) -> runServerWithConfig cliConfig serverOpts mCfgFile
         (Just Repl, Just cfgFile) -> runReplMode cliConfig cfgFile
         (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
         (Just cmd, Just cfgFile) -> runCLIViaAPI cliConfig cmd cfgFile
@@ -86,11 +86,16 @@ main = do
         (Just Stop, Nothing) -> runStopWithoutConfig cliConfig
         _ -> die "--config is required"
 
--- | Load config or die with error message
-loadConfigOrDie :: FilePath -> IO Config
-loadConfigOrDie cfgFile = do
-    reportProgress Info $ "Loading configuration from: " ++ cfgFile
-    configResult <- loadConfig cfgFile
+{- | Load config or die with error message. Without a path the effective
+config is the built-in defaults (no databases) — 'loadConfigOrDefault'
+still validates it and honours VOLCA_DATA_DIR.
+-}
+loadConfigOrDie :: Maybe FilePath -> IO Config
+loadConfigOrDie mCfgFile = do
+    reportProgress Info $ case mCfgFile of
+        Just cfgFile -> "Loading configuration from: " ++ cfgFile
+        Nothing -> "No --config given, running on built-in defaults (no databases)"
+    configResult <- loadConfigOrDefault mCfgFile
     case configResult of
         Left err -> do
             reportError $ "Failed to load config: " ++ T.unpack err
@@ -106,7 +111,7 @@ isLocalCommand _ = False
 -- | Run local-only CLI commands through DatabaseManager (loads DBs, matrix solver)
 runCLIWithConfig :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIWithConfig cliConfig cmd cfgFile = do
-    config <- loadConfigOrDie cfgFile
+    config <- loadConfigOrDie (Just cfgFile)
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
     executeCommand cliConfig cmd dbManager
 
@@ -120,7 +125,7 @@ newClientManager = newManager defaultManagerSettings{managerResponseTimeout = re
 -- | Run CLI commands via HTTP against a running server (lightweight, no DB loading)
 runCLIViaAPI :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIViaAPI cliConfig cmd cfgFile = do
-    config <- loadConfigOrDie cfgFile
+    config <- loadConfigOrDie (Just cfgFile)
     mgr <- newClientManager
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     executeRemoteCommand mgr rc (globalOptions cliConfig) cmd
@@ -128,7 +133,7 @@ runCLIViaAPI cliConfig cmd cfgFile = do
 -- | Run interactive REPL over HTTP (auto-starts server if needed)
 runReplMode :: CLIConfig -> FilePath -> IO ()
 runReplMode cliConfig cfgFile = do
-    config <- loadConfigOrDie cfgFile
+    config <- loadConfigOrDie (Just cfgFile)
     mgr <- newClientManager
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     runRepl mgr rc (globalOptions cliConfig) cfgFile
@@ -145,6 +150,20 @@ applyLoadOverride :: ServerOptions -> Config -> Config
 applyLoadOverride serverOpts config = case serverLoadDbs serverOpts of
     Nothing -> config
     Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
+
+{- | Warn for each --load name that matches no configured database: the
+override silently loads nothing for it — guaranteed when running on the
+built-in defaults, which configure no databases at all.
+-}
+warnUnknownLoadNames :: ServerOptions -> Config -> IO ()
+warnUnknownLoadNames serverOpts config =
+    mapM_ warn unknown
+  where
+    known = map dcName (cfgDatabases config)
+    unknown = concatMap (filter (`notElem` known)) (serverLoadDbs serverOpts)
+    warn name =
+        reportProgress Warning $
+            "--load " ++ T.unpack name ++ " matches no configured database; nothing will be loaded for it"
 
 -- | Log loaded databases (allows starting with none for BYOL mode).
 logLoadedDatabases :: DatabaseManager -> IO ()
@@ -219,12 +238,13 @@ uploadSizeLimitMiddleware hostingConfig =
             (pure . uploadBodyCeiling hostingConfig . pathInfo)
             defaultRequestSizeLimitSettings
 
--- | Run server with multi-database configuration file
-runServerWithConfig :: CLIConfig -> ServerOptions -> FilePath -> IO ()
-runServerWithConfig cliConfig serverOpts cfgFile = do
-    config <- applyLoadOverride serverOpts <$> loadConfigOrDie cfgFile
+-- | Run the server: on a configuration file when given, else on built-in defaults.
+runServerWithConfig :: CLIConfig -> ServerOptions -> Maybe FilePath -> IO ()
+runServerWithConfig cliConfig serverOpts mCfgFile = do
+    config <- applyLoadOverride serverOpts <$> loadConfigOrDie mCfgFile
+    warnUnknownLoadNames serverOpts config
     reportProgress Info "Initializing database manager..."
-    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
+    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) mCfgFile
     logLoadedDatabases dbManager
     let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
         staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
@@ -257,7 +277,7 @@ Useful for cache generation, validation, and benchmarking
 -}
 runConfigLoadOnly :: CLIConfig -> FilePath -> IO ()
 runConfigLoadOnly cliConfig cfgFile = do
-    config <- loadConfigOrDie cfgFile
+    config <- loadConfigOrDie (Just cfgFile)
 
     -- Initialize DatabaseManager (pre-loads databases with load=true)
     reportProgress Info "Loading all databases from config..."
