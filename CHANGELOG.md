@@ -17,10 +17,17 @@
   carries per-entry errors.
 
 ### Added
+- Delete-activities accepts an `ids` list to delete exactly the named
+  processes, on the API (`"ids": [...]`) and the CLI (repeatable `--id`).
+  Previously the only selection mode was a filter, so deleting a known list
+  of processes required a deliberately unsatisfiable filter plus the `extra`
+  list. `ids` cannot be combined with filter fields — an ambiguous request
+  is refused, not guessed at.
 - `volca server` starts without `--config`: it runs on the built-in defaults
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An
   explicit `--config` path that does not exist still fails loudly.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added

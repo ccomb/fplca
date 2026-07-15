@@ -436,6 +436,7 @@ volca database delete my-db                     # delete
 volca database copy my-db my-db-v2              # copy under a new name
 volca database relink my-db --to bg-db --mapping aliases.csv
 volca database delete-activities my-db --name "electricity"  # delete filtered set
+volca database delete-activities my-db --id UUID_UUID --id UUID_UUID  # delete exactly these
 volca database export my-db --format simapro --out out.csv
 #   formats: simapro | ecospold1 | ecospold2 | ilcd | brightway
 
@@ -485,7 +486,7 @@ volca method delete ef-31                        # delete
 | Relink / finalize | `POST /db/{name}/(relink\|finalize)` | `database relink DB --to DEP --mapping CSV` |
 | Setup / dependencies | `GET /db/{name}/setup`, `POST .../{add,remove}-dependency/{dep}`, `POST .../set-data-path` | — |
 | Copy database | `POST /db/{name}/copy/{newName}` | `database copy SRC NEW_NAME` |
-| Delete activities (filtered set) | `POST /db/{name}/delete` | `database delete-activities DB [filters]` |
+| Delete activities (by filter or ids) | `POST /db/{name}/delete` | `database delete-activities DB [filters\|--id …]` |
 | Export database | `POST /db/{name}/export` | `database export DB --format FMT --out FILE` |
 | Delete database | `DELETE /db/{name}` | `database delete NAME` |
 | **Method Management** | | |
