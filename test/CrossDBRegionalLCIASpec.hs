@@ -125,15 +125,54 @@ spec = describe "cross-DB regional LCIA" $ do
                     perDb
                     `shouldBe` Right 5.0
 
-    it "NEW path: tainted dep-DB drops to 0 contribution; root contribution survives" $ do
+    it "NEW path: a dep-DB integrity error fails the whole sum, never undercounts" $ do
+        -- Same solve as the 5.0 case, but the dep DB's tables carry a
+        -- genuine integrity error (regional CFs present, precomputed
+        -- weights absent — the stale-cache shape). Summing the healthy
+        -- root alone would silently return 0 instead of 5; the sum must
+        -- refuse instead.
+        rootSolver <- mkSolverFromDb rootDb "root"
+        depSolver <- mkSolverFromDb depDb "dep"
+        let depLookup name =
+                pure $
+                    if name == "dep" then Just (depDb, depSolver) else Nothing
+        eRes <-
+            SS.computeInventoryMatrixWithDepsCached
+                kgUnitConfig
+                depLookup
+                rootDb
+                "root"
+                rootSolver
+                0
+        case eRes of
+            Left err -> expectationFailure ("solve failed: " <> show err)
+            Right sol -> do
+                let perDb =
+                        [ (db, s, tablesFor n)
+                        | (n, db, s) <- NE.toList (SS.csScalings sol)
+                        ]
+                    tablesFor n = case n of
+                        "root" -> rootTables
+                        "dep" -> depTables{mtRegionalActivityWeights = Nothing}
+                        other -> error ("unexpected dbName in csScalings: " <> show other)
+                case sumRegionalizedLCIAScoreCrossDB
+                    kgUnitConfig
+                    (dbUnits depDb)
+                    (dbBioFlows depDb)
+                    M.empty
+                    perDb of
+                    Left _ -> pure ()
+                    Right s -> expectationFailure ("expected the integrity error to propagate, got Right " <> show s)
+
+    it "NEW path: tainted dep-DB column contributes 0; root contribution survives" $ do
         -- Same DBs, but the method only has CF[F, FR]. The dep DB's DE
         -- activity is regionalized in the method (F appears in regional
         -- CFs) but no CF resolves at DE / parents / broadcast — that's a
-        -- tainted column, and it carries scaling 1. Per-DB scoring Lefts
-        -- on dep. The cross-DB sum tolerates it: drops the dep DB to a 0
-        -- contribution and keeps the root DB's Right. The build-time WARN
-        -- already names the gap (per-(flow, location) pair); score-time
-        -- loudness would regress users who used to see partial scores.
+        -- tainted column, and it carries scaling 1. The precomputed
+        -- weights leave it at 0 (a coverage gap, not an integrity error),
+        -- so the dep DB scores Right 0 and the cross-DB sum stays Right.
+        -- The build-time WARN already names the gap per (flow, location)
+        -- pair.
         let strictMappings = regionalMappings [("FR", 1)]
             depTablesStrict = buildTables depDb strictMappings
             rootTablesStrict = buildTables rootDb strictMappings
@@ -162,8 +201,8 @@ spec = describe "cross-DB regional LCIA" $ do
                         "dep" -> depTablesStrict
                         other -> error ("unexpected dbName in csScalings: " <> show other)
                 -- Root has no biosphere triples → contributes Right 0.
-                -- Dep biosphere triple at DE has no CF → Left (tainted).
-                -- Tolerant sum: Right 0 (root) + 0 dropped (dep) = Right 0.
+                -- Dep's DE column is tainted → weight 0 → contributes Right 0.
+                -- Sum: Right 0.
                 sumRegionalizedLCIAScoreCrossDB
                     kgUnitConfig
                     (dbUnits depDb)
