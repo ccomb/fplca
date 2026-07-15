@@ -12,10 +12,12 @@ import Config (
     ScoringSetConfig (..),
     applyDataDir,
     defaultConfig,
+    loadConfigOrDefault,
     redirectIntoDataDir,
  )
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified TOML
 import Test.Hspec
 
@@ -145,6 +147,19 @@ spec = do
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
+
+    describe "loadConfigOrDefault" $ do
+        it "yields the validated defaults when no path is given" $ do
+            result <- loadConfigOrDefault Nothing
+            case result of
+                Right cfg -> cfgDatabases cfg `shouldBe` []
+                Left err -> expectationFailure (show err)
+
+        it "still fails loudly on an explicit path that does not exist" $ do
+            result <- loadConfigOrDefault (Just "/nonexistent/volca.toml")
+            case result of
+                Left err -> err `shouldSatisfy` ("Config file not found" `T.isPrefixOf`)
+                Right _ -> expectationFailure "expected a missing explicit config to fail"
 
     describe "ScoringSetConfig labels" $ do
         let decodeSet :: Text -> Either TOML.TOMLError ScoringSetConfig

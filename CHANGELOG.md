@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- The `name=` filter on the supply-chain and consumers endpoints (REST and
+  MCP) now filters. A name matching nothing previously disabled the filter
+  and returned every entry — with a matching `filteredActivities` count — so
+  a caller could not tell "no match" from "no filter". It now returns an
+  empty result.
 - A scoring integrity error (a regionalized score whose tables are internally
   inconsistent — mismatched lengths, absent weights) now fails the request
   with a 500 instead of silently scoring the category 0. A consumer could not
@@ -11,6 +16,11 @@
   responses the error lands on the affected perturbation entry, which already
   carries per-entry errors.
 
+### Added
+- `volca server` starts without `--config`: it runs on the built-in defaults
+  with no databases, ready to receive uploads or API-driven loads. Launchers
+  no longer have to write an empty TOML file just to satisfy the flag. An
+  explicit `--config` path that does not exist still fails loudly.
 ## [0.9.2] - 2026-07-14
 
 ### Added
