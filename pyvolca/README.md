@@ -15,19 +15,20 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 ## Compatibility
 
-pyvolca speaks one revision of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine — too old fails with a clear error, newer than this client knows warns. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
+pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine — too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
 | pyvolca | wire | compatible engine |
 |---------|------|-------------------|
 | `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
 | `0.6.0` … `0.7.1` | `1` | `v0.8.0` … `v0.9.0` |
-| `≥ 0.7.2` | `2` | `≥ v0.9.1` |
+| `0.7.2` … `0.8.1` | `2` | `≥ v0.9.1` |
+| `> 0.8.1` | `2` … `3` | `≥ v0.9.1` (delete by ids: `≥ v0.9.3`) |
 
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.8.1** speaks wire format **3** and requires a VoLCA engine **≥ v0.9.1**.
+This build of **pyvolca 0.8.1** speaks wire formats **2 to 3** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 
@@ -764,8 +765,11 @@ package directory so IDE autocomplete reflects the current engine.
 Useful when the engine is upgraded without reinstalling pyvolca.
 
 This is the explicit "the engine was upgraded" path — the likeliest
-place to meet a wire mismatch — so it runs the same one-shot gate as
-:meth:`_load_operations`, refusing a spec pyvolca can't decode.
+place to meet a wire *change* — so it forgets the cached wire and
+re-runs the gate against the live engine before fetching a spec
+pyvolca can't decode. Without the reset, a client that first met an
+older engine would keep refusing wire-gated capabilities after an
+in-place upgrade.
 
 ##### `Client.relink(dep_db: str, mapping_csv: str, db_name: str | None = None) -> dict`
 

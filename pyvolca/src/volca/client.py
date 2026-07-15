@@ -425,8 +425,10 @@ class Client:
         """One-shot wire-compatibility gate, run before the first real call.
 
         Placed inside the spec-fetch branch so it fires once per client, right
-        before we first depend on the engine's wire — and never for a client
-        that was handed a preloaded operation table (the offline fixtures).
+        before we first depend on the engine's wire. A client handed a
+        preloaded operation table (the offline fixtures) never reaches it
+        through dispatch — only a wire-gated capability (:meth:`_require_wire`)
+        forces the check, since it must ask the live engine.
         ``get_version`` is a direct GET, so this does not recurse.
         """
         if self._checked:
@@ -436,12 +438,13 @@ class Client:
         self._server_wire = sv.wire_version
         self._checked = True
 
-    def _require_wire(self, minimum: int, feature: str) -> None:
+    def _require_wire(self, minimum: int, feature: str, engine_hint: str) -> None:
         """Refuse ``feature`` unless the engine's wire revision is >= ``minimum``.
 
         For capabilities where an older engine would not merely lack the
         feature but silently misread the request (it drops the unknown wire
-        key), the request must never be sent at all.
+        key), the request must never be sent at all. ``engine_hint`` is the
+        first engine release advertising ``minimum``, shown in the error.
         """
         self._ensure_compatible()
         wire = self._server_wire
@@ -449,7 +452,8 @@ class Client:
             spoken = "pre-1" if wire is None else str(wire)
             raise VoLCAError(
                 f"{feature} needs engine wire revision >= {minimum}; this "
-                f"engine speaks wire {spoken}. Upgrade the engine."
+                f"engine speaks wire {spoken}. Upgrade the engine to "
+                f">= v{engine_hint}."
             )
 
     def refresh_stubs(self) -> None:
@@ -844,7 +848,7 @@ class Client:
             if value:
                 body[key] = value
         if ids is not None:
-            self._require_wire(3, "delete_activities(ids=...)")
+            self._require_wire(3, "delete_activities(ids=...)", engine_hint="0.9.3")
             body["ids"] = list(ids)
         target = self._db(db_name)
         payload = self._json(

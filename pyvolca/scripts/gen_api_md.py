@@ -331,12 +331,18 @@ def render_compatibility() -> str:
 
     from volca import _compat
 
+    wires = (
+        f"format **{_compat.REQUIRED_WIRE}**"
+        if _compat.REQUIRED_WIRE == _compat.KNOWN_WIRE
+        else f"formats **{_compat.REQUIRED_WIRE} to {_compat.KNOWN_WIRE}**"
+    )
     return (
         "_Generated from `volca._compat` — run "
         "`python scripts/gen_api_md.py` to regenerate._\n\n"
-        f"This build of **pyvolca {version('pyvolca')}** speaks wire format "
-        f"**{_compat.KNOWN_WIRE}** and requires a VoLCA engine "
-        f"**≥ v{_compat.MIN_ENGINE_HINT}**."
+        f"This build of **pyvolca {version('pyvolca')}** speaks wire "
+        f"{wires} and requires a VoLCA engine "
+        f"**≥ v{_compat.MIN_ENGINE_HINT}**; a capability gated on a newer "
+        "wire than the engine speaks refuses to run with a clear error."
     )
 
 
