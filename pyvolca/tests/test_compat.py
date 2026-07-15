@@ -58,15 +58,16 @@ def test_check_message_distinguishes_absent_from_zero() -> None:
     assert "wire 0" in str(zero_exc.value)
 
 
-def test_check_is_silent_on_exact_wire() -> None:
+@pytest.mark.parametrize("wire", [_compat.REQUIRED_WIRE, _compat.KNOWN_WIRE])
+def test_check_is_silent_on_known_wires(wire: int) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any warning would fail the test
-        _compat.check(_sv(_compat.REQUIRED_WIRE))  # neither raises nor warns
+        _compat.check(_sv(wire))  # neither raises nor warns
 
 
 def test_check_warns_on_newer_wire() -> None:
     with pytest.warns(UserWarning, match="upgrade pyvolca"):
-        _compat.check(_sv(_compat.REQUIRED_WIRE + 1))
+        _compat.check(_sv(_compat.KNOWN_WIRE + 1))
 
 
 @pytest.mark.parametrize("wire", [None, 0])

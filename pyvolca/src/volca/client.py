@@ -405,8 +405,11 @@ class Client:
             self._session.headers["Authorization"] = f"Bearer {password}"
         # Lazily fetched on first _call() invocation.
         self._operations: dict[str, _Operation] | None = None
-        # One-shot wire-compatibility gate (see _ensure_compatible).
+        # One-shot wire-compatibility gate (see _ensure_compatible). The
+        # engine's advertised wire revision is cached alongside so per-feature
+        # gates (_require_wire) don't refetch it.
         self._checked = False
+        self._server_wire: int | None = None
 
     # -- Spec / dispatch plumbing --
 
@@ -428,8 +431,26 @@ class Client:
         """
         if self._checked:
             return
-        _compat.check(self.get_version())
+        sv = self.get_version()
+        _compat.check(sv)
+        self._server_wire = sv.wire_version
         self._checked = True
+
+    def _require_wire(self, minimum: int, feature: str) -> None:
+        """Refuse ``feature`` unless the engine's wire revision is >= ``minimum``.
+
+        For capabilities where an older engine would not merely lack the
+        feature but silently misread the request (it drops the unknown wire
+        key), the request must never be sent at all.
+        """
+        self._ensure_compatible()
+        wire = self._server_wire
+        if wire is None or wire < minimum:
+            spoken = "pre-1" if wire is None else str(wire)
+            raise VoLCAError(
+                f"{feature} needs engine wire revision >= {minimum}; this "
+                f"engine speaks wire {spoken}. Upgrade the engine."
+            )
 
     def refresh_stubs(self) -> None:
         """Fetch the OpenAPI spec from the server and refresh the dispatch table.
@@ -776,9 +797,10 @@ class Client:
         exact: bool = False,
         keep: list[str] | None = None,
         extra: list[str] | None = None,
+        ids: list[str] | None = None,
         db_name: str | None = None,
     ) -> dict:
-        """Delete activities selected by filter, sparing/adding explicit ids.
+        """Delete activities selected by filter — or exactly the ``ids`` list.
 
         Builds a ``DeleteSelectionRequest``: the filter fields select the whole
         matching set, ``keep`` spares matched process ids, and ``extra`` adds
@@ -786,10 +808,22 @@ class Client:
         ``{"system", "value", "exact"}`` dicts or ``(system, value, exact)``
         tuples.
 
+        ``ids`` names the selection verbatim instead of filtering; the filter
+        arguments (and ``exact``) must then stay unset — the two modes are
+        exclusive, mirroring the engine. Needs an engine speaking wire
+        revision 3 (>= v0.9.3): an older one would silently drop the unknown
+        ``ids`` key and read the request as an empty filter — "everything" —
+        so pyvolca refuses to send it rather than let the engine guess.
+
         Returns the ``DeleteSelectionResponse`` dict
         (``{"success", "message", "deleted"}``); raises VoLCAError on
         ``success=false``.
         """
+        if ids is not None and (name or location or product or classifications or exact):
+            raise VoLCAError(
+                "delete_activities: ids cannot be combined with the filter "
+                "arguments (name/location/product/classifications/exact)"
+            )
         # Omit blank filters entirely: sending "name":"" makes the engine treat
         # an empty string as a real (unsatisfiable) name filter, so a
         # product-only delete would match nothing and still report success.
@@ -804,6 +838,9 @@ class Client:
         for key, value in (("name", name), ("location", location), ("product", product)):
             if value:
                 body[key] = value
+        if ids is not None:
+            self._require_wire(3, "delete_activities(ids=...)")
+            body["ids"] = list(ids)
         target = self._db(db_name)
         payload = self._json(
             self._session.post(

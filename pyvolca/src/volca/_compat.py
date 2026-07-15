@@ -1,9 +1,9 @@
 """Engine wire-compatibility policy — the single source of truth.
 
-pyvolca speaks one revision of the JSON wire format; the engine advertises its
-own revision as ``wireVersion`` on ``/api/v1/version``. This module owns the
-comparison: the wire this client requires, the engine hint shown when the check
-fails, and the check itself.
+pyvolca speaks a range of revisions of the JSON wire format; the engine
+advertises its own revision as ``wireVersion`` on ``/api/v1/version``. This
+module owns the comparison: the oldest wire this client accepts, the newest it
+understands, the engine hint shown when the check fails, and the check itself.
 
 It is deliberately import-cheap — only the stdlib at runtime — so the release
 preflight can read :data:`MIN_ENGINE_HINT` without pulling in ``requests`` or
@@ -20,7 +20,15 @@ if TYPE_CHECKING:
     from .types import ServerVersion
 
 REQUIRED_WIRE = 2
-"""The JSON wire-format revision this pyvolca speaks."""
+"""The oldest JSON wire-format revision this pyvolca accepts. Everything in
+the client works against it except the revision-gated capabilities (see
+``Client._require_wire``), which check the engine's advertised revision
+before sending anything."""
+
+KNOWN_WIRE = 3
+"""The newest wire revision this pyvolca understands (revision 3 adds the
+delete ``ids`` selection). An engine advertising more is newer than this
+client and may answer shapes it cannot decode."""
 
 MIN_ENGINE_HINT = "0.9.1"
 """First engine release that advertises :data:`REQUIRED_WIRE`. Used only for the
@@ -52,9 +60,9 @@ def check(sv: ServerVersion) -> None:
             f"needs (wire {spoken} < {REQUIRED_WIRE}). Upgrade the engine to "
             f">= v{MIN_ENGINE_HINT}, or `pip install 'pyvolca<0.7.2'`."
         )
-    if w > REQUIRED_WIRE:
+    if w > KNOWN_WIRE:
         warnings.warn(
             f"Engine v{sv.version} speaks wire {w}; this pyvolca knows up to "
-            f"wire {REQUIRED_WIRE}. Some responses may not decode — upgrade "
+            f"wire {KNOWN_WIRE}. Some responses may not decode — upgrade "
             "pyvolca."
         )

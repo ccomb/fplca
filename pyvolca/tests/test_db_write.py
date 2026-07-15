@@ -101,6 +101,52 @@ class TestDelete:
             client.delete_activities(name="x")
 
 
+def _version_ok(session, wire: int) -> None:
+    """Wire the mocked session's GET (used by get_version) to a wire response."""
+    from tests.conftest import _make_response
+
+    session.get.return_value = _make_response(
+        {
+            "version": "0.9.3",
+            "gitHash": "abc1234",
+            "gitTag": "v0.9.3",
+            "buildTarget": "x86_64-linux",
+            "wireVersion": wire,
+        }
+    )
+
+
+class TestDeleteByIds:
+    def test_ids_body_shape_behind_the_wire_gate(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=3)
+        _ok(session, {"success": True, "message": "ok", "deleted": 2})
+        result = client.delete_activities(ids=["a_b", "c_d"], keep=["a_b"])
+        assert result["deleted"] == 2
+        body = session.post.call_args[1]["json"]
+        assert body["ids"] == ["a_b", "c_d"]
+        assert body["keep"] == ["a_b"]
+        # ids names the selection verbatim: no filter keys ride along.
+        assert "name" not in body and "product" not in body
+
+    def test_ids_refused_with_filter_arguments(self, mocked_client):
+        client, session = mocked_client
+        with pytest.raises(VoLCAError, match="cannot be combined"):
+            client.delete_activities(ids=["a_b"], name="wheat")
+        with pytest.raises(VoLCAError, match="cannot be combined"):
+            client.delete_activities(ids=["a_b"], exact=True)
+        session.post.assert_not_called()
+
+    def test_ids_never_sent_to_a_wire2_engine(self, mocked_client):
+        # A wire-2 engine would drop the unknown "ids" key and read the request
+        # as an empty filter ("everything") — the client must refuse to send it.
+        client, session = mocked_client
+        _version_ok(session, wire=2)
+        with pytest.raises(VoLCAError, match="wire revision >= 3"):
+            client.delete_activities(ids=["a_b"])
+        session.post.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # copy
 # ---------------------------------------------------------------------------

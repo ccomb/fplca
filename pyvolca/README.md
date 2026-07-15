@@ -27,7 +27,7 @@ pyvolca speaks one revision of the engine's JSON wire format; the engine adverti
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.8.1** speaks wire format **2** and requires a VoLCA engine **≥ v0.9.1**.
+This build of **pyvolca 0.8.1** speaks wire format **3** and requires a VoLCA engine **≥ v0.9.1**.
 
 <!-- END: compatibility -->
 
@@ -427,15 +427,22 @@ Returns the engine's ``ActivateResponse`` dict
 (``{"success", "message", "database"?}``). Raises VoLCAError if the
 engine reports ``success=false``.
 
-##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, db_name: str | None = None) -> dict`
+##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, ids: list[str] | None = None, db_name: str | None = None) -> dict`
 
-Delete activities selected by filter, sparing/adding explicit ids.
+Delete activities selected by filter — or exactly the ``ids`` list.
 
 Builds a ``DeleteSelectionRequest``: the filter fields select the whole
 matching set, ``keep`` spares matched process ids, and ``extra`` adds
 ones the filter missed. ``classifications`` is a list of
 ``{"system", "value", "exact"}`` dicts or ``(system, value, exact)``
 tuples.
+
+``ids`` names the selection verbatim instead of filtering; the filter
+arguments (and ``exact``) must then stay unset — the two modes are
+exclusive, mirroring the engine. Needs an engine speaking wire
+revision 3 (>= v0.9.3): an older one would silently drop the unknown
+``ids`` key and read the request as an empty filter — "everything" —
+so pyvolca refuses to send it rather than let the engine guess.
 
 Returns the ``DeleteSelectionResponse`` dict
 (``{"success", "message", "deleted"}``); raises VoLCAError on

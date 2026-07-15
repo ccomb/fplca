@@ -335,7 +335,7 @@ def render_compatibility() -> str:
         "_Generated from `volca._compat` — run "
         "`python scripts/gen_api_md.py` to regenerate._\n\n"
         f"This build of **pyvolca {version('pyvolca')}** speaks wire format "
-        f"**{_compat.REQUIRED_WIRE}** and requires a VoLCA engine "
+        f"**{_compat.KNOWN_WIRE}** and requires a VoLCA engine "
         f"**≥ v{_compat.MIN_ENGINE_HINT}**."
     )
 
