@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- `exact=true` on the activity search now applies to the `product=` filter
+  too: it becomes a case-insensitive equality check on the reference product
+  name, as it already was for names and geographies. Previously the flag was
+  silently ignored for products, so an exact search could return near-miss
+  substring matches.
 - The `name=` filter on the supply-chain and consumers endpoints (REST and
   MCP) now filters. A name matching nothing previously disabled the filter
   and returned every entry — with a matching `filteredActivities` count — so
