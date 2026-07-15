@@ -36,6 +36,16 @@ Then paste the rendered block at the top of this file and tighten wording.
 - `Server.start()` fails fast with the exit code when the spawned engine dies
   before serving, instead of hanging until the readiness timeout — in both
   fixed-port and `port="auto"` modes.
+- `Client.ensure_database(source, name=…)` — the one-call, idempotent form of
+  the upload lifecycle. It matches by display name (default: the file's
+  stem), uploads only when absent, finalizes the staged copy, loads if
+  unloaded, and returns the slug. Run it at the top of a script and it
+  converges on the same loaded database every time instead of re-uploading;
+  the list → match → upload → finalize → load state machine that every
+  script hand-rolled is now one line. A copy that is not ready to finalize
+  raises with the concrete blocker (missing suppliers, no activities
+  parsed) — including an upload left staged by an earlier failed run, which
+  goes through the same readiness gate instead of being loaded half-linked.
 
 ### Changed
 

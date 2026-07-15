@@ -62,6 +62,7 @@ from .types import (
     ContributingActivities,
     ContributingFlows,
     DatabaseInfo,
+    DatabaseStatus,
     Exchange,
     Flow,
     FlowDetail,
@@ -984,6 +985,75 @@ class Client:
         """
         return self._upload(
             "/api/v1/db/upload", source, name, description, "upload_database"
+        )
+
+    def ensure_database(self, source: str | Path | bytes, name: str | None = None) -> str:
+        """Idempotently make the archive at ``source`` a loaded database.
+
+        The one-call form of the upload lifecycle: match by display name
+        (default: the file's stem), upload only when absent, finalize the
+        staged copy, load if unloaded. Returns the slug every later call
+        targets — run it at the top of a script and it converges on the same
+        loaded database every time instead of re-uploading. A match that is
+        already loaded — even partially linked — is left untouched.
+
+        A staged copy that is not ready to finalize raises VoLCAError naming
+        the blocker (missing suppliers, no activities parsed) — fix it with
+        :meth:`add_dependency` or :meth:`set_data_path`, then
+        :meth:`finalize_database`. The gate also holds on re-runs: an upload
+        left staged by an earlier failed run goes through the same readiness
+        check instead of being loaded half-linked.
+        """
+        if name is None:
+            if isinstance(source, bytes):
+                raise VoLCAError(
+                    "ensure_database: name= is required when source is bytes"
+                )
+            name = Path(source).stem
+        for db in self.list_databases():
+            if name in (db.display_name, db.name):
+                if db.status == DatabaseStatus.UNLOADED:
+                    if db.is_uploaded:
+                        self._finalize_when_ready(db.name, name)
+                    else:
+                        self.load_database(db.name)
+                return db.name
+        slug = self.upload_database(source, name=name)["slug"]
+        self._finalize_when_ready(slug, name)
+        return slug
+
+    def _finalize_when_ready(self, slug: str, name: str) -> None:
+        """Readiness gate of :meth:`ensure_database`: finalize or refuse.
+
+        Finalizing builds the matrices and loads the database, so a staged
+        copy that ``get_setup`` reports not ready raises with the concrete
+        blocker instead — a half-linked database silently undercounts and
+        the consumer can't tell.
+        """
+        setup = self.get_setup(slug)
+        if setup.get("isReady", False):
+            self.finalize_database(slug)
+            return
+        missing = setup.get("missingSuppliers") or []
+        if missing:
+            blocker = (
+                f"missing suppliers {missing!r} — wire them with "
+                "add_dependency, then finalize_database"
+            )
+        elif not setup.get("activityCount"):
+            blocker = (
+                "no activities parsed — pick the data file with "
+                "set_data_path (see availablePaths in get_setup), "
+                "then finalize_database"
+            )
+        else:
+            blocker = (
+                f"{setup.get('unresolvedLinks')} unresolved links — "
+                "inspect get_setup"
+            )
+        raise VoLCAError(
+            f"ensure_database: {name!r} (slug {slug!r}) is not ready to "
+            f"finalize — {blocker}."
         )
 
     def get_setup(self, db_name: str | None = None) -> dict:

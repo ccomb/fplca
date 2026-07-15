@@ -493,6 +493,24 @@ Download a flow-synonyms set as its raw CSV bytes.
 
 Raises VoLCAError on an HTTP error (e.g. the set does not exist).
 
+##### `Client.ensure_database(source: str | Path | bytes, name: str | None = None) -> str`
+
+Idempotently make the archive at ``source`` a loaded database.
+
+The one-call form of the upload lifecycle: match by display name
+(default: the file's stem), upload only when absent, finalize the
+staged copy, load if unloaded. Returns the slug every later call
+targets — run it at the top of a script and it converges on the same
+loaded database every time instead of re-uploading. A match that is
+already loaded — even partially linked — is left untouched.
+
+A staged copy that is not ready to finalize raises VoLCAError naming
+the blocker (missing suppliers, no activities parsed) — fix it with
+:meth:`add_dependency` or :meth:`set_data_path`, then
+:meth:`finalize_database`. The gate also holds on re-runs: an upload
+left staged by an earlier failed run goes through the same readiness
+check instead of being loaded half-linked.
+
 ##### `Client.export_database(fmt: str, db_name: str | None = None) -> bytes`
 
 Export a loaded database, returning the serialized bytes.
