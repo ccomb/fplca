@@ -15,9 +15,15 @@ from volca.client import Client, VoLCAError
 from volca.types import DatabaseInfo, DatabaseStatus
 
 
-def _info(slug: str, display: str, status: DatabaseStatus) -> DatabaseInfo:
+def _info(
+    slug: str, display: str, status: DatabaseStatus, uploaded: bool = False
+) -> DatabaseInfo:
     return DatabaseInfo(
-        name=slug, display_name=display, status=status, path=f"/data/{slug}"
+        name=slug,
+        display_name=display,
+        status=status,
+        path=f"/data/{slug}",
+        is_uploaded=uploaded,
     )
 
 
@@ -78,6 +84,45 @@ def test_unready_upload_fails_before_finalize(client: Client):
         "missingSuppliers": ["ecoinvent-3.11"],
     }
     with pytest.raises(VoLCAError, match="ecoinvent-3.11"):
+        client.ensure_database("ignored/fresh-1.0.xlsx")
+    client.finalize_database.assert_not_called()
+
+
+def test_staged_leftover_goes_through_readiness_gate(client: Client):
+    """An upload left staged by an earlier failed run must not be blind-loaded.
+
+    Uploads register in the engine's database list immediately, before
+    finalize — so the name match finds them as unloaded. Loading one with
+    unresolved suppliers would silently produce a half-linked database.
+    """
+    client.list_databases.return_value = [
+        _info("fresh-1-0", "fresh-1.0", DatabaseStatus.UNLOADED, uploaded=True)
+    ]
+    client.get_setup.return_value = {
+        "isReady": False,
+        "missingSuppliers": ["ecoinvent-3.11"],
+    }
+    with pytest.raises(VoLCAError, match="ecoinvent-3.11"):
+        client.ensure_database("ignored/fresh-1.0.xlsx")
+    client.load_database.assert_not_called()
+    client.upload_database.assert_not_called()
+    client.finalize_database.assert_not_called()
+
+
+def test_staged_leftover_ready_is_finalized_not_loaded(client: Client):
+    client.list_databases.return_value = [
+        _info("fresh-1-0", "fresh-1.0", DatabaseStatus.UNLOADED, uploaded=True)
+    ]
+    slug = client.ensure_database("ignored/fresh-1.0.xlsx")
+    assert slug == "fresh-1-0"
+    client.upload_database.assert_not_called()
+    client.load_database.assert_not_called()
+    client.finalize_database.assert_called_once_with("fresh-1-0")
+
+
+def test_no_activities_names_the_data_path_remedy(client: Client):
+    client.get_setup.return_value = {"isReady": False, "activityCount": 0}
+    with pytest.raises(VoLCAError, match="set_data_path"):
         client.ensure_database("ignored/fresh-1.0.xlsx")
     client.finalize_database.assert_not_called()
 

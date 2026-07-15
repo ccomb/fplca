@@ -994,12 +994,15 @@ class Client:
         (default: the file's stem), upload only when absent, finalize the
         staged copy, load if unloaded. Returns the slug every later call
         targets — run it at the top of a script and it converges on the same
-        loaded database every time instead of re-uploading.
+        loaded database every time instead of re-uploading. A match that is
+        already loaded — even partially linked — is left untouched.
 
-        A staged archive that is not ready to finalize (unresolved
-        dependencies) raises VoLCAError naming what is missing — wire the
-        dependencies with :meth:`add_dependency` and :meth:`finalize_database`
-        yourself in that case.
+        A staged copy that is not ready to finalize raises VoLCAError naming
+        the blocker (missing suppliers, no activities parsed) — fix it with
+        :meth:`add_dependency` or :meth:`set_data_path`, then
+        :meth:`finalize_database`. The gate also holds on re-runs: an upload
+        left staged by an earlier failed run goes through the same readiness
+        check instead of being loaded half-linked.
         """
         if name is None:
             if isinstance(source, bytes):
@@ -1010,19 +1013,48 @@ class Client:
         for db in self.list_databases():
             if name in (db.display_name, db.name):
                 if db.status == DatabaseStatus.UNLOADED:
-                    self.load_database(db.name)
+                    if db.is_uploaded:
+                        self._finalize_when_ready(db.name, name)
+                    else:
+                        self.load_database(db.name)
                 return db.name
         slug = self.upload_database(source, name=name)["slug"]
-        setup = self.get_setup(slug)
-        if not setup.get("isReady", False):
-            missing = setup.get("missingSuppliers") or setup.get("unresolvedLinks") or []
-            raise VoLCAError(
-                f"ensure_database: uploaded {name!r} (slug {slug!r}) is not "
-                f"ready to finalize — unresolved dependencies: {missing!r}. "
-                "Wire them with add_dependency, then finalize_database."
-            )
-        self.finalize_database(slug)
+        self._finalize_when_ready(slug, name)
         return slug
+
+    def _finalize_when_ready(self, slug: str, name: str) -> None:
+        """Readiness gate of :meth:`ensure_database`: finalize or refuse.
+
+        Finalizing builds the matrices and loads the database, so a staged
+        copy that ``get_setup`` reports not ready raises with the concrete
+        blocker instead — a half-linked database silently undercounts and
+        the consumer can't tell.
+        """
+        setup = self.get_setup(slug)
+        if setup.get("isReady", False):
+            self.finalize_database(slug)
+            return
+        missing = setup.get("missingSuppliers") or []
+        if missing:
+            blocker = (
+                f"missing suppliers {missing!r} — wire them with "
+                "add_dependency, then finalize_database"
+            )
+        elif not setup.get("activityCount"):
+            blocker = (
+                "no activities parsed — pick the data file with "
+                "set_data_path (see availablePaths in get_setup), "
+                "then finalize_database"
+            )
+        else:
+            blocker = (
+                f"{setup.get('unresolvedLinks')} unresolved links — "
+                "inspect get_setup"
+            )
+        raise VoLCAError(
+            f"ensure_database: {name!r} (slug {slug!r}) is not ready to "
+            f"finalize — {blocker}."
+        )
 
     def get_setup(self, db_name: str | None = None) -> dict:
         """Setup status of a staged or loaded database (``DatabaseSetupInfo``).
