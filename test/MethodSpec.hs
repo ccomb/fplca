@@ -10,6 +10,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Test.Hspec
 
+import API.Routes (cfToAPI)
+import API.Types (MethodFactorAPI (..))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
@@ -806,6 +808,23 @@ spec = do
                 let inventory = M.fromList [(UUID.fromWords 1 2 3 4, 100.0)]
                 loScore (computeLCIAScore defaultUnitConfig M.empty M.empty inventory []) `shouldBe` 0.0
 
+    describe "cfToAPI" $ do
+        it "keeps the axes that distinguish same-name factors: compartment, location, unit" $ do
+            let uuid = UUID.fromWords 1 2 3 4
+                cf comp = MethodCF uuid "Ammonia" Output 1.0 comp Nothing "kg"
+                toAir = cfToAPI (cf (Just (Compartment "air" "urban air" "")) Nothing)
+                toWaterLongTerm = cfToAPI (cf (Just (Compartment "water" "unspecified" "long-term")) Nothing)
+                inFrance = cfToAPI (cf Nothing (Just "FR"))
+            mfaCompartment toAir `shouldBe` Just "air/urban air"
+            mfaCompartment toWaterLongTerm `shouldBe` Just "water/unspecified/long-term"
+            mfaCompartment inFrance `shouldBe` Nothing
+            mfaLocation inFrance `shouldBe` Just "FR"
+            mfaUnit toAir `shouldBe` Just "kg"
+
+        it "emits no unit rather than an empty one when the source method states none" $ do
+            let unitless = MethodCF (UUID.fromWords 1 2 3 4) "Ammonia" Output 1.0 Nothing Nothing "" Nothing
+            mfaUnit (cfToAPI unitless) `shouldBe` Nothing
+
     describe "SimaPro Method CSV Parser" $ do
         it "detects SimaPro method CSV format" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"
@@ -855,6 +874,18 @@ spec = do
                     mcfValue co2 `shouldBe` 1.0
                     mcfDirection co2 `shouldBe` Output
                     mcfCAS co2 `shouldBe` Just "124-38-9"
+
+        it "drops the compartment when the compartment column is empty" $ do
+            let csv =
+                    "{SimaPro 10.2.0.0}\r\n{methods}\r\n{CSV separator: Semicolon}\r\n{Decimal separator: .}\r\n\r\n\
+                    \Method\r\n\r\nName\r\nTest\r\n\r\n\
+                    \Impact category\r\nClimate change;kg CO2 eq\r\n\r\n\
+                    \Substances\r\n;;Mystery substance;;1;kg\r\n\r\nEnd\r\n"
+            case parseSimaProMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right coll -> do
+                    let cfs = methodFactors (head (mcMethods coll))
+                    map mcfCompartment cfs `shouldBe` [Nothing]
 
         it "parses Methane CF = 29.8" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"

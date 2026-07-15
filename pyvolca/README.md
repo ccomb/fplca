@@ -1682,7 +1682,12 @@ and ``description`` are free-text metadata the source may or may not carry.
 One characterization factor of a method (:meth:`Client.get_method_factors`).
 
 ``direction`` is the flow direction the factor applies to; ``value`` is the
-factor in the method's unit per the flow's unit.
+factor in the method's unit per the flow's unit. A method routinely holds
+several factors sharing one ``flow_name`` — the same substance emitted to
+air vs. water, or one regionalized factor per ``location`` — so
+``compartment``, ``location`` and ``unit`` are what tell them apart.
+Each is ``None`` when the source method does not carry that axis, or
+when the engine predates these fields.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1690,6 +1695,9 @@ factor in the method's unit per the flow's unit.
 | `flow_name` | `str` | — |
 | `direction` | `str` | — |
 | `value` | `float` | — |
+| `unit` | `str \| None` | None |
+| `compartment` | `str \| None` | None |
+| `location` | `str \| None` | None |
 
 ### `PathResult`
 

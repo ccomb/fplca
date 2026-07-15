@@ -16,7 +16,7 @@ import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Exception (evaluate)
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, mfilter, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
@@ -1062,7 +1062,17 @@ cfToAPI cf =
             MT.Input -> "Input"
             MT.Output -> "Output"
         , mfaValue = mcfValue cf
+        , mfaUnit = mfilter (not . T.null) (Just (mcfUnit cf))
+        , mfaCompartment = compartmentPath <$> mcfCompartment cf
+        , mfaLocation = mcfConsumerLocation cf
         }
+
+{- | Render a compartment triple as one display path, keeping every non-empty
+axis: @"air/urban air"@, @"water/unspecified/long-term"@.
+-}
+compartmentPath :: MT.Compartment -> Text
+compartmentPath (MT.Compartment medium sub qualifier) =
+    T.intercalate "/" (filter (not . T.null) [medium, sub, qualifier])
 
 -- ---------------------------------------------------------------------------
 -- AppM helpers

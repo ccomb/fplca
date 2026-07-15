@@ -49,6 +49,10 @@
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An
   explicit `--config` path that does not exist still fails loudly.
+- Each factor listed by `GET /method/{id}/factors` now carries its
+  compartment, location, and unit. A method routinely holds several factors
+  for one substance name — emitted to air vs. water, or one per region — and
+  without these fields such rows looked like duplicates.
 - The `aggregate` primitive gains a `consumption` scope that answers "how much
   of X is consumed across the whole upstream chain" — total electricity or
   heat feeding a product, grass eaten by cattle. Each row is one scaled
