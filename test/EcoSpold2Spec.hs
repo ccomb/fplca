@@ -3,12 +3,15 @@
 module EcoSpold2Spec (spec) where
 
 import qualified Data.ByteString as BS
+import Data.List (isInfixOf)
+import qualified Data.Map as M
 import qualified Data.Text as T
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
+import Progress (getLogLines)
 import Types
 
 {- | The bundled fixture has a `<comment xml:lang="en">...</comment>` on each
@@ -182,6 +185,39 @@ spec = describe "per-exchange comments" $ do
                 Right (act, _, _, _, _) ->
                     activityNativeType act `shouldBe` Nothing
 
+    -- -----------------------------------------------------------------------
+    -- mathematicalRelation formulas: <parameter> variables plus exchange
+    -- variableNames form a dataset-local environment; an exchange's
+    -- mathematicalRelation is re-evaluated against it. An unresolvable
+    -- formula keeps the stored amount and warns — never zero, never a crash.
+    -- -----------------------------------------------------------------------
+    describe "mathematicalRelation formulas" $ do
+        it "evaluates an exchange formula from parameters and exchange variables" $
+            withFormulaFixture $ \(act, _, _, _, _) ->
+                -- fuel_input(2.0) * 2 + production(1.0) = 5.0, overriding the stale stored 4.0.
+                -- The nested <property>'s own mathematicalRelation ("9999") must not leak in.
+                [exchangeAmount e | e@TechnosphereExchange{techRole = Input} <- exchanges act]
+                    `shouldBe` [5.0]
+
+        it "stores <parameter> values and raw formulas on the activity" $
+            withFormulaFixture $ \(act, _, _, _, _) -> do
+                activityParams act `shouldBe` M.fromList [("fuel_input", 2.0)]
+                activityParamExprs act `shouldBe` M.fromList [("fuel_input", "4.0 / 2")]
+
+        it "keeps the stored amount when a formula references an unknown variable" $
+            withFormulaFixture $ \(act, _, _, _, _) ->
+                [exchangeAmount e | e@BiosphereExchange{} <- exchanges act]
+                    `shouldBe` [3.0]
+
+        it "warns on an unresolvable formula and on a stored/evaluated mismatch" $ do
+            (since, _) <- getLogLines 0
+            withFormulaFixture $ \_ -> pure ()
+            (_, newLines) <- getLogLines since
+            any ("Cannot evaluate mathematicalRelation \"missing_var * 2\"" `isInfixOf`) newLines
+                `shouldBe` True
+            any ("evaluates to 5.0 but the dataset stores amount 4.0" `isInfixOf`) newLines
+                `shouldBe` True
+
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and
 optional specialActivityType code. One reference output, no other exchanges.
 -}
@@ -329,3 +365,69 @@ parseWasteReference = withSystemTempDirectory "es2-waste-ref" $ \dir -> do
 withWasteReferenceFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWasteReferenceFixture k =
     parseWasteReference >>= either (expectationFailure . ("Parse failed: " ++)) k
+
+{- | Synthetic dataset exercising mathematicalRelation evaluation:
+  - a reference output carrying variableName="production" (amount 1.0)
+  - a fuel input whose stored amount (4.0) is stale next to its formula
+    "fuel_input * 2 + production" (= 5.0); its nested <property> carries its
+    own variableName/mathematicalRelation which must NOT leak onto the exchange
+  - an emission whose formula references an unknown variable (kept at 3.0)
+  - a <parameter> (fuel_input = 2.0, formula "4.0 / 2") placed AFTER the
+    exchanges, as the EcoSpold2 schema orders flowData
+-}
+formulaXml :: BS.ByteString
+formulaXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+    \  <activityDataset>\n\
+    \    <activityDescription>\n\
+    \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"formula-test\">\n\
+    \        <activityName xml:lang=\"en\">Formula test activity</activityName>\n\
+    \      </activity>\n\
+    \      <geography geographyId=\"TEST\"><shortname xml:lang=\"en\">TEST</shortname></geography>\n\
+    \    </activityDescription>\n\
+    \    <flowData>\n\
+    \      <intermediateExchange id=\"ref\" unitId=\"unit-kwh\" amount=\"1.0\" variableName=\"production\"\n\
+    \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+    \        <name xml:lang=\"en\">Formula test product</name>\n\
+    \        <unitName xml:lang=\"en\">kWh</unitName>\n\
+    \        <outputGroup>0</outputGroup>\n\
+    \      </intermediateExchange>\n\
+    \      <intermediateExchange id=\"fuel\" unitId=\"unit-kg\" amount=\"4.0\"\n\
+    \                           mathematicalRelation=\"fuel_input * 2 + production\"\n\
+    \                           intermediateExchangeId=\"cccccccc-cccc-cccc-cccc-cccccccccccc\">\n\
+    \        <name xml:lang=\"en\">Fuel</name>\n\
+    \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \        <property propertyId=\"prop-1\" amount=\"7.0\" variableName=\"prop_var\" mathematicalRelation=\"9999\">\n\
+    \          <name xml:lang=\"en\">dry mass</name>\n\
+    \          <unitName xml:lang=\"en\">kg</unitName>\n\
+    \        </property>\n\
+    \        <inputGroup>5</inputGroup>\n\
+    \      </intermediateExchange>\n\
+    \      <elementaryExchange id=\"em\" unitId=\"unit-kg\" amount=\"3.0\"\n\
+    \                         mathematicalRelation=\"missing_var * 2\"\n\
+    \                         elementaryExchangeId=\"dddddddd-dddd-dddd-dddd-dddddddddddd\">\n\
+    \        <name xml:lang=\"en\">Carbon dioxide</name>\n\
+    \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \        <compartment>\n\
+    \          <compartment xml:lang=\"en\">air</compartment>\n\
+    \          <subcompartment xml:lang=\"en\">unspecified</subcompartment>\n\
+    \        </compartment>\n\
+    \        <outputGroup>4</outputGroup>\n\
+    \      </elementaryExchange>\n\
+    \      <parameter parameterId=\"par-1\" variableName=\"fuel_input\" amount=\"2.0\" mathematicalRelation=\"4.0 / 2\">\n\
+    \        <name xml:lang=\"en\">fuel input</name>\n\
+    \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \      </parameter>\n\
+    \    </flowData>\n\
+    \  </activityDataset>\n\
+    \</ecoSpold>\n"
+
+withFormulaFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withFormulaFixture k = withSystemTempDirectory "es2-formula" $ \dir -> do
+    let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+    BS.writeFile path formulaXml
+    result <- streamParseActivityAndFlowsFromFile path
+    case result of
+        Left err -> expectationFailure $ "Parse failed: " ++ err
+        Right res -> k res

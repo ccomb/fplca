@@ -5,18 +5,20 @@
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
 
+import Amount (readAmount)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement)
+import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement, nonEmptyText)
 import EcoSpold.Cutoff (applyCutoffStrategy)
+import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
 import System.FilePath (takeBaseName)
 import Types
@@ -95,6 +97,8 @@ data IntermediateData = IntermediateData
     , idSynonyms :: !(M.Map Text (S.Set Text))
     , idComment :: !(Maybe (Text, Text)) -- (xml:lang, comment text) — English wins
     , idClassifications :: !(M.Map Text Text) -- per-exchange classifications (e.g. By-product classification → Waste)
+    , idVariableName :: !Text -- variableName attribute (referencable from other formulas in the dataset)
+    , idMathRel :: !Text -- mathematicalRelation attribute (formula defining the amount)
     }
     deriving (Eq)
 
@@ -112,8 +116,30 @@ data ElementaryData = ElementaryData
     , edSynonyms :: !(M.Map Text (S.Set Text))
     , edCAS :: !(Maybe Text)
     , edComment :: !(Maybe (Text, Text))
+    , edVariableName :: !Text -- variableName attribute (referencable from other formulas in the dataset)
+    , edMathRel :: !Text -- mathematicalRelation attribute (formula defining the amount)
     }
     deriving (Eq)
+
+{- | Dataset-local formula metadata carried by an exchange: its own
+@variableName@ (referencable from other formulas in the same dataset) and its
+@mathematicalRelation@ (re-evaluated once the whole dataset is parsed, since
+the variables it references may be declared after it in the file).
+-}
+data ExchangeFormula = ExchangeFormula
+    { efVariableName :: !(Maybe Text)
+    , efMathRel :: !(Maybe Text)
+    }
+
+-- | Attribute accumulator for the currently-open @\<parameter\>@ element.
+data PendingParam = PendingParam
+    { ppVariableName :: !Text
+    , ppAmount :: !(Maybe Double)
+    , ppMathRel :: !Text
+    }
+
+emptyPendingParam :: PendingParam
+emptyPendingParam = PendingParam "" Nothing ""
 
 {- | Update a comment slot with a newly seen `<comment xml:lang="…">` text.
 Prefer English; otherwise keep the first non-empty entry. Empty / blank
@@ -136,7 +162,7 @@ data ParseState = ParseState
     , psLocation :: !(Maybe Text)
     , psRefUnit :: !(Maybe Text)
     , psDescription :: ![Text]
-    , psExchanges :: ![Exchange]
+    , psExchanges :: ![(Exchange, ExchangeFormula)]
     , psTechFlows :: ![TechnosphereFlow]
     , psBioFlows :: ![BiosphereFlow]
     , psWasteFlows :: ![WasteFlow]
@@ -152,6 +178,9 @@ data ParseState = ParseState
     , psPendingCommentLang :: !Text -- xml:lang on the currently-open <comment>
     , psActivityType :: !(Maybe Int) -- ecospold2 <activity activityType="1..8"> attribute
     , psSpecialActivityType :: !(Maybe Int) -- ecospold2 <activity specialActivityType="…"> attribute
+    , psParams :: !(M.Map Text Double) -- <parameter> variableName → amount (amounts are pre-evaluated in the source)
+    , psParamExprs :: !(M.Map Text Text) -- <parameter> variableName → mathematicalRelation (raw formula, for inspection)
+    , psPendingParam :: !PendingParam -- attribute accumulator for the open <parameter>
     }
 
 -- | Initial parsing state
@@ -178,6 +207,9 @@ initialParseState =
         , psPendingCommentLang = ""
         , psActivityType = Nothing
         , psSpecialActivityType = Nothing
+        , psParams = M.empty
+        , psParamExprs = M.empty
+        , psPendingParam = emptyPendingParam
         }
 
 {- | Build the source-native activity-type record from the ecospold2
@@ -341,8 +373,8 @@ parseUUIDOrNil t
 nonBlankOr :: Text -> Text -> Text
 nonBlankOr fallback t = if T.null t then fallback else t
 
-addExchange :: Exchange -> ParseState -> ParseState
-addExchange ex st = st{psExchanges = ex : psExchanges st}
+addExchange :: Exchange -> ExchangeFormula -> ParseState -> ParseState
+addExchange ex ef st = st{psExchanges = (ex, ef) : psExchanges st}
 
 addTechFlow :: TechnosphereFlow -> ParseState -> ParseState
 addTechFlow f st = st{psTechFlows = f : psTechFlows st}
@@ -366,12 +398,66 @@ finishExchange unit warns st =
         , psWarnings = warns ++ psWarnings st
         }
 
+-- | Replace an exchange's amount, whatever its variant.
+setAmount :: Double -> Exchange -> Exchange
+setAmount v ex = case ex of
+    TechnosphereExchange{} -> ex{techAmount = v}
+    BiosphereExchange{} -> ex{bioAmount = v}
+    WasteExchange{} -> ex{waAmount = v}
+
+{- | Re-evaluate exchange @mathematicalRelation@ formulas against the
+dataset-local environment: the dataset's @\<parameter\>@ variables plus every
+exchange's own @variableName@ bound to its stored amount. Stored amounts are
+already evaluated in EcoSpold2 sources, so binding them directly needs no
+fixpoint iteration.
+
+A formula that evaluates replaces the stored amount (normally to the same
+value — a divergence means the stored amount was stale and is reported). One
+that doesn't evaluate — unknown variable, unsupported function, cross-dataset
+reference — keeps the stored amount and yields a warning: never zero, never a
+crash.
+-}
+evaluateFormulas :: M.Map Text Double -> [(Exchange, ExchangeFormula)] -> ([Exchange], [String])
+evaluateFormulas params pairs = (map fst resolved, mapMaybe snd resolved)
+  where
+    -- Left-biased union: a <parameter> wins over an exchange variable of the same name.
+    env = M.union params (M.fromList [(v, exchangeAmount ex) | (ex, ef) <- pairs, Just v <- [efVariableName ef]])
+    resolved = map apply pairs
+    apply (ex, ef) = case efMathRel ef of
+        Nothing -> (ex, Nothing)
+        Just rel -> case Expr.evaluate env (Expr.normalizeExpr '.' rel) of
+            Right v -> (setAmount v ex, mismatchWarning rel v ex)
+            Left _ ->
+                ( ex
+                , Just $
+                    "[WARNING] Cannot evaluate mathematicalRelation \""
+                        ++ T.unpack rel
+                        ++ "\" for exchange flow "
+                        ++ UUID.toString (exchangeFlowId ex)
+                        ++ " - keeping stored amount "
+                        ++ show (exchangeAmount ex)
+                )
+    mismatchWarning rel v ex
+        | nearlyEqual v (exchangeAmount ex) = Nothing
+        | otherwise =
+            Just $
+                "[WARNING] mathematicalRelation \""
+                    ++ T.unpack rel
+                    ++ "\" for exchange flow "
+                    ++ UUID.toString (exchangeFlowId ex)
+                    ++ " evaluates to "
+                    ++ show v
+                    ++ " but the dataset stores amount "
+                    ++ show (exchangeAmount ex)
+                    ++ " - using the formula result"
+    nearlyEqual a b = abs (a - b) <= 1e-9 * max 1 (max (abs a) (abs b))
+
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
 parseWithXeno xmlContent processId = do
     finalState <- first show (X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent)
-    result <- buildResult finalState processId
-    pure (result, reverse (psWarnings finalState))
+    (result, formulaWarns) <- buildResult finalState processId
+    pure (result, reverse (psWarnings finalState) ++ formulaWarns)
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -381,14 +467,16 @@ parseWithXeno xmlContent processId = do
                     state{psPendingInputGroup = "", psPendingOutputGroup = ""}
                 | isElement tagName "comment" =
                     state{psPendingCommentLang = ""}
+                | isElement tagName "parameter" =
+                    state{psPendingParam = emptyPendingParam}
                 | otherwise = state
             newContext
                 | isElement tagName "activityName" = InActivityName
                 | isElement tagName "shortname" && any (isElement "geography") (psPath cleanState) = InGeographyShortname
                 | isElement tagName "intermediateExchange" =
-                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing M.empty)
+                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing M.empty "" "")
                 | isElement tagName "elementaryExchange" =
-                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing Nothing)
+                    InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing Nothing "" "")
                 | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
                 -- Classification elements: don't switch context. Handled via psTextAccum + psPendingClassSystem.
                 -- Switching context here would destroy InIntermediateExchange when classifications appear inside exchanges.
@@ -414,6 +502,8 @@ parseWithXeno xmlContent processId = do
                             | isElement name "inputGroup" = idata{idInputGroup = bsToText value}
                             | isElement name "outputGroup" = idata{idOutputGroup = bsToText value}
                             | isElement name "activityLinkId" = idata{idActivityLinkId = bsToText value}
+                            | isElement name "variableName" && not isInsideProperty = idata{idVariableName = bsToText value}
+                            | isElement name "mathematicalRelation" && not isInsideProperty = idata{idMathRel = bsToText value}
                             | otherwise = idata
                      in withLang state{psContext = InIntermediateExchange updated}
                 InElementaryExchange edata ->
@@ -424,6 +514,8 @@ parseWithXeno xmlContent processId = do
                             | isElement name "inputGroup" = edata{edInputGroup = bsToText value}
                             | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
                             | isElement name "casNumber" = edata{edCAS = Just (normalizeCAS (bsToText value))}
+                            | isElement name "variableName" && not isInsideProperty = edata{edVariableName = bsToText value}
+                            | isElement name "mathematicalRelation" && not isInsideProperty = edata{edMathRel = bsToText value}
                             | otherwise = edata
                      in withLang state{psContext = InElementaryExchange updated}
                 InGeneralCommentText _ ->
@@ -431,13 +523,23 @@ parseWithXeno xmlContent processId = do
                      in withLang state{psContext = InGeneralCommentText idx}
                 _ ->
                     -- Attributes on the <activity> opening tag carry the
-                    -- ecospold2 activityType and specialActivityType enums.
+                    -- ecospold2 activityType and specialActivityType enums;
+                    -- attributes on a <parameter> carry its variableName,
+                    -- pre-evaluated amount and mathematicalRelation formula.
                     let onActivity = pathAt 0 "activity" state
+                        onParameter = pathAt 0 "parameter" state
+                        pending = psPendingParam state
                         captured
                             | onActivity && isElement name "activityType" =
                                 state{psActivityType = bsToIntMaybe value}
                             | onActivity && isElement name "specialActivityType" =
                                 state{psSpecialActivityType = bsToIntMaybe value}
+                            | onParameter && isElement name "variableName" =
+                                state{psPendingParam = pending{ppVariableName = bsToText value}}
+                            | onParameter && isElement name "amount" =
+                                state{psPendingParam = pending{ppAmount = readAmount (bsToText value)}}
+                            | onParameter && isElement name "mathematicalRelation" =
+                                state{psPendingParam = pending{ppMathRel = bsToText value}}
                             | otherwise = state
                      in withLang captured
 
@@ -534,10 +636,11 @@ parseWithXeno xmlContent processId = do
                             if isReferenceProduct && not (T.null (idUnitName idata))
                                 then Just (idUnitName idata)
                                 else psRefUnit state
+                        formula = ExchangeFormula (nonEmptyText (idVariableName idata)) (nonEmptyText (idMathRel idata))
                         base = (finishExchange unit warns state){psRefUnit = newRefUnit}
                      in if refOnWasteAxis
-                            then addExchange wasteExchange (addWasteFlow wasteFlow base)
-                            else addExchange techExchange (addTechFlow techFlow base)
+                            then addExchange wasteExchange formula (addWasteFlow wasteFlow base)
+                            else addExchange techExchange formula (addTechFlow techFlow base)
         | isElement tagName "elementaryExchange" =
             case currentElementary state of
                 Nothing -> popPath state
@@ -602,10 +705,11 @@ parseWithXeno xmlContent processId = do
                                 , waPedigree = Nothing
                                 }
                         wasteFlow = WasteFlow flowUUID resolvedFlowName unitUUID (edSynonyms edata) (edCAS edata) Nothing
+                        formula = ExchangeFormula (nonEmptyText (edVariableName edata)) (nonEmptyText (edMathRel edata))
                         base = finishExchange unit warns state
                      in if isInventoryIndicatorWaste
-                            then addExchange wasteExchange (addWasteFlow wasteFlow base)
-                            else addExchange bioExchange (addBioFlow bioFlow base)
+                            then addExchange wasteExchange formula (addWasteFlow wasteFlow base)
+                            else addExchange bioExchange formula (addBioFlow bioFlow base)
         | isElement tagName "text" =
             -- The generalComment <text> branch deliberately does NOT pop the path.
             if inGeneralComment state
@@ -641,6 +745,19 @@ parseWithXeno xmlContent processId = do
             let txt = T.strip (accumText state)
                 add d = if T.null txt then d else d{edSubcompartments = txt : edSubcompartments d}
              in onExchange id add state
+        -- A <parameter> is referencable from formulas only through its
+        -- variableName; its amount is pre-evaluated in the source, so an
+        -- entry without either has nothing to contribute and is skipped.
+        | isElement tagName "parameter" =
+            let PendingParam var amt rel = psPendingParam state
+                committed = case (nonEmptyText var, amt) of
+                    (Just v, Just a) ->
+                        state
+                            { psParams = M.insert v a (psParams state)
+                            , psParamExprs = maybe (psParamExprs state) (\r -> M.insert v r (psParamExprs state)) (nonEmptyText rel)
+                            }
+                    (_, _) -> state
+             in popText committed{psPendingParam = emptyPendingParam}
         | isElement tagName "classificationSystem" =
             (popText state){psPendingClassSystem = T.strip (accumText state)}
         | isElement tagName "classificationValue" =
@@ -661,20 +778,21 @@ parseWithXeno xmlContent processId = do
     cdata = text
 
     -- Build final result from parse state
-    buildResult :: ParseState -> ProcessId -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
+    buildResult :: ParseState -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
     buildResult st _pid =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
             description = reverse (psDescription st) -- Reverse to get correct order
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
+            (resolvedExchanges, formulaWarns) = evaluateFormulas (psParams st) (reverse (psExchanges st))
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing nativeType Nothing
+            activity = Activity name description M.empty (psClassifications st) location refUnit resolvedExchanges (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
-         in (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
+         in (,formulaWarns) . (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
 
 -- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
