@@ -224,7 +224,7 @@ GET    /api/v1/db/{dbName}/activity/{processId}/supply-chain             Flat su
 POST   /api/v1/db/{dbName}/activity/{processId}/supply-chain             Same, with substitutions applied
 GET    /api/v1/db/{dbName}/activity/{processId}/consumers                Downstream activities consuming this one
 GET    /api/v1/db/{dbName}/activity/{processId}/path-to?target=          Shortest supply-chain path to a target activity
-GET    /api/v1/db/{dbName}/activity/{processId}/aggregate                SQL-style group/filter on exchanges, supply chain, or biosphere
+GET    /api/v1/db/{dbName}/activity/{processId}/aggregate                SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges
 
 # Inventory and impacts
 GET    /api/v1/db/{dbName}/activity/{processId}/inventory                Life cycle inventory (LCI)
@@ -332,7 +332,7 @@ Available tools — auto-derived at runtime from the single resource registry (`
 | `search_activities` | Search by name, geography, product, classification, or preset |
 | `search_flows` | Search biosphere flows |
 | `get_activity` | Activity details and exchanges (with comments) |
-| `aggregate` | SQL-style group/filter on exchanges, supply chain, or biosphere |
+| `aggregate` | SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges |
 | `get_supply_chain` | Flat upstream activity list with quantities and filters |
 | `get_consumers` | Downstream activities that consume a given activity |
 | `get_path_to` | Shortest supply-chain path from one activity to another |

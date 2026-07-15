@@ -741,6 +741,7 @@ callAggregate dbManager rid args (db, solver) =
                     Left err -> return $ toolError rid err
                     Right fn -> case filterExchangeTypeFromArg of
                         Left err -> return $ toolError rid err
+                        Right filterExchangeType | Just msg <- Agg.exchangeTypeScopeError scope filterExchangeType -> return $ toolError rid msg
                         Right filterExchangeType -> do
                             let params =
                                     Agg.AggregateParams
@@ -754,6 +755,9 @@ callAggregate dbManager rid args (db, solver) =
                                         , Agg.apFilterClassifications =
                                             mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
                                         , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                        , Agg.apFilterConsumer = textArg "filter_consumer" args
+                                        , Agg.apFilterConsumerNot =
+                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
                                         , Agg.apFilterExchangeType = filterExchangeType
                                         , Agg.apFilterIsReference = boolArg "filter_is_reference" args
                                         , Agg.apGroupBy = textArg "group_by" args
@@ -770,7 +774,8 @@ callAggregate dbManager rid args (db, solver) =
         Just "direct" -> Right Agg.ScopeDirect
         Just "supply_chain" -> Right Agg.ScopeSupplyChain
         Just "biosphere" -> Right Agg.ScopeBiosphere
-        Nothing -> Left "Missing required parameter: scope (direct | supply_chain | biosphere)"
+        Just "consumption" -> Right Agg.ScopeConsumption
+        Nothing -> Left "Missing required parameter: scope (direct | supply_chain | biosphere | consumption)"
         Just other -> Left ("Invalid scope: " <> other)
     aggFnFromArg = case textArg "aggregate" args of
         Nothing -> Right Agg.AggSum

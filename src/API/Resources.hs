@@ -306,6 +306,16 @@ description r = case r of
         \  - Mass breakdown of direct inputs: scope=direct, is_input=true, filter_unit=kg, group_by=name\n\
         \  - Total energy across the supply chain: scope=supply_chain, max_depth=2, filter_classification=[\"Category type=energy:exact\"]\n\
         \  - Largest pasture occupation flow: scope=biosphere, filter_name=Occupation, pasture, group_by=name\n\
+        \  - Total upstream electricity without double counting: scope=consumption, filter_name=electricity, filter_consumer_not=electricity\n\
+        \  - Grass eaten by cattle across the whole chain: scope=consumption, filter_name=grass, filter_consumer=cattle\n\
+        \\n\
+        \scope=supply_chain rows are cumulative productions: when a filtered product \
+        \feeds another filtered product (electricity high→medium→low voltage), their \
+        \sum double-counts the chain. scope=consumption has one row per scaled \
+        \technosphere edge (product, supplier, consumer), so its sums are actual \
+        \consumption events; the default total is gross throughput — exclude \
+        \intra-family edges with filter_consumer_not to get the amount delivered \
+        \outside the filtered family. Byproduct edges keep their negative sign.\n\
         \\n\
         \The filter_classification parameter accepts a list of strings in \"System=Value[:exact]\" form (default mode is 'contains')."
     GetSupplyChain ->
@@ -314,7 +324,9 @@ description r = case r of
         \scaled amount relative to the functional unit (scaling_factor × root \
         \reference product amount). To get the per-step yield ratio between two \
         \connected entries, divide the supplier's scaling_factor by the consumer's \
-        \scaling_factor."
+        \scaling_factor. Summing quantities across entries that feed each other \
+        \(electricity high→medium→low voltage) double-counts the chain — use \
+        \aggregate with scope=consumption for upstream totals."
     GetInventory ->
         "LCA / ACV — compute the Life Cycle Inventory (LCI): biosphere flows \
         \(emissions and resource extractions) for an activity's full supply chain. \
@@ -598,7 +610,7 @@ params r = case r of
     Aggregate ->
         [ pDatabase
         , pProcessId
-        , Param "scope" "string" Required "direct | supply_chain | biosphere"
+        , Param "scope" "string" Required "direct | supply_chain | biosphere | consumption"
         , Param "is_input" "boolean" Optional "Only for scope=direct — true=inputs only, false=outputs only"
         , Param "max_depth" "integer" Optional "Only for scope=supply_chain — max hops from the root activity"
         , Param "filter_name" "string" Optional "Case-insensitive substring on flow/activity name"
@@ -606,9 +618,11 @@ params r = case r of
         , Param "filter_unit" "string" Optional "Exact unit name"
         , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expanded and merged into filter_classification."
         , Param "filter_classification" "array" Optional "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode"
-        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere — filter by upstream activity name"
+        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption — filter by supplier activity name"
+        , Param "filter_consumer" "string" Optional "Only for scope=consumption — case-insensitive substring on the consuming activity's name"
+        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption — comma-separated consumer-name exclude list (each item is a substring; a name containing a comma cannot be expressed)"
         , Param "filter_is_reference" "boolean" Optional "Filter by reference-product flag (typically for outputs)"
-        , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name"
+        , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name | consumer_name"
         , Param "aggregate" "string" Optional "sum_quantity | count | share (default: sum_quantity)"
         ]
     GetSupplyChain ->
