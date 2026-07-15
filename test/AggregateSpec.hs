@@ -12,16 +12,19 @@ correctness.
 -}
 module AggregateSpec (spec) where
 
+import qualified Data.Map.Strict as MS
 import Data.Maybe (isJust)
 import qualified Data.Set as S
+import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Test.Hspec
 
 import qualified API.Types as API
 import qualified Service.Aggregate as Agg
 import qualified SharedSolver as SS
-import TestHelpers (loadSampleDatabase, mkSolverFromDb)
-import Types (Database (..), processIdToText)
+import TestHelpers (loadSampleDatabase, mkDepLookupFromMap, mkSolverFromDb)
+import Types (CrossDBLink (..), Database (..), processIdToText)
 import qualified Types
 import qualified UnitConversion as UC
 
@@ -34,7 +37,15 @@ runAgg ::
     Database ->
     Agg.AggregateParams ->
     IO API.Aggregation
-runAgg db params = do
+runAgg = runAggWith noDeps
+
+-- Same, with a real dep-DB lookup for cross-database chains.
+runAggWith ::
+    SS.DepSolverLookup ->
+    Database ->
+    Agg.AggregateParams ->
+    IO API.Aggregation
+runAggWith depLookup db params = do
     solver <- mkSolverFromDb db "test"
     -- ProcessId is the activity's index in dbActivities; for SAMPLE.min3 the
     -- first activity has ProcessId 0, which is what we use here.
@@ -47,7 +58,7 @@ runAgg db params = do
             db
             "test"
             solver
-            noDeps
+            depLookup
             pidText
             params
     case result of
@@ -72,6 +83,40 @@ consumption = Agg.emptyAggregateParams Agg.ScopeConsumption
 shouldBeCloseTo :: Double -> Double -> Expectation
 shouldBeCloseTo actual expected =
     actual `shouldSatisfy` (\x -> abs (x - expected) < 1e-9)
+
+{- | SAMPLE.min3 loaded twice: the root copy gains one synthetic bridge
+link — activity Y consumes 0.5 unit of the dep copy's product Y per unit
+output — so a single aggregate call exercises internal edges, the bridge
+edge, and dep-DB internal edges at once. Scalings: root (1, 0.6, 0.24),
+bridge demand 0.5 × 0.6 = 0.3, dep (0, 0.3, 0.12).
+-}
+loadLinkedPair :: IO (Database, SS.DepSolverLookup)
+loadLinkedPair = do
+    base <- loadSampleDatabase "SAMPLE.min3"
+    depDb <- loadSampleDatabase "SAMPLE.min3"
+    depSolver <- mkSolverFromDb depDb "dep"
+    yPid <- case V.findIndex (\a -> Types.activityName a == "production of product Y") (dbActivities base) of
+        Just i -> pure i
+        Nothing -> expectationFailure "SAMPLE.min3 lost its product Y activity" >> error "unreachable"
+    let (yAct, yProd) = dbProcessIdTable base V.! yPid -- same UUIDs in both copies
+        link =
+            CrossDBLink
+                { cdlConsumerActUUID = yAct
+                , cdlConsumerProdUUID = yProd
+                , cdlConsumerFlowId = UUID.nil
+                , cdlSupplierActUUID = yAct
+                , cdlSupplierProdUUID = yProd
+                , cdlCoefficient = 0.5
+                , cdlExchangeUnit = Types.activityUnit (dbActivities base V.! yPid)
+                , cdlFlowName = "product Y"
+                , cdlLocation = "GLO"
+                , cdlSourceDatabase = "dep"
+                , cdlTiedAlternatives = []
+                }
+    pure
+        ( base{dbCrossDBLinks = [link]}
+        , mkDepLookupFromMap (MS.singleton "dep" (depDb, depSolver))
+        )
 
 spec :: Spec
 spec = do
@@ -233,6 +278,36 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             agg <- runAgg db direct{Agg.apFilterConsumer = Just "product"}
             API.aggFilteredCount agg `shouldBe` 0
+
+    describe "ScopeConsumption across databases (bridge links)" $ do
+        it "sums internal, bridge, and dep-DB edges" $ do
+            -- Root edges 0.6 + 0.24, bridge 0.5 × s_Y = 0.3, dep edge
+            -- 0.4 × 0.3 = 0.12.
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption
+            API.aggFilteredCount agg `shouldBe` 4
+            API.aggFilteredTotal agg `shouldBeCloseTo` 1.26
+
+        it "matches the cumulative supply_chain total (two independent paths)" $ do
+            (rootDb, depLookup) <- loadLinkedPair
+            aggC <- runAggWith depLookup rootDb consumption
+            aggS <- runAggWith depLookup rootDb supplyChain
+            API.aggFilteredTotal aggC `shouldBeCloseTo` API.aggFilteredTotal aggS
+
+        it "group_by=flow_id qualifies the bridge and dep-side suppliers with the dep name" $ do
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption{Agg.apGroupBy = Just "flow_id"}
+            let keys = map API.aggKey (API.aggGroups agg)
+            length keys `shouldBe` 4
+            length (filter ("dep::" `T.isPrefixOf`) keys) `shouldBe` 2
+
+        it "filter_consumer spans databases" $ do
+            -- Consumers named "…product Y": root Y eats Z (0.24) and the
+            -- bridge (0.3); dep Y eats dep Z (0.12).
+            (rootDb, depLookup) <- loadLinkedPair
+            agg <- runAggWith depLookup rootDb consumption{Agg.apFilterConsumer = Just "product Y"}
+            API.aggFilteredCount agg `shouldBe` 3
+            API.aggFilteredTotal agg `shouldBeCloseTo` 0.66
 
     describe "exchangeTypeScopeError (shared REST/MCP guard)" $ do
         it "allows the filter on scope=direct and an absent filter everywhere" $ do
