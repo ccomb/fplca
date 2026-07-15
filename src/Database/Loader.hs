@@ -111,6 +111,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
 import Database.CrossLinking (
+    AliasMap,
     CrossDBLinkResult (..),
     IndexedDatabase (..),
     LinkWarning (..),
@@ -118,6 +119,7 @@ import Database.CrossLinking (
     SupplierEntry (..),
     WasteTreatmentMatch (..),
     defaultLinkingThreshold,
+    emptyAliasMap,
     extractBracketedLocation,
     extractProductPrefixes,
     findSupplierAcrossDatabases,
@@ -196,6 +198,10 @@ History of manual bumps:
      emission to two subcompartments (e.g. river + groundwater, long-term)
      no longer collapses to one row scored at a single arbitrary
      subcompartment's CF. Old caches merged those amounts under one flow.
+- 9: LinkBlocker gained AliasTargetMissing (geo-aware relink mapping), which
+     changes the Store layout of the linking stats embedded in the cache; a
+     downgrade reading a newer cache would fail mid-decode, so both directions
+     rebuild once instead.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -203,7 +209,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 8
+     in hi `xor` lo `xor` 9
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1276,7 +1282,7 @@ fixActivityLinksWithCrossDB indexedDbs synonymDB unitConfig locationHier policy 
                         , lcThreshold = defaultLinkingThreshold
                         , lcLocationHierarchy = if M.null locationHier then locationHierarchy else locationHier
                         , lcGeographyPolicy = policy
-                        , lcSupplierAliases = Nothing
+                        , lcSupplierAliases = emptyAliasMap
                         }
 
             -- Process all activities to find cross-DB links
@@ -1348,7 +1354,7 @@ relinkSimpleDatabase ::
     UC.UnitConfig ->
     M.Map T.Text [T.Text] ->
     GeographyPolicy ->
-    Maybe (M.Map T.Text T.Text) ->
+    AliasMap ->
     SimpleDatabase ->
     CrossDBLinkingStats
 relinkSimpleDatabase indexedDbs synonymDB unitConfig locationHier policy aliases db =
@@ -1867,6 +1873,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                     [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
                 NoNameMatch -> []
                 UnitIncompatible _ _ -> []
+                AliasTargetMissing _ _ -> []
          in mempty
                 { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
                 , cdlLocationUnresolved = unresolved
@@ -2025,3 +2032,5 @@ showBlocker (UnitIncompatible q s) = printf "Unit: %s vs %s" (T.unpack q) (T.unp
 showBlocker (LocationUnavailable loc) = printf "Location: %s" (T.unpack loc)
 showBlocker (LocationRejectedByPolicy req act kind) =
     printf "Rejected by policy: %s → %s (%s)" (T.unpack req) (T.unpack act) (T.unpack (locationKindCode kind))
+showBlocker (AliasTargetMissing name mLoc) =
+    printf "Mapping target not found: %s%s" (T.unpack name) (maybe "" ((" @ " <>) . T.unpack) mLoc)

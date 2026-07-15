@@ -193,12 +193,13 @@ unloadDatabaseHandler dbName = do
 re-resolves links within the existing dependency pin (plain relink) — letting
 the user recover from loads that happened in a suboptimal order without
 reloading. A body carrying both @depDb@ and @mappingCsv@ switches to mapping
-mode: relink against that one dependency using an inline name→name
-supplier-alias CSV, so an Ecoinvent-named background (e.g. Agribalyse) resolves
-against a differently-named dependency (e.g. BAFU). A loaded-but-undeclared
-dependency is auto-pinned in-memory rather than rejected. Supplying exactly one
-of the two is a client error. Parse/validation failures surface as 4xx rather
-than a silent no-op; the only 404 from this path is an unloaded database or
+mode: relink against that one dependency using an inline supplier-alias CSV
+(source/target names with optional locations — see "Database.RelinkMapping"),
+so inputs named after one background database resolve against a
+differently-named dependency. A loaded-but-undeclared dependency is
+auto-pinned in-memory rather than rejected. Supplying exactly one of the two
+is a client error. Parse/validation failures surface as 4xx rather than a
+silent no-op; the only 404 from this path is an unloaded database or
 dependency.
 -}
 relinkDatabaseHandler :: Text -> RelinkRequest -> AppM RelinkResponse

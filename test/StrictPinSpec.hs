@@ -29,7 +29,7 @@ import Test.Hspec
 import Config (DatabaseConfig (..), defaultConfig)
 import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
-import Database.CrossLinking (buildIndexedDatabaseFromDB)
+import Database.CrossLinking (AliasKey (..), AliasMap (..), AliasTarget (..), buildIndexedDatabaseFromDB)
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
@@ -124,7 +124,12 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             -- A mapping relink scoped to beta must re-resolve the whole pin, not
             -- drop the alpha link. (The alias is inert here; it only exercises the
             -- mapping path.)
-            result <- relinkDatabaseWithMapping manager "consumer" "beta" (M.singleton "no-such-input" "no-such-supplier")
+            result <-
+                relinkDatabaseWithMapping
+                    manager
+                    "consumer"
+                    "beta"
+                    (AliasMap (M.singleton (AliasKey "no-such-input" Nothing) (AliasTarget "no-such-supplier" Nothing)))
             result `shouldSatisfy` isRight
 
             loaded <- readTVarIO (dmLoadedDbs manager)

@@ -20,8 +20,12 @@ import Test.Hspec
 import API.DatabaseHandlers (gapReportToAPI)
 import API.Types (GapEntryAPI (..), GapReportAPI (..))
 import Database.CrossLinking (
+    AliasKey (..),
+    AliasMap (..),
+    AliasTarget (..),
     IndexedDatabase,
     buildIndexedDatabase,
+    emptyAliasMap,
  )
 import Database.Loader (
     CrossDBLinkingStats (..),
@@ -193,7 +197,7 @@ supplierDB =
 
 stats :: CrossDBLinkingStats
 stats =
-    relinkSimpleDatabase [supplierIndexed] emptySynonymDB defaultUnitConfig M.empty GeoGlobal Nothing consumerDB
+    relinkSimpleDatabase [supplierIndexed] emptySynonymDB defaultUnitConfig M.empty GeoGlobal emptyAliasMap consumerDB
 
 report :: GapReport
 report = gapReportForStaged "consumer" consumerDB stats
@@ -272,6 +276,19 @@ spec = do
         it "returns everything without a limit" $
             length (graGaps (gapReportToAPI Nothing report)) `shouldBe` 3
 
+    describe "alias integration" $ do
+        it "surfaces a missing designated target as its blocker in the report" $ do
+            -- A relink mapping redirects flour to a supplier nobody ships:
+            -- the gap report must carry the curated-mapping error, not a
+            -- generic no_name_match.
+            let aliases = AliasMap (M.singleton (AliasKey "flour" Nothing) (AliasTarget "no such product" (Just "CH")))
+                aliasStats =
+                    relinkSimpleDatabase [supplierIndexed] emptySynonymDB defaultUnitConfig M.empty GeoGlobal aliases consumerDB
+                r = gapReportForStaged "consumer" consumerDB aliasStats
+            case filter ((== "flour") . geFlowName) (grGaps r) of
+                [e] -> geReason e `shouldBe` GapBlocked (AliasTargetMissing "no such product" Nothing)
+                other -> expectationFailure ("expected one flour entry, got: " <> show other)
+
     describe "partial coverage" $ do
         it "reports only the surplus edges of a partially covered demand" $ do
             -- Two identical water demands, but only one of the two links kept:
@@ -285,7 +302,7 @@ spec = do
                                 (mkActivity "washing" [reference breadFlow, techInput waterFlow 1.0, techInput waterFlow 2.0])
                         }
                 twoWaterStats =
-                    relinkSimpleDatabase [supplierIndexed] emptySynonymDB defaultUnitConfig M.empty GeoGlobal Nothing twoWaterDB
+                    relinkSimpleDatabase [supplierIndexed] emptySynonymDB defaultUnitConfig M.empty GeoGlobal emptyAliasMap twoWaterDB
                 onlyWater r = filter ((== "water") . geFlowName) (grGaps r)
             -- sanity: both demands link, so the full stats leave no water gap
             length (cdlLinks twoWaterStats) `shouldBe` 2

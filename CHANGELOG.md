@@ -57,6 +57,24 @@
   summing cumulative production would give (for example counting the same
   electricity once per voltage level). Grouping by `consumer_name` shows who
   consumes what. Available on the REST endpoint, the MCP tool, and pyvolca.
+- The relink mapping CSV's `source_location` and `target_location` columns
+  now steer the linking instead of being informational. A row with a source
+  location applies only to demands at that exact location (an exact row wins
+  over a name-only row for the same name). A row with a target location
+  designates the supplier literally: the link goes to that name at that
+  location, bypassing the geography policy — so "a French process consuming
+  Swiss cement: replace it with the French cement?" is answered row by row in
+  the mapping. When nothing supplies the designated target, the relink
+  reports a new `alias_target_missing` blocker (visible in the linking stats
+  and the gap report) rather than silently falling back.
+
+### Changed
+- A mapping row now preempts the direct name cascade instead of being a
+  last-resort retry. A curated row is a stronger statement of intent than a
+  coincidental direct name match; names the mapping does not mention resolve
+  exactly as before.
+- The matrix-cache format changed with the new blocker (manual schema bump
+  8 → 9): the first start after upgrading rebuilds each database cache once.
 
 ## [0.9.2] - 2026-07-14
 

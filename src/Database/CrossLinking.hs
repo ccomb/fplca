@@ -32,6 +32,13 @@ module Database.CrossLinking (
     IndexedDatabase (..),
     SupplierEntry (..),
 
+    -- * Supplier aliases (relink mapping)
+    AliasKey (..),
+    AliasTarget (..),
+    AliasMap (..),
+    emptyAliasMap,
+    lookupAlias,
+
     -- * Configuration
     defaultLinkingThreshold,
 
@@ -68,6 +75,7 @@ module Database.CrossLinking (
     normalizeUnicode,
 ) where
 
+import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
 import Data.Char (isAlpha, isUpper)
 import Data.Foldable (find)
@@ -160,16 +168,64 @@ data LinkingContext = LinkingContext
     -- ^ Location hierarchy (code → parent codes)
     , lcGeographyPolicy :: !GeographyPolicy
     -- ^ How aggressively to widen geography when no exact match is found
-    , lcSupplierAliases :: !(Maybe (M.Map Text Text))
-    {- ^ Optional consumer-flow-name → supplier-name aliases. When a
-    consumer's input flow name does not match any supplier directly, the
-    matcher retries with its alias from this map (e.g. an Ecoinvent-named
-    input rewritten to the BAFU activity name). 'Nothing' disables the
-    feature entirely (the common case for ordinary loads); 'Just' an empty
-    map is equivalent. Keys are matched on the raw (un-normalized) flow
-    name, falling back to 'normalizeText'.
+    , lcSupplierAliases :: !AliasMap
+    {- ^ Consumer-flow → designated-supplier aliases from a relink mapping
+    (an input named after one background database, rewritten to another
+    database's activity name). A matching row preempts the direct cascade:
+    the curated designation is a stronger statement of intent than a
+    generic name match, otherwise a row could be silently overridden by a
+    coincidental direct hit. Keys match the raw (un-normalized) flow name
+    plus the demand's effective location — see 'lookupAlias'.
+    'emptyAliasMap' disables the feature (the common case).
     -}
     }
+
+{- | Alias source key: consumer flow name plus optional consumer location.
+A row with a location applies only to demands at that exact location code
+(no hierarchy — the curator writes the code as it appears in the data); a
+row without one applies at any location.
+-}
+data AliasKey = AliasKey
+    { akName :: !Text
+    , akLocation :: !(Maybe Text)
+    }
+    deriving (Show, Eq, Ord)
+
+{- | Designated supplier of an alias row: product/activity name, optionally
+pinned to an exact location code. A pinned location is honoured literally —
+the matcher links there bypassing the geography policy and score threshold,
+and reports 'AliasTargetMissing' when nothing supplies that name there.
+Without a pinned location the geography policy chooses among the name's
+candidates, as for any other demand.
+-}
+data AliasTarget = AliasTarget
+    { atName :: !Text
+    , atLocation :: !(Maybe Text)
+    }
+    deriving (Show, Eq)
+
+{- | Consumer-flow → designated-supplier mapping. The empty map means no
+mapping is in force, so a bare newtype keeps "no aliases" and "no matching
+row" from needing two representations.
+-}
+newtype AliasMap = AliasMap (M.Map AliasKey AliasTarget)
+    deriving (Show, Eq)
+
+emptyAliasMap :: AliasMap
+emptyAliasMap = AliasMap M.empty
+
+{- | The alias row in force for a demand: an exact (name, location) row wins
+over a name-only row; a demand without a location can only match name-only
+rows.
+-}
+lookupAlias :: AliasMap -> Text -> Text -> Maybe AliasTarget
+lookupAlias (AliasMap m) name loc =
+    located <|> M.lookup (AliasKey name Nothing) m
+  where
+    located =
+        if T.null loc
+            then Nothing
+            else M.lookup (AliasKey name (Just loc)) m
 
 -- | A candidate supplier from another database
 data CrossDBCandidate = CrossDBCandidate
@@ -567,38 +623,66 @@ findSupplierInIndexedDBs ::
     Text ->
     CrossDBLinkResult
 findSupplierInIndexedDBs LinkingContext{..} productName location unit =
-    let normalizedName = normalizeText productName
-        -- Three priority-ordered match strategies; we take the first non-empty
-        -- result via 'firstNonEmpty' (the "First" monoid restricted to lists).
-        --   1. Exact product-name match across all indexed DBs.
-        --   2. Synonym-group match if exact yielded nothing.
-        --   3. Prefix-splitting fallback for compound names (e.g. SimaPro).
-        -- Alias retry: when the consumer's flow name only matches the target
-        -- supplier under an explicit name→name mapping (e.g. Ecoinvent name →
-        -- BAFU activity name), look the alias up and run the same
-        -- exact/synonym sub-cascade on it. Tried last, so direct matches always
-        -- win over the mapping.
-        aliasOf nm = case lcSupplierAliases of
-            Nothing -> Nothing
-            Just aliases -> M.lookup nm aliases
-        aliasCandidates = case aliasOf productName of
-            Nothing -> []
-            Just aliasName -> firstNonEmpty [tryName aliasName, tryPrefixes (extractProductPrefixes aliasName)]
-        allCandidates =
-            firstNonEmpty
-                [ concatMap (lookupExact normalizedName) lcIndexedDatabases
-                , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
-                    Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
-                    Nothing -> []
-                , tryPrefixes (extractProductPrefixes productName)
-                , aliasCandidates
-                ]
-        -- Effective location: if raw location is empty, try extracting from compound name
-        effectiveLocation =
-            if T.null location
-                then extractBracketedLocation productName
-                else location
-     in case allCandidates of
+    -- An alias row preempts the direct cascade: the curator's designation is
+    -- a stronger statement of intent than a generic name match — otherwise a
+    -- row answering "which supplier replaces this input?" could be silently
+    -- overridden by a coincidental direct hit. A name with no row resolves
+    -- exactly as it would without any mapping.
+    case lookupAlias lcSupplierAliases productName effectiveLocation of
+        Just target -> resolveDesignated target
+        Nothing ->
+            -- Three priority-ordered match strategies; take the first
+            -- non-empty result via 'firstNonEmpty':
+            --   1. Exact product-name match across all indexed DBs.
+            --   2. Synonym-group match if exact yielded nothing.
+            --   3. Prefix-splitting fallback for compound names (e.g. SimaPro).
+            resolveCandidates $
+                firstNonEmpty
+                    [ concatMap (lookupExact (normalizeText productName)) lcIndexedDatabases
+                    , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
+                        Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
+                        Nothing -> []
+                    , tryPrefixes (extractProductPrefixes productName)
+                    ]
+  where
+    -- Effective location: if raw location is empty, try extracting from compound name
+    effectiveLocation =
+        if T.null location
+            then extractBracketedLocation productName
+            else location
+
+    -- Resolve an alias row's designated target: the exact/synonym/prefix
+    -- sub-cascade on the target name, then either the normal geography-policy
+    -- pipeline (no pinned location) or the literal designated link. A target
+    -- name that matches nowhere is a loud curated-mapping error
+    -- ('AliasTargetMissing'), never a silent 'NoNameMatch'.
+    resolveDesignated (AliasTarget targetName mTargetLoc) =
+        case firstNonEmpty [tryName targetName, tryPrefixes (extractProductPrefixes targetName)] of
+            [] -> CrossDBNotLinked (AliasTargetMissing targetName Nothing)
+            candidates -> case mTargetLoc of
+                Nothing -> resolveCandidates candidates
+                Just targetLoc -> designatedAt targetName targetLoc candidates
+
+    -- The curator designated (name, location): link there directly. Unit
+    -- compatibility still applies; the geography policy and score threshold
+    -- do not (and no 'UpperLocationUsed' warning — the widening is
+    -- deliberate). A designated location nothing supplies is a loud
+    -- curated-mapping error, never a silent fallback to the generic cascade.
+    designatedAt targetName targetLoc candidates =
+        case filter ((== targetLoc) . seLocation . snd) candidates of
+            [] -> CrossDBNotLinked (AliasTargetMissing targetName (Just targetLoc))
+            atLoc@((_, firstSe) : _) ->
+                case filter (\(_, se) -> unitsAreCompatible lcUnitConfig unit (seUnit se)) atLoc of
+                    [] -> CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
+                    compatible@(_ : _) ->
+                        let scored = map (scoreEntry effectiveLocation) compatible
+                            !best = maximumBy (comparing cdbScore) scored
+                         in mkLinked best [] (tiedDatabases best scored)
+
+    -- Pipeline once the candidate set is fixed: unit filter, geography
+    -- policy, then rank the survivors against the score threshold.
+    resolveCandidates allCandidates =
+        case allCandidates of
             [] -> CrossDBNotLinked NoNameMatch
             ((_, firstSe) : _) ->
                 -- Check unit compatibility first
@@ -623,36 +707,38 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                     _ ->
                                         let scored = map (first (scoreEntry effectiveLocation)) accepted
                                             !(bestCand, bestKind) = maximumBy (comparing (cdbScore . fst)) scored
-                                            -- Other databases whose surviving best candidate ties the
-                                            -- winner's score. Dedup by DB name to ignore intra-DB ties.
-                                            tied =
-                                                let winnerDB = cdbDatabaseName bestCand
-                                                    winnerScore = cdbScore bestCand
-                                                    sameScoreDBs =
-                                                        [ cdbDatabaseName c
-                                                        | (c, _) <- scored
-                                                        , cdbScore c == winnerScore
-                                                        , cdbDatabaseName c /= winnerDB
-                                                        ]
-                                                 in M.keys (M.fromList [(d, ()) | d <- sameScoreDBs])
                                          in if cdbScore bestCand >= lcThreshold
                                                 then
-                                                    let warnings =
-                                                            [ UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind
-                                                            | not (T.null location || bestKind == ExactLoc)
-                                                            ]
-                                                     in CrossDBLinked
-                                                            { cdlrActivityUUID = cdbActivityUUID bestCand
-                                                            , cdlrProductUUID = cdbProductUUID bestCand
-                                                            , cdlrDatabaseName = cdbDatabaseName bestCand
-                                                            , cdlrScore = cdbScore bestCand
-                                                            , cdlrProductName = cdbProductName bestCand
-                                                            , cdlrLocation = cdbLocation bestCand
-                                                            , cdlrWarnings = warnings
-                                                            , cdlrTiedDatabases = tied
-                                                            }
+                                                    mkLinked
+                                                        bestCand
+                                                        [ UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind
+                                                        | not (T.null location || bestKind == ExactLoc)
+                                                        ]
+                                                        (tiedDatabases bestCand (map fst scored))
                                                 else CrossDBNotLinked (LocationUnavailable effectiveLocation)
-  where
+
+    -- Other databases whose surviving best candidate ties the winner's
+    -- score. Dedup by DB name to ignore intra-DB ties.
+    tiedDatabases winner scored =
+        M.keys $
+            M.fromList
+                [ (cdbDatabaseName c, ())
+                | c <- scored
+                , cdbScore c == cdbScore winner
+                , cdbDatabaseName c /= cdbDatabaseName winner
+                ]
+
+    mkLinked best warnings tied =
+        CrossDBLinked
+            { cdlrActivityUUID = cdbActivityUUID best
+            , cdlrProductUUID = cdbProductUUID best
+            , cdlrDatabaseName = cdbDatabaseName best
+            , cdlrScore = cdbScore best
+            , cdlrProductName = cdbProductName best
+            , cdlrLocation = cdbLocation best
+            , cdlrWarnings = warnings
+            , cdlrTiedDatabases = tied
+            }
     lookupExact :: Text -> IndexedDatabase -> [(Text, SupplierEntry)]
     lookupExact name idb =
         [(idbName idb, entry) | entry <- fromMaybe [] (M.lookup name (idbByProductName idb))]
