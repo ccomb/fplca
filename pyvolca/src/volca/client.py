@@ -62,6 +62,7 @@ from .types import (
     ContributingActivities,
     ContributingFlows,
     DatabaseInfo,
+    DatabaseStatus,
     Exchange,
     Flow,
     FlowDetail,
@@ -985,6 +986,43 @@ class Client:
         return self._upload(
             "/api/v1/db/upload", source, name, description, "upload_database"
         )
+
+    def ensure_database(self, source: str | Path | bytes, name: str | None = None) -> str:
+        """Idempotently make the archive at ``source`` a loaded database.
+
+        The one-call form of the upload lifecycle: match by display name
+        (default: the file's stem), upload only when absent, finalize the
+        staged copy, load if unloaded. Returns the slug every later call
+        targets — run it at the top of a script and it converges on the same
+        loaded database every time instead of re-uploading.
+
+        A staged archive that is not ready to finalize (unresolved
+        dependencies) raises VoLCAError naming what is missing — wire the
+        dependencies with :meth:`add_dependency` and :meth:`finalize_database`
+        yourself in that case.
+        """
+        if name is None:
+            if isinstance(source, bytes):
+                raise VoLCAError(
+                    "ensure_database: name= is required when source is bytes"
+                )
+            name = Path(source).stem
+        for db in self.list_databases():
+            if name in (db.display_name, db.name):
+                if db.status == DatabaseStatus.UNLOADED:
+                    self.load_database(db.name)
+                return db.name
+        slug = self.upload_database(source, name=name)["slug"]
+        setup = self.get_setup(slug)
+        if not setup.get("isReady", False):
+            missing = setup.get("missingSuppliers") or setup.get("unresolvedLinks") or []
+            raise VoLCAError(
+                f"ensure_database: uploaded {name!r} (slug {slug!r}) is not "
+                f"ready to finalize — unresolved dependencies: {missing!r}. "
+                "Wire them with add_dependency, then finalize_database."
+            )
+        self.finalize_database(slug)
+        return slug
 
     def get_setup(self, db_name: str | None = None) -> dict:
         """Setup status of a staged or loaded database (``DatabaseSetupInfo``).
