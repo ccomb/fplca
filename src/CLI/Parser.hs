@@ -120,7 +120,7 @@ databaseParser =
                     <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
                     <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
-                    <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a name->name supplier alias CSV"))
+                    <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a supplier alias CSV (source/target names, optional locations)"))
                     <> OA.command "export" (info (DbExport <$> exportArgsParser <**> helper) (progDesc "Export a loaded database to a file"))
                 )
             )
@@ -140,7 +140,7 @@ relinkArgsParser =
     DbRelinkArgs
         <$> textArg "DB" "Name of the loaded database to relink"
         <*> textOpt "to" Nothing "DEP_DB" "Dependency database to link against"
-        <*> strOpt "mapping" Nothing "CSV" "Path to the name->name supplier alias CSV"
+        <*> strOpt "mapping" Nothing "CSV" "Path to the supplier alias CSV (source/target names, optional source/target locations)"
 
 {- | Export parser: positional DB, @--format@ keyword, @--out@ file path.
 Mirrors @db export <db> --format <fmt> --out <file>@.

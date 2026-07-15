@@ -22,6 +22,7 @@ import Database.CrossLinking (
     LinkingContext (..),
     buildIndexedDatabase,
     defaultLinkingThreshold,
+    emptyAliasMap,
     findSupplierByActivityProduct,
     locationHierarchy,
  )
@@ -126,7 +127,7 @@ ctxFor idbs =
         , lcThreshold = defaultLinkingThreshold
         , lcLocationHierarchy = locationHierarchy
         , lcGeographyPolicy = GeoGlobal
-        , lcSupplierAliases = Nothing
+        , lcSupplierAliases = emptyAliasMap
         }
 
 runLinks :: SimpleDatabase -> [IndexedDatabase] -> CrossDBLinkingStats

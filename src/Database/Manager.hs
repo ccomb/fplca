@@ -227,6 +227,7 @@ import qualified UnitConversion
 import API.Types (DepLoadResult (..))
 import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
+import qualified Database.CrossLinking as CrossLinking
 import Database.Upload (DatabaseFormat (..), findMethodDirectory, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
@@ -1738,10 +1739,10 @@ even though we already know the answer. The save is skipped when the
 relink is a no-op (no change vs. the in-memory state).
 -}
 relinkDatabase :: DatabaseManager -> Text -> IO (Either Text RelinkResult)
-relinkDatabase manager dbName = relinkDatabaseWith manager dbName Nothing Nothing
+relinkDatabase manager dbName = relinkDatabaseWith manager dbName CrossLinking.emptyAliasMap Nothing
 
 {- | Re-link a loaded DB across its full pinned dependency set, applying a
-name→name supplier-alias map. The aliases let a consumer's input flow name that
+curated supplier-alias map. The aliases let a consumer's input flow name that
 only matches a target supplier (typically in @depDb@) under the mapping still
 link; links to the other pinned dependencies are re-resolved unchanged rather
 than dropped. If @depDb@ is loaded but not yet in the database's declared
@@ -1756,13 +1757,13 @@ relinkDatabaseWithMapping ::
     Text ->
     -- | dependency database to link against
     Text ->
-    -- | consumer-flow-name → supplier-name aliases
-    M.Map Text Text ->
+    -- | consumer-flow → designated-supplier aliases
+    CrossLinking.AliasMap ->
     IO (Either Text RelinkResult)
 relinkDatabaseWithMapping manager dbName depDb aliases = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
-        Nothing -> relinkStaged manager dbName (Just depDb) (Just aliases)
+        Nothing -> relinkStaged manager dbName (Just depDb) aliases
         Just loaded
             | not (M.member depDb loadedDbs) ->
                 return $ Left $ "Dependency database not loaded: " <> depDb <> " (load it first)"
@@ -1777,7 +1778,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = do
                 unless (depDb `elem` persistedDeps) $
                     atomically $
                         modifyTVar' (dmLoadedDbs manager) (M.adjust (addPinnedDep depDb) dbName)
-                relinkDatabaseWith manager dbName (Just aliases) (Just persistedDeps)
+                relinkDatabaseWith manager dbName aliases (Just persistedDeps)
   where
     -- Idempotent: a concurrent relink may have pinned the dep between the
     -- snapshot above and this transaction, so never prepend a duplicate.
@@ -1793,7 +1794,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = do
 page before a database is finalized. @maybeDepDb@ pins a chosen dependency (a
 mapping relink); @aliases@ feeds the supplier-alias map.
 -}
-relinkStaged :: DatabaseManager -> Text -> Maybe Text -> Maybe (M.Map Text Text) -> IO (Either Text RelinkResult)
+relinkStaged :: DatabaseManager -> Text -> Maybe Text -> CrossLinking.AliasMap -> IO (Either Text RelinkResult)
 relinkStaged manager dbName maybeDepDb aliases = do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     case M.lookup dbName stagedDbs of
@@ -1847,9 +1848,9 @@ relinkStaged manager dbName maybeDepDb aliases = do
 {- | Shared relink core. Candidates are the database's full declared pin
 ('dbDependsOn'); relink recomputes the links within it but never grows or
 shrinks the set. @aliases@ feeds 'lcSupplierAliases' — a mapping relink passes
-the user's name→name map (which retargets a chosen dependency without dropping
-links to the others), a plain relink passes 'Nothing'. The dependency set
-stored on the database is never mutated here.
+the user's curated map (which retargets a chosen dependency without dropping
+links to the others), a plain relink passes 'emptyAliasMap'. The dependency
+set stored on the database is never mutated here.
 
 @persistedDeps@ is the dependency set as it stands in the matrix cache on disk
 ('Just' when the caller pinned a new dep in-memory before calling). The cache
@@ -1860,7 +1861,7 @@ that divergence. 'Nothing' means the pin is unchanged from disk.
 relinkDatabaseWith ::
     DatabaseManager ->
     Text ->
-    Maybe (M.Map Text Text) ->
+    CrossLinking.AliasMap ->
     Maybe [Text] ->
     IO (Either Text RelinkResult)
 relinkDatabaseWith manager dbName aliases persistedDeps = do

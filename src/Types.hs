@@ -1115,6 +1115,12 @@ data LinkBlocker
       geography_policy rejected it
       -}
       LocationRejectedByPolicy !Text !Text !LocationKind
+    | {- | targetName, targetLocation — a relink-mapping row designated a supplier
+      that no pinned dependency ships ('Nothing' when the name matches nowhere,
+      'Just' the pinned location when the name exists but not there). A curated
+      designation must fail loudly, never fall back to the generic cascade.
+      -}
+      AliasTargetMissing !Text !(Maybe Text)
     deriving (Show, Eq, Generic, NFData, Store)
 
 {- | Per-database knob controlling how aggressively geography may be widened when
@@ -1177,6 +1183,8 @@ blockerReasonDetail blocker = case blocker of
     LocationUnavailable loc -> ("location_unavailable", Just loc)
     LocationRejectedByPolicy req act kind ->
         ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
+    AliasTargetMissing name mLoc ->
+        ("alias_target_missing", Just (name <> maybe "" (" @ " <>) mLoc))
 
 instance FromJSON LocationKind where
     parseJSON v = do

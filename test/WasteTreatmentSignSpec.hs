@@ -29,7 +29,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database (buildDatabaseWithMatrices)
-import Database.CrossLinking (LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
+import Database.CrossLinking (LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold, emptyAliasMap)
 import Database.Loader (findAllCrossDBLinks)
 import Matrix (computeInventoryMatrix)
 import SharedSolver (CrossDBSolution (..), computeInventoryMatrixWithDepsCached)
@@ -187,7 +187,7 @@ scoreCross depName depRole depRefAmount = do
                 , lcThreshold = defaultLinkingThreshold
                 , lcLocationHierarchy = M.empty
                 , lcGeographyPolicy = GeoExact
-                , lcSupplierAliases = Nothing
+                , lcSupplierAliases = emptyAliasMap
                 }
         links = cdlLinks (findAllCrossDBLinks ctx techFlowDB wasteFlowDB (M.singleton kgU (Unit kgU "kg" "kg" "")) rootActs)
         rootDB = rootBase{dbCrossDBLinks = links}
