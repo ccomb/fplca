@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import urllib.parse
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Iterable, Literal, get_args
 
 import requests
 
@@ -1191,6 +1192,68 @@ class Client:
 
         raw = fetch(wire_offset, wire_limit)
         return SearchResults.from_raw(raw, parse=Activity.from_json, fetch=fetch)
+
+    def resolve_activities(
+        self,
+        names: Iterable[str],
+        *,
+        by: Literal["name", "product"] = "name",
+        geo: str | None = None,
+        exact: bool = True,
+        limit: int = 5,
+        workers: int = 8,
+    ) -> dict[str, list[Activity]]:
+        """Resolve a batch of names to their matching activities, concurrently.
+
+        One :meth:`search_activities` call per unique name, fanned out over
+        ``workers`` threads on the client's HTTP session. This replaces the
+        two patterns scripts keep hand-rolling: downloading the whole
+        database to build a name→process_id dict, and per-name thread pools.
+
+        The result maps every input name to its matches — the mapping is
+        total, so misses are visible, never silently dropped:
+
+        * ``[]`` — no match; the name does not resolve.
+        * one :class:`Activity` — unambiguous; ``matches[0].process_id``.
+        * several — ambiguous (same name across geographies or products);
+          disambiguate with ``geo=`` or inspect the candidates.
+
+        With ``exact=False`` matches are relevance-ranked (best first), so
+        ``matches[0]`` is the engine's best fuzzy guess.
+
+        Args:
+            names: Names to resolve. Duplicates are searched once.
+            by: Match against activity ``"name"`` or reference ``"product"``.
+            geo: Restrict every search to one geography code.
+            exact: Exact (default) or substring/ranked matching.
+            limit: Maximum candidates returned per name.
+            workers: Concurrent searches.
+
+        Returns:
+            ``{name: matches}`` for every input name, in input order.
+        """
+        if by not in ("name", "product"):
+            raise VoLCAError(f"by= must be 'name' or 'product', got {by!r}")
+        unique = list(dict.fromkeys(names))
+        if not unique:
+            return {}
+
+        def search(n: str) -> list[Activity]:
+            kwargs: dict[str, Any] = {by: n}
+            matches = self.search_activities(
+                **kwargs, geo=geo, exact=exact, limit=limit
+            ).results
+            if exact:
+                # Engines released before the product filter honored exact=
+                # return substring matches; re-check equality (same casefold
+                # rule as the engine) so a near-miss never resolves silently.
+                want = n.casefold()
+                field = "activity_name" if by == "name" else "product_name"
+                matches = [a for a in matches if getattr(a, field).casefold() == want]
+            return matches
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(unique))) as pool:
+            return dict(zip(unique, pool.map(search, unique)))
 
     def search_flows(
         self,
