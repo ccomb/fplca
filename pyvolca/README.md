@@ -838,6 +838,37 @@ Remove ``dep_name`` from the target database's dependencies.
 
 Returns the updated ``DatabaseSetupInfo`` dict.
 
+##### `Client.resolve_activities(names: Iterable[str], *, by: Literal['name', 'product'] = 'name', geo: str | None = None, exact: bool = True, limit: int = 5, workers: int = 8) -> dict[str, list[Activity]]`
+
+Resolve a batch of names to their matching activities, concurrently.
+
+One :meth:`search_activities` call per unique name, fanned out over
+``workers`` threads on the client's HTTP session. This replaces the
+two patterns scripts keep hand-rolling: downloading the whole
+database to build a name→process_id dict, and per-name thread pools.
+
+The result maps every input name to its matches — the mapping is
+total, so misses are visible, never silently dropped:
+
+* ``[]`` — no match; the name does not resolve.
+* one :class:`Activity` — unambiguous; ``matches[0].process_id``.
+* several — ambiguous (same name across geographies or products);
+  disambiguate with ``geo=`` or inspect the candidates.
+
+With ``exact=False`` matches are relevance-ranked (best first), so
+``matches[0]`` is the engine's best fuzzy guess.
+
+Args:
+    names: Names to resolve. Duplicates are searched once.
+    by: Match against activity ``"name"`` or reference ``"product"``.
+    geo: Restrict every search to one geography code.
+    exact: Exact (default) or substring/ranked matching.
+    limit: Maximum candidates returned per name.
+    workers: Concurrent searches.
+
+Returns:
+    ``{name: matches}`` for every input name, in input order.
+
 ##### `Client.score_activities(process_ids: list[str], *, collection: str = 'methods', top_flows: int | None = None, exclude_long_term: bool | None = None) -> BatchScores`
 
 Score many processes in one call (every category of a collection each).

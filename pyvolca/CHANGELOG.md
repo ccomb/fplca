@@ -46,6 +46,12 @@ Then paste the rendered block at the top of this file and tighten wording.
   raises with the concrete blocker (missing suppliers, no activities
   parsed) — including an upload left staged by an earlier failed run, which
   goes through the same readiness gate instead of being loaded half-linked.
+- `Client.resolve_activities(names)` resolves a batch of activity (or
+  product) names to their matching activities with concurrent searches.
+  The returned mapping is total — a name that doesn't resolve maps to an
+  empty list instead of disappearing — and replaces the two patterns
+  scripts kept hand-rolling: downloading the whole database to build a
+  name→process_id dict, and per-name thread pools.
 
 ### Changed
 
