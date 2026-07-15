@@ -18,7 +18,7 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
-## [Unreleased]
+## [0.8.2] - 2026-07-15
 
 ### Added
 
@@ -52,6 +52,19 @@ Then paste the rendered block at the top of this file and tighten wording.
   empty list instead of disappearing — and replaces the two patterns
   scripts kept hand-rolling: downloading the whole database to build a
   name→process_id dict, and per-name thread pools.
+- `search_activities`, `search_flows`, `get_supply_chain`, and
+  `get_consumers` take optional `sort=` / `order=` keyword arguments,
+  forwarding to the engine's ordering support. Left unset, nothing changes.
+- `MethodFactor` gains `compartment`, `location`, and `unit` — the axes
+  that distinguish factors sharing one `flow_name` (the same substance
+  emitted to air vs. water, or one regionalized factor per location).
+  `None` when the source method has no such axis, or the engine predates
+  these fields.
+- `aggregate` gains a `consumption` scope (`AggregateScope.CONSUMPTION`)
+  with `filter_consumer` / `filter_consumer_not`: total upstream demand
+  for a flow (electricity, heat, grass…) without the double counting that
+  summing cumulative production gives when a flow crosses several
+  transformation steps.
 
 ### Changed
 
