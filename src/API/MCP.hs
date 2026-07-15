@@ -739,6 +739,7 @@ callAggregate dbManager rid args (db, solver) =
                     Left err -> return $ toolError rid err
                     Right fn -> case filterExchangeTypeFromArg of
                         Left err -> return $ toolError rid err
+                        Right filterExchangeType | Just msg <- Agg.exchangeTypeScopeError scope filterExchangeType -> return $ toolError rid msg
                         Right filterExchangeType -> do
                             let params =
                                     Agg.AggregateParams

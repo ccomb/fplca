@@ -12,6 +12,7 @@ correctness.
 -}
 module AggregateSpec (spec) where
 
+import Data.Maybe (isJust)
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import Test.Hspec
@@ -232,6 +233,16 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             agg <- runAgg db direct{Agg.apFilterConsumer = Just "product"}
             API.aggFilteredCount agg `shouldBe` 0
+
+    describe "exchangeTypeScopeError (shared REST/MCP guard)" $ do
+        it "allows the filter on scope=direct and an absent filter everywhere" $ do
+            Agg.exchangeTypeScopeError Agg.ScopeDirect (Just Agg.KindTechnosphere) `shouldBe` Nothing
+            Agg.exchangeTypeScopeError Agg.ScopeConsumption Nothing `shouldBe` Nothing
+
+        it "rejects the filter on every non-direct scope" $ do
+            Agg.exchangeTypeScopeError Agg.ScopeBiosphere (Just Agg.KindBiosphere) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeSupplyChain (Just Agg.KindWaste) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeConsumption (Just Agg.KindTechnosphere) `shouldSatisfy` isJust
 
     describe "ScopeBiosphere on SAMPLE.min3" $ do
         it "echoes the biosphere scope text" $ do

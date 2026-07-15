@@ -1439,14 +1439,9 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
         case V.toEither $ (,,) <$> parseScope scopeParam <*> parseExType fexchangeTypeParam <*> parseAgg aggregateParam of
             Left errs -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 (T.intercalate "; " (NE.toList errs)))}
             Right v -> pure v
-    case (exchangeType, scope) of
-        (Just _, Agg.ScopeBiosphere) ->
-            throwError err400{errBody = "filter_exchange_type is redundant with scope=biosphere"}
-        (Just _, Agg.ScopeSupplyChain) ->
-            throwError err400{errBody = "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"}
-        (Just _, Agg.ScopeConsumption) ->
-            throwError err400{errBody = "filter_exchange_type is not supported with scope=consumption (all edges are technosphere)"}
-        _ -> return ()
+    case Agg.exchangeTypeScopeError scope exchangeType of
+        Just msg -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
+        Nothing -> return ()
     let presetFilters = expandPreset presets presetParam
         explicitFilters = mapMaybe parseClassFilter fclassParams
         params =

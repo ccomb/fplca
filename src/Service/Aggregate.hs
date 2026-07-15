@@ -15,6 +15,7 @@ module Service.Aggregate (
     AggregateFn (..),
     ExchangeKind (..),
     exchangeKindOf,
+    exchangeTypeScopeError,
     emptyAggregateParams,
     aggregate,
 ) where
@@ -95,6 +96,20 @@ exchangeKindOf :: Exchange -> ExchangeKind
 exchangeKindOf TechnosphereExchange{} = KindTechnosphere
 exchangeKindOf BiosphereExchange{} = KindBiosphere
 exchangeKindOf WasteExchange{} = KindWaste
+
+{- | Why a filter_exchange_type value cannot be combined with the given
+scope — 'Nothing' when the combination is legal. Shared by the REST and
+MCP surfaces so both reject identically instead of one silently
+no-opping the filter.
+-}
+exchangeTypeScopeError :: AggScope -> Maybe ExchangeKind -> Maybe Text
+exchangeTypeScopeError scope mKind = case mKind of
+    Nothing -> Nothing
+    Just _ -> case scope of
+        ScopeDirect -> Nothing
+        ScopeBiosphere -> Just "filter_exchange_type is redundant with scope=biosphere"
+        ScopeSupplyChain -> Just "filter_exchange_type is not supported with scope=supply_chain (all entries are technosphere)"
+        ScopeConsumption -> Just "filter_exchange_type is not supported with scope=consumption (all edges are technosphere)"
 
 data AggregateFn = AggSum | AggCount | AggShare
     deriving (Eq, Show)
