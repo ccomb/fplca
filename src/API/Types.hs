@@ -448,12 +448,20 @@ data MethodDetail = MethodDetail
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped MethodDetail)
 
--- | Characterization factor for API response
+{- | Characterization factor for API response. A method routinely carries
+several CFs sharing one flow name — same substance emitted to air vs. water,
+or one regionalized CF per location — so the distinguishing axes
+(compartment, location, unit) travel with each row instead of leaving
+consumers with apparent duplicates.
+-}
 data MethodFactorAPI = MethodFactorAPI
     { mfaFlowRef :: UUID -- ILCD flow UUID
     , mfaFlowName :: Text -- Flow name
     , mfaDirection :: Text -- "Input" or "Output"
     , mfaValue :: Double -- CF value
+    , mfaUnit :: Text -- CF reference unit (e.g. "kg", "kBq")
+    , mfaCompartment :: Maybe Text -- e.g. "air/urban air", "water/unspecified/long-term"
+    , mfaLocation :: Maybe Text -- Consumer location for regionalized CFs
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped MethodFactorAPI)

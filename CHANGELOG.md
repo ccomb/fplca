@@ -14,6 +14,10 @@
   with no databases, ready to receive uploads or API-driven loads. Launchers
   no longer have to write an empty TOML file just to satisfy the flag. An
   explicit `--config` path that does not exist still fails loudly.
+- Each factor listed by `GET /method/{id}/factors` now carries its
+  compartment, location, and unit. A method routinely holds several factors
+  for one substance name — emitted to air vs. water, or one per region — and
+  without these fields such rows looked like duplicates.
 
 ## [0.9.2] - 2026-07-14
 

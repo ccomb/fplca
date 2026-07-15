@@ -10,6 +10,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Test.Hspec
 
+import API.Routes (cfToAPI)
+import API.Types (MethodFactorAPI (..))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
@@ -805,6 +807,19 @@ spec = do
             it "returns 0 for empty mappings" $ do
                 let inventory = M.fromList [(UUID.fromWords 1 2 3 4, 100.0)]
                 loScore (computeLCIAScore defaultUnitConfig M.empty M.empty inventory []) `shouldBe` 0.0
+
+    describe "cfToAPI" $ do
+        it "keeps the axes that distinguish same-name factors: compartment, location, unit" $ do
+            let uuid = UUID.fromWords 1 2 3 4
+                cf comp = MethodCF uuid "Ammonia" Output 1.0 comp Nothing "kg"
+                toAir = cfToAPI (cf (Just (Compartment "air" "urban air" "")) Nothing)
+                toWaterLongTerm = cfToAPI (cf (Just (Compartment "water" "unspecified" "long-term")) Nothing)
+                inFrance = cfToAPI (cf Nothing (Just "FR"))
+            mfaCompartment toAir `shouldBe` Just "air/urban air"
+            mfaCompartment toWaterLongTerm `shouldBe` Just "water/unspecified/long-term"
+            mfaCompartment inFrance `shouldBe` Nothing
+            mfaLocation inFrance `shouldBe` Just "FR"
+            mfaUnit toAir `shouldBe` "kg"
 
     describe "SimaPro Method CSV Parser" $ do
         it "detects SimaPro method CSV format" $ do

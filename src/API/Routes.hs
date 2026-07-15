@@ -1030,7 +1030,17 @@ cfToAPI cf =
             MT.Input -> "Input"
             MT.Output -> "Output"
         , mfaValue = mcfValue cf
+        , mfaUnit = mcfUnit cf
+        , mfaCompartment = compartmentPath <$> mcfCompartment cf
+        , mfaLocation = mcfConsumerLocation cf
         }
+
+{- | Render a compartment triple as one display path, keeping every non-empty
+axis: @"air/urban air"@, @"water/unspecified/long-term"@.
+-}
+compartmentPath :: MT.Compartment -> Text
+compartmentPath (MT.Compartment medium sub qualifier) =
+    T.intercalate "/" (filter (not . T.null) [medium, sub, qualifier])
 
 -- ---------------------------------------------------------------------------
 -- AppM helpers
