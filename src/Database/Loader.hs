@@ -1583,6 +1583,10 @@ gapEdgesWith hasProducer db links stats =
 {- | Describe one unsupplied demand. Biosphere exchanges are never demands
 ('isSupplierDemand'), hence 'Nothing'. A missing flow entry doesn't hide the
 edge: the flow UUID stands in for the name so the report stays countable.
+
+'cdlUnresolvedProducts' records one blocker per flow /name/, while the report
+keys entries by (name, location, unit) — two same-named entries at different
+locations therefore share that blocker even when the underlying causes differ.
 -}
 mkGapEdge ::
     SimpleDatabase ->
