@@ -171,6 +171,23 @@ spec = do
                 nBlank = scrFilteredActivities (buildWithName db rootPid supplyVec (Just "   "))
             nBlank `shouldBe` nNone
 
+        it "non-matching name query returns zero entries" $ do
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            scrFilteredActivities (buildWithName db rootPid supplyVec (Just "zzznomatch"))
+                `shouldBe` 0
+
+        it "punctuation-only name query returns zero entries" $ do
+            -- "???" survives the blank check but tokenizes to nothing, so
+            -- its expansion is empty: a query that matches nothing, not an
+            -- absent filter.
+            db <- loadWithIndex
+            let rootPid = 0 :: ProcessId
+            supplyVec <- computeScalingVector db rootPid
+            scrFilteredActivities (buildWithName db rootPid supplyVec (Just "???"))
+                `shouldBe` 0
+
         it "preserves depth sort order across filtered entries" $ do
             db <- loadWithIndex
             let rootPid = 0 :: ProcessId
@@ -211,6 +228,13 @@ spec = do
             case getConsumers db "test-db" pidZ emptyConsumer of
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
                 Right cr -> length (srResults (crrResults cr)) `shouldBe` 2
+
+        it "non-matching name query returns zero consumers" $ do
+            db <- loadWithIndex
+            let pidZ = processIdToText db 2
+            case getConsumers db "test-db" pidZ (mapConsumerCore (\c -> c{afcName = Just "zzznomatch"}) emptyConsumer) of
+                Left err -> expectationFailure $ "getConsumers failed: " ++ show err
+                Right cr -> length (srResults (crrResults cr)) `shouldBe` 0
 
     describe "Classifications on consumers" $ do
         let loadWithIndex = fmap BM25.addBM25Index (loadSampleDatabase "SAMPLE.min3")

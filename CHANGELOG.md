@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- The `name=` filter on the supply-chain and consumers endpoints (REST and
+  MCP) now filters. A name matching nothing previously disabled the filter
+  and returned every entry — with a matching `filteredActivities` count — so
+  a caller could not tell "no match" from "no filter". It now returns an
+  empty result.
+
 ### Added
 - `volca server` starts without `--config`: it runs on the built-in defaults
   with no databases, ready to receive uploads or API-driven loads. Launchers
