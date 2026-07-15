@@ -607,7 +607,7 @@ params r = case r of
         , Param "filter_classification" "array" Optional "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode"
         , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption — filter by supplier activity name"
         , Param "filter_consumer" "string" Optional "Only for scope=consumption — case-insensitive substring on the consuming activity's name"
-        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption — comma-separated consumer-name exclude list"
+        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption — comma-separated consumer-name exclude list (each item is a substring; a name containing a comma cannot be expressed)"
         , Param "filter_is_reference" "boolean" Optional "Filter by reference-product flag (typically for outputs)"
         , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name | consumer_name"
         , Param "aggregate" "string" Optional "sum_quantity | count | share (default: sum_quantity)"

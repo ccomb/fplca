@@ -1236,6 +1236,10 @@ class Client:
                 (``CONSUMPTION`` scope only).
             filter_consumer_not: exclude edges whose consumer name contains
                 any of these substrings (list or comma-separated string).
+                Items always split on commas on the wire, so a name that
+                itself contains a comma ("electricity production, hard
+                coal") becomes two independent substrings — use a
+                comma-free fragment of the name instead.
             group_by: omit for a single-bucket result (just the totals).
                 Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
                 ``"unit"``, ``"location"``, ``"target_name"``,
