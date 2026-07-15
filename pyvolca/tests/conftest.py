@@ -60,6 +60,8 @@ def fixture_spec() -> dict[str, Any]:
                         {"name": "classification-mode", "in": "query", "required": False, "schema": {"type": "string"}},
                         {"name": "limit", "in": "query", "required": False, "schema": {"type": "integer"}},
                         {"name": "offset", "in": "query", "required": False, "schema": {"type": "integer"}},
+                        {"name": "sort", "in": "query", "required": False, "schema": {"type": "string"}},
+                        {"name": "order", "in": "query", "required": False, "schema": {"type": "string"}},
                     ],
                 },
             },

@@ -168,6 +168,24 @@ class TestDispatcher:
         with pytest.raises(ValueError):
             client.search_activities(classification="Category", classification_value="Food", classification_match="exct")
 
+    def test_search_activities_forwards_sort_order(self, mocked_client, make_response, empty_envelope):
+        """sort= and order= must reach the wire as query params (same path as get_consumers etc.)."""
+        client, session = mocked_client
+        session.get.return_value = make_response(empty_envelope())
+        client.search_activities(name="wheat", sort="location", order="desc")
+        params = dict(session.get.call_args[1]["params"])
+        assert params["sort"] == "location"
+        assert params["order"] == "desc"
+
+    def test_search_activities_omits_sort_order_by_default(self, mocked_client, make_response, empty_envelope):
+        """Unset sort/order must not appear in the query string (server defaults apply)."""
+        client, session = mocked_client
+        session.get.return_value = make_response(empty_envelope())
+        client.search_activities(name="wheat")
+        params = dict(session.get.call_args[1]["params"])
+        assert "sort" not in params
+        assert "order" not in params
+
     def test_search_activities_page_kwargs_compute_offset(self, mocked_client, make_response, empty_envelope):
         """page=3 + page_size=20 must translate to offset=40, limit=20."""
         client, session = mocked_client
