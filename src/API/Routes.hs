@@ -122,7 +122,7 @@ type LCAAPI =
                 -- Relink: empty {} body = plain relink; {depDb,mappingCsv} = mapping relink
                 :<|> "db" :> Capture "dbName" Text :> "relink" :> ReqBody '[JSON] RelinkRequest :> Post '[JSON] RelinkResponse
                 -- Supplier-gap report: what is still unsupplied after linking (read-only relink companion)
-                :<|> "db" :> Capture "dbName" Text :> "gap-report" :> Get '[JSON] GapReportAPI
+                :<|> "db" :> Capture "dbName" Text :> "gap-report" :> QueryParam "limit" Int :> Get '[JSON] GapReportAPI
                 :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Delete the whole filtered set of activities (selection in JSON body)

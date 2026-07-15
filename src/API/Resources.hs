@@ -750,4 +750,5 @@ params r = case r of
         ]
     GetGapReport ->
         [ pDatabase
+        , pLimit "Max gap entries to return, biggest first (default: all). The header counts always cover the full report, so a truncated list stays countable."
         ]

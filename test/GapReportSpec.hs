@@ -17,6 +17,8 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
+import API.DatabaseHandlers (gapReportToAPI)
+import API.Types (GapEntryAPI (..), GapReportAPI (..))
 import Database.CrossLinking (
     IndexedDatabase,
     buildIndexedDatabase,
@@ -259,6 +261,16 @@ spec = do
         it "does not list the supplied or internal products" $ do
             entryFor "water" `shouldBe` Nothing
             entryFor "bread" `shouldBe` Nothing
+
+    describe "wire projection limit" $ do
+        it "keeps only the biggest gaps but the full header counts" $ do
+            let api = gapReportToAPI (Just 1) report
+            map gaeName (graGaps api) `shouldBe` ["flour"]
+            graUnresolvedProducts api `shouldBe` 3
+            graUnresolvedEdges api `shouldBe` 5
+
+        it "returns everything without a limit" $
+            length (graGaps (gapReportToAPI Nothing report)) `shouldBe` 3
 
     describe "partial coverage" $ do
         it "reports only the surplus edges of a partially covered demand" $ do

@@ -1307,7 +1307,7 @@ callGetGapReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetGapReport dbManager rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
     report <- ExceptT (DM.databaseGapReport dbManager dbName)
-    return $ toolSuccessJson rid (toJSON (gapReportToAPI report))
+    return $ toolSuccessJson rid (toJSON (gapReportToAPI (intArg "limit" args) report))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do

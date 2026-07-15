@@ -235,17 +235,21 @@ relinkDatabaseHandler dbName req = do
 unsupplied after internal resolution and cross-DB linking. The natural
 follow-up read after a relink — POST relink, then GET gap-report.
 -}
-gapReportHandler :: Text -> AppM GapReportAPI
-gapReportHandler dbName = do
+gapReportHandler :: Text -> Maybe Int -> AppM GapReportAPI
+gapReportHandler dbName mLimit = do
     dbManager <- asks aeDbManager
     res <- liftIO $ databaseGapReport dbManager dbName
     case res of
         Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-        Right report -> return (gapReportToAPI report)
+        Right report -> return (gapReportToAPI mLimit report)
 
--- | Project the domain gap report onto its wire shape.
-gapReportToAPI :: Loader.GapReport -> GapReportAPI
-gapReportToAPI r =
+{- | Project the domain gap report onto its wire shape, keeping at most
+@limit@ gap entries (they are ranked by demanding edges, so a cap keeps the
+biggest gaps). The header counts always cover the full report, so a truncated
+list stays countable — never a silent cap.
+-}
+gapReportToAPI :: Maybe Int -> Loader.GapReport -> GapReportAPI
+gapReportToAPI mLimit r =
     GapReportAPI
         { graDbName = Loader.grDbName r
         , graTotalInputs = Loader.grTotalInputs r
@@ -254,7 +258,7 @@ gapReportToAPI r =
         , graUnresolvedEdges = Loader.grUnresolvedEdges r
         , graUnresolvedProducts = Loader.grUnresolvedProducts r
         , graCompleteness = Loader.grCompleteness r
-        , graGaps = map entryToAPI (Loader.grGaps r)
+        , graGaps = map entryToAPI (maybe id take mLimit (Loader.grGaps r))
         }
   where
     entryToAPI e =
