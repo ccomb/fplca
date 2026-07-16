@@ -25,7 +25,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -790,6 +790,47 @@ data GapReportAPI = GapReportAPI
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped GapReportAPI)
+
+-- | One dataset-soundness finding: where it was found, and what is wrong.
+data QualityOffenderAPI = QualityOffenderAPI
+    { qoaSeverity :: Severity
+    , qoaActivityName :: Text
+    , qoaLocation :: Text
+    , qoaProductName :: Maybe Text
+    , qoaDetail :: Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityOffenderAPI)
+
+{- | One check of the quality report. @offenderCount@ always covers the whole
+finding list, so a list capped by @limit@ stays countable — never a silent cap.
+@applicable@ is 'False' when the database carries nothing the check could judge,
+which is not the same as passing it.
+-}
+data QualityCheckAPI = QualityCheckAPI
+    { qcaApplicable :: Bool
+    , qcaOffenderCount :: Int
+    , qcaOffenders :: [QualityOffenderAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityCheckAPI)
+
+{- | Dataset-soundness report of a database: the structural defects a score
+can't reveal, one named field per check. The methodological counterpart of
+'GapReportAPI', which reports what a database is missing rather than what is
+malformed in it.
+-}
+data QualityReportAPI = QualityReportAPI
+    { qraDbName :: Text
+    , qraProcessCount :: Int
+    , qraReferenceProduct :: QualityCheckAPI
+    , qraAllocationSums :: QualityCheckAPI
+    , qraDuplicateActivities :: QualityCheckAPI
+    , qraSuspiciousAmounts :: QualityCheckAPI
+    , qraMissingMetadata :: QualityCheckAPI
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityReportAPI)
 
 -- | Result of auto-loading a single dependency
 data DepLoadResult

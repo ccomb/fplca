@@ -35,7 +35,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (gapReportToAPI)
+import API.DatabaseHandlers (gapReportToAPI, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -362,6 +362,7 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     "score_activities" -> callScoreActivities dbManager mBaseUrl rid args
     "list_scoring_sets" -> callListScoringSets dbManager rid args
     "get_gap_report" -> callGetGapReport dbManager rid args
+    "get_quality_report" -> callGetQualityReport dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1313,6 +1314,16 @@ callGetGapReport dbManager rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
     report <- ExceptT (DM.databaseGapReport dbManager dbName)
     return $ toolSuccessJson rid (toJSON (gapReportToAPI (intArg "limit" args) report))
+
+{- | Dataset-soundness report: what is malformed in the database itself. Same
+wire shape as the REST endpoint ('qualityReportToAPI'), so both surfaces stay
+in lock-step.
+-}
+callGetQualityReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callGetQualityReport dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    report <- ExceptT (DM.databaseQualityReport dbManager dbName)
+    return $ toolSuccessJson rid (toJSON (qualityReportToAPI (intArg "limit" args) report))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do

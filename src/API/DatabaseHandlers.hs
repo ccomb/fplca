@@ -18,6 +18,8 @@ module API.DatabaseHandlers (
     relinkDatabaseHandler,
     gapReportHandler,
     gapReportToAPI,
+    qualityReportHandler,
+    qualityReportToAPI,
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
@@ -91,6 +93,9 @@ import API.Types (
     GapEntryAPI (..),
     GapReportAPI (..),
     LoadDatabaseResponse (..),
+    QualityCheckAPI (..),
+    QualityOffenderAPI (..),
+    QualityReportAPI (..),
     RefDataListResponse (..),
     RefDataStatusAPI (..),
     RelinkRequest (..),
@@ -128,6 +133,7 @@ import Database.Manager (
     addMethodCollection,
     addUnitDefs,
     databaseGapReport,
+    databaseQualityReport,
     finalizeDatabase,
     getDatabase,
     getDatabaseSetupInfo,
@@ -154,6 +160,7 @@ import Database.Manager (
     unloadFlowSynonyms,
     unloadUnitDefs,
  )
+import qualified Database.Quality as Quality
 import Database.RelinkMapping (buildAliasMap, parseAliasCSV, rejectEmpty)
 import Database.Upload (
     DatabaseFormat (..),
@@ -287,6 +294,51 @@ gapReportToAPI mLimit r =
         Loader.GapBlocked blocker -> blockerReasonDetail blocker
         Loader.GapDanglingIdentity -> ("dangling_source_identity", Nothing)
         Loader.GapWasteInput -> ("unlinked_waste_input", Nothing)
+
+{- | Dataset-soundness report for a loaded or staged database: the structural
+defects a score can't reveal. The methodological counterpart of the
+supplier-gap report — that one says what a database is missing, this one says
+what is malformed in it.
+-}
+qualityReportHandler :: Text -> Maybe Int -> AppM QualityReportAPI
+qualityReportHandler dbName mLimit = do
+    dbManager <- asks aeDbManager
+    res <- liftIO $ databaseQualityReport dbManager dbName
+    case res of
+        Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right report -> return (qualityReportToAPI mLimit report)
+
+{- | Project the domain quality report onto its wire shape, keeping at most
+@limit@ findings per check (they are sorted worst-first, so a cap keeps the
+worst ones). Each check's @offenderCount@ always covers its full list, so a
+truncated list stays countable — never a silent cap.
+-}
+qualityReportToAPI :: Maybe Int -> Quality.QualityReport -> QualityReportAPI
+qualityReportToAPI mLimit r =
+    QualityReportAPI
+        { qraDbName = Quality.qrDbName r
+        , qraProcessCount = Quality.qrProcessCount r
+        , qraReferenceProduct = checkToAPI (Quality.qrReferenceProduct r)
+        , qraAllocationSums = checkToAPI (Quality.qrAllocationSums r)
+        , qraDuplicateActivities = checkToAPI (Quality.qrDuplicateActivities r)
+        , qraSuspiciousAmounts = checkToAPI (Quality.qrSuspiciousAmounts r)
+        , qraMissingMetadata = checkToAPI (Quality.qrMissingMetadata r)
+        }
+  where
+    checkToAPI c =
+        QualityCheckAPI
+            { qcaApplicable = Quality.qcApplicable c
+            , qcaOffenderCount = length (Quality.qcOffenders c)
+            , qcaOffenders = map offenderToAPI (maybe id take mLimit (Quality.qcOffenders c))
+            }
+    offenderToAPI o =
+        QualityOffenderAPI
+            { qoaSeverity = Quality.qoSeverity o
+            , qoaActivityName = Quality.qoActivityName o
+            , qoaLocation = Quality.qoLocation o
+            , qoaProductName = Quality.qoProductName o
+            , qoaDetail = Quality.qoDetail o
+            }
 
 {- | Copy a loaded database under a new name. The copy is an independent
 in-memory database registered under @newName@; the source is untouched.

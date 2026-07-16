@@ -270,6 +270,11 @@ routeSpecs = do
             resp <- doGet b "/api/v1/db/no-such-db/gap-report"
             statusCode (responseStatus resp) `shouldBe` 404
 
+        it "GET /api/v1/db/no-such-db/quality-report returns 404" $ \b -> do
+            -- Same contract as the gap report: loaded or staged, or nothing.
+            resp <- doGet b "/api/v1/db/no-such-db/quality-report"
+            statusCode (responseStatus resp) `shouldBe` 404
+
     describe "method-not-allowed" $ do
         it "GET /api/v1/db/X returns 405 (only DELETE is defined on /db/{name})" $ \b -> do
             -- Documents the current API surface: /db/{name} accepts DELETE,
