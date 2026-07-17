@@ -187,8 +187,17 @@ spec = do
             let db = dbOf [((actA, prodA), allocated "truncated name" (Just 100) (Just "b1")), ((actB, prodB), allocated "truncated name" (Just 100) (Just "b2"))]
             qcOffenders (qrAllocationSums (qualityReport "testdb" db)) `shouldBe` []
 
-        it "does not judge a group where only some entries carry a percentage" $ do
+        it "flags a block where only some coproducts carry a percentage, without judging its sum" $ do
+            -- The 60% alone is neither a good sum nor a bad one — the missing
+            -- percentage is the defect, so it gets its own warning instead of
+            -- a misdiagnosed danger.
             let db = dbOf [((actA, prodA), allocated "block" (Just 60) (Just "b1")), ((actA, prodB), allocated "block" Nothing (Just "b1"))]
+                check = qrAllocationSums (qualityReport "testdb" db)
+            details check `shouldBe` ["1 of 2 coproduct(s) carry no allocation percentage"]
+            severities check `shouldBe` [WarningSev]
+
+        it "leaves a block with no percentages at all alone" $ do
+            let db = dbOf [((actA, prodA), allocated "block" Nothing (Just "b1")), ((actA, prodB), allocated "block" Nothing (Just "b1"))]
             qcOffenders (qrAllocationSums (qualityReport "testdb" db)) `shouldBe` []
 
         it "reports not-applicable on a database without allocation data" $ do

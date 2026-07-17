@@ -24,7 +24,7 @@ module Database.Quality (
 import Control.Applicative ((<|>))
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -156,22 +156,39 @@ qualityReport dbName db =
             [ (activityGroupKey actUUID act, [act])
             | ((actUUID, _productUUID), act) <- M.toList (sdbActivities db)
             ]
-    allocationOffenders =
-        [ offender DangerSev representative Nothing $
-            "allocation sums to "
-                <> T.pack (show total)
-                <> "% across "
-                <> T.pack (show (length group'))
-                <> " coproduct(s)"
-        | group'@(representative : _) <- M.elems allocationGroups
-        , -- Judge a group only when every member carries a percentage: a mix of
-        -- allocated and unallocated entries is not a sum.
-        Just percents <- [traverse activityAllocationPercent group']
-        , let total = sum percents
-        , -- NaN needs its own test: any comparison against it is False, so the
-        -- tolerance check alone would let it through.
-        isNaN total || isInfinite total || abs (total - 100) > allocationTolerance
-        ]
+    allocationOffenders = concatMap allocationGroupOffenders (M.elems allocationGroups)
+
+    -- A block whose every coproduct carries a percentage is judged on its sum.
+    -- A block where only some do is its own defect — the sum means nothing
+    -- until the missing percentages are restored, so reporting it as a bad sum
+    -- would misdiagnose. A block where none do is simply unallocated: nothing
+    -- to judge.
+    allocationGroupOffenders group' = case group' of
+        [] -> []
+        representative : _
+            | null carried -> []
+            | missing > 0 ->
+                [ offender WarningSev representative Nothing $
+                    T.pack (show missing)
+                        <> " of "
+                        <> T.pack (show (length group'))
+                        <> " coproduct(s) carry no allocation percentage"
+                ]
+            -- NaN needs its own test: any comparison against it is False, so
+            -- the tolerance check alone would let it through.
+            | isNaN total || isInfinite total || abs (total - 100) > allocationTolerance ->
+                [ offender DangerSev representative Nothing $
+                    "allocation sums to "
+                        <> T.pack (show total)
+                        <> "% across "
+                        <> T.pack (show (length group'))
+                        <> " coproduct(s)"
+                ]
+            | otherwise -> []
+      where
+        carried = mapMaybe activityAllocationPercent group'
+        missing = length group' - length carried
+        total = sum carried
 
     -- Same name, same place, same product, twice: one of them is stale. Entries
     -- without exactly one reference are skipped — check 1 already reports them,

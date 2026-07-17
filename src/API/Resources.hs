@@ -466,7 +466,8 @@ description r = case r of
         \who build or repair one: the structural defects a score cannot \
         \reveal. Five checks, computed on staged and loaded databases alike: \
         \entries without exactly one reference exchange, coproduct allocation \
-        \percentages that don't sum to 100%, entries duplicated outright \
+        \percentages that don't sum to 100% (or blocks where only some \
+        \coproducts carry one), entries duplicated outright \
         \(same name, location and reference product), non-finite amounts or a \
         \zero reference amount, and missing metadata (description, \
         \classification, location, units absent from the registry). Each \
