@@ -165,8 +165,20 @@ spec = do
         it "flags coproducts summing to 90%, naming the sum" $ do
             let db = dbOf [((actA, prodA), allocated "block" (Just 60) (Just "b1")), ((actA, prodB), allocated "block" (Just 30) (Just "b1"))]
                 check = qrAllocationSums (qualityReport "testdb" db)
-            details check `shouldBe` ["allocation sums to 90.0% across 2 coproduct(s)"]
+            details check `shouldBe` ["allocation sums to 90.00% across 2 coproduct(s)"]
             severities check `shouldBe` [DangerSev]
+
+        it "rounds the reported sum to two decimals, free of floating-point dust" $ do
+            -- 33.3 + 33.3 + 3.3 is 69.89999999999999 as a double; the message
+            -- must not say so, and the judgement still flags it.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), allocated "block" (Just 33.3) (Just "b1"))
+                        , ((actA, prodB), allocated "block" (Just 33.3) (Just "b1"))
+                        , ((actA, u "1c"), allocated "block" (Just 3.3) (Just "b1"))
+                        ]
+            details (qrAllocationSums (qualityReport "testdb" db))
+                `shouldBe` ["allocation sums to 69.90% across 3 coproduct(s)"]
 
         it "tolerates source rounding (33.3 + 33.3 + 33.4)" $ do
             let db =

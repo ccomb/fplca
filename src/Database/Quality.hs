@@ -28,6 +28,7 @@ import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
+import Numeric (showFFloat)
 
 import Types (
     Activity (..),
@@ -104,6 +105,13 @@ costs.
 allocationTolerance :: Double
 allocationTolerance = 0.5
 
+{- | Two-decimal rendering for detail texts. The judgement uses the exact
+double; only the message is rounded, so a drifting sum reads as @69.90@ rather
+than as floating-point dust like @69.89999999999999@.
+-}
+formatPercent :: Double -> Text
+formatPercent x = T.pack (showFFloat (Just 2) x "")
+
 -- | Run every check over a database.
 qualityReport :: Text -> SimpleDatabase -> QualityReport
 qualityReport dbName db =
@@ -179,7 +187,7 @@ qualityReport dbName db =
             | isNaN total || isInfinite total || abs (total - 100) > allocationTolerance ->
                 [ offender DangerSev representative Nothing $
                     "allocation sums to "
-                        <> T.pack (show total)
+                        <> formatPercent total
                         <> "% across "
                         <> T.pack (show (length group'))
                         <> " coproduct(s)"
