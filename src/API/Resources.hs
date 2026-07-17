@@ -72,6 +72,7 @@ data Resource
     | ScoreActivities
     | ListScoringSets
     | GetGapReport
+    | GetQualityReport
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -154,6 +155,7 @@ apiPath r = case r of
     ScoreActivities -> Just (POST, ["db", "{dbName}", "impacts", "{collection}"])
     ListScoringSets -> Nothing -- MCP-only: scoring sets are configuration metadata, no REST equivalent yet
     GetGapReport -> Just (GET, ["db", "{dbName}", "gap-report"])
+    GetQualityReport -> Just (GET, ["db", "{dbName}", "quality-report"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -197,6 +199,7 @@ mcpName r = case r of
     ScoreActivities -> "score_activities"
     ListScoringSets -> "list_scoring_sets"
     GetGapReport -> "get_gap_report"
+    GetQualityReport -> "get_quality_report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -236,6 +239,7 @@ cliName r = case r of
     ScoreActivities -> "score-activities"
     ListScoringSets -> "scoring-sets"
     GetGapReport -> "gap-report"
+    GetQualityReport -> "quality-report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -457,6 +461,20 @@ description r = case r of
         \and the top consuming processes. Answers 'what is missing to switch \
         \or complete this database's background dependency?' — typically read \
         \right after a relink."
+    GetQualityReport ->
+        "LCA / ACV — dataset-soundness report of a database, for the people \
+        \who build or repair one: the structural defects a score cannot \
+        \reveal. Five checks, computed on staged and loaded databases alike: \
+        \entries without exactly one reference exchange, coproduct allocation \
+        \percentages that don't sum to 100% (or blocks where only some \
+        \coproducts carry one), entries duplicated outright \
+        \(same name, location and reference product), non-finite amounts or a \
+        \zero reference amount, and missing metadata (description, \
+        \classification, location, units absent from the registry). Each \
+        \finding carries a severity (danger, warning, info), the activity it \
+        \was found on, and a readable detail. Answers 'is this dataset well \
+        \formed?' — the complement of the supplier-gap report, which answers \
+        \'what is this database missing?'"
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -765,4 +783,8 @@ params r = case r of
     GetGapReport ->
         [ pDatabase
         , pLimit "Max gap entries to return, biggest first (default: all). The header counts always cover the full report, so a truncated list stays countable."
+        ]
+    GetQualityReport ->
+        [ pDatabase
+        , pLimit "Max findings to return per check, worst first (default: all). Each check's offenderCount always covers its full list, so a truncated list stays countable."
         ]

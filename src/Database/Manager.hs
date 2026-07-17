@@ -88,6 +88,7 @@ module Database.Manager (
     getDatabaseSetupInfo,
     buildLoadedSetupInfo,
     databaseGapReport,
+    databaseQualityReport,
     addDependencyToStaged,
     removeDependencyFromStaged,
     setDataPath,
@@ -145,6 +146,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
+import qualified Database.Quality as Quality
 import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
@@ -2297,6 +2299,19 @@ databaseGapReport manager dbName = do
         (Just loaded, _) -> Right (Loader.gapReportForLoaded dbName (ldDatabase loaded))
         (Nothing, Just staged) ->
             Right (Loader.gapReportForStaged dbName (sdSimpleDB staged) (sdLinkingStats staged))
+        (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
+
+{- | Dataset-soundness report for a loaded or staged database — the structural
+defects a score can't reveal. Both phases reduce to the same pure scan, so a
+maker gets the same answer before and after building the matrices.
+-}
+databaseQualityReport :: DatabaseManager -> Text -> IO (Either Text Quality.QualityReport)
+databaseQualityReport manager dbName = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    stagedDbs <- readTVarIO (dmStagedDbs manager)
+    pure $ case (M.lookup dbName loadedDbs, M.lookup dbName stagedDbs) of
+        (Just loaded, _) -> Right (Quality.qualityReport dbName (toSimpleDatabase (ldDatabase loaded)))
+        (Nothing, Just staged) -> Right (Quality.qualityReport dbName (sdSimpleDB staged))
         (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
 
 data StageAction = AlreadyDone | NeedToStage

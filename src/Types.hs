@@ -1211,6 +1211,58 @@ instance ToSchema LocationKind where
                            | c <- ["exact", "parent", "global", "unrelated"]
                            ]
 
+{- | How serious a dataset-soundness finding is. Declaration order is the
+severity order, so 'Ord' sorts the worst findings first.
+
+The constructors carry a @Sev@ suffix for the same reason 'LocationKind' has
+@Loc@: this module is re-exported wholesale, and bare @Warning@ / @Info@ would
+collide with 'Progress.ProgressLevel' wherever both are imported.
+-}
+data Severity
+    = -- | Breaks scoring or a faithful round-trip
+      DangerSev
+    | -- | Suspicious: legal data, but likely a mistake
+      WarningSev
+    | -- | Incomplete rather than wrong
+      InfoSev
+    deriving (Show, Eq, Ord, Generic, NFData)
+
+{- | Stable lowercase wire code for a 'Severity'. Single source of truth shared
+by the JSON encoder and the schema, so consumers never see raw Haskell
+constructor names like @"DangerSev"@.
+-}
+severityCode :: Severity -> Text
+severityCode DangerSev = "danger"
+severityCode WarningSev = "warning"
+severityCode InfoSev = "info"
+
+instance ToJSON Severity where
+    toJSON = toJSON . severityCode
+
+instance FromJSON Severity where
+    parseJSON v = do
+        s <- parseJSON v
+        case (s :: Text) of
+            "danger" -> pure DangerSev
+            "warning" -> pure WarningSev
+            "info" -> pure InfoSev
+            other -> fail $ "Invalid Severity: " <> T.unpack other
+
+{- | OpenAPI schema for 'Severity' as a string-enum matching the wire codes
+produced by 'severityCode', for the same reason as 'LocationKind': the generic
+schema would expose the Haskell constructor names.
+-}
+instance ToSchema Severity where
+    declareNamedSchema _ =
+        pure $
+            NamedSchema (Just "Severity") $
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_
+                        ?~ [ toJSON (c :: Text)
+                           | c <- ["danger", "warning", "info"]
+                           ]
+
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
     { lfProduct :: !Text
