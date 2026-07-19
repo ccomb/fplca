@@ -128,7 +128,7 @@ import Data.Either (lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
@@ -1625,18 +1625,16 @@ loadDatabaseSingle manager dbName = do
     -- Check if already staged -> try to finalize, or clear stale staged entry
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     case M.lookup dbName stagedDbs of
-        Just staged -> do
-            -- Check if the staged database can be finalized
-            let unlinked = Loader.countUnlinkedExchanges (sdSimpleDB staged)
-                crossDBLinks' = Loader.crossDBLinksCount (sdLinkingStats staged)
-                unresolvedLinks = max 0 (unlinked - crossDBLinks')
-            if unresolvedLinks == 0
-                then finalizeDatabase manager dbName
-                else do
-                    -- Cannot finalize: clear staged entry, reload from config
-                    -- (loadDatabase pre-loaded deps, so fresh load should resolve links)
-                    atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-                    loadDatabaseSingleFromConfig manager dbName
+        Just staged
+            -- Same readiness gate as finalize itself, so the shortcut and the
+            -- gate can't disagree
+            | isNothing (notReadyReason (stagedLinkCounts staged)) ->
+                finalizeDatabase manager dbName
+            | otherwise -> do
+                -- Cannot finalize: clear staged entry, reload from config
+                -- (loadDatabase pre-loaded deps, so fresh load should resolve links)
+                atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+                loadDatabaseSingleFromConfig manager dbName
         Nothing -> loadDatabaseSingleFromConfig manager dbName
 
 -- | Load a database from config (not staged)
@@ -2388,130 +2386,168 @@ buildSetupResult manager dbName = do
                 return $ Right $ buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded) availableDbs indexedDbs
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
-{- | Missing-supplier list for a staged database. Nil-link gaps carry the rich
-blockers the attribute matcher produced ('cdlUnresolvedProducts'); non-nil
-dangling gaps — a partial EcoSpold2 import whose background activities no loaded
-dependency ships, even after UUID + attribute linking — are scanned separately
-and named. The two sets are disjoint (nil vs non-nil), so the concatenation
-never duplicates. Sorted by activity count, descending.
+{- | Link-resolution tally shared by the setup page and the finalize gate.
+Both derive readiness from this one record, so "ready" and "can be finalized"
+can never drift apart.
+-}
+data LinkCounts = LinkCounts
+    { lcActivityCount :: !Int
+    , lcTotalInputs :: !Int
+    , lcInternalLinks :: !Int
+    , lcCrossDBLinks :: !Int
+    , lcUnresolvedLinks :: !Int
+    }
+
+mkLinkCounts :: Int -> Int -> Int -> Int -> LinkCounts
+mkLinkCounts activityCount totalInputs unlinked crossDB =
+    LinkCounts
+        { lcActivityCount = activityCount
+        , lcTotalInputs = totalInputs
+        , lcInternalLinks = max 0 (totalInputs - unlinked)
+        , lcCrossDBLinks = crossDB
+        , lcUnresolvedLinks = max 0 (unlinked - crossDB)
+        }
+
+-- | Tally for a staged database, from its parsed activities and linking stats.
+stagedLinkCounts :: StagedDatabase -> LinkCounts
+stagedLinkCounts staged =
+    mkLinkCounts
+        (M.size (sdbActivities sdb))
+        (Loader.countTotalTechInputs sdb)
+        (Loader.countUnlinkedExchanges sdb)
+        (Loader.crossDBLinksCount (sdLinkingStats staged))
+  where
+    sdb = sdSimpleDB staged
+
+{- | Tally for a loaded database. Counts are recomputed from the activity set
+via the same predicate as the staged path ('Loader.countUnlinkedExchanges'),
+not read from 'dbLinkingStats': the stats only track nil-link / cross-DB
+resolution and are blind to dangling internal links (non-nil 'activityLinkId'
+pointing at an activity the database doesn't ship). A database bulk-loaded
+from config bypasses the finalize gate, so without this it would report a
+partial EcoSpold2 import as 100% ready while the matrix silently drops those
+inputs.
+-}
+loadedLinkCounts :: Database -> LinkCounts
+loadedLinkCounts db =
+    mkLinkCounts
+        (fromIntegral (dbActivityCount db))
+        (Loader.countTotalTechInputs sdb)
+        (Loader.countUnlinkedExchanges sdb)
+        (length (dbCrossDBLinks db))
+  where
+    sdb = toSimpleDatabase db
+
+-- | Percentage of resolved inputs (0-100); an inputless database is complete.
+lcCompleteness :: LinkCounts -> Double
+lcCompleteness lc
+    | lcTotalInputs lc > 0 =
+        100.0 * fromIntegral (lcInternalLinks lc + lcCrossDBLinks lc) / fromIntegral (lcTotalInputs lc)
+    | otherwise = 100.0
+
+{- | Why a database cannot be finalized — 'Nothing' means ready. The setup
+page's 'dsiIsReady' is the 'isNothing' of this, so the ready badge and the
+finalize gate always agree.
+-}
+notReadyReason :: LinkCounts -> Maybe Text
+notReadyReason lc
+    | lcActivityCount lc == 0 =
+        Just "database contains 0 activities. The data file may be corrupted or in an unsupported format."
+    | lcUnresolvedLinks lc > 0 =
+        Just $
+            T.pack (show (lcUnresolvedLinks lc))
+                <> " unresolved inputs. Add dependencies to resolve them first."
+    | otherwise = Nothing
+
+{- | Rank missing products by demanding-input count, descending. Nil-link gaps
+carry the rich blockers the attribute matcher produced; dangling non-nil gaps
+are tagged 'NoNameMatch'. The two sets are disjoint (nil vs non-nil), so the
+concatenation never duplicates.
+-}
+rankMissingProducts :: Map Text (Int, LinkBlocker) -> Map Text Int -> [(Text, Int, LinkBlocker)]
+rankMissingProducts blocked dangling =
+    sortOn
+        (\(_, cnt, _) -> Down cnt)
+        ( [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList blocked]
+            <> [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList dangling]
+        )
+
+-- | Project one ranked missing product onto its wire shape.
+blockerToMissingSupplier :: (Text, Int, LinkBlocker) -> MissingSupplier
+blockerToMissingSupplier (name, cnt, blocker) =
+    let (reason, detail) = blockerReasonDetail blocker
+     in MissingSupplier name cnt Nothing reason detail
+
+{- | Missing-supplier list for a staged database: rich blockers from the
+linking stats plus dangling background links a partial import leaves behind
+('Loader.collectStagedDanglingProductNames'), ranked by demand.
 -}
 stagedMissingProducts :: SimpleDatabase -> CrossDBLinkingStats -> [(Text, Int, LinkBlocker)]
 stagedMissingProducts sdb stats =
-    let fromStats = [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (cdlUnresolvedProducts stats)]
-        fromDangling =
-            [ (name, cnt, NoNameMatch)
-            | (name, cnt) <- M.toList (Loader.collectStagedDanglingProductNames sdb (cdlLinks stats))
-            ]
-     in sortOn (\(_, cnt, _) -> Down cnt) (fromStats <> fromDangling)
+    rankMissingProducts
+        (cdlUnresolvedProducts stats)
+        (Loader.collectStagedDanglingProductNames sdb (cdlLinks stats))
 
-{- | Build setup info from a staged database
-dataPath and availablePaths are filled in by buildSetupResult (requires IO)
+{- | Assemble the wire record from the shared tally — the single place the
+completeness, readiness, and linking-stats fields are filled, for both the
+staged and the loaded builder. availablePaths is filled in by
+'buildSetupResult' for uploaded databases (requires IO).
 -}
+setupInfoFrom :: DatabaseConfig -> LinkCounts -> CrossDBLinkingStats -> [(Text, Int, LinkBlocker)] -> [DependencyChoice] -> Bool -> DatabaseSetupInfo
+setupInfoFrom config lc stats missing dependencies isLoaded =
+    DatabaseSetupInfo
+        { dsiName = dcName config
+        , dsiDisplayName = dcDisplayName config
+        , dsiActivityCount = lcActivityCount lc
+        , dsiInputCount = lcTotalInputs lc
+        , dsiCompleteness = lcCompleteness lc
+        , dsiInternalLinks = lcInternalLinks lc
+        , dsiCrossDBLinks = lcCrossDBLinks lc
+        , dsiUnresolvedLinks = lcUnresolvedLinks lc
+        , dsiMissingSuppliers = take 10 (map blockerToMissingSupplier missing)
+        , dsiDependencies = dependencies
+        , dsiIsReady = isNothing (notReadyReason lc)
+        , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
+        , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
+        , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
+        , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
+        , dsiDataPath = T.pack (dcPath config)
+        , dsiAvailablePaths = []
+        , dsiIsLoaded = isLoaded
+        }
+
+-- | Build setup info from a staged database
 buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildStagedSetupInfo staged configs indexedDbs =
     let stats = sdLinkingStats staged
-        -- Count from the actual database, not from cross-DB linking stats
-        totalInputs = Loader.countTotalTechInputs (sdSimpleDB staged)
-        unlinked = Loader.countUnlinkedExchanges (sdSimpleDB staged)
-        crossDBLinks = Loader.crossDBLinksCount stats
-        internalLinks = totalInputs - unlinked
-        unresolvedLinks = max 0 (unlinked - crossDBLinks)
-        resolved = internalLinks + crossDBLinks
-        completeness =
-            if totalInputs > 0
-                then 100.0 * fromIntegral resolved / fromIntegral totalInputs
-                else 100.0
-        -- Convert missing products to MissingSupplier with reason/detail
-        missingSuppliers = take 10 $ map blockerToMissingSupplier (sdMissingProducts staged)
-        blockerToMissingSupplier (name, cnt, blocker) =
-            let (reason, detail) = blockerReasonDetail blocker
-             in MissingSupplier name cnt Nothing reason detail
-        -- Combined dependencies list (selected + redundant + available, alpha sorted)
-        dependencies =
-            buildDependencyChoices
+     in setupInfoFrom
+            (sdConfig staged)
+            (stagedLinkCounts staged)
+            stats
+            (sdMissingProducts staged)
+            ( buildDependencyChoices
                 (dcName (sdConfig staged))
                 (sdSelectedDeps staged)
                 (crossDBRedundantSources (cdlLinks stats) (sdSelectedDeps staged))
                 configs
                 indexedDbs
-        -- Database is ready only when it has activities and all inputs are resolved
-        activityCount = M.size (sdbActivities (sdSimpleDB staged))
-        isReady = activityCount > 0 && unresolvedLinks == 0
-     in DatabaseSetupInfo
-            { dsiName = dcName (sdConfig staged)
-            , dsiDisplayName = dcDisplayName (sdConfig staged)
-            , dsiActivityCount = activityCount
-            , dsiInputCount = totalInputs
-            , dsiCompleteness = completeness
-            , dsiInternalLinks = internalLinks
-            , dsiCrossDBLinks = crossDBLinks
-            , dsiUnresolvedLinks = unresolvedLinks
-            , dsiMissingSuppliers = missingSuppliers
-            , dsiDependencies = dependencies
-            , dsiIsReady = isReady
-            , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
-            , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
-            , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
-            , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
-            , dsiDataPath = T.pack (dcPath (sdConfig staged))
-            , dsiAvailablePaths = [] -- Filled in by buildSetupResult (requires IO)
-            , dsiIsLoaded = False
-            }
+            )
+            False
 
-{- | Build setup info from a loaded database (already finalized).
-
-Counts are recomputed from the activity set via the same predicate as the
-staged path ('Loader.countUnlinkedExchanges'), not read from 'dbLinkingStats':
-the stats only track nil-link / cross-DB resolution and are blind to dangling
-internal links (non-nil 'activityLinkId' pointing at an activity the database
-doesn't ship). A database bulk-loaded from config bypasses the finalize gate,
-so without this it would report a partial EcoSpold2 import as 100% ready while
-the matrix silently drops those inputs. Rich blocker reasons still come from
-the stats; dangling links are appended.
+{- | Build setup info from a loaded database (already finalized). Counts come
+from 'loadedLinkCounts' (see its note on recomputing rather than trusting
+'dbLinkingStats'); rich blocker reasons still come from the stats, dangling
+links are ranked in with them.
 -}
 buildLoadedSetupInfo :: DatabaseConfig -> Database -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildLoadedSetupInfo config db configs indexedDbs =
-    let sdb = toSimpleDatabase db
-        stats = dbLinkingStats db
-        totalInputs = Loader.countTotalTechInputs sdb
-        unlinked = Loader.countUnlinkedExchanges sdb
-        nCrossDBLinks = length (dbCrossDBLinks db)
-        internalLinks = max 0 (totalInputs - unlinked)
-        unresolvedLinks = max 0 (unlinked - nCrossDBLinks)
-        resolved = internalLinks + nCrossDBLinks
-        completeness =
-            if totalInputs > 0
-                then 100.0 * fromIntegral resolved / fromIntegral totalInputs
-                else 100.0
-        blockerToMissingSupplier (name, (cnt, blocker)) =
-            let (reason, detail) = blockerReasonDetail blocker
-             in MissingSupplier name cnt Nothing reason detail
-        statsSuppliers = map blockerToMissingSupplier (M.toList (cdlUnresolvedProducts stats))
-        danglingSuppliers =
-            [ MissingSupplier name cnt Nothing "no_name_match" Nothing
-            | (name, cnt) <- M.toList (Loader.collectDanglingProductNames db)
-            ]
-        missingSuppliers = take 10 (statsSuppliers ++ danglingSuppliers)
-     in DatabaseSetupInfo
-            { dsiName = dcName config
-            , dsiDisplayName = dcDisplayName config
-            , dsiActivityCount = fromIntegral (dbActivityCount db)
-            , dsiInputCount = totalInputs
-            , dsiCompleteness = completeness
-            , dsiInternalLinks = internalLinks
-            , dsiCrossDBLinks = nCrossDBLinks
-            , dsiUnresolvedLinks = unresolvedLinks
-            , dsiMissingSuppliers = missingSuppliers
-            , dsiDependencies = buildDependencyChoices (dcName config) (dbDependsOn db) [] configs indexedDbs
-            , dsiIsReady = dbActivityCount db > 0 && unresolvedLinks == 0
-            , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
-            , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
-            , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
-            , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
-            , dsiDataPath = T.pack (dcPath config)
-            , dsiAvailablePaths = [] -- No picker for loaded/configured databases
-            , dsiIsLoaded = True
-            }
+    setupInfoFrom
+        config
+        (loadedLinkCounts db)
+        (dbLinkingStats db)
+        (rankMissingProducts (cdlUnresolvedProducts (dbLinkingStats db)) (Loader.collectDanglingProductNames db))
+        (buildDependencyChoices (dcName config) (dbDependsOn db) [] configs indexedDbs)
+        True
 
 {- | Discover candidate data paths within an uploaded database's root directory.
 Returns one 'PathCandidate' per candidate directory.
@@ -2757,130 +2793,119 @@ finalizeDatabase manager dbName = do
 
     case M.lookup dbName stagedDbs of
         Nothing -> do
-            -- Not staged — check if already loaded (no-op finalize)
+            -- Not staged — an already-loaded database finalizes as a no-op,
+            -- but only through the same readiness gate the setup page reports:
+            -- a partial import bulk-loaded from config must not get a success
+            -- where the setup says not ready.
             loadedDbs <- readTVarIO (dmLoadedDbs manager)
             case M.lookup dbName loadedDbs of
-                Just loaded -> return $ Right loaded
+                Just loaded ->
+                    return $ case notReadyReason (loadedLinkCounts (ldDatabase loaded)) of
+                        Just reason -> Left ("Cannot finalize: " <> reason)
+                        Nothing -> Right loaded
                 Nothing -> return $ Left $ "Staged database not found: " <> dbName
-        Just staged -> do
-            -- Reject finalization if there are unresolved links
-            let unlinked = Loader.countUnlinkedExchanges (sdSimpleDB staged)
-                crossDBLinks = Loader.crossDBLinksCount (sdLinkingStats staged)
-                unresolvedLinks = max 0 (unlinked - crossDBLinks)
-            let activityCount = M.size (sdbActivities (sdSimpleDB staged))
-            if activityCount == 0
-                then
-                    return $
-                        Left $
-                            "Cannot finalize: database contains 0 activities. "
-                                <> "The data file may be corrupted or in an unsupported format."
-                else
-                    if unresolvedLinks > 0
-                        then
-                            return $
-                                Left $
-                                    "Cannot finalize: "
-                                        <> T.pack (show unresolvedLinks)
-                                        <> " unresolved inputs. Add dependencies to resolve them first."
-                        else do
-                            reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
+        Just staged ->
+            case notReadyReason (stagedLinkCounts staged) of
+                Just reason -> return $ Left ("Cannot finalize: " <> reason)
+                Nothing -> do
+                    reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
 
-                            synonymDB <- getMergedSynonymDB manager
+                    synonymDB <- getMergedSynonymDB manager
 
-                            -- Use pre-built database from cache, or build matrices from scratch
-                            buildResult <- case sdCachedDB staged of
-                                Just cachedDb -> do
-                                    -- The on-disk cache == cachedDb. Carry the
-                                    -- (possibly edited) staged dependency pin and
-                                    -- its recomputed links onto the loaded DB so
-                                    -- the pin is authoritative; flag a re-save
-                                    -- when either diverges from what's on disk.
-                                    let pinned =
-                                            cachedDb
+                    -- Use pre-built database from cache, or build matrices from scratch
+                    buildResult <- case sdCachedDB staged of
+                        Just cachedDb -> do
+                            -- The on-disk cache == cachedDb. Carry the
+                            -- (possibly edited) staged dependency pin and
+                            -- its recomputed links onto the loaded DB so
+                            -- the pin is authoritative; flag a re-save
+                            -- when either diverges from what's on disk.
+                            let pinned =
+                                    cachedDb
+                                        { dbCrossDBLinks = sdCrossDBLinks staged
+                                        , dbDependsOn = sdSelectedDeps staged
+                                        , dbLinkingStats = sdLinkingStats staged
+                                        }
+                                needsSave =
+                                    not (sameSet (dbDependsOn cachedDb) (sdSelectedDeps staged))
+                                        || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
+                            return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
+                        Nothing -> do
+                            unitConfig <- getMergedUnitConfig manager
+                            dbResult <-
+                                buildDatabaseWithMatrices
+                                    unitConfig
+                                    (sdbActivities (sdSimpleDB staged))
+                                    (sdbTechFlows (sdSimpleDB staged))
+                                    (sdbBioFlows (sdSimpleDB staged))
+                                    (sdbWasteFlows (sdSimpleDB staged))
+                                    (sdbUnits (sdSimpleDB staged))
+                            case dbResult of
+                                Left err -> return $ Left err
+                                Right db -> do
+                                    let dbWithLinks =
+                                            db
                                                 { dbCrossDBLinks = sdCrossDBLinks staged
                                                 , dbDependsOn = sdSelectedDeps staged
                                                 , dbLinkingStats = sdLinkingStats staged
                                                 }
-                                        needsSave =
-                                            not (sameSet (dbDependsOn cachedDb) (sdSelectedDeps staged))
-                                                || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
-                                    return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
-                                Nothing -> do
-                                    unitConfig <- getMergedUnitConfig manager
-                                    dbResult <-
-                                        buildDatabaseWithMatrices
-                                            unitConfig
-                                            (sdbActivities (sdSimpleDB staged))
-                                            (sdbTechFlows (sdSimpleDB staged))
-                                            (sdbBioFlows (sdSimpleDB staged))
-                                            (sdbWasteFlows (sdSimpleDB staged))
-                                            (sdbUnits (sdSimpleDB staged))
-                                    case dbResult of
-                                        Left err -> return $ Left err
-                                        Right db -> do
-                                            let dbWithLinks =
-                                                    db
-                                                        { dbCrossDBLinks = sdCrossDBLinks staged
-                                                        , dbDependsOn = sdSelectedDeps staged
-                                                        , dbLinkingStats = sdLinkingStats staged
-                                                        }
-                                            -- Freshly built matrices: always persist.
-                                            return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), True)
+                                    -- Freshly built matrices: always persist.
+                                    return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), True)
 
-                            case buildResult of
-                                Left err -> return $ Left err
-                                Right (dbWithRuntime, needsSave) -> do
-                                    -- Create shared solver with lazy factorization (deferred to first query)
-                                    let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
-                                        activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
-                                    sharedSolver <- createSharedSolver dbName techTriplesInt activityCountInt
+                    case buildResult of
+                        Left err -> return $ Left err
+                        Right (dbWithRuntime, needsSave) -> do
+                            -- Create shared solver with lazy factorization (deferred to first query)
+                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
+                                activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
+                            sharedSolver <- createSharedSolver dbName techTriplesInt activityCountInt
 
-                                    let loaded =
-                                            LoadedDatabase
-                                                { ldDatabase = dbWithRuntime
-                                                , ldSharedSolver = sharedSolver
-                                                , ldConfig = sdConfig staged
-                                                }
+                            let loaded =
+                                    LoadedDatabase
+                                        { ldDatabase = dbWithRuntime
+                                        , ldSharedSolver = sharedSolver
+                                        , ldConfig = sdConfig staged
+                                        }
 
-                                    -- Move from staged to loaded
-                                    let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithRuntime
-                                    atomically $ do
-                                        modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-                                        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                                        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
-                                    clearMethodMappingCacheForDb manager dbName
+                            -- Move from staged to loaded
+                            let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithRuntime
+                            atomically $ do
+                                modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+                                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+                                modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                            clearMethodMappingCacheForDb manager dbName
 
-                                    -- Self-relink first against the current
-                                    -- dep set: a cached or staged build can
-                                    -- carry cross-DB links that don't match
-                                    -- the deps now in 'dmIndexedDbs'.
-                                    -- 'relinkDatabase' rewrites both the
-                                    -- in-memory state and (when 'linksChanged'
-                                    -- is True) the matrix cache.
-                                    relinkOutcome <- relinkDatabase manager dbName
+                            -- Self-relink first against the current
+                            -- dep set: a cached or staged build can
+                            -- carry cross-DB links that don't match
+                            -- the deps now in 'dmIndexedDbs'.
+                            -- 'relinkDatabase' rewrites both the
+                            -- in-memory state and (when 'linksChanged'
+                            -- is True) the matrix cache.
+                            relinkOutcome <- relinkDatabase manager dbName
 
-                                    -- 'needsSave' marks a finalize that changed
-                                    -- something on disk (fresh build, or an
-                                    -- edited dependency pin on a cache hit). The
-                                    -- 'Left' fallback treats a failed relink as
-                                    -- "no relink write happened", so the explicit
-                                    -- save below still fires when needed.
-                                    linksChangedAfter <- case relinkOutcome of
-                                        Right rr -> return (rresLinksChanged rr)
-                                        Left err -> do
-                                            reportProgress Warning $
-                                                "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-                                            return False
-                                    -- Persist when this finalize introduced a
-                                    -- change (fresh build, or an edited pin on a
-                                    -- cache hit) that the relink didn't already
-                                    -- write. relink owns the save whenever it
-                                    -- actually changed the in-memory links.
-                                    when (needsSave && not linksChangedAfter) $
-                                        Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
+                            -- 'needsSave' marks a finalize that changed
+                            -- something on disk (fresh build, or an
+                            -- edited dependency pin on a cache hit). The
+                            -- 'Left' fallback treats a failed relink as
+                            -- "no relink write happened", so the explicit
+                            -- save below still fires when needed.
+                            linksChangedAfter <- case relinkOutcome of
+                                Right rr -> return (rresLinksChanged rr)
+                                Left err -> do
+                                    reportProgress Warning $
+                                        "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
+                                    return False
+                            -- Persist when this finalize introduced a
+                            -- change (fresh build, or an edited pin on a
+                            -- cache hit) that the relink didn't already
+                            -- write. relink owns the save whenever it
+                            -- actually changed the in-memory links.
+                            when (needsSave && not linksChangedAfter) $
+                                Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
 
-                                    reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
-                                    return $ Right loaded
+                            reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
+                            return $ Right loaded
 
 --------------------------------------------------------------------------------
 -- Method Collection Management
