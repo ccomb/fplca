@@ -452,7 +452,7 @@ parseProductRow cfg line =
                             , prAllocRaw = norm alloc
                             , prWasteType = decodeBS (BS8.strip waste)
                             , prCategory = decodeBS (BS8.strip cat)
-                            , prComment = decodeBS (BS8.intercalate ";" rest)
+                            , prComment = joinComment rest
                             }
             -- 6+ fields without allocation: name;unit;amount;waste;cat;comment
             (name : unit : amount : waste : cat : rest) ->
@@ -466,7 +466,7 @@ parseProductRow cfg line =
                         , prAllocRaw = "100"
                         , prWasteType = decodeBS (BS8.strip waste)
                         , prCategory = decodeBS (BS8.strip cat)
-                        , prComment = decodeBS (BS8.intercalate ";" rest)
+                        , prComment = joinComment rest
                         }
             _ -> Nothing
 
@@ -967,6 +967,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 else (prUnit, rawAmount)
         flowUUID = generateFlowUUID cleanName "" effUnitName
         unitUUID = generateUnitUUID effUnitName
+        (pedigree, cleanedComment) = parsePedigreePrefix prComment
         exchange =
             TechnosphereExchange
                 { techFlowId = flowUUID
@@ -982,8 +983,8 @@ productToExchange unitCfg env isRef ProductRow{..} =
                   -- field lets the cross-DB supplier index expose the
                   -- product under its declared geographic scope as well.
                   techLocation = prodRowLoc
-                , techComment = Nothing
-                , techPedigree = Nothing
+                , techComment = cleanedComment
+                , techPedigree = pedigree
                 }
         flow =
             TechnosphereFlow
@@ -997,12 +998,13 @@ productToExchange unitCfg env isRef ProductRow{..} =
         unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
 
-{- | Drop empty / whitespace-only text. Single normalisation point so future
-cleanup (e.g. stripping control bytes from SimaPro exports) lives here.
+{- | Drop empty / whitespace-only text, decoding SimaPro's in-cell line
+breaks: a multi-line comment is exported on one physical line with @\\x7f@
+(DEL) separating the lines. Single normalisation point for comment cleanup.
 -}
 nonEmptyText :: Text -> Maybe Text
 nonEmptyText t =
-    let s = T.strip t
+    let s = T.strip (T.replace "\x7f" "\n" t)
      in if T.null s then Nothing else Just s
 
 {- | Split SimaPro's trailing comment column into the pedigree matrix (when

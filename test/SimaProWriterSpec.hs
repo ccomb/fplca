@@ -77,7 +77,7 @@ fixtureCSV =
         , "FR"
         , ""
         , "Products"
-        , "Butter;kg;1;100;not defined;material;"
+        , "Butter;kg;1;100;not defined;material;(2,1,1,1,1),churned on site\x7f\&from pasture milk"
         , ""
         , "Materials/fuels"
         , -- name;unit;amount;Undefined;0;0;0;<pedigree>,<comment>
@@ -398,6 +398,12 @@ spec = describe "SimaPro.Writer round-trip" $ do
         let origExchanges = concatMap exchanges (activitiesOf original)
         map exchangeComment origExchanges `shouldSatisfy` elem (Just "farm milk")
         map exchangePedigree origExchanges `shouldSatisfy` elem (Just (Pedigree 3 3 2 1 2))
+        -- Same guard for the Products row: the reference product's comment and
+        -- pedigree must survive the round-trip, not just the input rows'. The
+        -- comment is multi-line (\x7f in the file, \n in memory), pinning the
+        -- writer's \n → \x7f re-encoding as well.
+        map exchangeComment origExchanges `shouldSatisfy` elem (Just "churned on site\nfrom pasture milk")
+        map exchangePedigree origExchanges `shouldSatisfy` elem (Just (Pedigree 2 1 1 1 1))
 
     it "(c) score-equivalence: same inventory for a sample activity within tolerance" $ do
         original <- parseBytes fixtureCSV
