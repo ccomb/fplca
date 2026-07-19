@@ -576,12 +576,16 @@ productLines keep cats allocPct category exchs =
         -- known to be a TechnosphereExchange — so mkRow is total (no unreachable
         -- blank-row arm). Sort by (name, unit, amount) for determinism.
         entries =
-            [ (tfName flow, unitNameOf (catUnits cats) (exchangeUnitId ex), exchangeAmount ex)
+            [ ( tfName flow
+              , unitNameOf (catUnits cats) (exchangeUnitId ex)
+              , exchangeAmount ex
+              , renderComment (exchangePedigree ex) (exchangeComment ex)
+              )
             | ex@TechnosphereExchange{} <- exchs
             , keep ex
             , Just flow <- [M.lookup (exchangeFlowId ex) (catTech cats)]
             ]
-        mkRow (nm, unit, amt) = row [nm, unit, formatAmount amt, alloc, "not defined", category, ""]
+        mkRow (nm, unit, amt, comment) = row [nm, unit, formatAmount amt, alloc, "not defined", category, comment]
      in map mkRow (sortOn id entries)
 
 {- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
