@@ -2390,29 +2390,27 @@ can never drift apart.
 data LinkCounts = LinkCounts
     { lcActivityCount :: !Int
     , lcTotalInputs :: !Int
-    , lcInternalLinks :: !Int
+    , lcUnlinked :: !Int
     , lcCrossDBLinks :: !Int
-    , lcUnresolvedLinks :: !Int
     }
 
-mkLinkCounts :: Int -> Int -> Int -> Int -> LinkCounts
-mkLinkCounts activityCount totalInputs unlinked crossDB =
-    LinkCounts
-        { lcActivityCount = activityCount
-        , lcTotalInputs = totalInputs
-        , lcInternalLinks = max 0 (totalInputs - unlinked)
-        , lcCrossDBLinks = crossDB
-        , lcUnresolvedLinks = max 0 (unlinked - crossDB)
-        }
+-- | Inputs resolved inside the database itself.
+lcInternalLinks :: LinkCounts -> Int
+lcInternalLinks lc = max 0 (lcTotalInputs lc - lcUnlinked lc)
+
+-- | Inputs no link, internal or cross-DB, resolves.
+lcUnresolvedLinks :: LinkCounts -> Int
+lcUnresolvedLinks lc = max 0 (lcUnlinked lc - lcCrossDBLinks lc)
 
 -- | Tally for a staged database, from its parsed activities and linking stats.
 stagedLinkCounts :: StagedDatabase -> LinkCounts
 stagedLinkCounts staged =
-    mkLinkCounts
-        (M.size (sdbActivities sdb))
-        (Loader.countTotalTechInputs sdb)
-        (Loader.countUnlinkedExchanges sdb)
-        (Loader.crossDBLinksCount (sdLinkingStats staged))
+    LinkCounts
+        { lcActivityCount = M.size (sdbActivities sdb)
+        , lcTotalInputs = Loader.countTotalTechInputs sdb
+        , lcUnlinked = Loader.countUnlinkedExchanges sdb
+        , lcCrossDBLinks = Loader.crossDBLinksCount (sdLinkingStats staged)
+        }
   where
     sdb = sdSimpleDB staged
 
@@ -2427,11 +2425,12 @@ inputs.
 -}
 loadedLinkCounts :: Database -> LinkCounts
 loadedLinkCounts db =
-    mkLinkCounts
-        (fromIntegral (dbActivityCount db))
-        (Loader.countTotalTechInputs sdb)
-        (Loader.countUnlinkedExchanges sdb)
-        (length (dbCrossDBLinks db))
+    LinkCounts
+        { lcActivityCount = fromIntegral (dbActivityCount db)
+        , lcTotalInputs = Loader.countTotalTechInputs sdb
+        , lcUnlinked = Loader.countUnlinkedExchanges sdb
+        , lcCrossDBLinks = length (dbCrossDBLinks db)
+        }
   where
     sdb = toSimpleDatabase db
 
