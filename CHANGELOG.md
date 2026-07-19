@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- The free-text comment on a SimaPro Products row (Agribalyse uses it for
+  modelling notes such as edible fraction and raw-to-cooked ratios) now
+  reaches the reference product and coproduct exchanges, so it shows up in
+  activity details and exports like input and emission comments already did.
+  Its data-quality pedigree prefix is decoded the same way too, and the
+  SimaPro writer emits both back on the Products row instead of leaving the
+  comment column empty.
+
 ## [0.9.3] - 2026-07-15
 
 ### Changed
