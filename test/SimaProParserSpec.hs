@@ -807,6 +807,22 @@ spec = do
                     ]
             map exchangeComment bios `shouldBe` [Just "tail-pipe combustion"]
 
+        it "surfaces the Products-row comment and pedigree on the reference product" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Walnut process"
+                    ["Walnut at consumer;kg;1.0;100;not defined;material;(3,3,2,1,2),Modelled parameters: Edible fraction = 0.5"]
+            let refs =
+                    [ ex
+                    | act <- activities
+                    , ex <- exchanges act
+                    , case ex of
+                        TechnosphereExchange{techRole = ReferenceProduct} -> True
+                        _ -> False
+                    ]
+            map exchangeComment refs `shouldBe` [Just "Modelled parameters: Edible fraction = 0.5"]
+            map exchangePedigree refs `shouldBe` [Just (Pedigree 3 3 2 1 2)]
+
     -- -----------------------------------------------------------------------
     -- Pedigree matrix
     -- -----------------------------------------------------------------------
