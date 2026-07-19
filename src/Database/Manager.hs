@@ -15,6 +15,7 @@ module Database.Manager (
     StagedDatabase (..),
     DatabaseSetupInfo (..),
     SetupError (..),
+    setupErrorMessage,
     MissingSupplier (..),
     DependencyChoice (..),
     DependencyStatus (..),
@@ -385,11 +386,16 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     deriving (ToJSON) via (Stripped DatabaseSetupInfo)
 
 -- | Errors from getDatabaseSetupInfo
-data SetupError = SetupNotFound Text | SetupFailed Text
+data SetupError
+    = SetupNotFound Text
+    | -- | Configured (non-uploaded) database that must be loaded before setup.
+      SetupNotLoaded Text
+    | SetupFailed Text
     deriving (Show, Eq)
 
 setupErrorMessage :: SetupError -> Text
 setupErrorMessage (SetupNotFound msg) = msg
+setupErrorMessage (SetupNotLoaded name) = "Database not loaded: " <> name
 setupErrorMessage (SetupFailed msg) = msg
 
 -- | Load status: derivable from TVar membership + linking stats
@@ -2341,7 +2347,7 @@ getDatabaseSetupInfo manager dbName = do
                                         modifyTVar' (dmStagingDbs manager) (S.insert dbName)
                                         return $ Right NeedToStage
                                     | otherwise ->
-                                        return $ Left $ SetupFailed $ "Database is not loaded. Use the Load button to load it first: " <> dbName
+                                        return $ Left $ SetupNotLoaded dbName
 
     case action of
         Left err -> return $ Left err
