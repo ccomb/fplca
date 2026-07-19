@@ -1831,10 +1831,7 @@ relinkStaged manager dbName maybeDepDb aliases = do
                                 { sdSelectedDeps = pinnedDeps
                                 , sdCrossDBLinks = newLinks
                                 , sdLinkingStats = newStats
-                                , sdMissingProducts =
-                                    sortOn
-                                        (\(_, cnt, _) -> Down cnt)
-                                        [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList (Loader.cdlUnresolvedProducts newStats)]
+                                , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
                                 }
                     atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
                     return $
