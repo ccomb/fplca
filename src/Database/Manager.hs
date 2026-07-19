@@ -2317,7 +2317,10 @@ databaseQualityReport manager dbName = do
         (Nothing, Just staged) -> Right (Quality.qualityReport dbName (sdSimpleDB staged))
         (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
 
-data StageAction = AlreadyDone | NeedToStage
+{- | Outcome of the atomic staging decision; 'NeedToStage' carries the config
+read inside the same transaction, so no later (racy) re-lookup is needed.
+-}
+data StageAction = AlreadyDone | NeedToStage DatabaseConfig
 
 {- | Get setup info for a database (for the setup page)
 Works for both staged and loaded databases
@@ -2345,17 +2348,15 @@ getDatabaseSetupInfo manager dbName = do
                                 Just dbConfig
                                     | dcIsUploaded dbConfig -> do
                                         modifyTVar' (dmStagingDbs manager) (S.insert dbName)
-                                        return $ Right NeedToStage
+                                        return $ Right (NeedToStage dbConfig)
                                     | otherwise ->
                                         return $ Left $ SetupNotLoaded dbName
 
     case action of
         Left err -> return $ Left err
         Right AlreadyDone -> buildSetupResult manager dbName
-        Right NeedToStage -> do
+        Right (NeedToStage dbConfig) -> do
             -- Do the slow work, ensuring we always unmark on exception
-            availableDbs <- readTVarIO (dmAvailableDbs manager)
-            let dbConfig = availableDbs M.! dbName -- safe: checked above
             stageResult <-
                 Control.Exception.finally
                     (stageUploadedDatabase manager dbConfig)
