@@ -127,6 +127,23 @@ spec = do
                 detectMethodFormat found `shouldReturn` ILCDProcess
                 formatDisplayText ILCDProcess `shouldBe` "ILCD"
 
+    describe "detectMethodFormat when nothing matches" $ do
+        it "does not read a non-SimaPro CSV sitting next to the method files as SimaPro" $
+            withSystemTempDirectory "volca-method-format-csv" $ \tmp -> do
+                BL.writeFile (tmp </> "climate.xml") miniLciaMethodXml
+                BL.writeFile (tmp </> "factors.csv") (BLC.pack "flow,cf\nCO2,1.0\n")
+                detectMethodFormat tmp `shouldReturn` ILCDProcess
+
+        it "stays UnknownFormat, with no label to advertise, on an unrecognized directory" $
+            withSystemTempDirectory "volca-method-format-empty" $ \tmp -> do
+                BL.writeFile (tmp </> "readme.txt") (BLC.pack "nothing to see")
+                detectMethodFormat tmp `shouldReturn` UnknownFormat
+                detectedFormatLabel UnknownFormat `shouldBe` Nothing
+
+        it "reports UnknownFormat instead of throwing on a missing directory" $
+            withSystemTempDirectory "volca-method-format-gone" $ \tmp ->
+                detectMethodFormat (tmp </> "does-not-exist") `shouldReturn` UnknownFormat
+
     describe "loadMethodCollectionFromConfig on the uploaded JSON" $
         it "produces one Method with one CF carrying the fixture's value" $
             withSystemTempDirectory "volca-method-load" $ \tmp -> do

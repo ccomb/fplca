@@ -167,6 +167,7 @@ import Database.Upload (
     UploadData (..),
     UploadResult (..),
     detectMethodFormat,
+    detectedFormatLabel,
     findMethodDirectory,
     formatDisplayText,
     handleUpload,
@@ -762,7 +763,7 @@ uploadMethodHandler mName mDesc src =
                             , mcActive = False
                             , mcIsUploaded = True
                             , mcDescription = mDescription
-                            , mcFormat = Just $ formatDisplayText methodFormat
+                            , mcFormat = detectedFormatLabel methodFormat
                             , mcScoringSets = []
                             , mcGlobalMethods = []
                             , mcPatches = []

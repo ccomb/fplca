@@ -230,7 +230,7 @@ import API.Types (DepLoadResult (..))
 import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
 import qualified Database.CrossLinking as CrossLinking
-import Database.Upload (detectMethodFormat, findMethodDirectory, formatDisplayText, listDirectoryRecursive)
+import Database.Upload (detectMethodFormat, detectedFormatLabel, findMethodDirectory, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.FlowResolver (ILCDFlowInfo)
@@ -1263,7 +1263,7 @@ discoverUploadedMethodConfigs = do
                 , mcActive = False -- Never auto-load uploaded methods
                 , mcIsUploaded = True
                 , mcDescription = UploadedDB.umDescription meta
-                , mcFormat = Just $ formatDisplayText methodFormat
+                , mcFormat = detectedFormatLabel methodFormat
                 , mcScoringSets = []
                 , mcGlobalMethods = []
                 , mcPatches = []

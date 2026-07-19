@@ -32,6 +32,7 @@ module Database.Upload (
     countMethodFilesIn,
     anyMethodFilesIn,
     detectMethodFormat,
+    detectedFormatLabel,
     formatDisplayText,
     slugify,
 ) where
@@ -85,6 +86,14 @@ formatDisplayText :: DatabaseFormat -> Text
 formatDisplayText fmt = case toJSON fmt of
     A.String t -> t
     _ -> ""
+
+{- | Label for a format that was detected rather than declared.
+'Nothing' when detection failed, so a caller can say so — or fall back to its own
+guess — instead of advertising an empty format.
+-}
+detectedFormatLabel :: DatabaseFormat -> Maybe Text
+detectedFormatLabel UnknownFormat = Nothing
+detectedFormatLabel fmt = Just (formatDisplayText fmt)
 
 instance FromJSON DatabaseFormat where
     parseJSON = withText "DatabaseFormat" $ \case
@@ -584,13 +593,20 @@ otherwise be mistaken for a Brightway Excel inventory.
 -}
 detectMethodFormat :: FilePath -> IO DatabaseFormat
 detectMethodFormat dir = do
-    fs <- listDirectory dir
-    let withExt e = [dir </> f | f <- fs, map toLower (takeExtension f) == e]
-    firstMatch
-        [ (SimaProCSV, return $ not $ null $ withExt ".csv")
-        , (ILCDProcess, anyM isMethodXml (withExt ".xml"))
-        , (OpenLcaJsonLd, anyM isOlcaJsonFile (withExt ".json"))
-        ]
+    listed <- try @SomeException (listDirectory dir)
+    case listed of
+        -- An unreadable directory is not a format guess, and must not abort the
+        -- caller: discovery walks every uploaded collection in one pass.
+        Left _ -> return UnknownFormat
+        Right fs -> do
+            let withExt e = [dir </> f | f <- fs, map toLower (takeExtension f) == e]
+            firstMatch
+                [ (ILCDProcess, anyM isMethodXml (withExt ".xml"))
+                , (OpenLcaJsonLd, anyM isOlcaJsonFile (withExt ".json"))
+                , -- Content-checked, like the two above: a stray spreadsheet
+                  -- export next to the method files is not a SimaPro method.
+                  (SimaProCSV, checkForSimaProCSV (withExt ".csv"))
+                ]
   where
     -- No fallback guess: an unrecognized directory stays UnknownFormat.
     firstMatch [] = return UnknownFormat
