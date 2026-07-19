@@ -2434,11 +2434,14 @@ loadedLinkCounts db =
   where
     sdb = toSimpleDatabase db
 
--- | Percentage of resolved inputs (0-100); an inputless database is complete.
+{- | Percentage of resolved inputs (0-100); an inputless database is complete.
+Clamped: stats recording more cross-DB links than unlinked inputs must not
+report above 100%.
+-}
 lcCompleteness :: LinkCounts -> Double
 lcCompleteness lc
     | lcTotalInputs lc > 0 =
-        100.0 * fromIntegral (lcInternalLinks lc + lcCrossDBLinks lc) / fromIntegral (lcTotalInputs lc)
+        min 100.0 $ 100.0 * fromIntegral (lcInternalLinks lc + lcCrossDBLinks lc) / fromIntegral (lcTotalInputs lc)
     | otherwise = 100.0
 
 {- | Why a database cannot be finalized — 'Nothing' means ready. The setup
