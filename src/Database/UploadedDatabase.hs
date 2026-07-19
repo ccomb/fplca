@@ -140,13 +140,18 @@ parseMetaToml content = do
             , umDataPath = dataPath
             }
 
--- | Parse format string to DatabaseFormat
+{- | Parse a format string to a DatabaseFormat.
+Inverse of 'formatMetaToml''s writer below — every slug it can write is read back
+here. An unrecognized slug reads as 'UnknownFormat' rather than dropping the whole
+collection, since the format is re-detected from the files anyway.
+-}
 parseFormat :: Text -> Maybe DatabaseFormat
 parseFormat "ecospold2" = Just EcoSpold2
 parseFormat "ecospold1" = Just EcoSpold1
 parseFormat "simapro" = Just SimaProCSV
 parseFormat "ilcd" = Just ILCDProcess
 parseFormat "openlca-jsonld" = Just OpenLcaJsonLd
+parseFormat "brightway-excel" = Just BrightwayExcel
 parseFormat _ = Just UnknownFormat
 
 -- | Format meta.toml content
