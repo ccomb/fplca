@@ -51,6 +51,16 @@ miniImpactCategoryJson =
             , "}"
             ]
 
+-- | A minimal ILCD LCIA method dataset — only the root element matters here.
+miniLciaMethodXml :: BL.ByteString
+miniLciaMethodXml =
+    BLC.pack $
+        unlines
+            [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            , "<LCIAMethodDataSet xmlns=\"http://lca.jrc.it/ILCD/LCIAMethod\">"
+            , "</LCIAMethodDataSet>"
+            ]
+
 -- | An openLCA Process document — must NOT be picked up as a method.
 miniProcessJson :: BL.ByteString
 miniProcessJson =
@@ -96,6 +106,26 @@ spec = do
                 createDirectoryIfMissing True dir
                 BL.writeFile (dir </> "impact-category.json") miniImpactCategoryJson
                 detectDatabaseFormat dir `shouldReturn` OpenLcaJsonLd
+
+    describe "detectMethodFormat on an ILCD method package" $
+        -- Regression: an EF 3.1 ILCD package ships companion spreadsheets
+        -- (normalisation factors, UUID mappings) outside the method directory.
+        -- The database detector saw those and called the whole thing Brightway
+        -- Excel, so the Methods page advertised the wrong format.
+        it "reads ILCD off the method directory, ignoring companion spreadsheets" $
+            withSystemTempDirectory "volca-method-format" $ \tmp -> do
+                let methodDir = tmp </> "ILCD" </> "lciamethods"
+                    otherDir = tmp </> "other"
+                createDirectoryIfMissing True methodDir
+                createDirectoryIfMissing True otherDir
+                BL.writeFile (methodDir </> "climate.xml") miniLciaMethodXml
+                BL.writeFile (otherDir </> "Normalisation_Weighting_Factors.xlsx") (BLC.pack "PK stub")
+                -- The database detector is the one that gets it wrong:
+                detectDatabaseFormat tmp `shouldReturn` BrightwayExcel
+                found <- findMethodDirectory tmp
+                found `shouldBe` methodDir
+                detectMethodFormat found `shouldReturn` ILCDProcess
+                formatDisplayText ILCDProcess `shouldBe` "ILCD"
 
     describe "loadMethodCollectionFromConfig on the uploaded JSON" $
         it "produces one Method with one CF carrying the fixture's value" $

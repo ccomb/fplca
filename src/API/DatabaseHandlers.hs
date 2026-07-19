@@ -108,7 +108,7 @@ import App.Env (AppEnv (..), AppM)
 import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), RefDataConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
-import Data.Aeson (Value, toJSON)
+import Data.Aeson (Value)
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
@@ -166,7 +166,9 @@ import Database.Upload (
     DatabaseFormat (..),
     UploadData (..),
     UploadResult (..),
+    detectMethodFormat,
     findMethodDirectory,
+    formatDisplayText,
     handleUpload,
  )
 import qualified Database.UploadedDatabase as UploadedDB
@@ -640,12 +642,6 @@ makeRelative base path
     | base `isPrefixOf` path = drop (length base + 1) path -- +1 for separator
     | otherwise = path
 
--- | Convert DatabaseFormat to display text (uses ToJSON instance: "EcoSpold 2", etc.)
-formatDisplayText :: DatabaseFormat -> Text
-formatDisplayText fmt = case toJSON fmt of
-    A.String t -> t
-    _ -> ""
-
 -- | Convert DatabaseFormat to API slug text
 formatToText :: DatabaseFormat -> Text
 formatToText SimaProCSV = "simapro-csv"
@@ -742,6 +738,10 @@ uploadMethodHandler mName mDesc src =
 
                 -- Find the actual method XML directory (e.g. ILCD/lciamethods/)
                 methodDir <- liftIO $ findMethodDirectory uploadDir
+                -- Format comes from the method directory, not from the database
+                -- detector: companion spreadsheets shipped alongside a method
+                -- package would otherwise read as a Brightway Excel inventory.
+                methodFormat <- liftIO $ detectMethodFormat methodDir
 
                 -- Create meta.toml (store path relative to upload dir)
                 let meta =
@@ -749,7 +749,7 @@ uploadMethodHandler mName mDesc src =
                             { UploadedDB.umVersion = 1
                             , UploadedDB.umDisplayName = name
                             , UploadedDB.umDescription = mDescription
-                            , UploadedDB.umFormat = urFormat uploadResult
+                            , UploadedDB.umFormat = methodFormat
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
@@ -762,7 +762,7 @@ uploadMethodHandler mName mDesc src =
                             , mcActive = False
                             , mcIsUploaded = True
                             , mcDescription = mDescription
-                            , mcFormat = Just $ formatToText $ urFormat uploadResult
+                            , mcFormat = Just $ formatDisplayText methodFormat
                             , mcScoringSets = []
                             , mcGlobalMethods = []
                             , mcPatches = []

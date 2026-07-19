@@ -31,6 +31,8 @@ module Database.Upload (
     findAllMethodDirectories,
     countMethodFilesIn,
     anyMethodFilesIn,
+    detectMethodFormat,
+    formatDisplayText,
     slugify,
 ) where
 
@@ -77,6 +79,12 @@ instance ToJSON DatabaseFormat where
     toJSON OpenLcaJsonLd = A.String "openLCA JSON-LD"
     toJSON BrightwayExcel = A.String "Brightway Excel"
     toJSON UnknownFormat = A.String ""
+
+-- | Human-readable label for a format, straight from the 'ToJSON' instance above.
+formatDisplayText :: DatabaseFormat -> Text
+formatDisplayText fmt = case toJSON fmt of
+    A.String t -> t
+    _ -> ""
 
 instance FromJSON DatabaseFormat where
     parseJSON = withText "DatabaseFormat" $ \case
@@ -569,6 +577,25 @@ findMethodDirectory dir = do
                 (best : _) -> return (fst best)
                 [] -> return dir
 
+{- | Detect the format of a method collection from its method directory.
+Looks at that one directory only (like 'anyMethodFilesIn'), never at the whole
+extraction tree: a method package often ships companion spreadsheets that would
+otherwise be mistaken for a Brightway Excel inventory.
+-}
+detectMethodFormat :: FilePath -> IO DatabaseFormat
+detectMethodFormat dir = do
+    fs <- listDirectory dir
+    let withExt e = [dir </> f | f <- fs, map toLower (takeExtension f) == e]
+    firstMatch
+        [ (SimaProCSV, return $ not $ null $ withExt ".csv")
+        , (ILCDProcess, anyM isMethodXml (withExt ".xml"))
+        , (OpenLcaJsonLd, anyM isOlcaJsonFile (withExt ".json"))
+        ]
+  where
+    -- No fallback guess: an unrecognized directory stays UnknownFormat.
+    firstMatch [] = return UnknownFormat
+    firstMatch ((fmt, check) : rest) = check >>= \b -> if b then return fmt else firstMatch rest
+
 -- | Find all directories containing ILCD method XML files under a root.
 findAllMethodDirectories :: FilePath -> IO [FilePath]
 findAllMethodDirectories = go
@@ -610,11 +637,11 @@ anyMethodFilesIn d = do
             if hasMethodXml
                 then return True
                 else anyM isOlcaJsonFile jsonFiles
-  where
-    anyM _ [] = return False
-    anyM p (x : xs) = do
-        b <- p x
-        if b then return True else anyM p xs
+
+-- | Short-circuiting monadic 'any'.
+anyM :: (a -> IO Bool) -> [a] -> IO Bool
+anyM _ [] = return False
+anyM p (x : xs) = p x >>= \b -> if b then return True else anyM p xs
 
 -- | Check if an XML file is an ILCD LCIA method dataset
 isMethodXml :: FilePath -> IO Bool

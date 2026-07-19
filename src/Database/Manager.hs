@@ -230,7 +230,7 @@ import API.Types (DepLoadResult (..))
 import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
 import qualified Database.CrossLinking as CrossLinking
-import Database.Upload (DatabaseFormat (..), findMethodDirectory, listDirectoryRecursive)
+import Database.Upload (detectMethodFormat, findMethodDirectory, formatDisplayText, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
 import Method.FlowResolver (ILCDFlowInfo)
@@ -1246,12 +1246,6 @@ warnZeroTouchPatches collName stats =
                 <> T.unpack (Method.Patch.describePatch patch)
                 <> "\" touched 0 characterization factors — check the selector."
 
--- | Convert a DatabaseFormat to display text for methods
-methodFormatText :: DatabaseFormat -> Text
-methodFormatText SimaProCSV = "SimaPro CSV"
-methodFormatText ILCDProcess = "ILCD"
-methodFormatText f = T.pack (show f)
-
 discoverUploadedMethodConfigs :: IO [MethodConfig]
 discoverUploadedMethodConfigs = do
     uploads <- UploadedDB.discoverUploadedMethods
@@ -1259,6 +1253,9 @@ discoverUploadedMethodConfigs = do
         reportProgress Info $ "Discovered uploaded method: " <> T.unpack slug
         -- Find the actual method XML directory (e.g., ILCD/lciamethods/)
         methodDir <- findMethodDirectory dirPath
+        -- Read the format off the directory rather than meta.toml: the file on
+        -- disk may predate method-aware detection, and can't drift this way.
+        methodFormat <- detectMethodFormat methodDir
         return
             MethodConfig
                 { mcName = UploadedDB.umDisplayName meta
@@ -1266,7 +1263,7 @@ discoverUploadedMethodConfigs = do
                 , mcActive = False -- Never auto-load uploaded methods
                 , mcIsUploaded = True
                 , mcDescription = UploadedDB.umDescription meta
-                , mcFormat = Just $ methodFormatText (UploadedDB.umFormat meta)
+                , mcFormat = Just $ formatDisplayText methodFormat
                 , mcScoringSets = []
                 , mcGlobalMethods = []
                 , mcPatches = []
