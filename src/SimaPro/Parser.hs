@@ -998,12 +998,13 @@ productToExchange unitCfg env isRef ProductRow{..} =
         unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
 
-{- | Drop empty / whitespace-only text. Single normalisation point so future
-cleanup (e.g. stripping control bytes from SimaPro exports) lives here.
+{- | Drop empty / whitespace-only text, decoding SimaPro's in-cell line
+breaks: a multi-line comment is exported on one physical line with @\\x7f@
+(DEL) separating the lines. Single normalisation point for comment cleanup.
 -}
 nonEmptyText :: Text -> Maybe Text
 nonEmptyText t =
-    let s = T.strip t
+    let s = T.strip (T.replace "\x7f" "\n" t)
      in if T.null s then Nothing else Just s
 
 {- | Split SimaPro's trailing comment column into the pedigree matrix (when

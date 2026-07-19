@@ -10,6 +10,11 @@
   Its data-quality pedigree prefix is decoded the same way too, and the
   SimaPro writer emits both back on the Products row instead of leaving the
   comment column empty.
+- Multi-line SimaPro comments now display as real lines. SimaPro exports a
+  multi-line comment on one physical line with an invisible control character
+  (DEL, `\x7f`) between the lines; the parser now decodes it as a line break
+  on every exchange comment, and the SimaPro writer encodes line breaks back
+  the same way on export.
 
 ## [0.9.3] - 2026-07-15
 

@@ -127,11 +127,13 @@ Amounts must also be finite: a NaN or ±Infinity has no parseable literal, so
 inventory. Report it here instead. This is the export-boundary check;
 'serializeSimaProCSV' itself stays pure and total.
 
-Names and comments must also be free of newline characters. 'escapeField'
-RFC-4180-quotes them, but the parser splits the file on physical lines
-('BS8.lines') /before/ CSV parsing, so an embedded @\\n@ or @\\r@ tears the row
-apart and corrupts or drops it. Reject such fields rather than emit a row the
-parser cannot read back.
+Names and metadata values must also be free of newline characters.
+'escapeField' RFC-4180-quotes them, but the parser splits the file on physical
+lines ('BS8.lines') /before/ CSV parsing, so an embedded @\\n@ or @\\r@ tears
+the row apart and corrupts or drops it. Reject such fields rather than emit a
+row the parser cannot read back. Exchange comments are the exception:
+'renderComment' encodes their line breaks as @\\x7f@, SimaPro's in-cell
+newline, so they round-trip instead of being rejected.
 
 Two more round-trip hazards are specific to SimaPro's textual layout, and bite
 only for databases imported from other formats (a SimaPro parse can't produce
@@ -304,13 +306,14 @@ checkSimaProExportable db =
     hasNewline = T.any (\c -> c == '\n' || c == '\r')
     -- Every text field that lands in the output verbatim: the bare metadata
     -- value lines (so a newline in any of them — the Type label included — is
-    -- caught), the "Category" product-column value, exchange comments, and all
-    -- flow names. The line-based parser splits on physical newlines /before/
-    -- CSV parsing, so even a quoted newline tears a row apart; reject upstream.
+    -- caught), the "Category" product-column value, and all flow names.
+    -- Exchange comments are exempt: 'renderComment' encodes their newlines as
+    -- \x7f, SimaPro's in-cell line break. The line-based parser splits on
+    -- physical newlines /before/ CSV parsing, so even a quoted newline tears
+    -- a row apart; reject upstream.
     activityTexts act =
         map snd (activityMetaLines act)
             ++ M.elems (activityClassification act)
-            ++ [cmt | ex <- exchanges act, Just cmt <- [exchangeComment ex]]
     newlineOffenders =
         filter hasNewline $
             concatMap activityTexts (M.elems (sdbActivities db))
@@ -461,11 +464,16 @@ activityMetaLines Activity{..} =
     , ("Comment", T.intercalate " " activityDescription)
     ]
 
--- | Render the comment column, re-attaching a pedigree prefix when present.
+{- | Render the comment column, re-attaching a pedigree prefix when present.
+Line breaks are encoded as @\\x7f@ (DEL), SimaPro's in-cell newline — the
+line-based format cannot hold a literal newline (see 'checkSimaProExportable'),
+and the parser decodes @\\x7f@ back, so multi-line comments round-trip.
+-}
 renderComment :: Maybe Pedigree -> Maybe Text -> Text
 renderComment ped cmt =
     let pedTxt = maybe "" renderPedigree ped
-        cmtTxt = fromMaybe "" cmt
+        encodeNewlines = T.replace "\n" "\x7f" . T.replace "\r" "\n" . T.replace "\r\n" "\n"
+        cmtTxt = encodeNewlines (fromMaybe "" cmt)
      in case (pedTxt, cmtTxt) of
             ("", c) -> c
             (p, "") -> p <> ","
