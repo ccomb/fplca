@@ -2378,11 +2378,7 @@ buildSetupResult manager dbName = do
                 else return $ Right info
         Nothing -> case M.lookup dbName loadedDbs of
             Just loaded ->
-                -- 'buildLoadedSetupInfo' already derives dsiIsReady honestly
-                -- (it sees dangling internal links); only the loaded flag needs
-                -- flipping here.
-                let info = buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded) availableDbs indexedDbs
-                 in return $ Right info{dsiIsLoaded = False}
+                return $ Right $ buildLoadedSetupInfo (ldConfig loaded) (ldDatabase loaded) availableDbs indexedDbs
             Nothing -> return $ Left $ SetupFailed $ "Failed to stage database: " <> dbName
 
 {- | Missing-supplier list for a staged database. Nil-link gaps carry the rich
