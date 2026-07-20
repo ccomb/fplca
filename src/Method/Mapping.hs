@@ -51,6 +51,7 @@ module Method.Mapping (
     inventoryContributions,
     processContributionsFromTables,
     lookupCFForFlow,
+    characterizedFlowIds,
     convertForCharacterization,
     expandSynonymMappings,
     directionExcludedCFs,
@@ -2364,6 +2365,25 @@ characterizes. Cold path; the singleton allocation is irrelevant here.
 lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe (Double, Text)
 lookupCFForFlow tables fid mFlow =
     lookupCascadeCF tables (maybe M.empty (M.singleton fid) mFlow) fid
+
+{- | The database flows a method's tables characterize, each probed with
+'lookupCFForFlow' — the read-side lookup scoring uses — so a flow reached
+through a name-level, subcompartment or CAS-bridge fallback counts as covered.
+
+This is the honest way to count a method's reach into a database. The
+build-side mappings undercount it: there each factor resolves to at most one
+flow, so a factor that covers a substance across many compartments or
+locations surfaces as a single flow. And because the answer is a set, a whole
+collection's reach is the union of its methods' sets — summing per-method
+counts would count a flow once per method that characterizes it.
+-}
+characterizedFlowIds :: MethodTables -> BioFlowDB -> S.Set UUID
+characterizedFlowIds tables bioFlows =
+    S.fromList
+        [ fid
+        | (fid, flow) <- M.toList bioFlows
+        , isJust (lookupCFForFlow tables fid (Just flow))
+        ]
 
 {- | Find the top-N method CFs that most resemble a database flow.
 

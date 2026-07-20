@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -43,7 +43,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -111,6 +111,7 @@ type LCAAPI =
                 :<|> "method" :> Capture "methodId" Text :> "factors" :> Get '[JSON] [MethodFactorAPI]
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "mapping" :> Get '[JSON] MappingStatus
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
+                :<|> "db" :> Capture "dbName" Text :> "method-collection" :> Capture "collection" Text :> "coverage" :> Get '[JSON] CollectionCoverage
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "characterization" :> QueryParam "flow" Text :> QueryParam "limit" Int :> Get '[JSON] CharacterizationResult
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
@@ -1786,6 +1787,7 @@ getMethodMapping dbName methodIdText = do
     (db, _) <- requireDatabaseByName dbName
     (collectionName, method) <- loadMethodByUUID methodIdText
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
     let stats = computeMappingStats mappings
         totalFactors = length mappings
         coverage =
@@ -1804,7 +1806,11 @@ getMethodMapping dbName methodIdText = do
                     }
                 | (cf, Nothing) <- mappings
                 ]
-        uniqueDbFlows = S.size $ S.fromList [bfId f | (_, Just (f, _)) <- mappings]
+        -- Counted from the read-side tables, not the build-side mappings: a
+        -- factor resolves to at most one flow there, so counting resolved
+        -- flows would miss every flow reached through a fallback and report a
+        -- fraction of the method's real reach.
+        uniqueDbFlows = S.size (characterizedFlowIds tables (dbBioFlows db))
     return
         MappingStatus
             { mstMethodId = methodId method
@@ -1846,6 +1852,25 @@ getFlowCFMapping dbName methodIdText = do
             , fcmTotalFlows = fromIntegral (dbBiosphereCount db)
             , fcmMatchedFlows = matchedCount
             , fcmFlows = entries
+            }
+
+{- | Coverage of one database by a whole method collection, as distinct flows.
+Distinct across methods, because they overlap — every climate-change variant
+characterizes the same gases — so this number cannot be recovered from the
+per-method mapping statuses.
+-}
+getCollectionCoverage :: Text -> Text -> AppM CollectionCoverage
+getCollectionCoverage dbName collectionName = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    (methods, _, _, _) <- loadCollection collectionName
+    tablesList <- liftIO $ mapM (DM.mapMethodToTablesCached dbManager dbName collectionName db) methods
+    return
+        CollectionCoverage
+            { ccvCollection = collectionName
+            , ccvDbName = dbName
+            , ccvTotalFlows = fromIntegral (dbBiosphereCount db)
+            , ccvCharacterizedFlows = S.size (S.unions (map (`characterizedFlowIds` dbBioFlows db) tablesList))
             }
 
 getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM CharacterizationResult
@@ -2007,6 +2032,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> getMethodFactors
             :<|> getMethodMapping
             :<|> getFlowCFMapping
+            :<|> getCollectionCoverage
             :<|> getCharacterization
             :<|> searchFlows
             :<|> searchActivitiesWithCount

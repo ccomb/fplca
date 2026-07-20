@@ -15,6 +15,21 @@
   (DEL, `\x7f`) between the lines; the parser now decodes it as a line break
   on every exchange comment, and the SimaPro writer encodes line breaks back
   the same way on export.
+- The per-method `uniqueDbFlowsMatched` figure on the mapping-status endpoint
+  now counts every database flow the method actually characterizes — probed
+  with the same lookup scoring uses — instead of only the flows a factor
+  resolved to directly. The old count missed every flow reached through a
+  fallback (a factor covering a substance across many compartments counted as
+  one flow), under-reporting a method's real reach several-fold on typical
+  databases.
+
+### Added
+- A collection-coverage endpoint:
+  `GET /db/{db}/method-collection/{collection}/coverage` reports how many of
+  a database's emission and resource flows at least one method of a
+  collection characterizes, as a distinct count. No sum over the per-method
+  figures can recover it, because a collection's methods overlap on the same
+  flows. Exposed in pyvolca as `Client.get_collection_coverage`.
 
 ## [0.9.3] - 2026-07-15
 

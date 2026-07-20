@@ -1747,3 +1747,20 @@ class MappingStatus:
             unique_db_flows_matched=d["uniqueDbFlowsMatched"],
             unmapped_flows=[UnmappedFlow.from_json(u) for u in d["unmappedFlows"]],
         )
+
+
+@dataclass
+class CollectionCoverage(FromJson):
+    """How much of one database a whole method collection characterizes.
+
+    Returned by :meth:`Client.get_collection_coverage`.
+    ``characterized_flows`` counts distinct emission and resource flows that
+    at least one of the collection's methods resolves a factor for, with the
+    same lookup scoring uses — a figure no sum over the per-method
+    :class:`MappingStatus` values can recover, since the methods overlap.
+    """
+
+    collection: str
+    db_name: str
+    total_flows: int
+    characterized_flows: int
