@@ -553,6 +553,16 @@ Returns a :class:`CharacterizationResult` carrying ``matches`` (total
 rows the filter selected) and ``shown`` (rows actually returned under
 ``limit``). Check ``result.has_more`` to detect truncation.
 
+##### `Client.get_collection_coverage(collection: str, db_name: str | None = None) -> CollectionCoverage`
+
+How much of a database a whole method collection characterizes.
+
+Counts the distinct emission and resource flows at least one of the
+collection's methods resolves a factor for, with the same lookup
+scoring uses. Distinct across methods — their factors overlap, so the
+per-method figures from :meth:`get_mapping_status` do not add up to
+this number.
+
 ##### `Client.get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, sort: str | None = None, order: str | None = None, include_edges: bool = False) -> ConsumersResponse`
 
 Find all activities that transitively consume this supplier.

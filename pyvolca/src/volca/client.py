@@ -58,6 +58,7 @@ from .types import (
     CharacterizationResult,
     ClassificationFilter,
     ClassificationSystem,
+    CollectionCoverage,
     ConsumerResult,
     ConsumersResponse,
     ContributingActivities,
@@ -2004,6 +2005,26 @@ class Client:
             self._json(
                 self._session.get(
                     f"{self.base_url}/api/v1/db/{target}/method/{method_id}/mapping"
+                )
+            )
+        )
+
+    def get_collection_coverage(
+        self, collection: str, db_name: str | None = None
+    ) -> CollectionCoverage:
+        """How much of a database a whole method collection characterizes.
+
+        Counts the distinct emission and resource flows at least one of the
+        collection's methods resolves a factor for, with the same lookup
+        scoring uses. Distinct across methods — their factors overlap, so the
+        per-method figures from :meth:`get_mapping_status` do not add up to
+        this number.
+        """
+        target = self._db(db_name)
+        return CollectionCoverage.from_json(
+            self._json(
+                self._session.get(
+                    f"{self.base_url}/api/v1/db/{target}/method-collection/{urllib.parse.quote(collection, safe='')}/coverage"
                 )
             )
         )

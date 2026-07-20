@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from volca.types import FlowDetail, MappingStatus, MethodDetail, MethodFactor
+from volca.types import CollectionCoverage, FlowDetail, MappingStatus, MethodDetail, MethodFactor
 
 
 def _resp(session_attr, json_body: dict) -> None:
@@ -77,6 +77,24 @@ class TestMappingStatus:
         assert out.db_biosphere_count == 300
         assert out.unique_db_flows_matched == 75
         assert out.unmapped_flows[0].flow_name == "Unobtanium"
+
+
+class TestCollectionCoverage:
+    def test_collection_name_is_url_encoded(self, mocked_client):
+        client, session = mocked_client
+        _resp(session.get, {
+            "collection": "EF 3.1",
+            "dbName": "testdb",
+            "totalFlows": 300,
+            "characterizedFlows": 210,
+        })
+        out = client.get_collection_coverage("EF 3.1")
+        assert session.get.call_args[0][0] == (
+            "http://test.local/api/v1/db/testdb/method-collection/EF%203.1/coverage"
+        )
+        assert isinstance(out, CollectionCoverage)
+        assert out.characterized_flows == 210
+        assert out.total_flows == 300
 
 
 class TestStats:
