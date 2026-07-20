@@ -617,7 +617,7 @@ data MappingStatus = MappingStatus
     , mstUnmapped :: Int -- Not matched
     , mstCoverage :: Double -- Percentage of mapped flows (0-100)
     , mstDbBiosphereCount :: Int -- Total biosphere flows in the DB
-    , mstUniqueDbFlowsMatched :: Int -- Unique DB flows hit by this method's CFs
+    , mstUniqueDbFlowsMatched :: Int -- Distinct DB flows the method characterizes, counted with the same lookup scoring uses (fallbacks included)
     , mstUnmappedFlows :: [UnmappedFlowAPI] -- Details of unmapped flows
     }
     deriving (Generic)
@@ -654,6 +654,24 @@ data FlowCFEntry = FlowCFEntry
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowCFEntry)
+
+{- | How much of one database a whole method collection characterizes: the
+distinct emission and resource flows that at least one of its methods
+resolves a factor for, probed with the same lookup scoring uses.
+
+Distinct is the point. A collection's methods overlap heavily — every
+climate-change variant characterizes the same gases — so summing per-method
+figures counts a flow once per method that reaches it, and no sum of the
+per-method mapping statuses can recover this number.
+-}
+data CollectionCoverage = CollectionCoverage
+    { ccvCollection :: Text
+    , ccvDbName :: Text
+    , ccvTotalFlows :: Int -- Emission and resource flows the database carries
+    , ccvCharacterizedFlows :: Int -- Distinct flows at least one method characterizes
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped CollectionCoverage)
 
 -- | Characterization result: matched CFs for a method in a database
 data CharacterizationResult = CharacterizationResult
