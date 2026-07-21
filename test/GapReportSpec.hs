@@ -92,6 +92,7 @@ mkActivity name exs =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 mkTechFlow :: UUID -> Text -> TechnosphereFlow

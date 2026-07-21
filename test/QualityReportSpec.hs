@@ -27,6 +27,7 @@ import Database.Quality (
 import Types (
     Activity (..),
     Exchange (..),
+    FormulaCheck (..),
     NativeProcessId (..),
     Severity (..),
     SimpleDatabase (..),
@@ -76,6 +77,7 @@ mkActivity name exs =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 techExchange :: UUID -> Double -> TechRole -> Exchange
@@ -281,6 +283,24 @@ spec = do
 
         it "passes a fully documented activity" $
             qcOffenders (qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]))) `shouldBe` []
+
+    describe "formula consistency check" $ do
+        it "flags an activity whose formulas diverge, with counts and the example" $ do
+            let fc = FormulaCheck{fcEvaluated = 30, fcDivergent = 12, fcUnevaluable = 3, fcExample = Just "\"a*2\" evaluates to 5.0 but the dataset stores 4.0"}
+                check = qrFormulaConsistency (reportOf ((mkActivity "bread" [reference breadFlow]){activityFormulaCheck = Just fc}))
+            details check
+                `shouldBe` ["12 of 30 evaluable formula(s) disagree with the stored amount (e.g. \"a*2\" evaluates to 5.0 but the dataset stores 4.0); 3 more could not be evaluated"]
+            severities check `shouldBe` [InfoSev]
+
+        it "passes an activity whose formulas only failed to evaluate" $ do
+            let fc = FormulaCheck{fcEvaluated = 0, fcDivergent = 0, fcUnevaluable = 7, fcExample = Nothing}
+                check = qrFormulaConsistency (reportOf ((mkActivity "bread" [reference breadFlow]){activityFormulaCheck = Just fc}))
+            qcOffenders check `shouldBe` []
+            qcApplicable check `shouldBe` True
+
+        it "is not applicable to a database without any formula" $
+            qcApplicable (qrFormulaConsistency (reportOf (mkActivity "bread" [reference breadFlow])))
+                `shouldBe` False
 
     describe "report header" $
         it "counts one process per (activity, product) entry" $ do

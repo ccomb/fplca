@@ -202,6 +202,9 @@ History of manual bumps:
      changes the Store layout of the linking stats embedded in the cache; a
      downgrade reading a newer cache would fail mid-decode, so both directions
      rebuild once instead.
+- 10: Activity record gained activityFormulaCheck (mathematicalRelation
+     consistency outcome, surfaced by the database quality report). Old
+     caches miss the field and would fail mid-decode.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -209,7 +212,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 9
+     in hi `xor` lo `xor` 10
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

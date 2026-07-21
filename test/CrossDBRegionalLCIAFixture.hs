@@ -111,6 +111,7 @@ mkActivity _ loc =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 emptyIndexes :: Indexes

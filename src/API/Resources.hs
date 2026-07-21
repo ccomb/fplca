@@ -464,13 +464,15 @@ description r = case r of
     GetQualityReport ->
         "LCA / ACV — dataset-soundness report of a database, for the people \
         \who build or repair one: the structural defects a score cannot \
-        \reveal. Five checks, computed on staged and loaded databases alike: \
+        \reveal. Six checks, computed on staged and loaded databases alike: \
         \entries without exactly one reference exchange, coproduct allocation \
         \percentages that don't sum to 100% (or blocks where only some \
         \coproducts carry one), entries duplicated outright \
         \(same name, location and reference product), non-finite amounts or a \
-        \zero reference amount, and missing metadata (description, \
-        \classification, location, units absent from the registry). Each \
+        \zero reference amount, missing metadata (description, \
+        \classification, location, units absent from the registry), and \
+        \stored amounts that disagree with the formulas documenting them \
+        \(mathematicalRelation, checked at parse time). Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \

@@ -28,6 +28,7 @@ mkActivity name xs =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 -- Index-builder helper: create a BM25 index over a list of activity names.

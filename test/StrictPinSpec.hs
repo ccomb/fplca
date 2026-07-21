@@ -252,6 +252,7 @@ supplierDB offset products =
                         , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
+                        , activityFormulaCheck = Nothing
                         }
                in (((actUUID, prodUUID), act), (flowUUID, flow))
             | (i, name) <- zip [0 ..] products
@@ -313,6 +314,7 @@ consumerDB offset products =
                         , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
+                        , activityFormulaCheck = Nothing
                         }
                in (((actUUID, prodUUID), act), [(inFlowUUID, inFlow), (outFlowUUID, outFlow)])
             | (i, name) <- zip [0 ..] products

@@ -452,6 +452,7 @@ mkActivityAt loc =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 mkRefExchangeAt :: Text -> Exchange

@@ -327,6 +327,7 @@ qualityReportToAPI mLimit r =
         , qraDuplicateActivities = checkToAPI (Quality.qrDuplicateActivities r)
         , qraSuspiciousAmounts = checkToAPI (Quality.qrSuspiciousAmounts r)
         , qraMissingMetadata = checkToAPI (Quality.qrMissingMetadata r)
+        , qraFormulaConsistency = checkToAPI (Quality.qrFormulaConsistency r)
         }
   where
     checkToAPI c =

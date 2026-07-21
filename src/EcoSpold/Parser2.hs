@@ -9,7 +9,7 @@ import Amount (readAmount)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -407,49 +407,43 @@ The stored amount always stays authoritative. EcoSpold2 sources carry
 pre-evaluated amounts, and this evaluator only supports a subset of the
 formula language (no @UnitConversion@, no cross-dataset @Ref@) with
 SimaPro-flavoured semantics, so its result serves as a consistency check, not
-a replacement. A formula that evaluates to a different value is reported as a
-divergence; the formulas that cannot be evaluated at all are summarized in a
-single warning per dataset — real EcoSpold2 databases use unsupported
-functions heavily, and one line per exchange would flood the load log.
+a replacement. Divergences are expected in real EcoSpold2 databases
+(system-model exports rescale amounts without updating the copied formulas),
+so nothing is logged: the outcome is recorded on the activity for the
+database quality report.
 -}
-validateFormulas :: M.Map Text Double -> [(Exchange, ExchangeFormula)] -> [String]
-validateFormulas params pairs = divergences ++ unevaluableSummary
+checkFormulas :: M.Map Text Double -> [(Exchange, ExchangeFormula)] -> Maybe FormulaCheck
+checkFormulas params pairs = case checked of
+    [] -> Nothing
+    _ ->
+        Just
+            FormulaCheck
+                { fcEvaluated = length evaluated
+                , fcDivergent = length divergent
+                , fcUnevaluable = length [() | (_, _, Left _) <- checked]
+                , fcExample = listToMaybe (map example divergent)
+                }
   where
     -- Left-biased union: a <parameter> wins over an exchange variable of the same name.
     env = M.union params (M.fromList [(v, exchangeAmount ex) | (ex, ef) <- pairs, Just v <- [efVariableName ef]])
     checked = [(ex, rel, Expr.evaluate env (Expr.normalizeExpr '.' rel)) | (ex, ef) <- pairs, Just rel <- [efMathRel ef]]
-    divergences =
-        [ "[WARNING] mathematicalRelation \""
-            ++ T.unpack rel
-            ++ "\" for exchange flow "
-            ++ UUID.toString (exchangeFlowId ex)
-            ++ " evaluates to "
-            ++ show v
-            ++ " but the dataset stores amount "
-            ++ show (exchangeAmount ex)
-            ++ " - keeping the stored amount"
-        | (ex, rel, Right v) <- checked
-        , not (nearlyEqual v (exchangeAmount ex))
-        ]
-    unevaluableSummary = case [(ex, rel) | (ex, rel, Left _) <- checked] of
-        [] -> []
-        unevaluable@((ex, rel) : _) ->
-            [ "[WARNING] "
-                ++ show (length unevaluable)
-                ++ " mathematicalRelation formula(s) could not be evaluated (e.g. \""
-                ++ T.unpack rel
-                ++ "\" on exchange flow "
-                ++ UUID.toString (exchangeFlowId ex)
-                ++ ") - keeping the stored amounts"
-            ]
+    evaluated = [(ex, rel, v) | (ex, rel, Right v) <- checked]
+    divergent = [(ex, rel, v) | (ex, rel, v) <- evaluated, not (nearlyEqual v (exchangeAmount ex))]
+    example (ex, rel, v) =
+        "\""
+            <> rel
+            <> "\" evaluates to "
+            <> T.pack (show v)
+            <> " but the dataset stores "
+            <> T.pack (show (exchangeAmount ex))
     nearlyEqual a b = abs (a - b) <= 1e-9 * max 1 (max (abs a) (abs b))
 
 -- | Xeno SAX parser implementation
 parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
 parseWithXeno xmlContent processId = do
     finalState <- first show (X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent)
-    (result, formulaWarns) <- buildResult finalState processId
-    pure (result, reverse (psWarnings finalState) ++ formulaWarns)
+    result <- buildResult finalState processId
+    pure (result, reverse (psWarnings finalState))
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -778,7 +772,7 @@ parseWithXeno xmlContent processId = do
     cdata = text
 
     -- Build final result from parse state
-    buildResult :: ParseState -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
+    buildResult :: ParseState -> ProcessId -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
     buildResult st _pid =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
@@ -786,14 +780,14 @@ parseWithXeno xmlContent processId = do
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
             pairs = reverse (psExchanges st)
-            formulaWarns = validateFormulas (psParams st) pairs
+            formulaCheck = checkFormulas (psParams st) pairs
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing
+            activity = Activity name description M.empty (psClassifications st) location refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing formulaCheck
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
-         in (,formulaWarns) . (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
+         in (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
 
 -- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))

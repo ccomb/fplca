@@ -466,6 +466,23 @@ of a database.
 newtype NativeProcessId = NativeProcessId Text
     deriving (Show, Eq, Ord, Generic, NFData, Store)
 
+{- | Per-dataset outcome of the mathematicalRelation consistency check,
+computed at parse time (exchange formulas are discarded after parsing).
+The stored amounts always stay authoritative; this only records how well the
+dataset's formulas agree with them, for the database quality report.
+-}
+data FormulaCheck = FormulaCheck
+    { fcEvaluated :: !Int
+    -- ^ Formulas successfully evaluated
+    , fcDivergent :: !Int
+    -- ^ Evaluated to a value different from the stored amount (beyond float tolerance)
+    , fcUnevaluable :: !Int
+    -- ^ Not evaluable (unsupported functions, external references)
+    , fcExample :: !(Maybe Text)
+    -- ^ One divergent example, pre-rendered for display
+    }
+    deriving (Generic, NFData, Store)
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
@@ -483,6 +500,7 @@ data Activity = Activity
     , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
     , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
     , activityNativeId :: !(Maybe NativeProcessId) -- Source dataset block this activity was read from; groups the coproducts of one block. Nothing when the source format lacks the field
+    , activityFormulaCheck :: !(Maybe FormulaCheck) -- Outcome of the mathematicalRelation consistency check; Nothing when the dataset has no formulas or the format has none
     }
     deriving (Generic, NFData, Store)
 

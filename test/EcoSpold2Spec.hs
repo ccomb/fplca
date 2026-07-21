@@ -189,14 +189,15 @@ spec = describe "per-exchange comments" $ do
     -- mathematicalRelation formulas: <parameter> variables plus exchange
     -- variableNames form a dataset-local environment; an exchange's
     -- mathematicalRelation is checked against it as a consistency control.
-    -- The stored amount always stays authoritative — a divergence or an
-    -- unresolvable formula warns, never changes a number, never crashes.
+    -- The stored amount always stays authoritative — the check's outcome is
+    -- recorded on the activity for the quality report, never logged, never
+    -- changes a number, never crashes.
     -- -----------------------------------------------------------------------
     describe "mathematicalRelation formulas" $ do
         it "keeps the stored amount when the formula evaluates to a different value" $
             withFormulaFixture $ \(act, _, _, _, _) ->
                 -- fuel_input(2.0) * 2 + production(1.0) = 5.0 diverges from the
-                -- stored 4.0; the stored amount wins (the divergence warning is
+                -- stored 4.0; the stored amount wins (the recorded divergence is
                 -- asserted below, proving the nested <property>'s own
                 -- mathematicalRelation "9999" did not leak into the evaluation).
                 [exchangeAmount e | e@TechnosphereExchange{techRole = Input} <- exchanges act]
@@ -216,16 +217,24 @@ spec = describe "per-exchange comments" $ do
             withFormulaFixture $ \(act, _, _, _, _) ->
                 M.member "ghost" (activityParams act) `shouldBe` False
 
-        it "warns on divergence, on unresolvable formulas (aggregated), and on a dropped parameter" $ do
+        it "records the check outcome on the activity, with the divergent example" $
+            withFormulaFixture $ \(act, _, _, _, _) ->
+                case activityFormulaCheck act of
+                    Nothing -> expectationFailure "expected a FormulaCheck on the activity"
+                    Just fc -> do
+                        fcEvaluated fc `shouldBe` 1
+                        fcDivergent fc `shouldBe` 1
+                        fcUnevaluable fc `shouldBe` 1
+                        fcExample fc `shouldBe` Just "\"fuel_input * 2 + production\" evaluates to 5.0 but the dataset stores 4.0"
+
+        it "logs the dropped parameter but nothing about the formulas" $ do
             (since, _) <- getLogLines 0
             withFormulaFixture $ \_ -> pure ()
             (_, newLines) <- getLogLines since
-            any ("evaluates to 5.0 but the dataset stores amount 4.0 - keeping the stored amount" `isInfixOf`) newLines
-                `shouldBe` True
-            any ("1 mathematicalRelation formula(s) could not be evaluated (e.g. \"missing_var * 2\"" `isInfixOf`) newLines
-                `shouldBe` True
             any ("Ignoring <parameter> \"ghost\"" `isInfixOf`) newLines
                 `shouldBe` True
+            any ("mathematicalRelation" `isInfixOf`) newLines
+                `shouldBe` False
 
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and
 optional specialActivityType code. One reference output, no other exchanges.

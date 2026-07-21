@@ -6,7 +6,8 @@ A score tells you whether a database computes; it says nothing about whether
 the dataset is well formed. These checks look for the structural defects a
 score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
-amounts that aren't finite, and missing metadata.
+amounts that aren't finite, missing metadata, and stored amounts that
+disagree with the formulas documenting them.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -33,6 +34,7 @@ import Numeric (showFFloat)
 import Types (
     Activity (..),
     BiosphereFlow (..),
+    FormulaCheck (..),
     Severity (..),
     SimpleDatabase (..),
     TechnosphereFlow (..),
@@ -81,6 +83,7 @@ data QualityReport = QualityReport
     , qrDuplicateActivities :: !QualityCheck
     , qrSuspiciousAmounts :: !QualityCheck
     , qrMissingMetadata :: !QualityCheck
+    , qrFormulaConsistency :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -95,6 +98,7 @@ qualityChecks r =
     , qrDuplicateActivities r
     , qrSuspiciousAmounts r
     , qrMissingMetadata r
+    , qrFormulaConsistency r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -123,6 +127,7 @@ qualityReport dbName db =
         , qrDuplicateActivities = QualityCheck True (worstFirst duplicateOffenders)
         , qrSuspiciousAmounts = QualityCheck True (worstFirst amountOffenders)
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
+        , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
         }
   where
     acts = M.elems (sdbActivities db)
@@ -236,6 +241,31 @@ qualityReport dbName db =
                         else Nothing
             ]
         ]
+
+    -- The parse-time mathematicalRelation check (EcoSpold2): formulas that
+    -- re-evaluate away from the amount they document. Expected in system-model
+    -- exports — allocation rescales amounts without updating the copied
+    -- formulas — hence Info: the stored amounts stay authoritative, this only
+    -- tells a maker where their own formulas and amounts drifted apart.
+    -- Datasets whose formulas merely could not be evaluated are not findings;
+    -- 'False' applicability means no dataset carried a formula at all.
+    formulaApplicable = any (isJust . activityFormulaCheck) acts
+    formulaOffenders =
+        [ offender InfoSev act Nothing (formulaDetail fc)
+        | act <- acts
+        , Just fc <- [activityFormulaCheck act]
+        , fcDivergent fc > 0
+        ]
+    formulaDetail fc =
+        T.pack (show (fcDivergent fc))
+            <> " of "
+            <> T.pack (show (fcEvaluated fc))
+            <> " evaluable formula(s) disagree with the stored amount"
+            <> maybe "" (\e -> " (e.g. " <> e <> ")") (fcExample fc)
+            <> ( if fcUnevaluable fc > 0
+                    then "; " <> T.pack (show (fcUnevaluable fc)) <> " more could not be evaluated"
+                    else ""
+               )
 
     -- Incomplete rather than wrong, hence Info — except a missing location or an
     -- unknown unit, which change how the entry links and converts.

@@ -90,6 +90,7 @@ targetDB =
                 , activityAllocationFormula = Nothing
                 , activityNativeType = Nothing
                 , activityNativeId = Nothing
+                , activityFormulaCheck = Nothing
                 }
         flow =
             TechnosphereFlow

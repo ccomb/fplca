@@ -928,6 +928,7 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
                     , activityAllocationFormula = allocFormula
                     , activityNativeType = nativeType
                     , activityNativeId = nativeId
+                    , activityFormulaCheck = Nothing
                     }
             allUnits =
                 map
