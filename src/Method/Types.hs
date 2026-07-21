@@ -14,6 +14,7 @@ module Method.Types (
     MethodCF (..),
     FlowDirection (..),
     Compartment (..),
+    Location (..),
     Medium (..),
     Subcompartment (..),
     CFFamily (..),
@@ -98,6 +99,13 @@ newtype Medium = Medium Text
 normalized name; a newtype so it can't be swapped with a medium in a key tuple.
 -}
 newtype Subcompartment = Subcompartment Text
+    deriving (Eq, Ord, Show)
+
+{- | A location / geography code (@"FR"@, @"CN-SC"@, @"RER"@, @"GLO"@) as used
+by regionalized CFs and the location hierarchy. A newtype so a location can't
+be swapped with any other Text axis in a regionalized lookup key.
+-}
+newtype Location = Location Text
     deriving (Eq, Ord, Show)
 
 {- | A characterization factor from a method file

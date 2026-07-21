@@ -20,6 +20,8 @@ module Method.Mapping (
     buildMapContext,
 
     -- * LCIA scoring
+    CF (..),
+    CFUnit (..),
     CFFamily (..),
     cfFamily,
     MethodTables (..),
@@ -406,35 +408,52 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     -- to keep the match exhaustive. Counts as unmatched if ever introduced.
     tally (Just NoMatch) = one{msUnmatched = 1}
 
+{- | The unit a CF value is denominated in ('mcfUnit' as parsed — a flow
+reference unit like @"kg"@, or an impact-result expression like @"kg CO2 eq"@).
+A distinct type from the flow's own unit so the two sides of a
+flow-unit → CF-unit conversion can't be silently swapped.
+-}
+newtype CFUnit = CFUnit Text
+    deriving (Eq, Show)
+
+{- | A characterization factor as stored in the lookup tables: the value and
+the unit it is denominated in, kept together so they can't drift apart.
+-}
+data CF = CF
+    { cfValue :: !Double
+    , cfUnit :: !CFUnit
+    }
+    deriving (Eq, Show)
+
 {- | Precomputed CF lookup tables for one (database, method) pair.
 Building these from raw mappings is O(n log n) over thousands of CFs, so they
 should be computed once per method and reused across inventories.
 -}
 data MethodTables = MethodTables
-    { mtUuidCF :: !(M.Map UUID (Double, Text))
-    -- ^ UUID-matched CFs: exact flow id → (CF value, CF unit)
-    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) (Double, Text))
-    -- ^ (normalized name, medium, subcompartment) → (CF, unit)
-    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
-    -- ^ (normalized name, medium) → (CF, unit) for entries with unspecified subcompartment
-    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
-    {- ^ (normalized name, medium) → (CF, unit) for entries with the long-term
+    { mtUuidCF :: !(M.Map UUID CF)
+    -- ^ UUID-matched CFs: exact flow id → CF
+    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) CF)
+    -- ^ (normalized name, medium, subcompartment) → CF
+    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) CF)
+    -- ^ (normalized name, medium) → CF for entries with unspecified subcompartment
+    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) CF)
+    {- ^ (normalized name, medium) → CF for entries with the long-term
     UNSPECIFIED subcompartment ("unspecified (long-term)"). A long-term flow at an
     uncovered specific subcompartment ("groundwater, long-term") inherits this —
     the method's long-term default, often a deliberate zero — instead of the
     immediate-emission 'mtFallbackCF', so JRC scores delayed emissions with the
     method's own long-term factor rather than the immediate one.
     -}
-    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) (Double, Text))
-    {- ^ (normalized name, medium) → (CF, unit), but only where the substance's
+    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) CF)
+    {- ^ (normalized name, medium) → CF, but only where the substance's
     factor is the SAME across every subcompartment — i.e. the subcompartment
     genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
     == any sub). Lets a flow whose sub matches no exact CF and has no
     unspecified fallback still resolve, without guessing for a substance whose
     factor DOES vary by sub (water by source), which is omitted as ambiguous.
     -}
-    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) (Double, Text))
-    {- ^ (CAS, normalized medium) → (CF, unit), from non-regionalized CFs.
+    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) CF)
+    {- ^ (CAS, normalized medium) → CF, from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
     single database flow at build time, so when many flows share one CAS in a
     compartment (e.g. every water flow shares 7732-18-5) only that one flow is
@@ -446,14 +465,14 @@ data MethodTables = MethodTables
     (minerals are reachable only through this bridge). Empty for methods whose
     CFs carry no CAS.
     -}
-    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Text (Double, Text)))
-    {- ^ (CAS, normalized medium) → (location → (CF, unit)), from regionalized
+    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Location CF))
+    {- ^ (CAS, normalized medium) → (location → CF), from regionalized
     CFs. The regionalized analogue of 'mtCasCF': lets the regionalized build
     characterize every same-CAS flow per location, not just the one a CF
     resolved to. Empty for methods with no regionalized CAS-bearing CFs.
     -}
-    , mtRegionalizedCF :: !(M.Map (UUID, Text) (Double, Text))
-    {- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → (CF, unit).
+    , mtRegionalizedCF :: !(M.Map (UUID, Location) CF)
+    {- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → CF.
     Empty for non-regionalized methods. When non-empty, callers should dispatch
     to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
     -}
@@ -519,7 +538,7 @@ caller can emit one warning per gap rather than per pid × per method.
 data RegionalActivityWeights = RegionalActivityWeights
     { rawWeights :: !(U.Vector Double)
     , rawTainted :: !(U.Vector Word8)
-    , rawMissingPairs :: ![(UUID, Text)]
+    , rawMissingPairs :: ![(UUID, Location)]
     }
 
 {- | Inverted indices over a 'Method' for the post-scoring suggester.
@@ -962,7 +981,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- keeps the last row). Regionalized UUID-matched rows reach
             -- 'mtRegionalizedCF' keyed by flow UUID + location.
             M.fromList
-                [ (bfId flow, (mcfValue cf, mcfUnit cf))
+                [ (bfId flow, cfOf cf)
                 | (cf, Just (flow, ByUUID)) <- mappings
                 , Nothing <- [mcfConsumerLocation cf]
                 ]
@@ -976,7 +995,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -999,7 +1018,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1017,7 +1036,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             stripStrategy $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (mcfValue cf, mcfUnit cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1033,7 +1052,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [(mcfValue cf, mcfUnit cf)])
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [cfOf cf])
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1071,7 +1090,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.map snd $
                 M.fromListWith
                     preferUnspecifiedCas
-                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
@@ -1089,7 +1108,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith preferUnspecifiedCas)
-                    [ ((SR.CASNumber cas, Medium normMed), M.singleton loc (casSubRank normSub, (mcfValue cf, mcfUnit cf)))
+                    [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
@@ -1107,7 +1126,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- fallback CF. CFs with no specific subcomp ('isUnspecifiedSub')
             -- are wildcards and match any flow subcomp.
             M.fromList
-                [ ((bfId flow, loc), (mcfValue cf, mcfUnit cf))
+                [ ((bfId flow, Location loc), cfOf cf)
                 | (cf, Just (flow, _)) <- mappings
                 , cfSubcompMatchesFlow cf flow
                 , Just loc <- [mcfConsumerLocation cf]
@@ -1119,7 +1138,9 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
   where
-    stripStrategy = M.map (\(v, u, _, _) -> (v, u))
+    cfOf cf = CF (mcfValue cf) (CFUnit (mcfUnit cf))
+
+    stripStrategy = M.map (\(c, _, _) -> c)
 
     -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
     -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
@@ -1136,7 +1157,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     casSubRank s
         | isUnspecifiedSub s = 0 :: Int
         | otherwise = 1
-    preferUnspecifiedCas a@(ra, (va, _)) b@(rb, (vb, _))
+    preferUnspecifiedCas a@(ra, CF va _) b@(rb, CF vb _)
         | ra /= rb = if ra < rb then a else b
         | abs va >= abs vb = a
         | otherwise = b
@@ -1185,7 +1206,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     -- verbatim carries the unit the flow is actually declared in; the other
     -- variant is dimensionally incompatible and would silently convert to 0.
     -- Only then the historical higher-value tie-break.
-    preferBetter a@(v1, _, s1, r1) b@(v2, _, s2, r2)
+    preferBetter a@(CF v1 _, s1, r1) b@(CF v2 _, s2, r2)
         | strategyPriority s1 < strategyPriority s2 = a
         | strategyPriority s1 > strategyPriority s2 = b
         | r1 /= r2 = if r1 then a else b
@@ -1228,11 +1249,11 @@ expects, for characterization.
     amount.
   * The flow unit itself is unknown → @qty@ unchanged (no base to normalize to).
 -}
-convertForCharacterization :: UnitConfig -> Text -> Text -> Double -> Double
-convertForCharacterization cfg flowUnit cfUnit qty
-    | flowUnit == cfUnit || T.null cfUnit || T.null flowUnit = qty
+convertForCharacterization :: UnitConfig -> Text -> CFUnit -> Double -> Double
+convertForCharacterization cfg flowUnit (CFUnit cfu) qty
+    | flowUnit == cfu || T.null cfu || T.null flowUnit = qty
     | not (isKnownUnit cfg flowUnit) = qty
-    | isKnownUnit cfg cfUnit = fromMaybe 0 (convertUnit cfg flowUnit cfUnit qty)
+    | isKnownUnit cfg cfu = fromMaybe 0 (convertUnit cfg flowUnit cfu qty)
     | otherwise = maybe 0 snd (normalizeToCanonical cfg flowUnit qty)
 
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
@@ -1252,7 +1273,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
   where
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfTuple 1.0)
+        Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0)
 
 {- | Precompute per-activity-column contributions for a regionalized method.
 
@@ -1290,7 +1311,7 @@ fillRegionalActivityWeights ::
     UnitDB ->
     BioFlowDB ->
     Database ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     MethodTables
 fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
@@ -1313,9 +1334,9 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     -- @(UUID, Text)@-keyed map. Subsumes the old
     -- @regionalizedFlows :: Set UUID@ check — @Just _@ here is the
     -- "this flow is regionalized" signal needed at the taint branch.
-    regionalByRow :: V.Vector (Maybe (M.Map Text (Double, Text)))
+    regionalByRow :: V.Vector (Maybe (M.Map Location CF))
     regionalByRow =
-        let perFlow :: M.Map UUID (M.Map Text (Double, Text))
+        let perFlow :: M.Map UUID (M.Map Location CF)
             perFlow =
                 M.fromListWith
                     M.union
@@ -1335,10 +1356,10 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
 
     -- ProcessId → matrix column index → activity's reference location.
     -- Built once (O(nActivities)) and indexed by column inside the hot loop.
-    colLoc :: V.Vector Text
+    colLoc :: V.Vector Location
     colLoc =
-        V.replicate nCols T.empty
-            V.// [ (fromIntegral (actIdx V.! pid), activityLocation (activities V.! pid))
+        V.replicate nCols (Location T.empty)
+            V.// [ (fromIntegral (actIdx V.! pid), Location (activityLocation (activities V.! pid)))
                  | pid <- [0 .. V.length actIdx - 1]
                  , let !col = fromIntegral (actIdx V.! pid) :: Int
                  , col >= 0
@@ -1368,19 +1389,19 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     precomputed = runST $ do
         ws <- MU.replicate nCols (0 :: Double)
         ts <- MU.replicate nCols (0 :: Word8)
-        missRef <- newSTRef (Set.empty :: Set.Set (UUID, Text))
+        missRef <- newSTRef (Set.empty :: Set.Set (UUID, Location))
         U.forM_ bioTriples $ \(SparseTriple flowRow colIdx bioVal) -> do
             let !col = fromIntegral colIdx :: Int
                 !row = fromIntegral flowRow :: Int
                 !flowUUID = bioFlows V.! row
-                applyRaw cfTuple =
+                applyRaw cf =
                     let !contribution =
                             convertAndMultiply
                                 unitCfg
                                 unitDB
                                 (mtEnergyDensities tables)
                                 (M.lookup flowUUID flowDB)
-                                cfTuple
+                                cf
                                 bioVal
                      in MU.unsafeModify ws (+ contribution) col
                 -- 'mtBroadcast' is the unit-converted CF per unit of flow, so
@@ -1404,9 +1425,9 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                             Just cf -> Just cf
                             Nothing -> lookupParents ps
                      in case M.lookup loc locMap of
-                            Just cfTuple -> applyRaw cfTuple
+                            Just cf -> applyRaw cf
                             Nothing -> case lookupParents (M.findWithDefault [] loc hier) of
-                                Just cfTuple -> applyRaw cfTuple
+                                Just cf -> applyRaw cf
                                 Nothing -> case M.lookup flowUUID broadcast of
                                     Just preMultipliedCF ->
                                         MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
@@ -1473,7 +1494,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 
     legacyScoreFlow fid qty = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cfTuple qty)
+        Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cf qty)
 
 {- | Back-compat wrapper: build tables on the fly, with no compartment map,
 energy densities, or CF-family gating ('OtherCFFamily'). Prefer the cached path
@@ -1511,7 +1532,7 @@ computeLCIAScoreAuto ::
     -- | Pre-computed inventory @g = B · s@ (only used in the classic path)
     Inventory ->
     -- | Location hierarchy: child → ordered list of parents
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     Either Text Double
 computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier tables
@@ -1549,7 +1570,7 @@ computeRegionalizedLCIAScore ::
     -- | Scaling vector @s@ from 'Matrix.computeScalingVector'
     Vector ->
     -- | Location hierarchy: child → ordered list of parents
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     Either Text Double
 computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier tables =
@@ -1637,7 +1658,7 @@ sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
     UnitDB ->
     BioFlowDB ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     {- | Per-DB triples: one per database participating in the cross-DB solve
     (root + dep DBs in the same order returned by 'SharedSolver.csScalings').
     -}
@@ -1661,7 +1682,7 @@ converges on the same canonical form — a compartments.csv rule like
 against ILCD-style bare media without requiring an explicit (medium, sub)
 pair for every combination.
 -}
-lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe (Double, Text)
+lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe CF
 lookupCascadeCF tables flowDB fid =
     M.lookup fid (mtUuidCF tables)
         <|> (M.lookup fid flowDB >>= byNameOrCas)
@@ -1926,8 +1947,8 @@ silently using the raw value.
 Every other case (matching dimensions, no density, or an energy flow) defers
 to 'convertForCharacterization', so flows without a density are unchanged.
 -}
-energyAwareConversion :: UnitConfig -> Text -> Text -> Maybe EnergyDensity -> Double -> Double
-energyAwareConversion cfg flowUnit cfUnit mDensity qty =
+energyAwareConversion :: UnitConfig -> Text -> CFUnit -> Maybe EnergyDensity -> Double -> Double
+energyAwareConversion cfg flowUnit cfu@(CFUnit rawCfUnit) mDensity qty =
     case mDensity of
         -- The bridge fires when the CF is denominated in the density's target
         -- unit (MJ for a calorific value, m³ for a mass density) and the flow is
@@ -1937,13 +1958,13 @@ energyAwareConversion cfg flowUnit cfUnit mDensity qty =
         -- CF (kg → m³ via density), which are the two cases where a per-physical-
         -- quantity CF meets a mass inventory flow.
         Just (EnergyDensity ev densityUnit nativeUnit)
-            | unitsCompatible cfg cfUnit densityUnit
-            , not (unitsCompatible cfg cfUnit flowUnit) ->
+            | unitsCompatible cfg rawCfUnit densityUnit
+            , not (unitsCompatible cfg rawCfUnit flowUnit) ->
                 fromMaybe 0 $ do
                     qtyNative <- toNativeQty flowUnit nativeUnit
-                    factor <- convertUnit cfg densityUnit cfUnit ev
+                    factor <- convertUnit cfg densityUnit rawCfUnit ev
                     pure (qtyNative * factor)
-        _ -> convertForCharacterization cfg flowUnit cfUnit qty
+        _ -> convertForCharacterization cfg flowUnit cfu qty
   where
     -- Bring the inventory quantity into the unit the density is denominated
     -- against: identical units need no table entry, otherwise a same-dimension
@@ -1970,11 +1991,10 @@ convertAndMultiply ::
     the identity factor (no flow record means no flow unit known).
     -}
     Maybe BiosphereFlow ->
-    -- | (CF value, CF unit)
-    (Double, Text) ->
+    CF ->
     Double ->
     Double
-convertAndMultiply unitConfig unitDB energyDensities mflow (cfVal, cfUnit) qty =
+convertAndMultiply unitConfig unitDB energyDensities mflow (CF cfVal cfu) qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
         -- Density from the curated CSV first; else parse it from the flow name
         -- ("Coal, 18 MJ per kg" → 18 MJ), so energy-resource variants the CSV
@@ -1983,7 +2003,7 @@ convertAndMultiply unitConfig unitDB energyDensities mflow (cfVal, cfUnit) qty =
             mflow >>= \f ->
                 M.lookup (normalizeName (bfName f)) energyDensities
                     <|> fmap snd (parseEnergyDensitySuffix (bfName f))
-        converted = energyAwareConversion unitConfig flowUnit cfUnit mDensity qty
+        converted = energyAwareConversion unitConfig flowUnit cfu mDensity qty
      in converted * cfVal
 
 {- | Per-flow contributions over an 'Inventory', keyed by flow UUID (possibly
@@ -2026,8 +2046,8 @@ inventoryContributions unitConfig unitDB flowDB inventory tables =
             Nothing -> (contribs, fid : unknowns) -- metadata missing — surface it
             Just flow -> case lookupCascadeCF tables flowDB fid of
                 Nothing -> (contribs, unknowns) -- no CF match — legitimately uncharacterized
-                Just cfTuple@(cfVal, _) ->
-                    let !contribution = convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfTuple qty
+                Just found@(CF cfVal _) ->
+                    let !contribution = convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) found qty
                      in ((flow, cfVal, contribution) : contribs, unknowns)
 
 {- | Per-process LCIA contributions for one DB + one method, driven by
@@ -2080,7 +2100,7 @@ processContributionsFromTables unitConfig unitDB flowDB ltMode db scalingVec tab
                     Nothing -> 0
                     Just _ -> case lookupCascadeCF tables flowDB flowUUID of
                         Nothing -> 0
-                        Just cfTuple -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cfTuple 1.0
+                        Just cf -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cf 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in
@@ -2244,7 +2264,7 @@ computeLCIAScoreSetFromTables ::
     UnitDB ->
     BioFlowDB ->
     Inventory ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     {- | Non-empty per-DB triples: 'NE.head' is root, tail is each participating
     dep DB. Building order matches 'SharedSolver.csScalings'.
     -}
@@ -2272,7 +2292,7 @@ scoreRegionalCrossDB ::
     UnitConfig ->
     UnitDB ->
     BioFlowDB ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     V.Vector MethodSetEntry ->
     NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]
@@ -2320,8 +2340,8 @@ scoreBatched unitCfg unitDB flowDB bt inventory
             cascadeContrib !tables !uuid !qty =
                 case lookupCascadeCF tables flowDB uuid of
                     Nothing -> 0
-                    Just cfTuple ->
-                        convertAndMultiply unitCfg unitDB (mtEnergyDensities tables) (M.lookup uuid flowDB) cfTuple qty
+                    Just cf ->
+                        convertAndMultiply unitCfg unitDB (mtEnergyDensities tables) (M.lookup uuid flowDB) cf qty
             scores = U.create $ do
                 mv <- MU.replicate nMethods (0.0 :: Double)
                 mapM_
@@ -2362,7 +2382,7 @@ DB) so the suggester sees exactly what scoring sees — including the CAS
 bridge — and 'findUncharacterized' never flags a flow the score path
 characterizes. Cold path; the singleton allocation is irrelevant here.
 -}
-lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe (Double, Text)
+lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe CF
 lookupCFForFlow tables fid mFlow =
     lookupCascadeCF tables (maybe M.empty (M.singleton fid) mFlow) fid
 

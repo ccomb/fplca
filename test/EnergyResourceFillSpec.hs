@@ -8,7 +8,7 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, lookupCFForFlow)
+import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, cfValue, lookupCFForFlow)
 import Method.Types (CFFamily (..), Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), parseEnergyDensitySuffix)
 import SynonymDB (normalizeName)
 import Types (BiosphereFlow (..))
@@ -74,7 +74,7 @@ disagreeingCoalTables =
 -- Borrowed raw CF (the density is applied later by convertAndMultiply).
 borrowFor :: EnergyDensityMap -> Text -> Maybe Double
 borrowFor eds flowName =
-    fmap fst (lookupCFForFlow (coalTables eds) (mkUUID 99) (Just (mkFlow 99 flowName)))
+    fmap cfValue (lookupCFForFlow (coalTables eds) (mkUUID 99) (Just (mkFlow 99 flowName)))
 
 spec :: Spec
 spec = do
@@ -98,7 +98,7 @@ spec = do
         it "does NOT borrow when the resource family is unknown to the engine" $
             borrowFor M.empty "Coal, 18 MJ per kg" `shouldBe` Nothing
         it "does NOT borrow when same-family CFs disagree (ambiguous, never guesses)" $
-            fmap fst (lookupCFForFlow disagreeingCoalTables (mkUUID 99) (Just (mkFlow 99 "Coal, 18 MJ per kg")))
+            fmap cfValue (lookupCFForFlow disagreeingCoalTables (mkUUID 99) (Just (mkFlow 99 "Coal, 18 MJ per kg")))
                 `shouldBe` Nothing
         it "does NOT fill a non-energy name" $
             borrowFor coalDensity "Water, per capita" `shouldBe` Nothing

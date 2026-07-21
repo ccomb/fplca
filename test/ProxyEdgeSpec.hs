@@ -13,6 +13,7 @@ import Method.Mapping (
     MatchStrategy (..),
     ProxyTargets (..),
     buildMethodTables,
+    cfValue,
     computeMappingStats,
     expandProxyEdges,
     lookupCFForFlow,
@@ -123,4 +124,4 @@ spec = describe "expandProxyEdges" $ do
             tablesProxy = buildMethodTables OtherCFFamily M.empty M.empty (expandProxyEdges byNameTargets edges baseMappings)
             lookup' ts = lookupCFForFlow ts (bfId phosphateFlow) (Just phosphateFlow)
         lookup' tablesNoProxy `shouldBe` Nothing
-        fmap fst (lookup' tablesProxy) `shouldBe` Just 1.0 -- 2.0 * 0.5
+        fmap cfValue (lookup' tablesProxy) `shouldBe` Just 1.0 -- 2.0 * 0.5

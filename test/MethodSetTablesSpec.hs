@@ -22,7 +22,7 @@ import Test.Hspec
 
 import Matrix (Inventory)
 import Method.Mapping
-import Method.Types (Compartment (..), Method (..), MethodCF (..))
+import Method.Types (Compartment (..), Location (..), Method (..), MethodCF (..))
 import qualified Method.Types as MT
 import Types (BiosphereFlow (..), Database, Unit (..))
 import qualified Types as VT
@@ -111,7 +111,7 @@ spec = do
                 cf = mkCF fid 1.0
                 tables0 =
                     (buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (mkFlow fid "co2" uidKg, ByUUID))])
-                        { mtRegionalizedCF = M.singleton (fid, "FR") (2.0, "kg")
+                        { mtRegionalizedCF = M.singleton (fid, Location "FR") (CF 2.0 (CFUnit "kg"))
                         }
                 m1 = mkMethod 1 "m1" [cf]
                 fdb = M.singleton fid (mkFlow fid "co2" uidKg)
@@ -317,7 +317,7 @@ spec = do
                 tRegio =
                     fill
                         ( (buildMethodTables OtherCFFamily M.empty M.empty [(cf2a, Just (flow1, ByUUID))])
-                            { mtRegionalizedCF = M.singleton (fid1, "FR") (7.0, "kg")
+                            { mtRegionalizedCF = M.singleton (fid1, Location "FR") (CF 7.0 (CFUnit "kg"))
                             }
                         )
                 tNonRegio2 =
@@ -409,11 +409,11 @@ spec = do
                 regio = mtRegionalizedCF tables
             -- Pre-fix: this was (0.0, "kg") — clobbered by cfOcean. The
             -- filter drops (cfOcean, flowUns) so the wildcard cfUns survives.
-            M.lookup (fidUns, "FR") regio `shouldBe` Just (3.0, "kg")
+            M.lookup (fidUns, Location "FR") regio `shouldBe` Just (CF 3.0 (CFUnit "kg"))
             -- The ocean flow legitimately receives the ocean CF (and the
             -- wildcard cfUns also matches, but cfOcean writes last so its
             -- explicit zero stays — that's the intended modeller behaviour).
-            M.lookup (fidOcean, "FR") regio `shouldBe` Just (0.0, "kg")
+            M.lookup (fidOcean, Location "FR") regio `shouldBe` Just (CF 0.0 (CFUnit "kg"))
 
         it "treats CFs with empty / (unspecified) subcomp as wildcards" $ do
             let fid = mkUuid 110
@@ -448,9 +448,9 @@ spec = do
                 tUnspec = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecified, Just (flowRiver, ByName))]
                 tUnspecBare = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecBare, Just (flowRiver, ByName))]
             -- All three wildcard forms apply to a specific-subcomp flow.
-            M.lookup (fid, "DE") (mtRegionalizedCF tEmpty) `shouldBe` Just (2.0, "kg")
-            M.lookup (fid, "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (7.0, "kg")
-            M.lookup (fid, "DE") (mtRegionalizedCF tUnspecBare) `shouldBe` Just (9.0, "kg")
+            M.lookup (fid, Location "DE") (mtRegionalizedCF tEmpty) `shouldBe` Just (CF 2.0 (CFUnit "kg"))
+            M.lookup (fid, Location "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (CF 7.0 (CFUnit "kg"))
+            M.lookup (fid, Location "DE") (mtRegionalizedCF tUnspecBare) `shouldBe` Just (CF 9.0 (CFUnit "kg"))
 
         it "does not let a wildcard CF reach a sea/ocean flow (foreign medium)" $ do
             -- A freshwater CF must not characterize a sea-water release via the
@@ -469,7 +469,7 @@ spec = do
                         , mcfConsumerLocation = Just "DE"
                         }
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
-            M.lookup (fid, "DE") (mtRegionalizedCF tables) `shouldBe` Nothing
+            M.lookup (fid, Location "DE") (mtRegionalizedCF tables) `shouldBe` Nothing
 
         it "does not let a wildcard CF reach a long-term groundwater flow for a USEtox method" $ do
             -- The USEtox gate is scoped to LONG-TERM groundwater: EF methods
@@ -493,10 +493,10 @@ spec = do
                         , mcfConsumerLocation = Just "DE"
                         }
                 tablesFor fam sub = buildMethodTables fam M.empty M.empty [(cfUnspecified, Just (flowSub sub, ByName))]
-            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor USEtoxFamily "groundwater, long-term")) `shouldBe` Nothing
-            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor USEtoxFamily "groundwater")) `shouldBe` Just (7.0, "kg")
-            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor OtherCFFamily "groundwater, long-term")) `shouldBe` Just (7.0, "kg")
-            M.lookup (fid, "DE") (mtRegionalizedCF (tablesFor OtherCFFamily "groundwater")) `shouldBe` Just (7.0, "kg")
+            M.lookup (fid, Location "DE") (mtRegionalizedCF (tablesFor USEtoxFamily "groundwater, long-term")) `shouldBe` Nothing
+            M.lookup (fid, Location "DE") (mtRegionalizedCF (tablesFor USEtoxFamily "groundwater")) `shouldBe` Just (CF 7.0 (CFUnit "kg"))
+            M.lookup (fid, Location "DE") (mtRegionalizedCF (tablesFor OtherCFFamily "groundwater, long-term")) `shouldBe` Just (CF 7.0 (CFUnit "kg"))
+            M.lookup (fid, Location "DE") (mtRegionalizedCF (tablesFor OtherCFFamily "groundwater")) `shouldBe` Just (CF 7.0 (CFUnit "kg"))
 
         it "keeps CF when mcfCompartment is Nothing (no subcomp info)" $ do
             let fid = mkUuid 120
@@ -512,4 +512,4 @@ spec = do
                         , mcfConsumerLocation = Just "IT"
                         }
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flowAny, ByName))]
-            M.lookup (fid, "IT") (mtRegionalizedCF tables) `shouldBe` Just (4.0, "kg")
+            M.lookup (fid, Location "IT") (mtRegionalizedCF tables) `shouldBe` Just (CF 4.0 (CFUnit "kg"))

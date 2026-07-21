@@ -23,7 +23,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Matrix (accumulateDepDemands, depDemandsToVector)
-import Method.Mapping (MethodTables (..), inventoryContributions)
+import Method.Mapping (CF (..), CFUnit (..), MethodTables (..), inventoryContributions)
 import qualified Method.Mapping as Mapping
 import Method.Types (CFFamily (..))
 import SharedSolver (
@@ -170,8 +170,8 @@ spec = do
                 MethodTables
                     { mtUuidCF =
                         M.fromList
-                            [ (uuidRoot, (27.0, "kg CO2 eq"))
-                            , (uuidDep, (1.0, "kg CO2 eq"))
+                            [ (uuidRoot, CF 27.0 (CFUnit "kg CO2 eq"))
+                            , (uuidDep, CF 1.0 (CFUnit "kg CO2 eq"))
                             ]
                     , mtExactCF = M.empty
                     , mtFallbackCF = M.empty

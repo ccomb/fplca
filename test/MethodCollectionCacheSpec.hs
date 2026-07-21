@@ -25,7 +25,7 @@ import Test.Hspec
 
 import Config (defaultConfig)
 import qualified Database.Manager as DM
-import Method.Mapping (mtUuidCF)
+import Method.Mapping (CF (..), CFUnit (..), mtUuidCF)
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..))
 import Types (UUID)
 
@@ -87,13 +87,13 @@ spec = do
             let db = mkDB 0 ["FR"] []
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
-            M.lookup flowUUID (mtUuidCF tablesA) `shouldBe` Just (cfA, "MJ")
-            M.lookup flowUUID (mtUuidCF tablesB) `shouldBe` Just (cfB, "MJ")
+            M.lookup flowUUID (mtUuidCF tablesA) `shouldBe` Just (CF cfA (CFUnit "MJ"))
+            M.lookup flowUUID (mtUuidCF tablesB) `shouldBe` Just (CF cfB (CFUnit "MJ"))
 
         it "returns per-collection CF tables for same-UUID methods (B then A)" $ do
             mgr <- DM.initDatabaseManager defaultConfig False Nothing
             let db = mkDB 0 ["FR"] []
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
-            M.lookup flowUUID (mtUuidCF tablesB) `shouldBe` Just (cfB, "MJ")
-            M.lookup flowUUID (mtUuidCF tablesA) `shouldBe` Just (cfA, "MJ")
+            M.lookup flowUUID (mtUuidCF tablesB) `shouldBe` Just (CF cfB (CFUnit "MJ"))
+            M.lookup flowUUID (mtUuidCF tablesA) `shouldBe` Just (CF cfA (CFUnit "MJ"))

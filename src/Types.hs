@@ -1114,13 +1114,6 @@ toSimpleDatabase db =
         , sdbUnits = dbUnits db
         }
 
--- | Impact category (e.g. Climate change)
-data ImpactCategory = ImpactCategory
-    { categoryId :: !Text
-    , categoryName :: !Text
-    }
-    deriving (Eq, Ord, Show)
-
 -- | Blocking reason for cross-database linking failure
 data LinkBlocker
     = -- | Product not found at all
@@ -1505,13 +1498,6 @@ data CrossDBLink = CrossDBLink
     -}
     }
     deriving (Generic, NFData, Store, Show, Eq, Ord)
-
--- | Characterization factor (associated with an LCIA method)
-data CF = CF
-    { cfFlowId :: !UUID -- Biosphere flow being characterized
-    , cfCategory :: !ImpactCategory -- Impact category
-    , cfFactor :: !Double -- Characterization factor
-    }
 
 -- ToJSON/FromJSON for the records above are produced via `deriving via (Stripped X)`
 -- attached to each `data` declaration. The two enums TechRole and BioDirection use

@@ -35,7 +35,7 @@ import Test.Hspec
 
 import Method.Mapping
 import Method.ParserSimaPro (parseSimaProMethodCSVBytes)
-import Method.Types (Compartment (..), FlowDirection (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
+import Method.Types (Compartment (..), FlowDirection (..), Location (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
 import SubstanceRegistry (CASNumber (..))
 import SynonymDB (buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..))
@@ -463,7 +463,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows mapCtx regionalCasMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber waterCAS, Medium "resource") (mtRegionalCasCF tables)
-                `shouldBe` Just (M.fromList [("FR", (9, "m3"))])
+                `shouldBe` Just (M.fromList [(Location "FR", CF 9 (CFUnit "m3"))])
             M.member (CASNumber waterCAS, Medium "resource") (mtCasCF tables) `shouldBe` False
 
         it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
@@ -471,8 +471,8 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- The global row stands; the location row lives in the regional
             -- table instead of clobbering the flow's universal value.
-            M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (5, "m3")
-            M.lookup (bfId river, "IN") (mtRegionalizedCF tables) `shouldBe` Just (100, "m3")
+            M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (CF 5 (CFUnit "m3"))
+            M.lookup (bfId river, Location "IN") (mtRegionalizedCF tables) `shouldBe` Just (CF 100 (CFUnit "m3"))
 
         it "keeps name-regionalized SimaPro rows out of mtCasCF (parser path)" $ do
             -- End-to-end through the real parser: 'parseCFRow' leaves
@@ -512,9 +512,9 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
                     -- sides (the negative release default keeps AWARE's
                     -- netting on the CAS-fallback path).
                     M.lookup (CASNumber waterCAS, Medium "resource") (mtCasCF tables)
-                        `shouldBe` Just (42.95, "m3")
+                        `shouldBe` Just (CF 42.95 (CFUnit "m3"))
                     M.lookup (CASNumber waterCAS, Medium "water") (mtCasCF tables)
-                        `shouldBe` Just (-42.95, "m3")
+                        `shouldBe` Just (CF (-42.95) (CFUnit "m3"))
 
     describe "unspecified subcompartment is the medium-level fallback" $ do
         it "an uncovered subcompartment falls back to the unspecified CF" $ do
@@ -539,7 +539,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows acrCtx acrMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- indoor air is 100x; the bridge must not broadcast it.
-            M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables) `shouldBe` Just (1, "kg")
+            M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables) `shouldBe` Just (CF 1 (CFUnit "kg"))
 
         it "reaches the flow with the unspecified factor, not the indoor max" $ do
             mappings <- mapMethodFlows acrCtx acrMethod
@@ -554,4 +554,4 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows acrCtx acrRegionalMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber acrCAS, Medium "air") (mtRegionalCasCF tables)
-                `shouldBe` Just (M.fromList [("FR", (1, "kg"))])
+                `shouldBe` Just (M.fromList [(Location "FR", CF 1 (CFUnit "kg"))])

@@ -8,7 +8,7 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import Method.Mapping (MatchStrategy (..), buildMethodTables, lookupCFForFlow)
+import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFForFlow)
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
 import Types (BiosphereFlow (..))
 import qualified Types as VT
@@ -44,7 +44,7 @@ mkFlow i name sub =
 
 score :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> BiosphereFlow -> Maybe Double
 score mappings flow =
-    fmap fst (lookupCFForFlow (buildMethodTables OtherCFFamily M.empty M.empty mappings) (bfId flow) (Just flow))
+    fmap cfValue (lookupCFForFlow (buildMethodTables OtherCFFamily M.empty M.empty mappings) (bfId flow) (Just flow))
 
 spec :: Spec
 spec = describe "sub-blind CF fallback" $ do
