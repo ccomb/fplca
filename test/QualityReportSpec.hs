@@ -131,6 +131,13 @@ details = map qoDetail . qcOffenders
 severities :: QualityCheck -> [Severity]
 severities = map qoSeverity . qcOffenders
 
+processIds :: QualityCheck -> [Text]
+processIds = map qoProcessId . qcOffenders
+
+-- | The canonical process id a finding on this (activity, product) entry carries.
+pidOf :: UUID -> UUID -> Text
+pidOf a p = UUID.toText a <> "_" <> UUID.toText p
+
 -- | An activity carrying an allocation percentage and a source block identity.
 allocated :: Text -> Maybe Double -> Maybe Text -> Activity
 allocated name percent nativeId =
@@ -146,6 +153,7 @@ spec = do
             let check = qrReferenceProduct (reportOf (mkActivity "no reference" [input flourFlow 1.0]))
             details check `shouldBe` ["0 reference exchanges instead of exactly one"]
             severities check `shouldBe` [DangerSev]
+            processIds check `shouldBe` [pidOf actA prodA]
 
         it "flags an activity with two reference exchanges" $ do
             let check = qrReferenceProduct (reportOf (mkActivity "two references" [reference breadFlow, reference flourFlow]))
@@ -229,6 +237,9 @@ spec = do
             details check `shouldBe` ["2 identical entries (same name, location and reference product)"]
             map qoProductName (qcOffenders check) `shouldBe` [Just "bread"]
             severities check `shouldBe` [WarningSev]
+            -- The finding covers several entries; it names the first so it
+            -- stays navigable.
+            processIds check `shouldBe` [pidOf actA prodA]
 
         it "passes the same name with a different reference product" $ do
             let db = dbOf [((actA, prodA), mkActivity "bakery" [reference breadFlow]), ((actB, prodB), mkActivity "bakery" [reference flourFlow])]
@@ -323,6 +334,11 @@ spec = do
             let act = (mkActivity "bread" [reference breadFlow]){activityDescription = [], activityLocation = ""}
             map qoaSeverity (qcaOffenders (qraMissingMetadata (qualityReportToAPI Nothing (reportOf act))))
                 `shouldBe` [WarningSev, InfoSev]
+
+        it "carries the process id through to the wire" $ do
+            let act = mkActivity "no reference" [input flourFlow 1.0]
+            map qoaProcessId (qcaOffenders (qraReferenceProduct (qualityReportToAPI Nothing (reportOf act))))
+                `shouldBe` [pidOf actA prodA]
 
         it "carries applicable through to the wire" $
             qcaApplicable (qraAllocationSums (qualityReportToAPI Nothing (reportOf (mkActivity "bread" [reference breadFlow]))))

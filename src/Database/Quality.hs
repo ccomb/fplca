@@ -26,6 +26,7 @@ import Control.Applicative ((<|>))
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Semigroup (Min (..), Sum (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -49,6 +50,11 @@ import Types (
 -- | One finding: the activity it was found on, and what is wrong with it.
 data QualityOffender = QualityOffender
     { qoSeverity :: !Severity
+    , qoProcessId :: !Text
+    {- ^ Canonical @activityUUID_productUUID@ address of the entry the finding
+    anchors to, so a consumer can navigate to it. A finding that covers
+    several entries (duplicates) names one of them.
+    -}
     , qoActivityName :: !Text
     , qoLocation :: !Text
     , qoProductName :: !(Maybe Text)
@@ -130,9 +136,11 @@ qualityReport dbName db =
         , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
         }
   where
-    acts = M.elems (sdbActivities db)
+    entries = M.toList (sdbActivities db)
+    acts = map snd entries
+    pidText (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
     worstFirst = sortOn (\o -> (qoSeverity o, qoActivityName o))
-    offender sev act = QualityOffender sev (activityName act) (activityLocation act)
+    offender sev key act = QualityOffender sev (pidText key) (activityName act) (activityLocation act)
 
     -- Names of the flow an exchange points at, whichever registry holds it.
     -- An unresolved id degrades to its UUID rather than to a blank: a finding
@@ -150,9 +158,9 @@ qualityReport dbName db =
     -- counts a treatment activity's reference /input/ too, so waste treatment
     -- passes on its own terms.
     referenceOffenders =
-        [ offender DangerSev act Nothing $
+        [ offender DangerSev key act Nothing $
             T.pack (show n) <> " reference exchanges instead of exactly one"
-        | act <- acts
+        | (key, act) <- entries
         , let n = length (filter exchangeIsReference (exchanges act))
         , n /= 1
         ]
@@ -166,8 +174,8 @@ qualityReport dbName db =
     allocationGroups =
         M.fromListWith
             (<>)
-            [ (activityGroupKey actUUID act, [act])
-            | ((actUUID, _productUUID), act) <- M.toList (sdbActivities db)
+            [ (activityGroupKey actUUID act, [(key, act)])
+            | (key@(actUUID, _productUUID), act) <- entries
             ]
     allocationOffenders = concatMap allocationGroupOffenders (M.elems allocationGroups)
 
@@ -178,10 +186,10 @@ qualityReport dbName db =
     -- to judge.
     allocationGroupOffenders group' = case group' of
         [] -> []
-        representative : _
+        (repKey, representative) : _
             | null carried -> []
             | missing > 0 ->
-                [ offender WarningSev representative Nothing $
+                [ offender WarningSev repKey representative Nothing $
                     T.pack (show missing)
                         <> " of "
                         <> T.pack (show (length group'))
@@ -190,7 +198,7 @@ qualityReport dbName db =
             -- NaN needs its own test: any comparison against it is False, so
             -- the tolerance check alone would let it through.
             | isNaN total || isInfinite total || abs (total - 100) > allocationTolerance ->
-                [ offender DangerSev representative Nothing $
+                [ offender DangerSev repKey representative Nothing $
                     "allocation sums to "
                         <> formatPercent total
                         <> "% across "
@@ -199,7 +207,7 @@ qualityReport dbName db =
                 ]
             | otherwise -> []
       where
-        carried = mapMaybe activityAllocationPercent group'
+        carried = mapMaybe (activityAllocationPercent . snd) group'
         missing = length group' - length carried
         total = sum carried
 
@@ -211,15 +219,15 @@ qualityReport dbName db =
         _ -> Nothing
     duplicateGroups =
         M.fromListWith
-            (+)
-            [ ((activityName act, activityLocation act, productName), 1 :: Int)
-            | act <- acts
+            (<>)
+            [ ((activityName act, activityLocation act, productName), (Min (pidText key), Sum (1 :: Int)))
+            | (key, act) <- entries
             , Just productName <- [referenceProductName act]
             ]
     duplicateOffenders =
-        [ QualityOffender WarningSev name location (Just productName) $
+        [ QualityOffender WarningSev pid name location (Just productName) $
             T.pack (show n) <> " identical entries (same name, location and reference product)"
-        | ((name, location, productName), n) <- M.toList duplicateGroups
+        | ((name, location, productName), (Min pid, Sum n)) <- M.toList duplicateGroups
         , n > 1
         ]
 
@@ -227,8 +235,8 @@ qualityReport dbName db =
     -- is what normalization divides by. Zero on an ordinary input is legal and
     -- says the activity simply doesn't consume it.
     amountOffenders =
-        [ offender DangerSev act Nothing detail
-        | act <- acts
+        [ offender DangerSev key act Nothing detail
+        | (key, act) <- entries
         , ex <- exchanges act
         , let amount = exchangeAmount ex
         , let flowName = anyFlowName (exchangeFlowId ex)
@@ -251,8 +259,8 @@ qualityReport dbName db =
     -- 'False' applicability means no dataset carried a formula at all.
     formulaApplicable = any (isJust . activityFormulaCheck) acts
     formulaOffenders =
-        [ offender InfoSev act Nothing (formulaDetail fc)
-        | act <- acts
+        [ offender InfoSev key act Nothing (formulaDetail fc)
+        | (key, act) <- entries
         , Just fc <- [activityFormulaCheck act]
         , fcDivergent fc > 0
         ]
@@ -271,13 +279,13 @@ qualityReport dbName db =
     -- unknown unit, which change how the entry links and converts.
     metadataOffenders =
         concat
-            [ [offender InfoSev act Nothing "the dataset carries no description" | all (T.null . T.strip) (activityDescription act)]
-                <> [offender InfoSev act Nothing "the dataset carries no classification" | M.null (activityClassification act)]
-                <> [offender WarningSev act Nothing "the dataset carries no location" | T.null (T.strip (activityLocation act))]
-                <> [ offender WarningSev act Nothing $
+            [ [offender InfoSev key act Nothing "the dataset carries no description" | all (T.null . T.strip) (activityDescription act)]
+                <> [offender InfoSev key act Nothing "the dataset carries no classification" | M.null (activityClassification act)]
+                <> [offender WarningSev key act Nothing "the dataset carries no location" | T.null (T.strip (activityLocation act))]
+                <> [ offender WarningSev key act Nothing $
                         T.pack (show unknownUnits) <> " exchange(s) whose unit is absent from the unit registry"
                    | let unknownUnits = length [() | ex <- exchanges act, M.notMember (exchangeUnitId ex) (sdbUnits db)]
                    , unknownUnits > 0
                    ]
-            | act <- acts
+            | (key, act) <- entries
             ]

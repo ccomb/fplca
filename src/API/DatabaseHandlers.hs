@@ -339,6 +339,7 @@ qualityReportToAPI mLimit r =
     offenderToAPI o =
         QualityOffenderAPI
             { qoaSeverity = Quality.qoSeverity o
+            , qoaProcessId = Quality.qoProcessId o
             , qoaActivityName = Quality.qoActivityName o
             , qoaLocation = Quality.qoLocation o
             , qoaProductName = Quality.qoProductName o
