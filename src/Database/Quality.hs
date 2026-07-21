@@ -271,9 +271,9 @@ qualityReport dbName db =
     -- unknown unit, which change how the entry links and converts.
     metadataOffenders =
         concat
-            [ [offender InfoSev act Nothing "no description" | all (T.null . T.strip) (activityDescription act)]
-                <> [offender InfoSev act Nothing "no classification" | M.null (activityClassification act)]
-                <> [offender WarningSev act Nothing "no location" | T.null (T.strip (activityLocation act))]
+            [ [offender InfoSev act Nothing "the dataset carries no description" | all (T.null . T.strip) (activityDescription act)]
+                <> [offender InfoSev act Nothing "the dataset carries no classification" | M.null (activityClassification act)]
+                <> [offender WarningSev act Nothing "the dataset carries no location" | T.null (T.strip (activityLocation act))]
                 <> [ offender WarningSev act Nothing $
                         T.pack (show unknownUnits) <> " exchange(s) whose unit is absent from the unit registry"
                    | let unknownUnits = length [() | ex <- exchanges act, M.notMember (exchangeUnitId ex) (sdbUnits db)]
