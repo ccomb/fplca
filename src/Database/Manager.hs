@@ -799,7 +799,7 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
         Just mst -> pure mst
         Nothing -> do
             -- Fetch the location hierarchy once for the whole fan-out so the
-            -- concurrent workers don't each rebuild 'M.map snd dmGeographies'
+            -- concurrent workers don't each rebuild the typed hierarchy
             -- under 'getLocationHierarchy'.
             hier <- getLocationHierarchy manager
             -- mapConcurrently here parallelizes the per-method 'MethodTables'
@@ -1095,7 +1095,7 @@ loadOneDatabase ::
 loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = do
     dbStart <- getCurrentTime
     reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (M.map snd (dmGeographies manager))
+    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (locationHierarchyOf manager)
     case result of
         Right (loaded0, _fromCache) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
@@ -1381,7 +1381,7 @@ loadDatabaseFromConfigWithCrossDB ::
     UnitConversion.UnitConfig ->
     Bool -> -- noCache
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
-    M.Map T.Text [T.Text] -> -- Location hierarchy (empty = use built-in)
+    M.Map Location [Location] -> -- Location hierarchy (empty = use built-in)
     IO (Either Text (LoadedDatabase, Bool))
 loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
@@ -1512,7 +1512,7 @@ loadDatabaseRawWithCrossDB ::
     -- | Pre-built indexes from other databases
     [IndexedDatabase] ->
     -- | Location hierarchy (empty = use built-in)
-    M.Map T.Text [T.Text] ->
+    M.Map Location [Location] ->
     -- | Geography policy for this database
     GeographyPolicy ->
     {- | (Database, fromCache): True iff the result came from the matrix cache
@@ -1666,7 +1666,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 unitConfig
                                 (dmNoCache manager)
                                 otherIndexes
-                                (M.map snd (dmGeographies manager))
+                                (locationHierarchyOf manager)
                     case eitherResult of
                         Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
                         Right (Left err) -> return $ Left err
@@ -1822,7 +1822,7 @@ relinkStaged manager dbName maybeDepDb aliases = do
                                 selectedIndexes
                                 synonymDB
                                 unitConfig
-                                (M.map snd (dmGeographies manager))
+                                (locationHierarchyOf manager)
                                 (dcGeographyPolicy (sdConfig staged))
                                 aliases
                                 (sdSimpleDB staged)
@@ -1896,7 +1896,7 @@ relinkDatabaseWith manager dbName aliases persistedDeps = do
                         , lcSynonymDB = synonymDB
                         , lcUnitConfig = unitConfig
                         , lcThreshold = defaultLinkingThreshold
-                        , lcLocationHierarchy = M.map snd (dmGeographies manager)
+                        , lcLocationHierarchy = locationHierarchyOf manager
                         , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
                         , lcSupplierAliases = aliases
                         }
@@ -2118,7 +2118,7 @@ stageUploadedDatabase manager dbConfig = do
                     otherIndexes
                     synonymDB
                     unitConfig
-                    (M.map snd (dmGeographies manager))
+                    (locationHierarchyOf manager)
                     (dcGeographyPolicy dbConfig)
                     loadPath
 
@@ -2149,7 +2149,7 @@ stageUploadedDatabase manager dbConfig = do
                                         restrictedIndexes
                                         synonymDB
                                         unitConfig
-                                        (M.map snd (dmGeographies manager))
+                                        (locationHierarchyOf manager)
                                         (dcGeographyPolicy dbConfig)
                                         simpleDb
                                 return (stats', simpleDb')
@@ -2731,7 +2731,7 @@ addDependencyToStaged manager dbName depName = do
                         selectedIndexes
                         synonymDB
                         unitConfig
-                        (M.map snd (dmGeographies manager))
+                        (locationHierarchyOf manager)
                         (dcGeographyPolicy (sdConfig staged))
                         (sdSimpleDB staged)
 
@@ -2770,7 +2770,7 @@ removeDependencyFromStaged manager dbName depName = do
                     remainingIndexes
                     synonymDB
                     unitConfig
-                    (M.map snd (dmGeographies manager))
+                    (locationHierarchyOf manager)
                     (dcGeographyPolicy (sdConfig staged))
                     (sdSimpleDB staged)
 
@@ -3243,7 +3243,11 @@ but if data drift produces them, surface via log rather than hide.
 regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
 -}
 getLocationHierarchy :: DatabaseManager -> IO (M.Map Location [Location])
-getLocationHierarchy manager = pure (M.map (map Location . snd) (M.mapKeysMonotonic Location (dmGeographies manager)))
+getLocationHierarchy = pure . locationHierarchyOf
+
+-- | Pure form of 'getLocationHierarchy', shared by the loading paths.
+locationHierarchyOf :: DatabaseManager -> M.Map Location [Location]
+locationHierarchyOf manager = M.map (map Location . snd) (M.mapKeysMonotonic Location (dmGeographies manager))
 
 {- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
 flows are not merged here because characterization (the only consumer of

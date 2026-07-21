@@ -10,6 +10,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import Database.CrossLinking
 import Database.Loader (loadDatabase)
+import Method.Types (Location (..))
 import SynonymDB (buildFromPairs, emptySynonymDB)
 import Test.Hspec
 import Types
@@ -141,41 +142,41 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "isSubregionOf" $ do
         it "FR is a subregion of RER" $
-            isSubregionOf locationHierarchy "FR" "RER" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "FR") (Location "RER") `shouldBe` True
 
         it "FR is a subregion of GLO" $
-            isSubregionOf locationHierarchy "FR" "GLO" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "FR") (Location "GLO") `shouldBe` True
 
         it "GLO is not a subregion of FR" $
-            isSubregionOf locationHierarchy "GLO" "FR" `shouldBe` False
+            isSubregionOf locationHierarchy (Location "GLO") (Location "FR") `shouldBe` False
 
         it "unknown location has no parents" $
-            isSubregionOf locationHierarchy "XX" "GLO" `shouldBe` False
+            isSubregionOf locationHierarchy (Location "XX") (Location "GLO") `shouldBe` False
 
     -- -----------------------------------------------------------------------
     -- matchLocation
     -- -----------------------------------------------------------------------
     describe "matchLocation" $ do
         it "exact match scores 30" $
-            matchLocation locationHierarchy "FR" "FR" `shouldBe` 30
+            matchLocation locationHierarchy (Location "FR") (Location "FR") `shouldBe` 30
 
         it "FR consumer, RER supplier scores 20 (widening)" $
-            matchLocation locationHierarchy "FR" "RER" `shouldBe` 20
+            matchLocation locationHierarchy (Location "FR") (Location "RER") `shouldBe` 20
 
         it "FR consumer, GLO supplier scores 20 (widening via subregion)" $
-            matchLocation locationHierarchy "FR" "GLO" `shouldBe` 20
+            matchLocation locationHierarchy (Location "FR") (Location "GLO") `shouldBe` 20
 
         it "unknown location, GLO supplier scores 10 (global fallback)" $
-            matchLocation locationHierarchy "XX" "GLO" `shouldBe` 10
+            matchLocation locationHierarchy (Location "XX") (Location "GLO") `shouldBe` 10
 
         it "unknown location, RoW supplier scores 10 (global fallback)" $
-            matchLocation locationHierarchy "XX" "RoW" `shouldBe` 10
+            matchLocation locationHierarchy (Location "XX") (Location "RoW") `shouldBe` 10
 
         it "narrowing (GLO consumer, FR supplier) scores 0" $
-            matchLocation locationHierarchy "GLO" "FR" `shouldBe` 0
+            matchLocation locationHierarchy (Location "GLO") (Location "FR") `shouldBe` 0
 
         it "unrelated locations score 5" $
-            matchLocation locationHierarchy "FR" "CN" `shouldBe` 5
+            matchLocation locationHierarchy (Location "FR") (Location "CN") `shouldBe` 5
 
     -- -----------------------------------------------------------------------
     -- matchProductName
@@ -212,32 +213,32 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "isSubregionOf (additional)" $ do
         it "US is a subregion of North America" $
-            isSubregionOf locationHierarchy "US" "North America" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "US") (Location "North America") `shouldBe` True
 
         it "CA is a subregion of NAFTA" $
-            isSubregionOf locationHierarchy "CA" "NAFTA" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "CA") (Location "NAFTA") `shouldBe` True
 
         it "JP is a subregion of Asia" $
-            isSubregionOf locationHierarchy "JP" "Asia" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "JP") (Location "Asia") `shouldBe` True
 
         it "BR is a subregion of Latin America" $
-            isSubregionOf locationHierarchy "BR" "Latin America" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "BR") (Location "Latin America") `shouldBe` True
 
         it "AU is a subregion of GLO" $
-            isSubregionOf locationHierarchy "AU" "GLO" `shouldBe` True
+            isSubregionOf locationHierarchy (Location "AU") (Location "GLO") `shouldBe` True
 
     -- -----------------------------------------------------------------------
     -- matchLocation — additional scoring cases
     -- -----------------------------------------------------------------------
     describe "matchLocation (additional)" $ do
         it "US consumer, NAFTA supplier scores 20 (widening)" $
-            matchLocation locationHierarchy "US" "NAFTA" `shouldBe` 20
+            matchLocation locationHierarchy (Location "US") (Location "NAFTA") `shouldBe` 20
 
         it "GLO consumer, GLO supplier scores 30 (exact)" $
-            matchLocation locationHierarchy "GLO" "GLO" `shouldBe` 30
+            matchLocation locationHierarchy (Location "GLO") (Location "GLO") `shouldBe` 30
 
         it "RoW consumer, RoW supplier scores 30 (exact)" $
-            matchLocation locationHierarchy "RoW" "RoW" `shouldBe` 30
+            matchLocation locationHierarchy (Location "RoW") (Location "RoW") `shouldBe` 30
 
     -- -----------------------------------------------------------------------
     -- findSupplierInIndexedDBs — integration using SAMPLE.min3
@@ -353,9 +354,9 @@ spec = do
                 , ("BR→GLO is global", "BR", "GLO", Nothing, Nothing, Just GlobalLoc)
                 ]
         forM_ cases $ \(label, req, cand, expExact, expParent, expGlobal) -> do
-            it (label ++ " — exact") $ acceptableLocation GeoExact hier req cand `shouldBe` expExact
-            it (label ++ " — parent") $ acceptableLocation GeoParent hier req cand `shouldBe` expParent
-            it (label ++ " — global") $ acceptableLocation GeoGlobal hier req cand `shouldBe` expGlobal
+            it (label ++ " — exact") $ acceptableLocation GeoExact hier (Location req) (Location cand) `shouldBe` expExact
+            it (label ++ " — parent") $ acceptableLocation GeoParent hier (Location req) (Location cand) `shouldBe` expParent
+            it (label ++ " — global") $ acceptableLocation GeoGlobal hier (Location req) (Location cand) `shouldBe` expGlobal
 
     -- -----------------------------------------------------------------------
     -- findSupplierInIndexedDBs — geography_policy enforcement

@@ -136,6 +136,7 @@ import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
 import GHC.Fingerprint (Fingerprint (..))
 import qualified ILCD.Parser as ILCD
+import Method.Types (Location)
 import Progress
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB (SynonymDB)
@@ -1176,7 +1177,7 @@ loadDatabaseWithCrossDBLinking ::
     -- | Unit configuration for compatibility checking
     UC.UnitConfig ->
     -- | Location hierarchy (empty = use built-in)
-    M.Map T.Text [T.Text] ->
+    M.Map Location [Location] ->
     -- | Geography policy for this database
     GeographyPolicy ->
     -- | Path to load from
@@ -1245,7 +1246,7 @@ fixActivityLinksWithCrossDB ::
     -- | Unit configuration
     UC.UnitConfig ->
     -- | Location hierarchy (code → parent codes)
-    M.Map T.Text [T.Text] ->
+    M.Map Location [Location] ->
     -- | Geography policy for this database
     GeographyPolicy ->
     -- | Database to fix
@@ -1355,7 +1356,7 @@ relinkSimpleDatabase ::
     [IndexedDatabase] ->
     SynonymDB ->
     UC.UnitConfig ->
-    M.Map T.Text [T.Text] ->
+    M.Map Location [Location] ->
     GeographyPolicy ->
     AliasMap ->
     SimpleDatabase ->

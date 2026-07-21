@@ -88,6 +88,7 @@ import qualified Data.Text as T
 import Data.UUID (UUID)
 
 import qualified Data.Vector as V
+import Method.Types (Location (..))
 import SynonymDB (SynonymDB, lookupSynonymGroup, normalizeName)
 import Types (
     Activity (..),
@@ -164,7 +165,7 @@ data LinkingContext = LinkingContext
     name+location scoring; geographic acceptability is enforced separately
     by 'lcGeographyPolicy' via 'acceptableLocation'.
     -}
-    , lcLocationHierarchy :: !(M.Map Text [Text])
+    , lcLocationHierarchy :: !(M.Map Location [Location])
     -- ^ Location hierarchy (code → parent codes)
     , lcGeographyPolicy :: !GeographyPolicy
     -- ^ How aggressively to widen geography when no exact match is found
@@ -776,7 +777,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
 
     classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
     classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =
-        case acceptableLocation lcGeographyPolicy lcLocationHierarchy queryLoc seLocation of
+        case acceptableLocation lcGeographyPolicy lcLocationHierarchy (Location queryLoc) (Location seLocation) of
             Just kind -> Just (entry, kind)
             Nothing -> Nothing
 
@@ -790,7 +791,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 mapMaybe
                     ( \(_, SupplierEntry{seLocation}) ->
                         (seLocation,)
-                            <$> acceptableLocation GeoGlobal lcLocationHierarchy queryLoc seLocation
+                            <$> acceptableLocation GeoGlobal lcLocationHierarchy (Location queryLoc) (Location seLocation)
                     )
                     candidates
             kindOrder ExactLoc = 4 :: Int
@@ -803,7 +804,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
 
     scoreEntry :: Text -> (Text, SupplierEntry) -> CrossDBCandidate
     scoreEntry queryLoc (dbName, SupplierEntry{..}) =
-        let locScore = matchLocation lcLocationHierarchy queryLoc seLocation
+        let locScore = matchLocation lcLocationHierarchy (Location queryLoc) (Location seLocation)
             nameScore = 50
             !totalScore = nameScore + locScore
          in CrossDBCandidate
@@ -872,11 +873,11 @@ Returns:
   10 = Global fallback (GLO or RoW)
    5 = Different but not blocking
 -}
-matchLocation :: M.Map Text [Text] -> Text -> Text -> Int
+matchLocation :: M.Map Location [Location] -> Location -> Location -> Int
 matchLocation hier queryLoc candidateLoc
     | queryLoc == candidateLoc = 30 -- Exact
     | isSubregionOf hier queryLoc candidateLoc = 20 -- Widening (FR→GLO, FR→RER)
-    | candidateLoc `elem` ["GLO", "RoW", "Unspecified"] = 10 -- Global fallback
+    | candidateLoc `elem` placelessLocations = 10 -- Global fallback
     | isSubregionOf hier candidateLoc queryLoc = 0 -- Narrowing (GLO→FR) — blocked
     | otherwise = 5 -- Unrelated
 
@@ -889,10 +890,10 @@ the requested location's parent chain (every country has GLO/RoW listed in
 'locationHierarchy'), because semantically a global fallback is a stronger
 caveat than an honest geographic widening.
 -}
-describeLocation :: M.Map Text [Text] -> Text -> Text -> LocationKind
+describeLocation :: M.Map Location [Location] -> Location -> Location -> LocationKind
 describeLocation hier queryLoc candidateLoc
     | queryLoc == candidateLoc = ExactLoc
-    | candidateLoc `elem` ["GLO", "RoW", "Unspecified"] = GlobalLoc
+    | candidateLoc `elem` placelessLocations = GlobalLoc
     | isSubregionOf hier queryLoc candidateLoc = ParentLoc
     | otherwise = UnrelatedLoc
 
@@ -903,11 +904,11 @@ rejected: it would invent precision the source dataset does not have.
 -}
 acceptableLocation ::
     GeographyPolicy ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     -- | requested location
-    Text ->
+    Location ->
     -- | candidate location
-    Text ->
+    Location ->
     Maybe LocationKind
 acceptableLocation policy hier queryLoc candidateLoc
     | isNarrowing = Nothing
@@ -924,21 +925,31 @@ acceptableLocation policy hier queryLoc candidateLoc
     -- placeless code (GLO/RoW/Unspecified) — those are wider, not narrower
     isNarrowing =
         queryLoc /= candidateLoc
-            && candidateLoc `notElem` ["GLO", "RoW", "Unspecified"]
+            && candidateLoc `notElem` placelessLocations
             && isSubregionOf hier candidateLoc queryLoc
 
 -- | Check if one location is a subregion of another
-isSubregionOf :: M.Map Text [Text] -> Text -> Text -> Bool
+isSubregionOf :: M.Map Location [Location] -> Location -> Location -> Bool
 isSubregionOf hier child parent =
     case M.lookup child hier of
         Just parents -> parent `elem` parents
         Nothing -> False
 
+{- | Placeless codes: wider than any region — a valid global fallback,
+never a narrowing target.
+-}
+placelessLocations :: [Location]
+placelessLocations = map Location ["GLO", "RoW", "Unspecified"]
+
 {- | Location hierarchy for common LCA regions
 Maps a location code to its parent regions
 -}
-locationHierarchy :: M.Map Text [Text]
-locationHierarchy =
+locationHierarchy :: M.Map Location [Location]
+locationHierarchy = M.mapKeysMonotonic Location (M.map (map Location) rawLocationHierarchy)
+
+-- | The hierarchy table, kept as literal 'Text' for readability.
+rawLocationHierarchy :: M.Map Text [Text]
+rawLocationHierarchy =
     M.fromList
         [ -- European countries → regional/continental groupings
           ("FR", ["Europe without Switzerland", "Europe without Austria", "Europe", "EU", "RER", "ENTSO-E", "GLO", "RoW"])
