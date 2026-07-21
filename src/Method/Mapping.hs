@@ -414,7 +414,7 @@ A distinct type from the flow's own unit so the two sides of a
 flow-unit → CF-unit conversion can't be silently swapped.
 -}
 newtype CFUnit = CFUnit Text
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Show)
 
 {- | A characterization factor as stored in the lookup tables: the value and
 the unit it is denominated in, kept together so they can't drift apart.
@@ -1273,7 +1273,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
   where
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfTuple 1.0)
+        Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0)
 
 {- | Precompute per-activity-column contributions for a regionalized method.
 
@@ -1394,14 +1394,14 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
             let !col = fromIntegral colIdx :: Int
                 !row = fromIntegral flowRow :: Int
                 !flowUUID = bioFlows V.! row
-                applyRaw cfTuple =
+                applyRaw cf =
                     let !contribution =
                             convertAndMultiply
                                 unitCfg
                                 unitDB
                                 (mtEnergyDensities tables)
                                 (M.lookup flowUUID flowDB)
-                                cfTuple
+                                cf
                                 bioVal
                      in MU.unsafeModify ws (+ contribution) col
                 -- 'mtBroadcast' is the unit-converted CF per unit of flow, so
@@ -1425,9 +1425,9 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                             Just cf -> Just cf
                             Nothing -> lookupParents ps
                      in case M.lookup loc locMap of
-                            Just cfTuple -> applyRaw cfTuple
+                            Just cf -> applyRaw cf
                             Nothing -> case lookupParents (M.findWithDefault [] loc hier) of
-                                Just cfTuple -> applyRaw cfTuple
+                                Just cf -> applyRaw cf
                                 Nothing -> case M.lookup flowUUID broadcast of
                                     Just preMultipliedCF ->
                                         MU.unsafeModify ws (+ bioVal * preMultipliedCF) col
@@ -1494,7 +1494,7 @@ computeLCIAScoreFromTables unitConfig unitDB flowDB inventory tables =
 
     legacyScoreFlow fid qty = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
-        Just cfTuple -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cfTuple qty)
+        Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (M.lookup fid flowDB) cf qty)
 
 {- | Back-compat wrapper: build tables on the fly, with no compartment map,
 energy densities, or CF-family gating ('OtherCFFamily'). Prefer the cached path
@@ -2100,7 +2100,7 @@ processContributionsFromTables unitConfig unitDB flowDB ltMode db scalingVec tab
                     Nothing -> 0
                     Just _ -> case lookupCascadeCF tables flowDB flowUUID of
                         Nothing -> 0
-                        Just cfTuple -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cfTuple 1.0
+                        Just cf -> convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) mflow cf 1.0
 
     -- Invert dbActivityIndex (pid -> col) into (col -> pid) as an unboxed
     -- vector for O(1) per-triple lookup. Assumes matrix cols are dense in
@@ -2340,8 +2340,8 @@ scoreBatched unitCfg unitDB flowDB bt inventory
             cascadeContrib !tables !uuid !qty =
                 case lookupCascadeCF tables flowDB uuid of
                     Nothing -> 0
-                    Just cfTuple ->
-                        convertAndMultiply unitCfg unitDB (mtEnergyDensities tables) (M.lookup uuid flowDB) cfTuple qty
+                    Just cf ->
+                        convertAndMultiply unitCfg unitDB (mtEnergyDensities tables) (M.lookup uuid flowDB) cf qty
             scores = U.create $ do
                 mv <- MU.replicate nMethods (0.0 :: Double)
                 mapM_
