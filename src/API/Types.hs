@@ -812,6 +812,7 @@ data GapReportAPI = GapReportAPI
 -- | One dataset-soundness finding: where it was found, and what is wrong.
 data QualityOffenderAPI = QualityOffenderAPI
     { qoaSeverity :: Severity
+    , qoaProcessId :: Text -- "activityUUID_productUUID" — usable as API process_id
     , qoaActivityName :: Text
     , qoaLocation :: Text
     , qoaProductName :: Maybe Text
