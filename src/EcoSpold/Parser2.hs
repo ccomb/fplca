@@ -418,7 +418,7 @@ checkFormulas params pairs = case checked of
     _ ->
         Just
             FormulaCheck
-                { fcChecked = length evaluated
+                { fcEvaluated = length evaluated
                 , fcDivergent = length divergent
                 , fcUnevaluable = length [() | (_, _, Left _) <- checked]
                 , fcExample = listToMaybe (map example divergent)

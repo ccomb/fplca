@@ -472,7 +472,7 @@ The stored amounts always stay authoritative; this only records how well the
 dataset's formulas agree with them, for the database quality report.
 -}
 data FormulaCheck = FormulaCheck
-    { fcChecked :: !Int
+    { fcEvaluated :: !Int
     -- ^ Formulas successfully evaluated
     , fcDivergent :: !Int
     -- ^ Evaluated to a value different from the stored amount (beyond float tolerance)

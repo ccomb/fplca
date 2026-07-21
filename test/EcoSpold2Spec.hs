@@ -222,7 +222,7 @@ spec = describe "per-exchange comments" $ do
                 case activityFormulaCheck act of
                     Nothing -> expectationFailure "expected a FormulaCheck on the activity"
                     Just fc -> do
-                        fcChecked fc `shouldBe` 1
+                        fcEvaluated fc `shouldBe` 1
                         fcDivergent fc `shouldBe` 1
                         fcUnevaluable fc `shouldBe` 1
                         fcExample fc `shouldBe` Just "\"fuel_input * 2 + production\" evaluates to 5.0 but the dataset stores 4.0"

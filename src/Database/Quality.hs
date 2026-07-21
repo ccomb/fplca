@@ -259,7 +259,7 @@ qualityReport dbName db =
     formulaDetail fc =
         T.pack (show (fcDivergent fc))
             <> " of "
-            <> T.pack (show (fcChecked fc))
+            <> T.pack (show (fcEvaluated fc))
             <> " evaluable formula(s) disagree with the stored amount"
             <> maybe "" (\e -> " (e.g. " <> e <> ")") (fcExample fc)
             <> ( if fcUnevaluable fc > 0
