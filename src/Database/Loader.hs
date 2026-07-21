@@ -746,7 +746,8 @@ loadEcoSpoldDirectory locationAliases dir = do
 
         -- Process all workers in parallel
         startTime <- getCurrentTime
-        results <- mapConcurrently (processWorker startTime isEcoSpold1) (zip [1 ..] workers)
+        scoped <- inheritLogScope
+        results <- mapConcurrently (scoped . processWorker startTime isEcoSpold1) (zip [1 ..] workers)
 
         -- Check for errors from any worker
         let errors = lefts results

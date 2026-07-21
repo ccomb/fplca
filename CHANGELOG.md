@@ -34,6 +34,13 @@
 ## [0.9.3] - 2026-07-15
 
 ### Changed
+- Log lines now say which database they belong to. When several databases
+  load at once their lines used to interleave in one anonymous stream, so a
+  page following one load would show another's progress. Each line of
+  `GET /api/v1/logs` and of the `/api/v1/logs/stream` SSE feed is now a
+  `{db, text}` object — `db` names the database whose operation emitted the
+  line, or is null for lines that belong to no particular one. The terminal
+  output is unchanged.
 - The wire-format revision advertised on `/api/v1/version` is now `3`. Nothing
   breaks: every wire change in this release is additive, and existing clients
   keep working (pyvolca 0.8.x prints at most an upgrade hint). The revision

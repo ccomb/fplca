@@ -38,16 +38,25 @@ module Progress (
     getLogLines,
     waitForNewLines,
 
+    -- * Log scoping
+    withLogScope,
+    inheritLogScope,
+
     -- * Types
     ProgressLevel (..),
+    LogLine (..),
 ) where
 
+import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, retry)
-import Control.Exception (SomeException, catch, try)
+import Control.Exception (SomeException, bracket_, catch, try)
 import Control.Monad (when)
+import Data.Aeson (ToJSON (toJSON), object, (.=))
+import qualified Data.Map.Strict as M
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
+import Data.Text (Text)
 import Data.Time (diffUTCTime, getCurrentTime)
 import GHC.Stats (RTSStats (..), getRTSStats)
 import System.Directory (doesFileExist, getFileSize)
@@ -71,9 +80,25 @@ data ProgressLevel
       Error
     deriving (Eq, Show)
 
+{- | One buffered log line, tagged with the database whose operation emitted it
+when that operation declared one via 'withLogScope'. The tag is what lets a
+consumer showing one database's progress drop the lines of a concurrent load
+of another.
+-}
+data LogLine = LogLine
+    { llScope :: !(Maybe Text)
+    -- ^ Database name the emitting operation was scoped to, if any
+    , llText :: !String
+    -- ^ Formatted line, exactly as written to stderr
+    }
+    deriving (Eq, Show)
+
+instance ToJSON LogLine where
+    toJSON l = object ["db" .= llScope l, "text" .= llText l]
+
 -- | In-memory log buffer state
 data LogBuffer = LogBuffer
-    { lbLines :: !(Seq String)
+    { lbLines :: !(Seq LogLine)
     -- ^ Buffered log lines
     , lbOffset :: !Int
     -- ^ Absolute index of first line in buffer
@@ -100,8 +125,42 @@ logBufferRef =
                 , lbMaxSize = 1000
                 }
 
+{- | Per-thread log scopes. 'reportProgress' reads the calling thread's entry
+to tag the line; threads outside any 'withLogScope' stay untagged.
+-}
+{-# NOINLINE logScopesRef #-}
+logScopesRef :: TVar (M.Map ThreadId Text)
+logScopesRef = unsafePerformIO $ newTVarIO M.empty
+
+{- | Tag every log line the current thread emits during the action with the
+given scope (a database name). The outermost scope wins: a dependency loaded
+inside another database's load keeps reporting under the database the caller
+named, because that is the load being watched.
+-}
+withLogScope :: Text -> IO a -> IO a
+withLogScope scope action = do
+    tid <- myThreadId
+    existing <- M.lookup tid <$> readTVarIO logScopesRef
+    case existing of
+        Just _ -> action
+        Nothing ->
+            bracket_
+                (atomically $ modifyTVar' logScopesRef (M.insert tid scope))
+                (atomically $ modifyTVar' logScopesRef (M.delete tid))
+                action
+
+{- | Capture the calling thread's log scope as a wrapper for worker actions.
+Scopes are per-thread, so a forked worker starts unscoped — wrapping its action
+with what this returns keeps its lines attributed to the same database.
+-}
+inheritLogScope :: IO (IO a -> IO a)
+inheritLogScope = do
+    tid <- myThreadId
+    scope <- M.lookup tid <$> readTVarIO logScopesRef
+    pure (maybe id withLogScope scope)
+
 -- | Append a line to the global log buffer
-appendLogLine :: String -> IO ()
+appendLogLine :: LogLine -> IO ()
 appendLogLine line = atomically $ modifyTVar' logBufferRef $ \buf ->
     let newLines = lbLines buf Seq.|> line
         len = Seq.length newLines
@@ -118,7 +177,7 @@ appendLogLine line = atomically $ modifyTVar' logBufferRef $ \buf ->
 {- | Get log lines since a given absolute index.
 Returns (nextIndex, newLines).
 -}
-getLogLines :: Int -> IO (Int, [String])
+getLogLines :: Int -> IO (Int, [LogLine])
 getLogLines since = do
     buf <- readTVarIO logBufferRef
     let nextIndex = lbOffset buf + Seq.length (lbLines buf)
@@ -128,7 +187,7 @@ getLogLines since = do
 {- | Block until new lines appear after the given index.
 Returns (nextIndex, newLines). Uses STM retry for efficient blocking.
 -}
-waitForNewLines :: Int -> IO (Int, [String])
+waitForNewLines :: Int -> IO (Int, [LogLine])
 waitForNewLines since = atomically $ do
     buf <- readTVar logBufferRef
     let nextIndex = lbOffset buf + Seq.length (lbLines buf)
@@ -149,8 +208,10 @@ reportProgress level message = do
             Solver -> "[SOLVER] "
             Error -> "[ERROR] "
         formatted = prefix ++ message
-    -- Append to in-memory buffer
-    appendLogLine formatted
+    -- Append to in-memory buffer, tagged with the thread's scope
+    tid <- myThreadId
+    scope <- M.lookup tid <$> readTVarIO logScopesRef
+    appendLogLine (LogLine scope formatted)
     -- Serialize all output to prevent thread-unsafe stderr corruption
     -- Catch encoding errors (safety net for Windows code page issues)
     withMVar progressOutputMutex $ \_ ->

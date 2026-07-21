@@ -11,7 +11,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
-import Progress (getLogLines)
+import Progress (LogLine (llText), getLogLines)
 import Types
 
 {- | The bundled fixture has a `<comment xml:lang="en">...</comment>` on each
@@ -231,9 +231,10 @@ spec = describe "per-exchange comments" $ do
             (since, _) <- getLogLines 0
             withFormulaFixture $ \_ -> pure ()
             (_, newLines) <- getLogLines since
-            any ("Ignoring <parameter> \"ghost\"" `isInfixOf`) newLines
+            let newTexts = map llText newLines
+            any ("Ignoring <parameter> \"ghost\"" `isInfixOf`) newTexts
                 `shouldBe` True
-            any ("mathematicalRelation" `isInfixOf`) newLines
+            any ("mathematicalRelation" `isInfixOf`) newTexts
                 `shouldBe` False
 
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and

@@ -43,6 +43,7 @@ import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
 import App.Env (AppEnv (..))
 import Data.Aeson (encode)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.String (fromString)
@@ -412,7 +413,11 @@ handleLogStream req respond = do
             let loop !cursor = do
                     (!nextIdx, newLines) <- waitForNewLines cursor
                     forM_ newLines $ \line ->
-                        write (fromString $ "id:" ++ show nextIdx ++ "\ndata:" ++ line ++ "\n\n")
+                        write
+                            ( fromString ("id:" ++ show nextIdx ++ "\ndata:")
+                                <> Builder.lazyByteString (encode line)
+                                <> fromString "\n\n"
+                            )
                     flush
                     loop nextIdx
             loop since
