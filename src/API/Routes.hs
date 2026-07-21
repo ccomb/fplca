@@ -43,7 +43,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupCFForFlow, strategyPriority, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -1037,7 +1037,7 @@ buildFlowEntry db tables reverseIndex uuid =
               -- single build-side CF resolved to it) still reports as covered —
               -- exactly what scoring sees. mMatch only annotates how a direct
               -- match resolved; it is absent for fallback-covered flows.
-              fceCfValue = fmap fst (mFlow >>= lookupCFForFlow tables uuid . Just)
+              fceCfValue = fmap cfValue (mFlow >>= lookupCFForFlow tables uuid . Just)
             , fceCfFlowName = fmap (mcfFlowName . fst) mMatch
             , fceMatchStrategy = fmap (strategyToText . snd) mMatch
             }

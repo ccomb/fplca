@@ -520,7 +520,7 @@ spec = do
         mapM_
             ( \(label, cfg, flowU, cfU, qty, expected) ->
                 it label $
-                    convertForCharacterization cfg flowU cfU qty `shouldBe` expected
+                    convertForCharacterization cfg flowU (CFUnit cfU) qty `shouldBe` expected
             )
             cases
 

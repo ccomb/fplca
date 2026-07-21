@@ -8,7 +8,7 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, lookupCFForFlow)
+import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, cfValue, lookupCFForFlow)
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..), extractLocationSuffix)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
@@ -52,7 +52,7 @@ tablesFor base val =
 -- | Score a flow of the given name against those tables.
 scoreOf :: Text -> Double -> Text -> Maybe Double
 scoreOf base val flowName =
-    fmap fst (lookupCFForFlow (tablesFor base val) (mkUUID 99) (Just (mkFlow 99 flowName)))
+    fmap cfValue (lookupCFForFlow (tablesFor base val) (mkUUID 99) (Just (mkFlow 99 flowName)))
 
 spec :: Spec
 spec = do

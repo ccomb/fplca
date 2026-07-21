@@ -201,10 +201,10 @@ oracleWeights db hier tables = U.generate (fromIntegral (dbActivityCount db)) wF
             ]
     cfFor flow loc =
         case M.lookup (flow, loc) regional of
-            Just (v, _) -> v
+            Just (CF v _) -> v
             Nothing ->
                 let parents = M.findWithDefault [] loc hier
-                 in case [v | p <- parents, Just (v, _) <- [M.lookup (flow, p) regional]] of
+                 in case [v | p <- parents, Just (CF v _) <- [M.lookup (flow, p) regional]] of
                         (v : _) -> v
                         [] -> 0 -- no fallback used in these fixtures
 
