@@ -259,20 +259,20 @@ spec = do
     describe "missing metadata check" $ do
         it "flags an empty description as info" $ do
             let check = qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]){activityDescription = []})
-            details check `shouldBe` ["no description"]
+            details check `shouldBe` ["the dataset carries no description"]
             severities check `shouldBe` [InfoSev]
 
         it "flags a description of blank paragraphs" $
             details (qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]){activityDescription = ["", "   "]}))
-                `shouldBe` ["no description"]
+                `shouldBe` ["the dataset carries no description"]
 
         it "flags a missing classification as info" $
             details (qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]){activityClassification = M.empty}))
-                `shouldBe` ["no classification"]
+                `shouldBe` ["the dataset carries no classification"]
 
         it "flags a missing location as warning" $ do
             let check = qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]){activityLocation = ""})
-            details check `shouldBe` ["no location"]
+            details check `shouldBe` ["the dataset carries no location"]
             severities check `shouldBe` [WarningSev]
 
         it "flags exchanges whose unit is absent from the registry, with a count" $ do
