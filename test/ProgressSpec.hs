@@ -2,16 +2,21 @@
 
 module ProgressSpec (spec) where
 
+import Control.Concurrent.Async (async, wait)
+import Data.List (isInfixOf)
 import Progress (
+    LogLine (..),
     ProgressLevel (..),
     formatBytes,
     formatDuration,
     getLogLines,
+    inheritLogScope,
     reportCacheOperation,
     reportError,
     reportMatrixOperation,
     reportProgress,
     reportSolverOperation,
+    withLogScope,
  )
 import Test.Hspec
 
@@ -100,14 +105,70 @@ spec = do
             (_, newLines) <- getLogLines before
             concatLines newLines `shouldSatisfy` ("[SOLVER]" `isInfixOf`)
 
-concatLines :: [String] -> String
-concatLines = unlines
+    describe "log scoping" $ do
+        it "tags lines emitted inside withLogScope with the database name" $ do
+            let marker = "progress-spec-scoped"
+            found <- emitAndCollect (withLogScope "db-a" (reportProgress Info marker)) marker
+            map llScope found `shouldBe` [Just "db-a"]
 
-isInfixOf :: String -> String -> Bool
-isInfixOf needle haystack = any (needle `isPrefixOf'`) (tails' haystack)
-  where
-    isPrefixOf' [] _ = True
-    isPrefixOf' _ [] = False
-    isPrefixOf' (x : xs) (y : ys) = x == y && isPrefixOf' xs ys
-    tails' [] = [[]]
-    tails' s@(_ : rest) = s : tails' rest
+        it "leaves lines emitted outside any scope untagged" $ do
+            let marker = "progress-spec-unscoped"
+            found <- emitAndCollect (reportProgress Info marker) marker
+            map llScope found `shouldBe` [Nothing]
+
+        it "keeps the outermost scope when scopes nest" $ do
+            let marker = "progress-spec-nested"
+            found <-
+                emitAndCollect
+                    (withLogScope "outer" (withLogScope "inner" (reportProgress Info marker)))
+                    marker
+            map llScope found `shouldBe` [Just "outer"]
+
+        it "restores the unscoped state after the action" $ do
+            let marker = "progress-spec-after"
+            found <-
+                emitAndCollect
+                    ( do
+                        withLogScope "db-a" (pure ())
+                        reportProgress Info marker
+                    )
+                    marker
+            map llScope found `shouldBe` [Nothing]
+
+        it "propagates the scope to a worker thread through inheritLogScope" $ do
+            let marker = "progress-spec-worker"
+            found <-
+                emitAndCollect
+                    ( withLogScope "db-a" $ do
+                        scoped <- inheritLogScope
+                        worker <- async (scoped (reportProgress Info marker))
+                        wait worker
+                    )
+                    marker
+            map llScope found `shouldBe` [Just "db-a"]
+
+        it "leaves a worker thread unscoped without inheritLogScope" $ do
+            let marker = "progress-spec-worker-bare"
+            found <-
+                emitAndCollect
+                    ( withLogScope "db-a" $ do
+                        worker <- async (reportProgress Info marker)
+                        wait worker
+                    )
+                    marker
+            map llScope found `shouldBe` [Nothing]
+
+concatLines :: [LogLine] -> String
+concatLines = unlines . map llText
+
+{- | Emit a marker line, then return the buffered lines carrying it. The log
+buffer is one process-global stream shared with every other spec in this
+suite, so each test reads from the cursor captured before emitting and
+filters on a marker unique to itself.
+-}
+emitAndCollect :: IO () -> String -> IO [LogLine]
+emitAndCollect emit marker = do
+    (cursor, _) <- getLogLines maxBound
+    emit
+    (_, logLines) <- getLogLines cursor
+    pure (filter ((marker `isInfixOf`) . llText) logLines)

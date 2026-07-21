@@ -185,7 +185,7 @@ import Method.Types (
     compartmentMapSize,
     energyDensityMapSize,
  )
-import Progress (ProgressLevel (..), reportError, reportProgress, reportProgressWithTiming)
+import Progress (ProgressLevel (..), reportError, reportProgress, reportProgressWithTiming, withLogScope)
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
@@ -754,7 +754,7 @@ so serial warming is both lower-peak-memory and faster wall-clock here. A
 failure is logged, not fatal — the on-demand path rebuilds and surfaces it.
 -}
 warmMethodTables :: DatabaseManager -> Text -> Database -> IO ()
-warmMethodTables manager dbName db = void $ forkIO $ do
+warmMethodTables manager dbName db = void $ forkIO $ withLogScope dbName $ do
     collections <- readTVarIO (dmLoadedMethods manager)
     let methods = [(collName, m) | (collName, mc) <- M.toList collections, m <- mcMethods mc]
     t0 <- getCurrentTime
@@ -1092,7 +1092,7 @@ loadOneDatabase ::
     DatabaseManager ->
     DatabaseConfig ->
     IO ()
-loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = do
+loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = withLogScope (dcName dbConfig) $ do
     dbStart <- getCurrentTime
     reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
     result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (locationHierarchyOf manager)
@@ -1764,7 +1764,7 @@ relinkDatabaseWithMapping ::
     -- | consumer-flow → designated-supplier aliases
     CrossLinking.AliasMap ->
     IO (Either Text RelinkResult)
-relinkDatabaseWithMapping manager dbName depDb aliases = do
+relinkDatabaseWithMapping manager dbName depDb aliases = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> relinkStaged manager dbName (Just depDb) aliases
@@ -1799,7 +1799,7 @@ page before a database is finalized. @maybeDepDb@ pins a chosen dependency (a
 mapping relink); @aliases@ feeds the supplier-alias map.
 -}
 relinkStaged :: DatabaseManager -> Text -> Maybe Text -> CrossLinking.AliasMap -> IO (Either Text RelinkResult)
-relinkStaged manager dbName maybeDepDb aliases = do
+relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     case M.lookup dbName stagedDbs of
         Nothing -> return $ Left $ "Database not loaded: " <> dbName
@@ -1865,7 +1865,7 @@ relinkDatabaseWith ::
     CrossLinking.AliasMap ->
     Maybe [Text] ->
     IO (Either Text RelinkResult)
-relinkDatabaseWith manager dbName aliases persistedDeps = do
+relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     case M.lookup dbName loadedDbs of
         Nothing -> relinkStaged manager dbName Nothing aliases
@@ -2015,7 +2015,7 @@ Pre-loads declared dependencies (from TOML config) so cross-DB linking works,
 then loads the target database.
 -}
 loadDatabase :: DatabaseManager -> Text -> IO (Either Text (LoadedDatabase, [DepLoadResult]))
-loadDatabase manager dbName = fmap flattenLoad (try go)
+loadDatabase manager dbName = fmap flattenLoad (try (withLogScope dbName go))
   where
     -- A fresh load parses/reads from disk and can throw. Fold any exception
     -- into the Left this function already returns, so every surface (REST,
@@ -2045,7 +2045,7 @@ When a valid cache exists, reconstructs staged state from the cached Database
 without re-parsing, turning a ~90s operation into ~7s.
 -}
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
-stageUploadedDatabase manager dbConfig = do
+stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
     let dbName = dcName dbConfig
     reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
 
@@ -2175,7 +2175,7 @@ Refuses to unload if any currently-loaded database declares this one as a
 dependency — unloading would leave the dependent's cross-DB links dangling.
 -}
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
-unloadDatabase manager dbName = do
+unloadDatabase manager dbName = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
 
     case M.lookup dbName loadedDbs of
@@ -2788,7 +2788,7 @@ removeDependencyFromStaged manager dbName depName = do
 
 -- | Finalize a staged database (build matrices and make it ready for queries)
 finalizeDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
-finalizeDatabase manager dbName = do
+finalizeDatabase manager dbName = withLogScope dbName $ do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
 
     case M.lookup dbName stagedDbs of
