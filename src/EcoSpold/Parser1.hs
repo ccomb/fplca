@@ -460,7 +460,7 @@ buildResult st =
                 filter
                     (not . T.null . snd)
                     [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-        activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing Nothing
+        activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
         pack act =
             ( act
             , reverse (psTechFlows st)

@@ -52,6 +52,7 @@ activityWithRefExchange fid =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 -- An activity with a single unresolved input exchange for the given flow UUID
@@ -83,6 +84,7 @@ activityWithInputExchange fid =
         , activityParamExprs = M.empty
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 spec :: Spec

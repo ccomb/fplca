@@ -147,6 +147,7 @@ supplierDB offset =
                 , activityAllocationFormula = Nothing
                 , activityNativeType = Nothing
                 , activityNativeId = Nothing
+                , activityFormulaCheck = Nothing
                 }
      in SimpleDatabase
             { sdbActivities = M.singleton (actUUID, prodUUID) act
@@ -224,6 +225,7 @@ consumerDB offset n =
                         , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
+                        , activityFormulaCheck = Nothing
                         }
              in ((actUUID, prodUUID), act)
         activities = M.fromList [mkConsumer i | i <- [1 .. n]]

@@ -509,6 +509,7 @@ mkActivity name loc classif exs =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 units :: M.Map UUID Unit

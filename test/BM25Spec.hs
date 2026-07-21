@@ -37,6 +37,7 @@ mkActivity name loc xs =
         , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 mkRefOutput :: UUID -> Exchange
