@@ -21,6 +21,7 @@ import Test.Hspec
 import Method.Mapping
 import Method.Types (
     FlowDirection (..),
+    Location (..),
     MethodCF (..),
  )
 import Types (
@@ -157,7 +158,7 @@ regionalMappings = map (\(loc, v) -> (cf loc v, Just (testFlow, ByName)))
 
 buildTables ::
     Database ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
     MethodTables
 buildTables db hier mappings =
@@ -179,7 +180,7 @@ buildTables db hier mappings =
 -- For each biosphere triple, look up the regional CF (with parent fallback)
 -- and accumulate per-column weight. No reliance on the cascade or mtBroadcast,
 -- so a bug in either won't mask a bug in fillRegionalActivityWeights.
-oracleWeights :: Database -> M.Map Text [Text] -> MethodTables -> U.Vector Double
+oracleWeights :: Database -> M.Map Location [Location] -> MethodTables -> U.Vector Double
 oracleWeights db hier tables = U.generate (fromIntegral (dbActivityCount db)) wForCol
   where
     regional = mtRegionalizedCF tables
@@ -188,7 +189,7 @@ oracleWeights db hier tables = U.generate (fromIntegral (dbActivityCount db)) wF
     bioFlows = dbBiosphereOrder db
     colToLoc =
         M.fromList
-            [ (fromIntegral (actIdx V.! pid), activityLocation (activities V.! pid))
+            [ (fromIntegral (actIdx V.! pid), Location (activityLocation (activities V.! pid)))
             | pid <- [0 .. V.length actIdx - 1]
             ]
     wForCol col =
@@ -197,7 +198,7 @@ oracleWeights db hier tables = U.generate (fromIntegral (dbActivityCount db)) wF
             | SparseTriple flowRow colIdx bioVal <- U.toList (dbBiosphereTriples db)
             , fromIntegral colIdx == col
             , let flow = bioFlows V.! fromIntegral flowRow
-            , let loc = M.findWithDefault "" col colToLoc
+            , let loc = M.findWithDefault (Location "") col colToLoc
             ]
     cfFor flow loc =
         case M.lookup (flow, loc) regional of
@@ -230,7 +231,7 @@ spec = do
             -- A1@FR, A2@DE; DE has parent EU; CFs: FR=2, EU=7. Activity DE
             -- finds CF via parent walk.
             let db = mkDB [("FR", 10), ("DE", 20)]
-                hier = M.fromList [("DE", ["EU"])]
+                hier = M.fromList [(Location "DE", [Location "EU"])]
                 mappings = regionalMappings [("FR", 2), ("EU", 7)]
                 tables = buildTables db hier mappings
                 Just raw = mtRegionalActivityWeights tables

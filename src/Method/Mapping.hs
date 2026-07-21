@@ -465,13 +465,13 @@ data MethodTables = MethodTables
     (minerals are reachable only through this bridge). Empty for methods whose
     CFs carry no CAS.
     -}
-    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Text CF))
+    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Location CF))
     {- ^ (CAS, normalized medium) → (location → CF), from regionalized
     CFs. The regionalized analogue of 'mtCasCF': lets the regionalized build
     characterize every same-CAS flow per location, not just the one a CF
     resolved to. Empty for methods with no regionalized CAS-bearing CFs.
     -}
-    , mtRegionalizedCF :: !(M.Map (UUID, Text) CF)
+    , mtRegionalizedCF :: !(M.Map (UUID, Location) CF)
     {- ^ Regionalized cells of the C matrix: (DB flow UUID, consumer location) → CF.
     Empty for non-regionalized methods. When non-empty, callers should dispatch
     to the regionalized scoring path (see 'Matrix.computeRegionalizedLCIAScore').
@@ -538,7 +538,7 @@ caller can emit one warning per gap rather than per pid × per method.
 data RegionalActivityWeights = RegionalActivityWeights
     { rawWeights :: !(U.Vector Double)
     , rawTainted :: !(U.Vector Word8)
-    , rawMissingPairs :: ![(UUID, Text)]
+    , rawMissingPairs :: ![(UUID, Location)]
     }
 
 {- | Inverted indices over a 'Method' for the post-scoring suggester.
@@ -1108,7 +1108,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith preferUnspecifiedCas)
-                    [ ((SR.CASNumber cas, Medium normMed), M.singleton loc (casSubRank normSub, cfOf cf))
+                    [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
@@ -1126,7 +1126,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- fallback CF. CFs with no specific subcomp ('isUnspecifiedSub')
             -- are wildcards and match any flow subcomp.
             M.fromList
-                [ ((bfId flow, loc), cfOf cf)
+                [ ((bfId flow, Location loc), cfOf cf)
                 | (cf, Just (flow, _)) <- mappings
                 , cfSubcompMatchesFlow cf flow
                 , Just loc <- [mcfConsumerLocation cf]
@@ -1311,7 +1311,7 @@ fillRegionalActivityWeights ::
     UnitDB ->
     BioFlowDB ->
     Database ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     MethodTables
 fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
@@ -1334,9 +1334,9 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     -- @(UUID, Text)@-keyed map. Subsumes the old
     -- @regionalizedFlows :: Set UUID@ check — @Just _@ here is the
     -- "this flow is regionalized" signal needed at the taint branch.
-    regionalByRow :: V.Vector (Maybe (M.Map Text CF))
+    regionalByRow :: V.Vector (Maybe (M.Map Location CF))
     regionalByRow =
-        let perFlow :: M.Map UUID (M.Map Text CF)
+        let perFlow :: M.Map UUID (M.Map Location CF)
             perFlow =
                 M.fromListWith
                     M.union
@@ -1356,10 +1356,10 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
 
     -- ProcessId → matrix column index → activity's reference location.
     -- Built once (O(nActivities)) and indexed by column inside the hot loop.
-    colLoc :: V.Vector Text
+    colLoc :: V.Vector Location
     colLoc =
-        V.replicate nCols T.empty
-            V.// [ (fromIntegral (actIdx V.! pid), activityLocation (activities V.! pid))
+        V.replicate nCols (Location T.empty)
+            V.// [ (fromIntegral (actIdx V.! pid), Location (activityLocation (activities V.! pid)))
                  | pid <- [0 .. V.length actIdx - 1]
                  , let !col = fromIntegral (actIdx V.! pid) :: Int
                  , col >= 0
@@ -1389,7 +1389,7 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
     precomputed = runST $ do
         ws <- MU.replicate nCols (0 :: Double)
         ts <- MU.replicate nCols (0 :: Word8)
-        missRef <- newSTRef (Set.empty :: Set.Set (UUID, Text))
+        missRef <- newSTRef (Set.empty :: Set.Set (UUID, Location))
         U.forM_ bioTriples $ \(SparseTriple flowRow colIdx bioVal) -> do
             let !col = fromIntegral colIdx :: Int
                 !row = fromIntegral flowRow :: Int
@@ -1532,7 +1532,7 @@ computeLCIAScoreAuto ::
     -- | Pre-computed inventory @g = B · s@ (only used in the classic path)
     Inventory ->
     -- | Location hierarchy: child → ordered list of parents
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     Either Text Double
 computeLCIAScoreAuto unitCfg unitDB flowDB db scalingVec inventory hier tables
@@ -1570,7 +1570,7 @@ computeRegionalizedLCIAScore ::
     -- | Scaling vector @s@ from 'Matrix.computeScalingVector'
     Vector ->
     -- | Location hierarchy: child → ordered list of parents
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     MethodTables ->
     Either Text Double
 computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier tables =
@@ -1658,7 +1658,7 @@ sumRegionalizedLCIAScoreCrossDB ::
     UnitConfig ->
     UnitDB ->
     BioFlowDB ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     {- | Per-DB triples: one per database participating in the cross-DB solve
     (root + dep DBs in the same order returned by 'SharedSolver.csScalings').
     -}
@@ -2264,7 +2264,7 @@ computeLCIAScoreSetFromTables ::
     UnitDB ->
     BioFlowDB ->
     Inventory ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     {- | Non-empty per-DB triples: 'NE.head' is root, tail is each participating
     dep DB. Building order matches 'SharedSolver.csScalings'.
     -}
@@ -2292,7 +2292,7 @@ scoreRegionalCrossDB ::
     UnitConfig ->
     UnitDB ->
     BioFlowDB ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     V.Vector MethodSetEntry ->
     NonEmpty (Database, Vector, MethodSetTables) ->
     [(UUID, Either Text Double)]

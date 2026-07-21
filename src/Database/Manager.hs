@@ -174,6 +174,7 @@ import Method.Mapping (
 import Method.Types (
     CompartmentMap,
     EnergyDensityMap,
+    Location (..),
     Method (..),
     MethodCF (..),
     MethodCollection (..),
@@ -630,7 +631,7 @@ mapMethodToTablesCachedWithHier ::
     Text ->
     Text ->
     Database ->
-    M.Map Text [Text] ->
+    M.Map Location [Location] ->
     Method ->
     IO MethodTables
 mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
@@ -654,7 +655,7 @@ coverage gaps are surfaced once here, at build time, rather than per-pid on the
 scoring path. Caching and single-flighting are the caller's responsibility.
 -}
 buildMethodTablesFor ::
-    DatabaseManager -> Text -> Text -> Database -> M.Map Text [Text] -> Method -> IO MethodTables
+    DatabaseManager -> Text -> Text -> Database -> M.Map Location [Location] -> Method -> IO MethodTables
 buildMethodTablesFor manager dbName collection db hier method = do
     expanded <- effectiveMethodMappings manager dbName collection db method
     -- A CF matchable through the union synonym tables but not through its own
@@ -706,7 +707,7 @@ buildMethodTablesFor manager dbName collection db hier method = do
                         <> " regionalized (flow, location) pair(s) without CF coverage "
                         <> "(after walking parent regions and universal broadcast). "
                         <> "Samples: "
-                        <> show (take 3 [(show fid, T.unpack loc) | (fid, loc) <- rawMissingPairs raw'])
+                        <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- rawMissingPairs raw'])
     pure tables
 
 {- | Run @build@ at most once per @key@ across concurrent callers. The first
@@ -3241,8 +3242,8 @@ but if data drift produces them, surface via log rather than hide.
 'data/geographies.csv' (or the hardcoded fallback). Reused across the LCIA
 regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
 -}
-getLocationHierarchy :: DatabaseManager -> IO (M.Map Text [Text])
-getLocationHierarchy manager = pure (M.map snd (dmGeographies manager))
+getLocationHierarchy :: DatabaseManager -> IO (M.Map Location [Location])
+getLocationHierarchy manager = pure (M.map (map Location . snd) (M.mapKeysMonotonic Location (dmGeographies manager)))
 
 {- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
 flows are not merged here because characterization (the only consumer of

@@ -35,7 +35,7 @@ import Test.Hspec
 
 import Method.Mapping
 import Method.ParserSimaPro (parseSimaProMethodCSVBytes)
-import Method.Types (Compartment (..), FlowDirection (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
+import Method.Types (Compartment (..), FlowDirection (..), Location (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
 import SubstanceRegistry (CASNumber (..))
 import SynonymDB (buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..))
@@ -463,7 +463,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows mapCtx regionalCasMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber waterCAS, Medium "resource") (mtRegionalCasCF tables)
-                `shouldBe` Just (M.fromList [("FR", CF 9 (CFUnit "m3"))])
+                `shouldBe` Just (M.fromList [(Location "FR", CF 9 (CFUnit "m3"))])
             M.member (CASNumber waterCAS, Medium "resource") (mtCasCF tables) `shouldBe` False
 
         it "keeps regionalized UUID-matched rows out of mtUuidCF" $ do
@@ -472,7 +472,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             -- The global row stands; the location row lives in the regional
             -- table instead of clobbering the flow's universal value.
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (CF 5 (CFUnit "m3"))
-            M.lookup (bfId river, "IN") (mtRegionalizedCF tables) `shouldBe` Just (CF 100 (CFUnit "m3"))
+            M.lookup (bfId river, Location "IN") (mtRegionalizedCF tables) `shouldBe` Just (CF 100 (CFUnit "m3"))
 
         it "keeps name-regionalized SimaPro rows out of mtCasCF (parser path)" $ do
             -- End-to-end through the real parser: 'parseCFRow' leaves
@@ -554,4 +554,4 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows acrCtx acrRegionalMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             M.lookup (CASNumber acrCAS, Medium "air") (mtRegionalCasCF tables)
-                `shouldBe` Just (M.fromList [("FR", CF 1 (CFUnit "kg"))])
+                `shouldBe` Just (M.fromList [(Location "FR", CF 1 (CFUnit "kg"))])
