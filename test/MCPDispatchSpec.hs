@@ -101,3 +101,16 @@ spec = describe "MCP database load/unload tools" $ do
             resp <- call "get_quality_report"
             isError resp `shouldBe` True
             resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    describe "characterization-coverage tool" $ do
+        it "is advertised with a required 'database' parameter (collection is optional)" $
+            fmap requiredOf (toolByName "get_characterization_coverage") `shouldBe` Just ["database"]
+
+        it "is routed by callTool (no 'Unknown tool' gap)" $ do
+            resp <- call "get_characterization_coverage"
+            resultText resp `shouldSatisfy` maybe False (not . T.isPrefixOf "Unknown tool:")
+
+        it "surfaces the engine error for an unknown database" $ do
+            resp <- call "get_characterization_coverage"
+            isError resp `shouldBe` True
+            resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)

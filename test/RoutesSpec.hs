@@ -275,6 +275,12 @@ routeSpecs = do
             resp <- doGet b "/api/v1/db/no-such-db/quality-report"
             statusCode (responseStatus resp) `shouldBe` 404
 
+        it "GET /api/v1/db/no-such-db/characterization-coverage returns 404" $ \b -> do
+            -- Loaded-only: it reads the built method tables, so an absent
+            -- database is a 404.
+            resp <- doGet b "/api/v1/db/no-such-db/characterization-coverage"
+            statusCode (responseStatus resp) `shouldBe` 404
+
     describe "method-not-allowed" $ do
         it "GET /api/v1/db/X returns 405 (only DELETE is defined on /db/{name})" $ \b -> do
             -- Documents the current API surface: /db/{name} accepts DELETE,

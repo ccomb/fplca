@@ -91,6 +91,7 @@ module Database.Manager (
     buildLoadedSetupInfo,
     databaseGapReport,
     databaseQualityReport,
+    databaseCoverageReport,
     addDependencyToStaged,
     removeDependencyFromStaged,
     setDataPath,
@@ -152,6 +153,7 @@ import qualified Database.Quality as Quality
 import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
+import qualified Method.Coverage as Coverage
 import Method.Mapping (
     MatchStrategy,
     MethodIndex,
@@ -162,6 +164,7 @@ import Method.Mapping (
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
+    characterizedFlowIds,
     directionExcludedCFs,
     expandProxyEdges,
     expandSynonymMappings,
@@ -2313,6 +2316,46 @@ databaseQualityReport manager dbName = do
         (Just loaded, _) -> Right (Quality.qualityReport dbName (toSimpleDatabase (ldDatabase loaded)))
         (Nothing, Just staged) -> Right (Quality.qualityReport dbName (sdSimpleDB staged))
         (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
+
+{- | Characterization-coverage report: the database flows a method collection
+scores only through a name bridge (synonym/CAS), which an exact-name consumer
+would score as zero. One entry per loaded collection when @mCollection@ is
+'Nothing'; a single named collection otherwise (an error if it isn't loaded).
+
+Needs a built database (the coverage probe reads the method tables), so unlike
+the quality report it is loaded-only — no staged answer. Computed per request
+on top of the per-method table and mapping caches; if it proves slow at
+ecoinvent scale, the upgrade path is a @(db, collection)@-keyed cache beside
+'mapMethodToTablesCached'.
+-}
+databaseCoverageReport :: DatabaseManager -> Text -> Maybe Text -> IO (Either Text Coverage.CoverageReport)
+databaseCoverageReport manager dbName mCollection = do
+    mLoaded <- getDatabase manager dbName
+    loadedMethods <- readTVarIO (dmLoadedMethods manager)
+    case mLoaded of
+        Nothing -> pure (Left ("Database not loaded: " <> dbName))
+        Just loaded -> do
+            let db = ldDatabase loaded
+            case collectionsToReport mCollection loadedMethods of
+                Left err -> pure (Left err)
+                Right cols -> do
+                    hier <- getLocationHierarchy manager
+                    bridges <- mapM (collectionBridgesFor db hier) cols
+                    pure (Right (Coverage.CoverageReport dbName bridges))
+  where
+    -- The named collection (must be loaded) or every loaded one, by name.
+    collectionsToReport sel loaded = case sel of
+        Just name -> case M.lookup name loaded of
+            Just mc -> Right [(name, mc)]
+            Nothing -> Left ("Method collection not loaded: " <> name)
+        Nothing -> Right (M.toList loaded)
+    collectionBridgesFor db hier (collName, mc) = do
+        let methods = mcMethods mc
+        tables <- mapM (mapMethodToTablesCachedWithHier manager dbName collName db hier) methods
+        mappings <- mapM (effectiveMethodMappings manager dbName collName db) methods
+        let characterized = S.size (S.unions (map (`characterizedFlowIds` dbBioFlows db) tables))
+            total = fromIntegral (dbBiosphereCount db)
+        pure (Coverage.collectionBridges collName total characterized mappings)
 
 {- | Outcome of the atomic staging decision; 'NeedToStage' carries the config
 read inside the same transaction, so no later (racy) re-lookup is needed.

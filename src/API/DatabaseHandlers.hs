@@ -21,6 +21,8 @@ module API.DatabaseHandlers (
     qualityReportHandler,
     qualityReportToAPI,
     computedQualityReportToAPI,
+    coverageReportHandler,
+    coverageReportToAPI,
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
@@ -87,7 +89,11 @@ import qualified Database.ComputedQuality as CQ
 import API.Types (
     ActivateResponse (..),
     BinaryContent (..),
+    BridgeGroupAPI (..),
+    BridgedFlowAPI (..),
+    CollectionBridgesAPI (..),
     ComputedQualityReportAPI (..),
+    CoverageReportAPI (..),
     DatabaseListResponse (..),
     DatabaseStatusAPI (..),
     DeleteClassFilter (..),
@@ -137,6 +143,7 @@ import Database.Manager (
     addFlowSynonyms,
     addMethodCollection,
     addUnitDefs,
+    databaseCoverageReport,
     databaseGapReport,
     databaseQualityReport,
     finalizeDatabase,
@@ -180,6 +187,8 @@ import Database.Upload (
     handleUpload,
  )
 import qualified Database.UploadedDatabase as UploadedDB
+import qualified Method.Coverage as Coverage
+import Method.Mapping (MatchStrategy (..))
 import Types (Database (..), GeographyPolicy (..), blockerReasonDetail, unresolvedCount)
 
 -- | List all databases
@@ -375,6 +384,61 @@ checkToAPI mLimit c =
             , qoaProductName = Quality.qoProductName o
             , qoaDetail = Quality.qoDetail o
             }
+
+{- | Characterization-coverage report for a loaded database: the flows each
+loaded method collection scores only through a name bridge. Loaded-only (the
+coverage probe reads the built method tables), so a missing database or an
+unloaded named collection is a 404.
+-}
+coverageReportHandler :: Text -> Maybe Text -> Maybe Int -> AppM CoverageReportAPI
+coverageReportHandler dbName mCollection mLimit = do
+    dbManager <- asks aeDbManager
+    res <- liftIO $ databaseCoverageReport dbManager dbName mCollection
+    case res of
+        Left err -> throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 err}
+        Right report -> return (coverageReportToAPI mLimit report)
+
+{- | Project the domain coverage report onto its wire shape, keeping at most
+@limit@ bridge groups per collection (sorted by rename target, so a cap is
+stable). Each collection's @bridgeGroupCount@ always covers the full list, so a
+truncated list stays countable — never a silent cap.
+-}
+coverageReportToAPI :: Maybe Int -> Coverage.CoverageReport -> CoverageReportAPI
+coverageReportToAPI mLimit r =
+    CoverageReportAPI
+        { cvrDbName = Coverage.crDbName r
+        , cvrCollections = map collectionToAPI (Coverage.crCollections r)
+        }
+  where
+    collectionToAPI c =
+        CollectionBridgesAPI
+            { cvcCollection = Coverage.cbCollection c
+            , cvcTotalFlows = Coverage.cbTotalFlows c
+            , cvcCharacterizedFlows = Coverage.cbCharacterizedFlows c
+            , cvcBridgeGroupCount = length (Coverage.cbGroups c)
+            , cvcBridgeGroups = map groupToAPI (maybe id take mLimit (Coverage.cbGroups c))
+            }
+    groupToAPI g =
+        BridgeGroupAPI
+            { cvgCas = Coverage.bgCas g
+            , cvgMethodName = Coverage.bgMethodName g
+            , cvgBridgedFlows = map flowToAPI (Coverage.bgBridged g)
+            }
+    flowToAPI f =
+        BridgedFlowAPI
+            { cvfFlowName = Coverage.brfFlowName f
+            , cvfStrategy = strategyLabel (Coverage.brfStrategy f)
+            }
+
+-- | Wire label for the bridge that reached a flow (only bridge strategies occur).
+strategyLabel :: MatchStrategy -> Text
+strategyLabel ByCAS = "cas"
+strategyLabel BySynonym = "synonym"
+strategyLabel ByFuzzy = "fuzzy"
+strategyLabel ByProxy = "proxy"
+strategyLabel ByName = "name"
+strategyLabel ByUUID = "uuid"
+strategyLabel NoMatch = "none"
 
 {- | Copy a loaded database under a new name. The copy is an independent
 in-memory database registered under @newName@; the source is untouched.

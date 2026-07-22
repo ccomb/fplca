@@ -35,7 +35,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (gapReportToAPI, qualityReportToAPI)
+import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -364,6 +364,7 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     "get_gap_report" -> callGetGapReport dbManager rid args
     "get_quality_report" -> callGetQualityReport dbManager rid args
     "get_computed_quality_report" -> callGetComputedQualityReport dbManager rid args
+    "get_characterization_coverage" -> callGetCoverageReport dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1337,6 +1338,17 @@ callGetComputedQualityReport dbManager rid args = runTool rid $ do
     case res of
         Left e -> throwE (batchErrorMsg e)
         Right r -> pure (toolSuccessJson rid (toJSON r))
+
+{- | Characterization-coverage report: the flows each loaded method collection
+scores only through a name bridge. Same wire shape as the REST endpoint
+('coverageReportToAPI'), so both surfaces stay in lock-step.
+-}
+callGetCoverageReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callGetCoverageReport dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    mCollection <- except (optionalText "collection" args)
+    report <- ExceptT (DM.databaseCoverageReport dbManager dbName mCollection)
+    return $ toolSuccessJson rid (toJSON (coverageReportToAPI (intArg "limit" args) report))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do

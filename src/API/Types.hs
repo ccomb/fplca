@@ -876,6 +876,54 @@ data ComputedQualityReportAPI = ComputedQualityReportAPI
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ComputedQualityReportAPI)
 
+-- | One database flow a method scores only through a name bridge.
+data BridgedFlowAPI = BridgedFlowAPI
+    { cvfFlowName :: Text
+    , cvfStrategy :: Text -- how the match was reached: "synonym" | "cas" | "fuzzy" | "proxy"
+    }
+    deriving (Eq, Show, Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped BridgedFlowAPI)
+
+{- | The database flows that bridge to one factor. @methodName@ is the name the
+method carries for the substance — the name each bridged flow should be renamed
+to for the database to score in an exact-name tool.
+-}
+data BridgeGroupAPI = BridgeGroupAPI
+    { cvgCas :: Maybe Text
+    , cvgMethodName :: Text
+    , cvgBridgedFlows :: [BridgedFlowAPI]
+    }
+    deriving (Eq, Show, Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped BridgeGroupAPI)
+
+{- | One collection's coverage of the database. @characterizedFlows@ of
+@totalFlows@ is the honest reach; @bridgeGroups@ is the subset reached only
+through a bridge (empty means every scored flow matches by its exact name).
+@bridgeGroupCount@ always covers the whole list, so a list capped by @limit@
+stays countable — never a silent cap.
+-}
+data CollectionBridgesAPI = CollectionBridgesAPI
+    { cvcCollection :: Text
+    , cvcTotalFlows :: Int
+    , cvcCharacterizedFlows :: Int
+    , cvcBridgeGroupCount :: Int
+    , cvcBridgeGroups :: [BridgeGroupAPI]
+    }
+    deriving (Eq, Show, Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped CollectionBridgesAPI)
+
+{- | Characterization-coverage report of a database against the loaded method
+collections: the flows each collection scores only through a synonym/CAS bridge,
+which an exact-name consumer would score as zero. One entry
+per loaded collection, so two method versions can be compared side by side.
+-}
+data CoverageReportAPI = CoverageReportAPI
+    { cvrDbName :: Text
+    , cvrCollections :: [CollectionBridgesAPI]
+    }
+    deriving (Eq, Show, Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped CoverageReportAPI)
+
 -- | Result of auto-loading a single dependency
 data DepLoadResult
     = DepLoaded {dlrName :: Text}
