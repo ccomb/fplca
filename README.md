@@ -23,7 +23,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel da
 - **Archive support**: Load databases directly from .zip, .7z, .gz, or .xz archives — no manual extraction
 - **Cross-database linking**: Resolve supplier references across databases, with configurable dependencies and topological load ordering. EcoSpold2 inputs link to a loaded background by exact `activityLinkId` identity (so a partial import resolves against its matching release), falling back to attribute matching — flagged as approximate — when the background is a different release
 - **Cross-DB what-if substitutions**: Swap an upstream activity at any depth — including suppliers in dependency databases — and recompute inventory and impacts through one endpoint
-- **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, or tabular CSV from config; export any loaded collection back as SimaPro method CSV or as columnar CSV (one column per impact category — the spreadsheet view)
+- **LCIA method collections**: Load ILCD method packages (ZIP or directory), SimaPro method CSV exports, openLCA JSON-LD impact categories, or tabular CSV from config; export any loaded collection back as SimaPro method CSV, columnar CSV (one column per impact category — the spreadsheet view), or an openLCA JSON-LD zip
 - **Normalization and weighting**: Batch LCIA computes normalized and weighted scores per category and a single aggregated score (Pt) when NW data is present in the method collection
 - **Contribution analysis**: Per-flow and per-activity contributions to any LCIA score, ranked by share
 - **Flow mapping engine**: 4-step matching cascade (UUID → name → synonym → CAS) with per-strategy coverage statistics
@@ -444,7 +444,7 @@ volca database export my-db --format simapro --out out.csv
 # List, upload, export, delete method collections
 volca method                                    # list (default)
 volca method upload EF-3.1.zip --name "EF 3.1"  # upload
-volca method export ef-31 --format simapro --out ef-31.csv  # export (formats: simapro | csv)
+volca method export ef-31 --format simapro --out ef-31.csv  # export (formats: simapro | csv | openlca)
 volca method delete ef-31                        # delete
 ```
 
@@ -499,7 +499,7 @@ volca method delete ef-31                        # delete
 | Upload collection | `POST /method-collections/upload` | `method upload FILE --name NAME` |
 | Load / unload collection | `POST /method-collections/{name}/(load\|unload)` | — |
 | Delete collection | `DELETE /method-collections/{name}` | `method delete NAME` |
-| Export collection (SimaPro or columnar CSV) | `POST /method-collections/{name}/export` | `method export NAME --format simapro --out FILE` |
+| Export collection (SimaPro CSV, columnar CSV, or openLCA JSON-LD) | `POST /method-collections/{name}/export` | `method export NAME --format simapro --out FILE` |
 | **Reference Data** | | |
 | Flow synonyms | `GET /flow-synonyms` (+ load/unload/upload/delete/groups/download) | `synonyms` |
 | Compartment mappings | `GET /compartment-mappings` (+ load/unload/upload/delete) | `compartment-mappings` |
