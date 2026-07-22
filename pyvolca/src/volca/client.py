@@ -142,7 +142,7 @@ client-side so a typo fails before the round-trip with the same message
 shape the engine would have returned."""
 
 
-_METHOD_EXPORT_FORMATS = frozenset({"simapro", "csv"})
+_METHOD_EXPORT_FORMATS = frozenset({"simapro", "csv", "openlca"})
 """Target keywords accepted by ``POST /api/v1/method-collections/{name}/export``.
 
 Mirrors the engine's ``parseMethodExportFormat`` — a space of its own,
@@ -1885,9 +1885,10 @@ class Client:
     def export_method_collection(self, name: str, fmt: str = "simapro") -> bytes:
         """Export a loaded method collection, returning the serialized bytes.
 
-        ``fmt`` names the target format: ``simapro`` (SimaPro method CSV) or
+        ``fmt`` names the target format: ``simapro`` (SimaPro method CSV),
         ``csv`` (columnar CSV — one column per impact category, the
-        spreadsheet view). Projection warnings (anything the format cannot
+        spreadsheet view), or ``openlca`` (a zip of openLCA JSON-LD impact
+        categories). Projection warnings (anything the format cannot
         carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
         header and are surfaced through :mod:`warnings`. Raises VoLCAError
         on an HTTP error, including a collection that is not loaded.

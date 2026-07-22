@@ -65,6 +65,21 @@ spec = do
                     UUID.toText (mcfFlowRef landFR)
                         `shouldBe` "0305b169-255d-4041-8f5d-6e095bcb6358"
 
+        it "reads the document-level category as the group label" $ do
+            let bytes =
+                    "{\"@type\":\"ImpactCategory\",\"name\":\"Acidification\",\
+                    \\"category\":\"EF 3.1\",\"referenceUnitName\":\"mol H+ eq\",\
+                    \\"impactFactors\":[]}"
+            case parseOlcaImpactCategoryBytes bytes of
+                Left err -> expectationFailure ("parse failed: " ++ err)
+                Right method -> methodCategory method `shouldBe` "EF 3.1"
+
+        it "falls back to the name when category is absent" $ do
+            bytes <- BS.readFile "test-data/olca-schema-mini/impact-category-mini.json"
+            case parseOlcaImpactCategoryBytes bytes of
+                Left err -> expectationFailure ("parse failed: " ++ err)
+                Right method -> methodCategory method `shouldBe` methodName method
+
         it "rejects a non-object top level" $
             case parseOlcaImpactCategoryBytes "[1,2,3]" of
                 Left _ -> pure ()

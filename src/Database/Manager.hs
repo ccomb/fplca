@@ -126,7 +126,7 @@ import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
 import Data.Either (lefts, partitionEithers, rights)
-import Data.List (isPrefixOf, sortOn, unsnoc)
+import Data.List (isPrefixOf, sort, sortOn, unsnoc)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
@@ -2952,7 +2952,10 @@ loadMethodCollectionFromConfig mc = do
                     else do
                         -- Find method directory (handles nested ILCD structures)
                         d <- findMethodDirectory resolvedPath
-                        fs <- listDirectory d
+                        -- listDirectory order is filesystem-dependent; sort so a
+                        -- collection loads its methods in the same order on every
+                        -- machine (and a re-export of it is byte-stable).
+                        fs <- sort <$> listDirectory d
                         let xs = filter (\f -> map toLower (takeExtension f) == ".xml") fs
                             cs = filter (\f -> map toLower (takeExtension f) == ".csv") fs
                             js = filter (\f -> map toLower (takeExtension f) == ".json") fs

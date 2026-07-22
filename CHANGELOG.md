@@ -45,6 +45,16 @@
   databases.
 
 ### Added
+- Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
+  of one `ImpactCategory` document per impact category, in the olca-schema
+  archive layout, that loads straight back. Flow UUIDs, per-factor
+  directions (`INPUT`/`OUTPUT`) and location codes are native to this
+  format, so regionalized collections round-trip without the name-suffix
+  projection the CSV formats use. What it cannot carry (methodology
+  labels, damage categories, normalization/weighting and scoring sets) is
+  reported in export warnings. The openLCA reader now also picks up the
+  document-level `category` field as the impact category's group label,
+  and method files load in a deterministic order on every machine.
 - Method collections can be exported as columnar CSV — one column per
   impact category, one row per substance: the file you open in a
   spreadsheet. `POST /api/v1/method-collections/{name}/export` with

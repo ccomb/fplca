@@ -529,9 +529,10 @@ warnings arrive in the ``X-Volca-Export-Warnings`` response header
 
 Export a loaded method collection, returning the serialized bytes.
 
-``fmt`` names the target format: ``simapro`` (SimaPro method CSV) or
+``fmt`` names the target format: ``simapro`` (SimaPro method CSV),
 ``csv`` (columnar CSV — one column per impact category, the
-spreadsheet view). Projection warnings (anything the format cannot
+spreadsheet view), or ``openlca`` (a zip of openLCA JSON-LD impact
+categories). Projection warnings (anything the format cannot
 carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
 header and are surfaced through :mod:`warnings`. Raises VoLCAError
 on an HTTP error, including a collection that is not loaded.
