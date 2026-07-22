@@ -291,19 +291,23 @@ buildMethod flowInfo state = do
             , methodFactors = enrichedFactors
             }
 
--- | Enrich a MethodCF with data from ILCD flow XMLs
+{- | Enrich a MethodCF with data from ILCD flow XMLs. When a flow file exists it
+is the authority for all three fields: a flow file without a categorization
+block means the flow has no compartment, so the name-derived guess from the
+method file's shortDescription must not survive (it would fabricate a
+compartment for any flow whose name merely contains "Resources" or
+"Emissions to ..."). The shortDescription fallback only applies when the
+package ships no flow file at all.
+-}
 enrichCF :: M.Map UUID ILCDFlowInfo -> MethodCF -> MethodCF
 enrichCF flowInfo cf = case M.lookup (mcfFlowRef cf) flowInfo of
     Nothing -> cf -- no flow XML found, keep fallback data from shortDescription
     Just info ->
         cf
             { mcfFlowName = ilcdBaseName info -- proper baseName replaces extracted name
-            , mcfCompartment = firstJust (ilcdCompartment info) (mcfCompartment cf)
+            , mcfCompartment = ilcdCompartment info
             , mcfCAS = ilcdCAS info
             }
-  where
-    firstJust (Just a) _ = Just a
-    firstJust Nothing b = b
 
 -- | Resolve flow UUID: prefer refObjectId, fall back to extracting UUID from URI path
 resolveFlowUUID :: Text -> Text -> UUID

@@ -119,6 +119,19 @@ spec = describe "Method.WriterILCD" $ do
                     Left err -> expectationFailure ("re-parse failed: " <> err)
                     Right ms -> serializeIlcdMethodEntries (collection ms) `shouldBe` Right (entries, [])
 
+        it "keeps a compartment-less flow compartment-less, even when its name mentions a medium" $ do
+            -- The reader's shortDescription fallback used to fabricate a
+            -- compartment from a name containing "Resources" or "Emissions
+            -- to ..."; with a flow file present, the flow file is the authority.
+            let cf = withRef 6 (mkCF "Fish, Resources penned" Nothing 2.5)
+            case serializeIlcdMethodEntries (collection [mkMethod 1 "Biotic resources" [cf]]) of
+                Left err -> expectationFailure (T.unpack err)
+                Right (entries, warnings) -> do
+                    warnings `shouldBe` []
+                    case reparse entries of
+                        Right [m'] -> map mcfCompartment (methodFactors m') `shouldBe` [Nothing]
+                        other -> expectationFailure ("unexpected re-parse: " <> show other)
+
         it "collapses a per-flow unit to the method reference unit, and says so" $ do
             let cf = withRef 4 (mkCF "Beryllium" (Just (Compartment "water" "" "")) 1.5){mcfUnit = "kg"}
                 m = (mkMethod 2 "Toxicity" [cf]){methodUnit = "CTUh"}
