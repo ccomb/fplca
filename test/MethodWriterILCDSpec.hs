@@ -194,6 +194,14 @@ spec = describe "Method.WriterILCD" $ do
             checkIlcdMethodExportable (collection [mkMethod 1 " " []])
                 `shouldSatisfy` isRefused "has no name"
 
+        it "rejects a method with no reference unit" $
+            checkIlcdMethodExportable (collection [(mkMethod 1 "A" []){methodUnit = ""}])
+                `shouldSatisfy` isRefused "no reference unit"
+
+        it "rejects a method with no impact category" $
+            checkIlcdMethodExportable (collection [(mkMethod 1 "A" []){methodCategory = " "}])
+                `shouldSatisfy` isRefused "no impact category"
+
         it "rejects a factor with no flow name" $
             serializeIlcdMethodEntries (collection [mkMethod 1 "A" [withRef 1 (mkCF "" Nothing 1)]])
                 `shouldSatisfy` isRefused "no flow name"

@@ -96,9 +96,11 @@ flowPath u = "flows/" <> UUID.toString u <> ".xml"
 {- | Reject a collection whose ILCD encoding would not round-trip: an empty
 collection, two methods sharing a UUID (their files would overwrite each other),
 a method with no name (the reader rejects it and drops all its factors), a
-non-finite or nameless factor (dropped or read as 0 on re-import), a compartment
-the flow categorization cannot represent exactly, or one flow UUID carrying two
-different flow definitions (one flow file cannot serve both).
+method with no reference unit or impact category (the reader fills the blank
+with @"unknown"@), a non-finite or nameless factor (dropped or read as 0 on
+re-import), a compartment the flow categorization cannot represent exactly, or
+one flow UUID carrying two different flow definitions (one flow file cannot
+serve both).
 -}
 checkIlcdMethodExportable :: MethodCollection -> Either Text ()
 checkIlcdMethodExportable mc = do
@@ -120,11 +122,19 @@ checkIlcdMethodExportable mc = do
 
 methodErrors :: Method -> [Maybe Text]
 methodErrors m =
-    emptyName : concatMap (factorErrors (methodName m)) (methodFactors m)
+    emptyName : emptyUnit : emptyCategory : concatMap (factorErrors (methodName m)) (methodFactors m)
   where
     emptyName
         | T.null (T.strip (methodName m)) =
             Just $ "A method (" <> UUID.toText (methodId m) <> ") has no name; ILCD import would reject it and drop all its factors."
+        | otherwise = Nothing
+    emptyUnit
+        | T.null (T.strip (methodUnit m)) =
+            Just $ "Method '" <> methodName m <> "' has no reference unit; ILCD import would read it back as \"unknown\"."
+        | otherwise = Nothing
+    emptyCategory
+        | T.null (T.strip (methodCategory m)) =
+            Just $ "Method '" <> methodName m <> "' has no impact category; ILCD import would read it back as \"unknown\"."
         | otherwise = Nothing
 
 factorErrors :: Text -> MethodCF -> [Maybe Text]
