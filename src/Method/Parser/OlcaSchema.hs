@@ -24,6 +24,10 @@ Top-level shape:
 >   ]
 > }
 
+The document-level @category@ (the impact category's group label, a plain
+string in the olca schema) becomes 'methodCategory', falling back to the
+name when absent.
+
 Each 'ImpactFactor' becomes a single 'MethodCF':
 
 * @flow.\@id@ → 'mcfFlowRef' (UUID — deterministic match against DB flow UUIDs)
@@ -97,7 +101,7 @@ parseOlcaImpactCategoryBytes bytes = do
                     , methodName = name
                     , methodDescription = description
                     , methodUnit = unit
-                    , methodCategory = name
+                    , methodCategory = fromMaybe name (lookupText o "category")
                     , methodMethodology = Just "openLCA JSON-LD"
                     , methodFactors = factors
                     }
