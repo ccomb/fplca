@@ -92,7 +92,7 @@ commandParser =
             <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
             <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
             <> OA.command "database" (info (databaseParser <**> helper) (progDesc "Manage databases (list, upload, delete)"))
-            <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections (list, upload, delete)"))
+            <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections"))
             <> OA.command "methods" (info (pure Methods <**> helper) (progDesc "List loaded methods (flattened)"))
             <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
@@ -152,6 +152,16 @@ exportArgsParser =
         <*> textOpt "format" Nothing "FMT" "Target format: simapro|ecospold1|ecospold2|ilcd|brightway"
         <*> strOpt "out" Nothing "FILE" "Output file path"
 
+{- | Method-export parser: positional collection name, @--format@ keyword,
+@--out@ file path. Mirrors @method export <name> --format <fmt> --out <file>@.
+-}
+mcExportArgsParser :: Parser McExportArgs
+mcExportArgsParser =
+    McExportArgs
+        <$> textArg "NAME" "Name of the loaded method collection to export"
+        <*> textOpt "format" Nothing "FMT" "Target format: simapro (the only method writer today)"
+        <*> strOpt "out" Nothing "FILE" "Output file path"
+
 {- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
 @--add@ may be repeated; they spare or add individual ProcessIds.
 -}
@@ -178,6 +188,7 @@ methodParser =
                 ( OA.command "list" (info (pure McList) (progDesc "List method collections"))
                     <> OA.command "upload" (info (McUpload <$> uploadArgsParser) (progDesc "Upload a method collection from a local file"))
                     <> OA.command "delete" (info (McDelete <$> deleteNameParser) (progDesc "Delete a method collection"))
+                    <> OA.command "export" (info (McExport <$> mcExportArgsParser <**> helper) (progDesc "Export a loaded method collection to a file (SimaPro CSV)"))
                 )
             )
 

@@ -525,6 +525,17 @@ warnings arrive in the ``X-Volca-Export-Warnings`` response header
 (percent-encoded, newline-joined) and are surfaced through
 :mod:`warnings`. Raises VoLCAError on an HTTP error.
 
+##### `Client.export_method_collection(name: str, fmt: str = 'simapro') -> bytes`
+
+Export a loaded method collection, returning the serialized bytes.
+
+``fmt`` names the target format; ``simapro`` (SimaPro method CSV) is
+the only format with a method writer today — the engine answers 400
+for the others. Projection warnings (a CF the format cannot carry
+faithfully) arrive in the ``X-Volca-Export-Warnings`` response header
+and are surfaced through :mod:`warnings`. Raises VoLCAError on an
+HTTP error, including a collection that is not loaded.
+
 ##### `Client.export_to_file(fmt: str, out_path: str, db_name: str | None = None) -> None`
 
 Export a database (see :meth:`export_database`) and write it to a file.

@@ -126,6 +126,19 @@ data MethodAction
     = McList
     | McUpload UploadArgs
     | McDelete Text
+    | -- | Export a loaded collection to a file: @NAME@, @--format fmt@, @--out file@.
+      McExport McExportArgs
+    deriving (Eq, Show, Generic)
+
+-- | Arguments for @method export@.
+data McExportArgs = McExportArgs
+    { meaName :: Text
+    -- ^ Method collection to export
+    , meaFormat :: Text
+    -- ^ Target format keyword (@--format@): simapro is the only method writer today
+    , meaOut :: FilePath
+    -- ^ Output file path (@--out@)
+    }
     deriving (Eq, Show, Generic)
 
 -- | Shared upload arguments for database and method uploads

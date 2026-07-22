@@ -399,13 +399,21 @@ parseAmount decimalSep bs
 -- | Split a CSV line by delimiter, respecting RFC 4180 quoted fields.
 splitCSV :: Char -> BS.ByteString -> [BS.ByteString]
 splitCSV delim bs =
-    let opts =
+    -- 'BS8.lines' leaves the CR of a CRLF terminator on the line. A lone
+    -- trailing CR makes cassava's incremental parser wait for the LF of a
+    -- CRLF and fail with "not enough input" at end of line (observably, its
+    -- success even varies with the optimization level), silently degrading
+    -- every CRLF row to the naive split below — which tears quoted fields
+    -- apart. Strip it before parsing: it is line-terminator residue, never
+    -- field data.
+    let clean = BS8.dropWhileEnd (== '\r') bs
+        opts =
             Csv.defaultDecodeOptions
                 { Csv.decDelimiter = fromIntegral (fromEnum delim)
                 }
-     in case Csv.decodeWith opts Csv.NoHeader (BL.fromStrict bs) of
+     in case Csv.decodeWith opts Csv.NoHeader (BL.fromStrict clean) of
             Right rows | not (V.null rows) -> V.toList (V.head rows)
-            _ -> BS8.split delim bs -- fallback to naive on parse error
+            _ -> BS8.split delim clean -- fallback to naive on parse error
 
 -- | Parse a parameter row: name;value_or_expression;...
 parseParamRow :: SimaProConfig -> BS.ByteString -> Maybe (Text, Text)

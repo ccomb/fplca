@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
-import Database.Export (exportDatabase, parseExportFormat)
+import Database.Export (exportDatabase, exportMethodCollection, parseExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.RelinkMapping (relinkWithMappingFile)
@@ -116,6 +116,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeMcUpload outputFormat manager args
         Method (McDelete name) ->
             executeMcDelete outputFormat manager name
+        Method (McExport args) ->
+            executeMcExport outputFormat manager args
         Methods -> do
             pairs <- DM.getLoadedMethods manager
             let val = toJSON [object ["collection" .= col, "method" .= m] | (col, m) <- pairs]
@@ -576,6 +578,31 @@ executeDbExport fmt manager args =
                                     [ "database" .= deaDb args
                                     , "format" .= deaFormat args
                                     , "out" .= deaOut args
+                                    ]
+
+-- | Execute method-collection export: serialize a loaded collection to a file.
+executeMcExport :: OutputFormat -> DatabaseManager -> McExportArgs -> IO ()
+executeMcExport fmt manager args =
+    case parseExportFormat (meaFormat args) of
+        Left err -> reportError (T.unpack err) >> exitFailure
+        Right mcFmt -> do
+            mColl <- DM.getMethodCollection manager (meaName args)
+            case mColl of
+                Nothing -> do
+                    reportError $ "Method collection '" ++ T.unpack (meaName args) ++ "' not loaded"
+                    exitFailure
+                Just coll -> do
+                    result <- exportMethodCollection mcFmt (meaName args) coll (meaOut args)
+                    case result of
+                        Left err -> reportError (T.unpack err) >> exitFailure
+                        Right warnings -> do
+                            mapM_ (reportProgress Warning . T.unpack) warnings
+                            reportProgress Info $ "Exported " ++ T.unpack (meaName args) ++ " -> " ++ meaOut args
+                            outputResult fmt $
+                                object
+                                    [ "collection" .= meaName args
+                                    , "format" .= meaFormat args
+                                    , "out" .= meaOut args
                                     ]
 
 -- | Execute method delete command

@@ -69,9 +69,10 @@ module SimaPro.Writer (
     serializeSimaProCSV,
     checkSimaProExportable,
 
-    -- * Pure helpers (exposed for testing)
+    -- * Pure helpers (exposed for testing and for "Method.WriterSimaPro")
     escapeField,
     formatAmount,
+    headerLines,
 ) where
 
 import qualified Data.ByteString as BS

@@ -1875,6 +1875,38 @@ class Client:
             "upload_method_collection",
         )
 
+    def export_method_collection(self, name: str, fmt: str = "simapro") -> bytes:
+        """Export a loaded method collection, returning the serialized bytes.
+
+        ``fmt`` names the target format; ``simapro`` (SimaPro method CSV) is
+        the only format with a method writer today — the engine answers 400
+        for the others. Projection warnings (a CF the format cannot carry
+        faithfully) arrive in the ``X-Volca-Export-Warnings`` response header
+        and are surfaced through :mod:`warnings`. Raises VoLCAError on an
+        HTTP error, including a collection that is not loaded.
+        """
+        fmt_norm = fmt.strip().lower()
+        if fmt_norm not in _EXPORT_FORMATS:
+            raise VoLCAError(
+                f"unknown export format: {fmt!r} "
+                f"(expected {'|'.join(sorted(_EXPORT_FORMATS))})"
+            )
+        resp = self._session.post(
+            f"{self.base_url}/api/v1/method-collections/{name}/export",
+            json={"format": fmt_norm},
+            headers={"Accept": "application/octet-stream"},
+        )
+        if resp.status_code >= 400:
+            raise VoLCAError(
+                f"export_method_collection failed (HTTP {resp.status_code}): "
+                f"{resp.text[:500]}"
+            )
+        header = resp.headers.get("X-Volca-Export-Warnings", "")
+        for line in urllib.parse.unquote(header).split("\n"):
+            if line:
+                warnings.warn(line, stacklevel=2)
+        return resp.content
+
     # -- Reference data (flow synonyms, compartment mappings, units) --
     #
     # Three families, one URL scheme (/api/v1/{kind}/...), so these methods

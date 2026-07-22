@@ -53,6 +53,7 @@ module Database.Manager (
     loadMethodCollectionFromConfig,
     unloadMethodCollection,
     getLoadedMethods,
+    getMethodCollection,
     addMethodCollection,
     removeMethodCollection,
 
@@ -3114,6 +3115,10 @@ getLoadedMethods :: DatabaseManager -> IO [(Text, Method)]
 getLoadedMethods manager = do
     loaded <- readTVarIO (dmLoadedMethods manager)
     return [(collName, m) | (collName, coll) <- M.toList loaded, m <- mcMethods coll]
+
+-- | Look up one loaded method collection by name.
+getMethodCollection :: DatabaseManager -> Text -> IO (Maybe MethodCollection)
+getMethodCollection manager name = M.lookup name <$> readTVarIO (dmLoadedMethods manager)
 
 -- | Add a new method collection to the available list
 addMethodCollection :: DatabaseManager -> MethodConfig -> IO ()

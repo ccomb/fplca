@@ -24,6 +24,7 @@ module API.DatabaseHandlers (
     deleteDatabaseHandler,
     deleteActivitiesHandler,
     exportDatabaseHandler,
+    exportMethodHandler,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -115,7 +116,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
-import Database.Export (parseExportFormat, serializeDatabase)
+import Database.Export (parseExportFormat, serializeDatabase, serializeMethodCollection)
 import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseLoadStatus (..),
@@ -138,6 +139,7 @@ import Database.Manager (
     getDatabase,
     getDatabaseSetupInfo,
     getFlowSynonymGroups,
+    getMethodCollection,
     listCompartmentMappings,
     listDatabases,
     listFlowSynonyms,
@@ -414,15 +416,34 @@ database that is not loaded — never a 200 with a failure flag.
 exportDatabaseHandler :: Text -> ExportRequest -> AppM (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
 exportDatabaseHandler dbName req = do
     dbManager <- asks aeDbManager
-    fmt <- either (httpErr err400) pure (parseExportFormat (exrFormat req))
+    fmt <- either (exportErr err400) pure (parseExportFormat (exrFormat req))
     mLoaded <- liftIO (getDatabase dbManager dbName)
-    ld <- maybe (httpErr err404 ("Database not loaded: " <> dbName)) pure mLoaded
-    (bytes, warnings) <- either (httpErr err400) pure (serializeDatabase fmt (ldDatabase ld))
-    pure (addHeader (encodeWarnings warnings) (BinaryContent bytes))
-  where
-    encodeWarnings = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.intercalate "\n"
-    httpErr :: ServerError -> Text -> AppM a
-    httpErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
+    ld <- maybe (exportErr err404 ("Database not loaded: " <> dbName)) pure mLoaded
+    (bytes, warnings) <- either (exportErr err400) pure (serializeDatabase fmt (ldDatabase ld))
+    pure (addHeader (encodeExportWarnings warnings) (BinaryContent bytes))
+
+{- | Export a loaded method collection over the same transport as the database
+export: raw octet-stream body, projection warnings percent-encoded in the
+@X-Volca-Export-Warnings@ header, 400 for a format without a method writer,
+404 for a collection that is not loaded.
+-}
+exportMethodHandler :: Text -> ExportRequest -> AppM (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
+exportMethodHandler name req = do
+    dbManager <- asks aeDbManager
+    fmt <- either (exportErr err400) pure (parseExportFormat (exrFormat req))
+    mColl <- liftIO (getMethodCollection dbManager name)
+    coll <- maybe (exportErr err404 ("Method collection not loaded: " <> name)) pure mColl
+    (bytes, warnings) <- either (exportErr err400) pure (serializeMethodCollection fmt name coll)
+    pure (addHeader (encodeExportWarnings warnings) (BinaryContent bytes))
+
+{- | Join export warnings for the response header, percent-encoded because
+flow and activity names are arbitrary Unicode.
+-}
+encodeExportWarnings :: [Text] -> Text
+encodeExportWarnings = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.intercalate "\n"
+
+exportErr :: ServerError -> Text -> AppM a
+exportErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
 
 {- | Resolve the hosting upload-size policy into a streaming byte cap.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0

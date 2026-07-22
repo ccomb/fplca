@@ -665,6 +665,12 @@ spec = do
         it "strips quotes and embeds delimiter in field" $
             splitCSV ';' "\"a;b\";c" `shouldBe` ["a;b", "c"]
 
+        -- Lines split out of a CRLF file keep their trailing CR; it must not
+        -- degrade quoted-field parsing to the naive split (which tears the
+        -- quoted field apart).
+        it "still strips quotes when the line ends with the CR of a CRLF file" $
+            splitCSV ';' "\"a;b\";c\r" `shouldBe` ["a;b", "c"]
+
         it "splits comma-delimited row" $
             splitCSV ',' "x,y,z" `shouldBe` ["x", "y", "z"]
 
