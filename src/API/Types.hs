@@ -848,9 +848,29 @@ data QualityReportAPI = QualityReportAPI
     , qraSuspiciousAmounts :: QualityCheckAPI
     , qraMissingMetadata :: QualityCheckAPI
     , qraFormulaConsistency :: QualityCheckAPI
+    , qraTruncatedNameCollisions :: QualityCheckAPI
+    , qraMissingPedigree :: QualityCheckAPI
+    , qraUnconsumedProducts :: QualityCheckAPI
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityReportAPI)
+
+{- | Computed-checks report of a loaded database: what the data computes,
+judged against the catalogue's own norms. Same check and offender shape as
+'QualityReportAPI', so consumers render both reports alike; a separate
+report because these checks need matrices and a method collection, which
+the structural report deliberately does not.
+-}
+data ComputedQualityReportAPI = ComputedQualityReportAPI
+    { cqaDbName :: Text
+    , cqaCollection :: Text
+    , cqaProcessCount :: Int
+    , cqaScoreOutliers :: QualityCheckAPI
+    , cqaZeroScores :: QualityCheckAPI
+    , cqaNegativeScores :: QualityCheckAPI
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ComputedQualityReportAPI)
 
 -- | Result of auto-loading a single dependency
 data DepLoadResult

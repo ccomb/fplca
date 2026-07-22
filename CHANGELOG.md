@@ -12,6 +12,20 @@
   output is unchanged.
 
 ### Fixed
+- openLCA JSON-LD method files now load with the right factor directions,
+  compartments, and reference unit — including files openLCA itself
+  exported. Such files carry no per-factor direction, so every factor used
+  to default to output — a resource factor (water withdrawal, land
+  occupation) then matched against the wrong synonym view and could
+  silently miss its flow. The direction now comes from the flow's category
+  path (`resource/…`, `Raw materials`, `Land use` → input; `Emission to …`
+  → output), or from the impact category's own direction when the path
+  says nothing either way; a factor that states its direction explicitly
+  is untouched. The parser also reads the olca-schema spellings a genuine
+  export uses — the category path as a plain string on the flow reference
+  (its `Elementary flows` root is dropped) and `refUnit` — where it
+  previously only understood its own exporter's shape and silently lost
+  the compartment and reference unit.
 - Numbers in columnar CSV method files and normalization/weighting CSV
   files now parse exactly. The previous number parser drifted in the last
   decimal (`1.2227e-3` came back as `1.2227000000000002e-3`) — every such
@@ -61,6 +75,26 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- A computed-checks report joins the structural quality report:
+  `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
+  MCP tool score every entry of a loaded database against a method collection
+  and report per-category score outliers (median/MAD on a log scale within
+  (category, reference-unit) groups — a mg-read-as-kg slip lands three orders
+  of magnitude out), entries whose every score is zero, and negative category
+  scores (info: avoided-production credits and waste treatment produce them
+  legitimately). Separate from the structural report on purpose — that one
+  stays identical on staged and loaded databases; this one needs the matrices
+  and a loaded method collection.
+- The quality report flags distinct activity names that merge under
+  SimaPro's 80-character name truncation — each colliding name gets its own
+  finding, so an export bound for SimaPro can be repaired before the names
+  collapse into one process there.
+- The quality report counts the exchanges that carry no pedigree scores, per
+  entry — only in databases that carry pedigree scores at all, so formats
+  that cannot publish them are not drowned in noise.
+- The quality report lists the entries whose reference product nothing in
+  the database consumes. Informational by nature: expected for a final
+  product, a dangling intermediate in a background database.
 - Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
   of one `ImpactCategory` document per impact category, in the olca-schema
   archive layout, that loads straight back. Flow UUIDs, per-factor
