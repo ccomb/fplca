@@ -337,6 +337,7 @@ qualityReportToAPI mLimit r =
         , qraTruncatedNameCollisions = checkToAPI mLimit (Quality.qrTruncatedNameCollisions r)
         , qraMissingPedigree = checkToAPI mLimit (Quality.qrMissingPedigree r)
         , qraUnconsumedProducts = checkToAPI mLimit (Quality.qrUnconsumedProducts r)
+        , qraLandTransformationBalance = checkToAPI mLimit (Quality.qrLandTransformationBalance r)
         }
 
 {- | Same projection for the computed report — one wire cap, one offender

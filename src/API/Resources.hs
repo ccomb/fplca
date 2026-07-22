@@ -478,9 +478,10 @@ description r = case r of
         \amounts that disagree with the formulas documenting them \
         \(mathematicalRelation, checked at parse time), distinct names \
         \that merge under SimaPro's 80-character truncation, exchanges \
-        \without the pedigree scores their database otherwise carries, and \
+        \without the pedigree scores their database otherwise carries, \
         \reference products nothing in the database consumes (expected for \
-        \final products). Each \
+        \final products), and land transformation whose 'to' and 'from' \
+        \areas don't balance within an activity. Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \

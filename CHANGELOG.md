@@ -75,6 +75,11 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- The quality report checks that land transformation balances within each
+  activity: the areas transformed *to* a use must match the areas transformed
+  *from* another, since a parcel changed into one state was changed out of
+  another. A gap beyond one percent — a dropped or mistyped line — is flagged,
+  compared per unit so only comparable areas are summed.
 - A computed-checks report joins the structural quality report:
   `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
   MCP tool score every entry of a loaded database against a method collection

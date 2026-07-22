@@ -9,8 +9,9 @@ coproduct allocation that doesn't sum to 100%, entries duplicated outright,
 amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
-their database otherwise carries, and reference products nothing in the
-database consumes.
+their database otherwise carries, reference products nothing in the
+database consumes, and land transformation whose "to" and "from" areas
+don't balance within an activity.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -26,6 +27,7 @@ module Database.Quality (
 ) where
 
 import Control.Applicative ((<|>))
+import Data.Char (isAlphaNum)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -34,7 +36,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Numeric (showFFloat)
+import Numeric (showFFloat, showGFloat)
 
 import Types (
     Activity (..),
@@ -45,6 +47,7 @@ import Types (
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
+    Unit (..),
     WasteFlow (..),
     activityGroupKey,
     exchangeAmount,
@@ -100,6 +103,7 @@ data QualityReport = QualityReport
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
+    , qrLandTransformationBalance :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -118,6 +122,7 @@ qualityChecks r =
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
     , qrUnconsumedProducts r
+    , qrLandTransformationBalance r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -142,6 +147,31 @@ than as floating-point dust like @69.89999999999999@.
 formatPercent :: Double -> Text
 formatPercent x = T.pack (showFFloat (Just 2) x "")
 
+{- | Compact rendering for physical amounts, which span orders of magnitude
+(@1.5e-4@ m² to thousands): three significant figures, scientific where it
+keeps the number legible.
+-}
+formatAmount :: Double -> Text
+formatAmount x = T.pack (showGFloat (Just 3) x "")
+
+{- | True when @name@ begins with @prefix@ and the prefix ends on a word
+boundary — the next character is absent or non-alphanumeric. So @"COD"@ matches
+@"COD, Chemical Oxygen Demand"@ but not a longer token that merely starts with
+the same letters.
+-}
+startsWithField :: Text -> Text -> Bool
+startsWithField prefix name = case T.stripPrefix prefix name of
+    Nothing -> False
+    Just rest -> maybe True (not . isAlphaNum . fst) (T.uncons rest)
+
+{- | Allowed drift when comparing two physical sums that a law says should be
+equal (land transformation in vs out, oxygen-demand ordering). Sources round
+their amounts, so an exact comparison would flag correct data; one percent is
+far below what a dropped or mistyped flow costs.
+-}
+physicalBalanceTolerance :: Double
+physicalBalanceTolerance = 0.01
+
 -- | Run every check over a database.
 qualityReport :: Text -> SimpleDatabase -> QualityReport
 qualityReport dbName db =
@@ -157,6 +187,7 @@ qualityReport dbName db =
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
+        , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -171,10 +202,12 @@ qualityReport dbName db =
     techOrWasteFlowName fid =
         (tfName <$> M.lookup fid (sdbTechFlows db))
             <|> (wfName <$> M.lookup fid (sdbWasteFlows db))
+    bioFlowName fid = bfName <$> M.lookup fid (sdbBioFlows db)
     anyFlowName fid =
         fromMaybe (UUID.toText fid) $
             techOrWasteFlowName fid
-                <|> (bfName <$> M.lookup fid (sdbBioFlows db))
+                <|> bioFlowName fid
+    unitLabel uid = maybe "?" unitName (M.lookup uid (sdbUnits db))
 
     -- Exactly one reference exchange defines the process: none leaves nothing
     -- to normalize against, several make the entry ambiguous. 'exchangeIsReference'
@@ -373,3 +406,43 @@ qualityReport dbName db =
         , exchangeFlowId refEx `S.notMember` usedFlowIds
         , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
         ]
+
+    -- Land transformation is conserved: a parcel changed into one use was
+    -- changed out of another, so within an activity the "Transformation, to …"
+    -- areas must match the "Transformation, from …" areas. A gap means one side
+    -- was dropped or mistyped. Compared per unit — only same-unit areas add —
+    -- though in practice these flows are all m². A database with no such flow
+    -- has nothing to judge.
+    landBalanceApplicable = not (all (M.null . transformationByUnit) acts)
+    landBalanceOffenders =
+        [ offender WarningSev key act Nothing $
+            "land transformation is unbalanced: "
+                <> formatAmount fromSum
+                <> " "
+                <> unit
+                <> " transformed from vs "
+                <> formatAmount toSum
+                <> " "
+                <> unit
+                <> " transformed to ("
+                <> formatPercent (100 * abs (fromSum - toSum) / denom)
+                <> "% apart)"
+        | (key, act) <- entries
+        , (uid, (fromSum, toSum)) <- M.toList (transformationByUnit act)
+        , let denom = max fromSum toSum
+        , denom > 0
+        , abs (fromSum - toSum) > physicalBalanceTolerance * denom
+        , let unit = unitLabel uid
+        ]
+    transformationByUnit act =
+        M.fromListWith
+            (\(a, b) (c, d) -> (a + c, b + d))
+            [ (exchangeUnitId ex, side)
+            | ex <- exchanges act
+            , Just nm <- [bioFlowName (exchangeFlowId ex)]
+            , Just side <- [transformationSide nm (exchangeAmount ex)]
+            ]
+    transformationSide nm amt
+        | startsWithField "Transformation, from" nm = Just (amt, 0)
+        | startsWithField "Transformation, to" nm = Just (0, amt)
+        | otherwise = Nothing
