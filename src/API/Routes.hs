@@ -1008,6 +1008,13 @@ computedQualityReportH dbName mCollection mLimit = do
         mapM
             (\pids -> batchImpactsH dbName collection Nothing IncludeLongTerm BatchImpactsRequest{birProcessIds = pids})
             (chunks (M.keys entriesByPid))
+    -- The ids come from the catalogue itself, so nothing should be
+    -- unresolvable — but a dropped entry would silently shrink the report,
+    -- so any is worth a warning in the log.
+    let unresolved = concatMap (\r -> birNotFound r <> birInvalid r) responses
+    unless (null unresolved) $
+        liftIO . reportProgress Warning $
+            "Computed quality report on " <> T.unpack dbName <> ": " <> show (length unresolved) <> " catalogue entries could not be scored and are missing from the report"
     let scored =
             [ CQ.ScoredEntry
                 { CQ.seProcessId = bieProcessId e

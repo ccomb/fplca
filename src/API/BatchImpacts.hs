@@ -22,7 +22,7 @@ module API.BatchImpacts (
 
 import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, computedQualityReportH, databaseNotLoadedPrefix)
 import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, ComputedQualityReportAPI, LCIABatchResult, SubstitutionRequest)
-import App.Env (AppEnv (..), runApp)
+import App.Env (AppEnv (..), AppM, runApp)
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -81,19 +81,8 @@ runActivityLCIABatch ::
     -- | whether to keep or drop delayed long-term emissions
     LongTermMode ->
     IO (Either BatchError LCIABatchResult)
-runActivityLCIABatch dbm dbName pid coll mSub ltMode = do
-    let env =
-            AppEnv
-                { aeDbManager = dbm
-                , aeMaxTreeDepth = 0
-                , aePassword = Nothing
-                , aeHostingConfig = Nothing
-                , aeClassificationPresets = []
-                }
-    res <- Servant.runHandler (runApp env (activityLCIABatchH dbName pid coll mSub ltMode))
-    case res of
-        Right lbr -> pure (Right lbr)
-        Left se -> Left <$> translateErrorIO dbm se
+runActivityLCIABatch dbm dbName pid coll mSub ltMode =
+    runBare dbm (activityLCIABatchH dbName pid coll mSub ltMode)
 
 {- | Score N activities against every method in a collection in one
 multi-RHS MUMPS solve plus parallel characterization. Unresolved process
@@ -113,27 +102,8 @@ runBatchImpacts ::
     -- | process_ids to score
     [Text] ->
     IO (Either BatchError BatchImpactsResponse)
-runBatchImpacts dbm dbName coll topFlows ltMode pids = do
-    let env =
-            AppEnv
-                { aeDbManager = dbm
-                , aeMaxTreeDepth = 0
-                , aePassword = Nothing
-                , aeHostingConfig = Nothing
-                , aeClassificationPresets = []
-                }
-    res <-
-        Servant.runHandler $
-            runApp env $
-                batchImpactsH
-                    dbName
-                    coll
-                    topFlows
-                    ltMode
-                    (BatchImpactsRequest{birProcessIds = pids})
-    case res of
-        Right r -> pure (Right r)
-        Left se -> Left <$> translateErrorIO dbm se
+runBatchImpacts dbm dbName coll topFlows ltMode pids =
+    runBare dbm (batchImpactsH dbName coll topFlows ltMode BatchImpactsRequest{birProcessIds = pids})
 
 {- | Computed-checks report over the whole catalogue of a loaded database.
 Same wire shape as the REST endpoint ('computedQualityReportH'), so both
@@ -148,7 +118,14 @@ runComputedQuality ::
     -- | max findings per check, worst first
     Maybe Int ->
     IO (Either BatchError ComputedQualityReportAPI)
-runComputedQuality dbm dbName mColl mLimit = do
+runComputedQuality dbm dbName mColl mLimit =
+    runBare dbm (computedQualityReportH dbName mColl mLimit)
+
+{- | Run one handler outside the Servant stack: the bare environment every
+wrapper shares, then 'ServerError' translated back to a 'BatchError'.
+-}
+runBare :: DatabaseManager -> AppM a -> IO (Either BatchError a)
+runBare dbm action = do
     let env =
             AppEnv
                 { aeDbManager = dbm
@@ -157,7 +134,7 @@ runComputedQuality dbm dbName mColl mLimit = do
                 , aeHostingConfig = Nothing
                 , aeClassificationPresets = []
                 }
-    res <- Servant.runHandler (runApp env (computedQualityReportH dbName mColl mLimit))
+    res <- Servant.runHandler (runApp env action)
     case res of
         Right r -> pure (Right r)
         Left se -> Left <$> translateErrorIO dbm se
