@@ -75,6 +75,24 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- The quality report flags individual allocation percentages outside the
+  0-100% range, alongside the existing check that a block's percentages sum to
+  100. A single factor can be out of range — a negative share, or more than the
+  whole — while the block total still lands on 100.
+- The quality report validates flow CAS numbers by their check digit: a CAS
+  registry number confirms itself, so a corrupt one — which silently breaks
+  the name-to-CAS bridge that matches flows across databases — is flagged. The
+  zero-padded and canonical spellings both pass.
+- The quality report flags oxygen-demand and organic-carbon measures recorded
+  in a physically impossible order: within one entry BOD5 must not exceed COD,
+  nor dissolved organic carbon exceed total. A reversed pair is a measurement
+  or transcription error. Checked only where both members of a pair are
+  present.
+- The quality report checks that land transformation balances within each
+  activity: the areas transformed *to* a use must match the areas transformed
+  *from* another, since a parcel changed into one state was changed out of
+  another. A gap beyond one percent — a dropped or mistyped line — is flagged,
+  compared per unit so only comparable areas are summed.
 - A computed-checks report joins the structural quality report:
   `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
   MCP tool score every entry of a loaded database against a method collection

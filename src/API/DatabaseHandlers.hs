@@ -337,6 +337,10 @@ qualityReportToAPI mLimit r =
         , qraTruncatedNameCollisions = checkToAPI mLimit (Quality.qrTruncatedNameCollisions r)
         , qraMissingPedigree = checkToAPI mLimit (Quality.qrMissingPedigree r)
         , qraUnconsumedProducts = checkToAPI mLimit (Quality.qrUnconsumedProducts r)
+        , qraLandTransformationBalance = checkToAPI mLimit (Quality.qrLandTransformationBalance r)
+        , qraOxygenDemandOrder = checkToAPI mLimit (Quality.qrOxygenDemandOrder r)
+        , qraInvalidCas = checkToAPI mLimit (Quality.qrInvalidCas r)
+        , qraAllocationOutOfRange = checkToAPI mLimit (Quality.qrAllocationOutOfRange r)
         }
 
 {- | Same projection for the computed report — one wire cap, one offender

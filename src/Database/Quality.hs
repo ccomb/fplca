@@ -9,8 +9,12 @@ coproduct allocation that doesn't sum to 100%, entries duplicated outright,
 amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
-their database otherwise carries, and reference products nothing in the
-database consumes.
+their database otherwise carries, reference products nothing in the
+database consumes, land transformation whose "to" and "from" areas
+don't balance within an activity, oxygen-demand or organic-carbon
+measures reported in a physically impossible order, CAS numbers
+whose check digit doesn't confirm them, and allocation percentages
+outside the 0-100% range.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -26,6 +30,7 @@ module Database.Quality (
 ) where
 
 import Control.Applicative ((<|>))
+import Data.Char (digitToInt, isAlphaNum, isDigit)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -34,7 +39,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
-import Numeric (showFFloat)
+import Numeric (showFFloat, showGFloat)
 
 import Types (
     Activity (..),
@@ -45,6 +50,7 @@ import Types (
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
+    Unit (..),
     WasteFlow (..),
     activityGroupKey,
     exchangeAmount,
@@ -100,6 +106,10 @@ data QualityReport = QualityReport
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
+    , qrLandTransformationBalance :: !QualityCheck
+    , qrOxygenDemandOrder :: !QualityCheck
+    , qrInvalidCas :: !QualityCheck
+    , qrAllocationOutOfRange :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -118,6 +128,10 @@ qualityChecks r =
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
     , qrUnconsumedProducts r
+    , qrLandTransformationBalance r
+    , qrOxygenDemandOrder r
+    , qrInvalidCas r
+    , qrAllocationOutOfRange r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -142,6 +156,49 @@ than as floating-point dust like @69.89999999999999@.
 formatPercent :: Double -> Text
 formatPercent x = T.pack (showFFloat (Just 2) x "")
 
+{- | Compact rendering for physical amounts, which span orders of magnitude
+(@1.5e-4@ m² to thousands): three significant figures, scientific where it
+keeps the number legible.
+-}
+formatAmount :: Double -> Text
+formatAmount x = T.pack (showGFloat (Just 3) x "")
+
+{- | True when @name@ begins with @prefix@ and the prefix ends on a word
+boundary — the next character is absent or non-alphanumeric. So @"COD"@ matches
+@"COD, Chemical Oxygen Demand"@ but not a longer token that merely starts with
+the same letters.
+-}
+startsWithField :: Text -> Text -> Bool
+startsWithField prefix name = case T.stripPrefix prefix name of
+    Nothing -> False
+    Just rest -> maybe True (not . isAlphaNum . fst) (T.uncons rest)
+
+{- | A CAS registry number is @<digits>-<2 digits>-<check digit>@, where the
+check digit confirms the rest: numbering the other digits 1, 2, 3, … from the
+right, their weighted sum modulo ten equals it. Leading zeros contribute
+nothing to that sum, so this accepts both the zero-padded spelling some formats
+emit and the canonical one.
+-}
+validCas :: Text -> Bool
+validCas cas = case T.splitOn "-" cas of
+    [body, pair, check] -> case (T.unpack body, T.unpack pair, T.unpack check) of
+        (bs@(_ : _), ps@[_, _], [c])
+            | all isDigit bs
+            , all isDigit ps
+            , isDigit c ->
+                let ds = map digitToInt (bs <> ps)
+                 in sum (zipWith (*) [1 ..] (reverse ds)) `mod` 10 == digitToInt c
+        _ -> False
+    _ -> False
+
+{- | Allowed drift when comparing two physical sums that a law says should be
+equal (land transformation in vs out, oxygen-demand ordering). Sources round
+their amounts, so an exact comparison would flag correct data; one percent is
+far below what a dropped or mistyped flow costs.
+-}
+physicalBalanceTolerance :: Double
+physicalBalanceTolerance = 0.01
+
 -- | Run every check over a database.
 qualityReport :: Text -> SimpleDatabase -> QualityReport
 qualityReport dbName db =
@@ -157,6 +214,10 @@ qualityReport dbName db =
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
+        , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
+        , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
+        , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
+        , qrAllocationOutOfRange = QualityCheck allocationApplicable (worstFirst allocationRangeOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -171,10 +232,12 @@ qualityReport dbName db =
     techOrWasteFlowName fid =
         (tfName <$> M.lookup fid (sdbTechFlows db))
             <|> (wfName <$> M.lookup fid (sdbWasteFlows db))
+    bioFlowName fid = bfName <$> M.lookup fid (sdbBioFlows db)
     anyFlowName fid =
         fromMaybe (UUID.toText fid) $
             techOrWasteFlowName fid
-                <|> (bfName <$> M.lookup fid (sdbBioFlows db))
+                <|> bioFlowName fid
+    unitLabel uid = maybe "?" unitName (M.lookup uid (sdbUnits db))
 
     -- Exactly one reference exchange defines the process: none leaves nothing
     -- to normalize against, several make the entry ambiguous. 'exchangeIsReference'
@@ -233,6 +296,19 @@ qualityReport dbName db =
         carried = mapMaybe (activityAllocationPercent . snd) group'
         missing = length group' - length carried
         total = sum carried
+
+    -- A single allocation factor outside 0–100% is wrong on its own terms: a
+    -- coproduct cannot take a negative share or more than the whole. Distinct
+    -- from the sums check, which judges the block total — a factor can be out
+    -- of range while its block still happens to sum to 100. NaN is left to the
+    -- sums check, which already reports it as a bad total.
+    allocationRangeOffenders =
+        [ offender WarningSev key act Nothing $
+            "allocation percentage is " <> formatPercent pct <> "%, outside the 0-100% range"
+        | (key, act) <- entries
+        , Just pct <- [activityAllocationPercent act]
+        , pct < 0 || pct > 100
+        ]
 
     -- Same name, same place, same product, twice: one of them is stale. Entries
     -- without exactly one reference are skipped — check 1 already reports them,
@@ -372,4 +448,101 @@ qualityReport dbName db =
         , [refEx] <- [filter exchangeIsReference (exchanges act)]
         , exchangeFlowId refEx `S.notMember` usedFlowIds
         , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
+        ]
+
+    -- Land transformation is conserved: a parcel changed into one use was
+    -- changed out of another, so within an activity the "Transformation, to …"
+    -- areas must match the "Transformation, from …" areas. A gap means one side
+    -- was dropped or mistyped. Compared per unit — only same-unit areas add —
+    -- though in practice these flows are all m². A database with no such flow
+    -- has nothing to judge.
+    landBalanceApplicable = not (all (M.null . transformationByUnit) acts)
+    landBalanceOffenders =
+        [ offender WarningSev key act Nothing $
+            "land transformation is unbalanced: "
+                <> formatAmount fromSum
+                <> " "
+                <> unit
+                <> " transformed from vs "
+                <> formatAmount toSum
+                <> " "
+                <> unit
+                <> " transformed to ("
+                <> formatPercent (100 * abs (fromSum - toSum) / denom)
+                <> "% apart)"
+        | (key, act) <- entries
+        , (uid, (fromSum, toSum)) <- M.toList (transformationByUnit act)
+        , let denom = max fromSum toSum
+        , denom > 0
+        , abs (fromSum - toSum) > physicalBalanceTolerance * denom
+        , let unit = unitLabel uid
+        ]
+    transformationByUnit act =
+        M.fromListWith
+            (\(a, b) (c, d) -> (a + c, b + d))
+            [ (exchangeUnitId ex, side)
+            | ex <- exchanges act
+            , Just nm <- [bioFlowName (exchangeFlowId ex)]
+            , Just side <- [transformationSide nm (exchangeAmount ex)]
+            ]
+    transformationSide nm amt
+        | startsWithField "Transformation, from" nm = Just (amt, 0)
+        | startsWithField "Transformation, to" nm = Just (0, amt)
+        | otherwise = Nothing
+
+    -- The biological oxygen demand is a fraction of the chemical one, and
+    -- dissolved organic carbon a fraction of the total: BOD5 ≤ COD and
+    -- DOC ≤ TOC, always. A reversed pair is a measurement or transcription
+    -- error, not a modelling choice. Compared only where both members are
+    -- present — a lone measure has nothing to be out of order with. These
+    -- flows are reported in kilograms across every format, so the per-activity
+    -- sums are directly comparable.
+    oxygenApplicable = any (any (maybe False isOxygenName . bioFlowName . exchangeFlowId) . exchanges) acts
+    isOxygenName nm = any (`startsWithField` nm) ["BOD5", "COD", "DOC", "TOC"]
+    oxygenSum prefix act =
+        sum [exchangeAmount ex | ex <- exchanges act, Just nm <- [bioFlowName (exchangeFlowId ex)], startsWithField prefix nm]
+    oxygenOffenders =
+        [ offender WarningSev key act Nothing detail
+        | (key, act) <- entries
+        , detail <- oxygenViolations act
+        ]
+    oxygenViolations act =
+        [ "BOD5 (" <> formatAmount bod <> ") exceeds COD (" <> formatAmount cod <> ") in this entry — the biological oxygen demand cannot exceed the chemical"
+        | let bod = oxygenSum "BOD5" act
+        , let cod = oxygenSum "COD" act
+        , bod > 0
+        , cod > 0
+        , bod - cod > physicalBalanceTolerance * cod
+        ]
+            <> [ "DOC (" <> formatAmount doc <> ") exceeds TOC (" <> formatAmount toc <> ") in this entry — the dissolved organic carbon cannot exceed the total"
+               | let doc = oxygenSum "DOC" act
+               , let toc = oxygenSum "TOC" act
+               , doc > 0
+               , toc > 0
+               , doc - toc > physicalBalanceTolerance * toc
+               ]
+
+    -- A CAS registry number is self-checking: a corrupt one is silently wrong
+    -- and breaks the name→CAS bridge that matches flows across databases. One
+    -- finding per distinct flow, anchored to the lowest-addressed entry that
+    -- uses it so it stays navigable. Flows the registry lists but no activity
+    -- uses are inert and left out — the report scans what activities carry.
+    allFlowCas =
+        [(tfId f, tfName f, cas) | f <- M.elems (sdbTechFlows db), Just cas <- [tfCAS f]]
+            <> [(bfId f, bfName f, cas) | f <- M.elems (sdbBioFlows db), Just cas <- [bfCAS f]]
+            <> [(wfId f, wfName f, cas) | f <- M.elems (sdbWasteFlows db), Just cas <- [wfCAS f]]
+    casApplicable = not (null allFlowCas)
+    flowRep =
+        M.fromListWith
+            min
+            [ (exchangeFlowId ex, (pidText key, activityName act, activityLocation act))
+            | (key, act) <- entries
+            , ex <- exchanges act
+            ]
+    casOffenders =
+        [ QualityOffender WarningSev pid name loc (Just flowName) $
+            "CAS number \"" <> cas <> "\" is not a valid CAS registry number"
+        | (fid, flowName, cas) <- allFlowCas
+        , not (validCas cas)
+        , Just (pid, name, loc) <- [M.lookup fid flowRep]
         ]

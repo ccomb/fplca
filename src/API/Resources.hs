@@ -478,9 +478,14 @@ description r = case r of
         \amounts that disagree with the formulas documenting them \
         \(mathematicalRelation, checked at parse time), distinct names \
         \that merge under SimaPro's 80-character truncation, exchanges \
-        \without the pedigree scores their database otherwise carries, and \
+        \without the pedigree scores their database otherwise carries, \
         \reference products nothing in the database consumes (expected for \
-        \final products). Each \
+        \final products), land transformation whose 'to' and 'from' \
+        \areas don't balance within an activity, oxygen-demand or \
+        \organic-carbon measures in a physically impossible order (BOD5 above \
+        \COD, or dissolved above total organic carbon), flow CAS numbers \
+        \whose check digit does not confirm them, and individual allocation \
+        \percentages outside the 0-100% range. Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \
