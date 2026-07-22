@@ -15,6 +15,8 @@ has no writer and 'UnknownFormat' is not a real target, so both fail loudly
 module Database.Export (
     serializeDatabase,
     exportDatabase,
+    MethodExportFormat (..),
+    parseMethodExportFormat,
     serializeMethodCollection,
     exportMethodCollection,
     parseExportFormat,
@@ -67,26 +69,34 @@ serializeDatabase fmt db = case fmt of
     sdb = toSimpleDatabase db
     noWarn = fmap (,[])
 
-{- | Serialize a loaded method collection in the requested format, paired with
-the projection warnings. SimaPro CSV is the only format with a method writer
-today; every other target fails loudly rather than emit an empty file. The
-name is the collection's own (used as the file-level method name when the
-impact categories don't share a methodology).
+{- | Export targets for a method collection — a space of its own, not
+'DatabaseFormat': most database formats carry no method writer, and method
+formats need not be database formats at all. A request naming a format
+outside this type is rejected at parse time instead of dispatching into a
+wall of runtime 'Left's.
 -}
-serializeMethodCollection :: DatabaseFormat -> Text -> MethodCollection -> Either Text (BL.ByteString, [Text])
+data MethodExportFormat
+    = MethodSimaProCSV -- SimaPro method CSV ({methods} block)
+    deriving (Show, Eq)
+
+{- | Parse a user-facing method-export format name (case- and
+whitespace-insensitive). Shared by the CLI and the HTTP handler so the
+accepted spellings and the error message stay in one place.
+-}
+parseMethodExportFormat :: Text -> Either Text MethodExportFormat
+parseMethodExportFormat raw = case T.toLower (T.strip raw) of
+    "simapro" -> Right MethodSimaProCSV
+    other -> Left ("unknown method export format: " <> other <> " (expected simapro)")
+
+{- | Serialize a loaded method collection in the requested format, paired with
+the projection warnings. The name is the collection's own (used as the
+file-level method name when the impact categories don't share a methodology).
+-}
+serializeMethodCollection :: MethodExportFormat -> Text -> MethodCollection -> Either Text (BL.ByteString, [Text])
 serializeMethodCollection fmt name mc = case fmt of
-    SimaProCSV ->
+    MethodSimaProCSV ->
         first BL.fromStrict
             <$> MW.serializeSimaProMethodCSV SP.defaultWriterConfig name mc
-    EcoSpold1 -> noMethodWriter "ecospold1"
-    EcoSpold2 -> noMethodWriter "ecospold2"
-    ILCDProcess -> noMethodWriter "ilcd"
-    BrightwayExcel -> noMethodWriter "brightway"
-    OpenLcaJsonLd -> noMethodWriter "openlca"
-    UnknownFormat -> Left "cannot export to an unknown format"
-  where
-    noMethodWriter f =
-        Left ("method collections can only be exported as SimaPro CSV (no method writer for format: " <> f <> ")")
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted
@@ -109,7 +119,7 @@ exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text [Tex
 exportDatabase fmt db path = writeExport path (serializeDatabase fmt db)
 
 -- | File variant of 'serializeMethodCollection', for the CLI.
-exportMethodCollection :: DatabaseFormat -> Text -> MethodCollection -> FilePath -> IO (Either Text [Text])
+exportMethodCollection :: MethodExportFormat -> Text -> MethodCollection -> FilePath -> IO (Either Text [Text])
 exportMethodCollection fmt name mc path = writeExport path (serializeMethodCollection fmt name mc)
 
 -- | Write serialized bytes to @path@, passing the warnings through.

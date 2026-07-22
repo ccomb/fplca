@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
-import Database.Export (exportDatabase, exportMethodCollection, parseExportFormat)
+import Database.Export (exportDatabase, exportMethodCollection, parseExportFormat, parseMethodExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
 import Database.RelinkMapping (relinkWithMappingFile)
@@ -583,7 +583,7 @@ executeDbExport fmt manager args =
 -- | Execute method-collection export: serialize a loaded collection to a file.
 executeMcExport :: OutputFormat -> DatabaseManager -> McExportArgs -> IO ()
 executeMcExport fmt manager args =
-    case parseExportFormat (meaFormat args) of
+    case parseMethodExportFormat (meaFormat args) of
         Left err -> reportError (T.unpack err) >> exitFailure
         Right mcFmt -> do
             mColl <- DM.getMethodCollection manager (meaName args)

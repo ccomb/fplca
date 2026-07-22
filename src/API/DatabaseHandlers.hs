@@ -116,7 +116,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
-import Database.Export (parseExportFormat, serializeDatabase, serializeMethodCollection)
+import Database.Export (parseExportFormat, parseMethodExportFormat, serializeDatabase, serializeMethodCollection)
 import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseLoadStatus (..),
@@ -430,7 +430,7 @@ export: raw octet-stream body, projection warnings percent-encoded in the
 exportMethodHandler :: Text -> ExportRequest -> AppM (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
 exportMethodHandler name req = do
     dbManager <- asks aeDbManager
-    fmt <- either (exportErr err400) pure (parseExportFormat (exrFormat req))
+    fmt <- either (exportErr err400) pure (parseMethodExportFormat (exrFormat req))
     mColl <- liftIO (getMethodCollection dbManager name)
     coll <- maybe (exportErr err404 ("Method collection not loaded: " <> name)) pure mColl
     (bytes, warnings) <- either (exportErr err400) pure (serializeMethodCollection fmt name coll)
