@@ -62,6 +62,7 @@ library
                      , Method.ParserCSV
                      , Method.ParserSimaPro
                      , Method.WriterCSV
+                     , Method.WriterILCD
                      , Method.WriterOlcaSchema
                      , Method.WriterSimaPro
                      , Method.ParserNW
@@ -299,6 +300,7 @@ test-suite lca-tests
                      , GeographiesSpec
                      , MethodUploadSpec
                      , MethodWriterCSVSpec
+                     , MethodWriterILCDSpec
                      , MethodWriterOlcaSchemaSpec
                      , MethodWriterSimaProSpec
                      , AuthSpec

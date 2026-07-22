@@ -49,6 +49,18 @@
   databases.
 
 ### Added
+- Method collections can be exported as an ILCD LCIA-method package (`ilcd`):
+  a zip of one method dataset per impact category plus the flow datasets they
+  reference (`lciamethods/` + `flows/`), which loads straight back. It carries
+  the most metadata of any of the method export formats — methodology,
+  description, per-factor direction, location and CAS all round-trip natively,
+  the way a real EF package does. What ILCD's method profile cannot hold — a
+  per-factor flow unit (it stores one reference unit per method), damage
+  categories, normalization/weighting sets and formula scoring sets — is
+  reported in export warnings, never dropped silently. Available through
+  `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
+  `volca method export NAME --format ilcd`, and pyvolca's
+  `export_method_collection(name, fmt="ilcd")`.
 - Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
   of one `ImpactCategory` document per impact category, in the olca-schema
   archive layout, that loads straight back. Flow UUIDs, per-factor

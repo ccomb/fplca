@@ -159,7 +159,7 @@ mcExportArgsParser :: Parser McExportArgs
 mcExportArgsParser =
     McExportArgs
         <$> textArg "NAME" "Name of the loaded method collection to export"
-        <*> textOpt "format" Nothing "FMT" "Target format: simapro|csv|openlca"
+        <*> textOpt "format" Nothing "FMT" "Target format: simapro|csv|openlca|ilcd"
         <*> strOpt "out" Nothing "FILE" "Output file path"
 
 {- | Delete-by-selection parser: positional DB plus filter options. @--keep@ and
@@ -188,7 +188,7 @@ methodParser =
                 ( OA.command "list" (info (pure McList) (progDesc "List method collections"))
                     <> OA.command "upload" (info (McUpload <$> uploadArgsParser) (progDesc "Upload a method collection from a local file"))
                     <> OA.command "delete" (info (McDelete <$> deleteNameParser) (progDesc "Delete a method collection"))
-                    <> OA.command "export" (info (McExport <$> mcExportArgsParser <**> helper) (progDesc "Export a loaded method collection to a file (SimaPro CSV, columnar CSV, or openLCA JSON-LD)"))
+                    <> OA.command "export" (info (McExport <$> mcExportArgsParser <**> helper) (progDesc "Export a loaded method collection to a file (SimaPro CSV, columnar CSV, openLCA JSON-LD, or ILCD method package)"))
                 )
             )
 
