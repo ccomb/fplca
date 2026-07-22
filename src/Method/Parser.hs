@@ -20,11 +20,11 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Xeno.SAX as X
 
+import Amount (readAmount)
 import EcoSpold.Common (bsToText, isElement)
 import Method.FlowResolver (ILCDFlowInfo (..))
 import Method.Types
@@ -291,19 +291,23 @@ buildMethod flowInfo state = do
             , methodFactors = enrichedFactors
             }
 
--- | Enrich a MethodCF with data from ILCD flow XMLs
+{- | Enrich a MethodCF with data from ILCD flow XMLs. When a flow file exists it
+is the authority for all three fields: a flow file without a categorization
+block means the flow has no compartment, so the name-derived guess from the
+method file's shortDescription must not survive (it would fabricate a
+compartment for any flow whose name merely contains "Resources" or
+"Emissions to ..."). The shortDescription fallback only applies when the
+package ships no flow file at all.
+-}
 enrichCF :: M.Map UUID ILCDFlowInfo -> MethodCF -> MethodCF
 enrichCF flowInfo cf = case M.lookup (mcfFlowRef cf) flowInfo of
     Nothing -> cf -- no flow XML found, keep fallback data from shortDescription
     Just info ->
         cf
             { mcfFlowName = ilcdBaseName info -- proper baseName replaces extracted name
-            , mcfCompartment = firstJust (ilcdCompartment info) (mcfCompartment cf)
+            , mcfCompartment = ilcdCompartment info
             , mcfCAS = ilcdCAS info
             }
-  where
-    firstJust (Just a) _ = Just a
-    firstJust Nothing b = b
 
 -- | Resolve flow UUID: prefer refObjectId, fall back to extracting UUID from URI path
 resolveFlowUUID :: Text -> Text -> UUID
@@ -322,11 +326,15 @@ extractUUIDFromURI uri =
     lastItem [] = ""
     lastItem xs = Prelude.last xs
 
--- | Parse Double from text, return 0 on failure
+{- | Parse a characterization-factor value, returning 0 on failure.
+
+Uses the correctly-rounded 'Amount.readAmount' — the same reader the ILCD
+database importer and every export round-trip guard share — rather than
+'Data.Text.Read.double', which is off by up to one ULP on ordinary magnitudes
+and so silently loaded CFs at a slightly wrong value.
+-}
 parseDoubleSafe :: Text -> Double
-parseDoubleSafe txt = case TR.double txt of
-    Right (val, _) -> val
-    Left _ -> 0.0
+parseDoubleSafe = fromMaybe 0.0 . readAmount
 
 -- | Parse flow direction from text
 parseDirection :: Text -> FlowDirection

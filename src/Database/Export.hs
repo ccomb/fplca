@@ -36,6 +36,7 @@ import qualified EcoSpold.Writer2 as ES2
 import qualified ILCD.Writer as ILCD
 import Method.Types (MethodCollection)
 import qualified Method.WriterCSV as MWC
+import qualified Method.WriterILCD as MWI
 import qualified Method.WriterOlcaSchema as MWO
 import qualified Method.WriterSimaPro as MW
 import qualified SimaPro.Writer as SP
@@ -81,6 +82,7 @@ data MethodExportFormat
     = MethodSimaProCSV -- SimaPro method CSV ({methods} block)
     | MethodColumnarCSV -- columnar CSV (one column per impact category)
     | MethodOpenLcaJsonLd -- openLCA JSON-LD zip (one ImpactCategory per method)
+    | MethodIlcdXml -- ILCD LCIA-method package zip (lciamethods/ + flows/)
     deriving (Show, Eq)
 
 {- | Parse a user-facing method-export format name (case- and
@@ -92,7 +94,8 @@ parseMethodExportFormat raw = case T.toLower (T.strip raw) of
     "simapro" -> Right MethodSimaProCSV
     "csv" -> Right MethodColumnarCSV
     "openlca" -> Right MethodOpenLcaJsonLd
-    other -> Left ("unknown method export format: " <> other <> " (expected simapro|csv|openlca)")
+    "ilcd" -> Right MethodIlcdXml
+    other -> Left ("unknown method export format: " <> other <> " (expected simapro|csv|openlca|ilcd)")
 
 {- | Serialize a loaded method collection in the requested format, paired with
 the projection warnings. The name is the collection's own (used as the
@@ -107,6 +110,8 @@ serializeMethodCollection fmt name mc = case fmt of
         first BL.fromStrict <$> MWC.serializeColumnarMethodCSV mc
     MethodOpenLcaJsonLd ->
         first zipFiles <$> MWO.serializeOlcaMethodEntries mc
+    MethodIlcdXml ->
+        first zipFiles <$> MWI.serializeIlcdMethodEntries mc
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted

@@ -33,6 +33,10 @@
   value (`1,23` once imported as `1.0`, truncated at the comma) or a
   non-finite one (`NaN`) is now rejected instead of imported as a wrong
   number.
+- Characterization factors loaded from an ILCD method package now parse
+  exactly. The XML reader used that same drifting number parser, so a factor
+  written as `0.0000010897906999999999` loaded one ulp off the value the file
+  states; it now reads the correctly-rounded number.
 - SimaPro CSV rows with quoted fields now parse correctly in files with
   Windows (CRLF) line endings. The carriage return left at the end of each
   line made the CSV reader give up and fall back to a naive split, which tore
@@ -59,6 +63,18 @@
   databases.
 
 ### Added
+- Method collections can be exported as an ILCD LCIA-method package (`ilcd`):
+  a zip of one method dataset per impact category plus the flow datasets they
+  reference (`lciamethods/` + `flows/`), which loads straight back. It carries
+  the most metadata of any of the method export formats — methodology,
+  description, per-factor direction, location and CAS all round-trip natively,
+  the way a real EF package does. What ILCD's method profile cannot hold — a
+  per-factor flow unit (it stores one reference unit per method), damage
+  categories, normalization/weighting sets and formula scoring sets — is
+  reported in export warnings, never dropped silently. Available through
+  `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
+  `volca method export NAME --format ilcd`, and pyvolca's
+  `export_method_collection(name, fmt="ilcd")`.
 - A computed-checks report joins the structural quality report:
   `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
   MCP tool score every entry of a loaded database against a method collection

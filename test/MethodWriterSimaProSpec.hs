@@ -194,7 +194,7 @@ spec = describe "Method.WriterSimaPro" $ do
 
     describe "format dispatch (Database.Export)" $ do
         it "refuses a format without a method writer at parse time" $ do
-            case parseMethodExportFormat "ilcd" of
+            case parseMethodExportFormat "xlsx" of
                 Left err -> err `shouldSatisfy` T.isInfixOf "unknown method export format"
                 Right f -> expectationFailure ("expected a Left, got: " <> show f)
 

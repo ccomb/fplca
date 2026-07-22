@@ -379,6 +379,39 @@ spec = do
                         mcfValue cf `shouldBe` 28.5
                         mcfDirection cf `shouldBe` Output
 
+            it "reads a characterization factor to the correctly-rounded Double" $ do
+                -- 0.0000010897906999999999 rounds to 1.0897906999999999e-6, one ULP
+                -- below the 1.0897907e-6 that Data.Text.Read.double returns. The
+                -- reader must land on the correct nearest Double, not the ULP-off one.
+                let xml =
+                        TE.encodeUtf8 $
+                            T.unlines
+                                [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                                , "<LCIAMethodDataSet>"
+                                , "  <LCIAMethodInformation>"
+                                , "    <dataSetInformation>"
+                                , "      <UUID>12345678-1234-1234-1234-123456789012</UUID>"
+                                , "      <name>Test</name>"
+                                , "    </dataSetInformation>"
+                                , "  </LCIAMethodInformation>"
+                                , "  <characterisationFactors>"
+                                , "    <factor>"
+                                , "      <referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\">"
+                                , "        <shortDescription>Substance</shortDescription>"
+                                , "      </referenceToFlowDataSet>"
+                                , "      <exchangeDirection>Output</exchangeDirection>"
+                                , "      <meanValue>0.0000010897906999999999</meanValue>"
+                                , "    </factor>"
+                                , "  </characterisationFactors>"
+                                , "</LCIAMethodDataSet>"
+                                ]
+                case parseMethodBytes xml of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right method -> do
+                        let cf = head (methodFactors method)
+                        mcfValue cf `shouldBe` 1.0897906999999999e-6
+                        mcfValue cf `shouldNotBe` 1.0897907e-6
+
             it "parses Input direction correctly" $ do
                 let xml =
                         TE.encodeUtf8 $
