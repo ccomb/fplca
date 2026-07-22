@@ -12,6 +12,11 @@
   output is unchanged.
 
 ### Fixed
+- SimaPro CSV rows with quoted fields now parse correctly in files with
+  Windows (CRLF) line endings. The carriage return left at the end of each
+  line made the CSV reader give up and fall back to a naive split, which tore
+  a quoted field apart at the separator it contains — a substance or category
+  name like `"Ecotoxicity; freshwater"` landed in the wrong columns.
 - The free-text comment on a SimaPro Products row (Agribalyse uses it for
   modelling notes such as edible fraction and raw-to-cooked ratios) now
   reaches the reference product and coproduct exchanges, so it shows up in
