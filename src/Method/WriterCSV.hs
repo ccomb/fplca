@@ -155,15 +155,19 @@ lossWarnings mc =
     mapMaybe
         (\(count, what) -> if count == 0 then Nothing else Just (T.pack (show count) <> " " <> what))
         [ (length descriptions, "impact category descriptions are not representable in columnar CSV")
-        , (mixedMethodologies, "distinct methodologies exist; the single '# methodology' comment is omitted")
+        , (lostMethodologies, "distinct stated methodologies; the single '# methodology' comment is omitted (it must be shared by every impact category)")
         , (length (mcDamageCategories mc), "damage categories are not representable in columnar CSV")
         , (length (mcNormWeightSets mc), "normalization/weighting sets are not representable in columnar CSV")
         , (length (mcScoringSets mc), "formula scoring sets are not representable in columnar CSV")
         ]
   where
     descriptions = mapMaybe methodDescription (mcMethods mc)
-    distinctMethodologies = S.size (S.fromList (map methodMethodology (mcMethods mc)))
-    mixedMethodologies = if distinctMethodologies > 1 then distinctMethodologies else 0
+    -- Count only the methodologies actually stated: an absent one is not a
+    -- distinct methodology, but it does block the shared comment — so any
+    -- stated methodology is lost whenever 'sharedMethodology' finds none.
+    lostMethodologies = case sharedMethodology (mcMethods mc) of
+        Just _ -> 0
+        Nothing -> S.size (S.fromList (mapMaybe methodMethodology (mcMethods mc)))
 
 {- | Reject a collection the columnar format cannot represent without silent
 corruption on re-import: no impact categories, a blank category name (its

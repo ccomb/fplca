@@ -195,6 +195,17 @@ spec = describe "Method.WriterCSV" $ do
                     out `shouldNotSatisfy` T.isInfixOf "# methodology"
                     warnings `shouldSatisfy` any (T.isInfixOf "methodologies")
 
+        it "warns when a stated methodology sits next to an absent one" $ do
+            -- An absent methodology is not a distinct one, but it blocks the
+            -- shared comment — the one stated methodology is still lost.
+            let m1 = (mkMethod "A" []){methodMethodology = Just "EF"}
+                m2 = mkMethod "B" []
+            case serialize (collection [m1, m2]) of
+                Left err -> expectationFailure (T.unpack err)
+                Right (out, warnings) -> do
+                    out `shouldNotSatisfy` T.isInfixOf "# methodology"
+                    warnings `shouldSatisfy` any (T.isInfixOf "1 distinct stated methodologies")
+
         it "writes the shared methodology as the file comment" $ do
             let m = (mkMethod "A" []){methodMethodology = Just "Environmental Footprint"}
             case serialize (collection [m]) of
