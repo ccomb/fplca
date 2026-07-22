@@ -73,6 +73,7 @@ data Resource
     | ListScoringSets
     | GetGapReport
     | GetQualityReport
+    | GetComputedQualityReport
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -156,6 +157,7 @@ apiPath r = case r of
     ListScoringSets -> Nothing -- MCP-only: scoring sets are configuration metadata, no REST equivalent yet
     GetGapReport -> Just (GET, ["db", "{dbName}", "gap-report"])
     GetQualityReport -> Just (GET, ["db", "{dbName}", "quality-report"])
+    GetComputedQualityReport -> Just (GET, ["db", "{dbName}", "computed-quality-report"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -200,6 +202,7 @@ mcpName r = case r of
     ListScoringSets -> "list_scoring_sets"
     GetGapReport -> "get_gap_report"
     GetQualityReport -> "get_quality_report"
+    GetComputedQualityReport -> "get_computed_quality_report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -240,6 +243,7 @@ cliName r = case r of
     ListScoringSets -> "scoring-sets"
     GetGapReport -> "gap-report"
     GetQualityReport -> "quality-report"
+    GetComputedQualityReport -> "computed-quality-report"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -481,6 +485,20 @@ description r = case r of
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \
         \'what is this database missing?'"
+    GetComputedQualityReport ->
+        "LCA / ACV — computed-checks report of a LOADED database: what the \
+        \data computes, judged against the catalogue's own norms. Scores \
+        \every (activity, product) entry against one method collection (the \
+        \single loaded one, or the 'collection' parameter) and reports: \
+        \per-category score outliers, judged on a log scale within \
+        \(category, reference-unit) groups by median/MAD — a mg-read-as-kg \
+        \unit slip lands three orders of magnitude out; entries whose every \
+        \category score is zero (empty or uncharacterized inventory); and \
+        \negative category scores (info — legitimate where avoided-production \
+        \credits or waste treatment dominate). Complements get_quality_report, \
+        \which checks what the database STORES and runs on staged databases \
+        \too; this one needs the matrices and a loaded method collection. \
+        \Same finding shape: severity, the entry, a readable detail."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -792,5 +810,10 @@ params r = case r of
         ]
     GetQualityReport ->
         [ pDatabase
+        , pLimit "Max findings to return per check, worst first (default: all). Each check's offenderCount always covers its full list, so a truncated list stays countable."
+        ]
+    GetComputedQualityReport ->
+        [ pDatabase
+        , Param "collection" "string" Optional "Method collection to score the catalogue against. Defaults to the single loaded collection; required when several are loaded."
         , pLimit "Max findings to return per check, worst first (default: all). Each check's offenderCount always covers its full list, so a truncated list stays countable."
         ]

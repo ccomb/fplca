@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivitySummary (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -37,6 +37,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Validation as V
 import qualified Data.Vector as V
 import Database
+import qualified Database.ComputedQuality as CQ
 import Database.Manager (DatabaseManager (..), DatabaseSetupInfo (..), LoadedDatabase (..), MethodCollectionStatus (..), getDatabase, getMergedUnitConfig)
 import qualified Database.Manager as DM
 import qualified Expr
@@ -128,6 +129,8 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "gap-report" :> QueryParam "limit" Int :> Get '[JSON] GapReportAPI
                 -- Dataset-soundness report: what is malformed in the database itself
                 :<|> "db" :> Capture "dbName" Text :> "quality-report" :> QueryParam "limit" Int :> Get '[JSON] QualityReportAPI
+                -- Computed checks: what a loaded database computes, judged against its own norms
+                :<|> "db" :> Capture "dbName" Text :> "computed-quality-report" :> QueryParam "collection" Text :> QueryParam "limit" Int :> Get '[JSON] ComputedQualityReportAPI
                 :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Delete the whole filtered set of activities (selection in JSON body)
@@ -960,6 +963,74 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
             , birNotFound = notFound
             , birInvalid = invalid
             }
+
+{- | Computed quality checks over the whole catalogue: score every entry of a
+loaded database against one method collection — chunked multi-RHS solves on
+the cached factorization, warm method tables — then judge the numbers with
+the pure 'Database.ComputedQuality' checks. The structural quality report
+runs on staged data too; this one needs matrices and methods, so it is a
+separate report with the same finding shape.
+-}
+computedQualityReportH :: Text -> Maybe Text -> Maybe Int -> AppM ComputedQualityReportAPI
+computedQualityReportH dbName mCollection mLimit = do
+    dbManager <- asks aeDbManager
+    (db, _solver) <- requireDatabaseByName dbName
+    loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
+    collection <- case (mCollection, M.keys loadedCollections) of
+        (Just c, _) -> pure c -- an unknown name answers 404 in batchImpactsH below
+        (Nothing, [only]) -> pure only
+        (Nothing, []) ->
+            throwError err400{errBody = "No method collection loaded - the computed checks judge scores, so they need one"}
+        (Nothing, several) ->
+            throwError
+                err400
+                    { errBody =
+                        BSL.fromStrict . T.encodeUtf8 $
+                            "Several method collections loaded (" <> T.intercalate ", " several <> ") - pass ?collection= to pick one"
+                    }
+    let simple = toSimpleDatabase db
+        entriesByPid =
+            M.fromList
+                [ (UUID.toText a <> "_" <> UUID.toText p, act)
+                | ((a, p), act) <- M.toList (sdbActivities simple)
+                ]
+        refProductName act = case filter exchangeIsReference (exchanges act) of
+            [ex] ->
+                asum
+                    [ tfName <$> M.lookup (exchangeFlowId ex) (sdbTechFlows simple)
+                    , wfName <$> M.lookup (exchangeFlowId ex) (sdbWasteFlows simple)
+                    ]
+            _ -> Nothing
+        chunks xs = case splitAt scoringChunk xs of
+            (h, []) -> [h | not (null h)]
+            (h, t) -> h : chunks t
+    responses <-
+        mapM
+            (\pids -> batchImpactsH dbName collection Nothing IncludeLongTerm BatchImpactsRequest{birProcessIds = pids})
+            (chunks (M.keys entriesByPid))
+    let scored =
+            [ CQ.ScoredEntry
+                { CQ.seProcessId = bieProcessId e
+                , CQ.seActivityName = bieActivityName e
+                , CQ.seLocation = activityLocation act
+                , CQ.seProductName = refProductName act
+                , CQ.seRefUnit = activityUnit act
+                , CQ.seScores =
+                    [ CQ.CategoryScore (lrMethodName r) (lrUnit r) (lrScore r)
+                    | r <- lbrResults (bieImpacts e)
+                    ]
+                }
+            | e <- concatMap birResults responses
+            , Just act <- [M.lookup (bieProcessId e) entriesByPid]
+            ]
+    pure (DBHandlers.computedQualityReportToAPI mLimit (CQ.computedQualityReport dbName collection scored))
+
+{- | Batch size of the catalogue-wide solve: bounds the dense right-hand-side
+block of one multi-RHS solve while every chunk still reuses the one cached
+factorization.
+-}
+scoringChunk :: Int
+scoringChunk = 512
 
 -- ---------------------------------------------------------------------------
 -- Pure helpers shared by handlers
@@ -2047,6 +2118,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> DBHandlers.relinkDatabaseHandler
             :<|> DBHandlers.gapReportHandler
             :<|> DBHandlers.qualityReportHandler
+            :<|> computedQualityReportH
             :<|> DBHandlers.copyDatabaseHandler
             :<|> DBHandlers.deleteDatabaseHandler
             :<|> DBHandlers.deleteActivitiesHandler

@@ -59,6 +59,16 @@
   databases.
 
 ### Added
+- A computed-checks report joins the structural quality report:
+  `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
+  MCP tool score every entry of a loaded database against a method collection
+  and report per-category score outliers (median/MAD on a log scale within
+  (category, reference-unit) groups — a mg-read-as-kg slip lands three orders
+  of magnitude out), entries whose every score is zero, and negative category
+  scores (info: avoided-production credits and waste treatment produce them
+  legitimately). Separate from the structural report on purpose — that one
+  stays identical on staged and loaded databases; this one needs the matrices
+  and a loaded method collection.
 - The quality report flags distinct activity names that merge under
   SimaPro's 80-character name truncation — each colliding name gets its own
   finding, so an export bound for SimaPro can be repaired before the names

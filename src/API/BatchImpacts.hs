@@ -16,11 +16,12 @@ module API.BatchImpacts (
     BatchError (..),
     runActivityLCIABatch,
     runBatchImpacts,
+    runComputedQuality,
     translateError,
 ) where
 
-import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, databaseNotLoadedPrefix)
-import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, LCIABatchResult, SubstitutionRequest)
+import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, computedQualityReportH, databaseNotLoadedPrefix)
+import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, ComputedQualityReportAPI, LCIABatchResult, SubstitutionRequest)
 import App.Env (AppEnv (..), runApp)
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.ByteString.Lazy as BSL
@@ -130,6 +131,33 @@ runBatchImpacts dbm dbName coll topFlows ltMode pids = do
                     topFlows
                     ltMode
                     (BatchImpactsRequest{birProcessIds = pids})
+    case res of
+        Right r -> pure (Right r)
+        Left se -> Left <$> translateErrorIO dbm se
+
+{- | Computed-checks report over the whole catalogue of a loaded database.
+Same wire shape as the REST endpoint ('computedQualityReportH'), so both
+surfaces stay in lock-step.
+-}
+runComputedQuality ::
+    DatabaseManager ->
+    -- | database name
+    Text ->
+    -- | method collection; 'Nothing' picks the single loaded one
+    Maybe Text ->
+    -- | max findings per check, worst first
+    Maybe Int ->
+    IO (Either BatchError ComputedQualityReportAPI)
+runComputedQuality dbm dbName mColl mLimit = do
+    let env =
+            AppEnv
+                { aeDbManager = dbm
+                , aeMaxTreeDepth = 0
+                , aePassword = Nothing
+                , aeHostingConfig = Nothing
+                , aeClassificationPresets = []
+                }
+    res <- Servant.runHandler (runApp env (computedQualityReportH dbName mColl mLimit))
     case res of
         Right r -> pure (Right r)
         Left se -> Left <$> translateErrorIO dbm se

@@ -363,6 +363,7 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     "list_scoring_sets" -> callListScoringSets dbManager rid args
     "get_gap_report" -> callGetGapReport dbManager rid args
     "get_quality_report" -> callGetQualityReport dbManager rid args
+    "get_computed_quality_report" -> callGetComputedQualityReport dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1324,6 +1325,18 @@ callGetQualityReport dbManager rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
     report <- ExceptT (DM.databaseQualityReport dbManager dbName)
     return $ toolSuccessJson rid (toJSON (qualityReportToAPI (intArg "limit" args) report))
+
+{- | Computed-checks report: what a loaded database computes, judged against
+the catalogue's own norms. Same wire shape as the REST endpoint, so both
+surfaces stay in lock-step.
+-}
+callGetComputedQualityReport :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callGetComputedQualityReport dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    res <- liftIO $ BI.runComputedQuality dbManager dbName (textArg "collection" args) (intArg "limit" args)
+    case res of
+        Left e -> throwE (batchErrorMsg e)
+        Right r -> pure (toolSuccessJson rid (toJSON r))
 
 callGetFlowMapping :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetFlowMapping dbManager rid args = runTool rid $ do
