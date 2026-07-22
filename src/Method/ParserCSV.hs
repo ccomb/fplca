@@ -40,6 +40,7 @@ module Method.ParserCSV (
     stripBOM,
 ) where
 
+import Control.Applicative ((<|>))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.List (elemIndex, zip4)
@@ -194,15 +195,19 @@ directionFromCompartment comp parsed
 
 {- | Parse the compartment cell: a @/@-separated path with a known top-level
 compartment first, or a legacy prose form matched by keyword ("Emissions to
-air", "Emissions to fresh water", "Resources", …).
+air", "Emissions to fresh water", "Resources", …). A cell that looks like a
+path but has an unknown top (or too many segments) falls back to the keyword
+match on the whole cell: legacy prose can contain a @/@ ("Emissions to
+water/groundwater"), and losing its compartment silently would degrade files
+that parsed before the path form existed.
 -}
 parseCSVCompartment :: Text -> Maybe Compartment
 parseCSVCompartment comp = case map T.strip (T.splitOn "/" comp) of
     [] -> Nothing -- splitOn never returns [], but the match must be total
     [single] -> legacyCompartment single
-    [top, s] -> pathCompartment top s ""
-    [top, s, q] -> pathCompartment top s q
-    _ -> Nothing -- more path segments than a compartment has fields
+    [top, s] -> pathCompartment top s "" <|> legacyCompartment comp
+    [top, s, q] -> pathCompartment top s q <|> legacyCompartment comp
+    _ -> legacyCompartment comp -- more path segments than a compartment has fields
 
 -- | A path form is only a compartment when its top segment is one we know.
 pathCompartment :: Text -> Text -> Text -> Maybe Compartment

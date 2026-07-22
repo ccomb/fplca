@@ -681,6 +681,22 @@ spec = do
                     lookup "freshwater" dirs `shouldBe` Just Input
                     lookup "CO2" dirs `shouldBe` Just Output
 
+        it "keeps the compartment of a legacy prose cell containing a slash" $ do
+            -- The path form is tried first; an unknown top must fall back to
+            -- the keyword match, not silently drop the compartment.
+            let csv =
+                    BC.unlines
+                        [ ";;Method A"
+                        , ";;kg eq"
+                        , "substance;compartment;"
+                        , "Nitrate;Emissions to water/groundwater;1.0"
+                        ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods ->
+                    [mcfCompartment cf | m <- methods, cf <- methodFactors m]
+                        `shouldBe` [Just (Compartment "water" "" "")]
+
         it "drops a factor whose value cell is not a clean number" $ do
             -- "NaN" would poison every score it touches; "1,23" once imported
             -- as 1.0 (the parser stopped at the comma) — a silently truncated
