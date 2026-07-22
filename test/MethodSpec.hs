@@ -681,6 +681,25 @@ spec = do
                     lookup "freshwater" dirs `shouldBe` Just Input
                     lookup "CO2" dirs `shouldBe` Just Output
 
+        it "drops a factor whose value cell is not a clean number" $ do
+            -- "NaN" would poison every score it touches; "1,23" once imported
+            -- as 1.0 (the parser stopped at the comma) — a silently truncated
+            -- value. Both must be dropped, never imported as something else.
+            let csv =
+                    BC.unlines
+                        [ ";;Method A"
+                        , ";;kg eq"
+                        , "substance;compartment;"
+                        , "CO2;air;NaN"
+                        , "Methane;air;1,23"
+                        , "N2O;air;265.0"
+                        ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods ->
+                    [(mcfFlowName cf, mcfValue cf) | m <- methods, cf <- methodFactors m]
+                        `shouldBe` [("N2O", 265.0)]
+
         it "returns Left when fewer than 3 header rows" $ do
             let csv =
                     BC.unlines

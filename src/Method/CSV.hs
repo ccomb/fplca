@@ -25,6 +25,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.Vector as V
 
+import Amount (readAmount)
+
 -- | Auto-detect a row delimiter: semicolon, then tab, then comma.
 detectDelimiter :: BS.ByteString -> Char
 detectDelimiter line
@@ -60,12 +62,12 @@ joinRow delim = T.intercalate (T.singleton delim) . map quote
             "\"" <> T.replace "\"" "\"\"" cell <> "\""
         | otherwise = cell
 
-{- | Parse a 'Double', 'Nothing' on failure. Goes through 'reads' — the
-correctly-rounded parse — not 'TR.double', whose fast path drifts in the
-last ulp (@1.2227e-3@ comes back as @1.2227000000000002e-3@), which is a
-wrong number. Trailing garbage is tolerated, as it always was.
+{- | Parse a 'Double', 'Nothing' on failure — 'Amount.readAmount', the
+correctly-rounded reader every importer shares ('TR.double' drifts in the
+last ulp: @1.2227e-3@ came back as @1.2227000000000002e-3@, a wrong
+number). It also rejects what a factor cell must never smuggle in: a
+non-finite literal (@NaN@, @Infinity@) and trailing garbage (@1,23@ once
+imported as @1.0@ — a silently truncated value).
 -}
 parseDouble :: Text -> Maybe Double
-parseDouble t = case reads (T.unpack t) of
-    (v, _) : _ -> Just v
-    [] -> Nothing
+parseDouble = readAmount

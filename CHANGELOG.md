@@ -15,7 +15,10 @@
 - Numbers in columnar CSV method files and normalization/weighting CSV
   files now parse exactly. The previous number parser drifted in the last
   decimal (`1.2227e-3` came back as `1.2227000000000002e-3`) — every such
-  characterization or normalization factor was off by one ulp.
+  characterization or normalization factor was off by one ulp. A malformed
+  value (`1,23` once imported as `1.0`, truncated at the comma) or a
+  non-finite one (`NaN`) is now rejected instead of imported as a wrong
+  number.
 - SimaPro CSV rows with quoted fields now parse correctly in files with
   Windows (CRLF) line endings. The carriage return left at the end of each
   line made the CSV reader give up and fall back to a naive split, which tore
