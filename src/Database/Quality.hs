@@ -10,8 +10,9 @@ amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
-database consumes, and land transformation whose "to" and "from" areas
-don't balance within an activity.
+database consumes, land transformation whose "to" and "from" areas
+don't balance within an activity, and oxygen-demand or organic-carbon
+measures reported in a physically impossible order.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -104,6 +105,7 @@ data QualityReport = QualityReport
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
     , qrLandTransformationBalance :: !QualityCheck
+    , qrOxygenDemandOrder :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -123,6 +125,7 @@ qualityChecks r =
     , qrMissingPedigree r
     , qrUnconsumedProducts r
     , qrLandTransformationBalance r
+    , qrOxygenDemandOrder r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -188,6 +191,7 @@ qualityReport dbName db =
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
+        , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -446,3 +450,35 @@ qualityReport dbName db =
         | startsWithField "Transformation, from" nm = Just (amt, 0)
         | startsWithField "Transformation, to" nm = Just (0, amt)
         | otherwise = Nothing
+
+    -- The biological oxygen demand is a fraction of the chemical one, and
+    -- dissolved organic carbon a fraction of the total: BOD5 ≤ COD and
+    -- DOC ≤ TOC, always. A reversed pair is a measurement or transcription
+    -- error, not a modelling choice. Compared only where both members are
+    -- present — a lone measure has nothing to be out of order with. These
+    -- flows are reported in kilograms across every format, so the per-activity
+    -- sums are directly comparable.
+    oxygenApplicable = any (any (maybe False isOxygenName . bioFlowName . exchangeFlowId) . exchanges) acts
+    isOxygenName nm = any (`startsWithField` nm) ["BOD5", "COD", "DOC", "TOC"]
+    oxygenSum prefix act =
+        sum [exchangeAmount ex | ex <- exchanges act, Just nm <- [bioFlowName (exchangeFlowId ex)], startsWithField prefix nm]
+    oxygenOffenders =
+        [ offender WarningSev key act Nothing detail
+        | (key, act) <- entries
+        , detail <- oxygenViolations act
+        ]
+    oxygenViolations act =
+        [ "BOD5 (" <> formatAmount bod <> ") exceeds COD (" <> formatAmount cod <> ") in this entry — the biological oxygen demand cannot exceed the chemical"
+        | let bod = oxygenSum "BOD5" act
+        , let cod = oxygenSum "COD" act
+        , bod > 0
+        , cod > 0
+        , bod - cod > physicalBalanceTolerance * cod
+        ]
+            <> [ "DOC (" <> formatAmount doc <> ") exceeds TOC (" <> formatAmount toc <> ") in this entry — the dissolved organic carbon cannot exceed the total"
+               | let doc = oxygenSum "DOC" act
+               , let toc = oxygenSum "TOC" act
+               , doc > 0
+               , toc > 0
+               , doc - toc > physicalBalanceTolerance * toc
+               ]

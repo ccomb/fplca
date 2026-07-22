@@ -75,6 +75,11 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- The quality report flags oxygen-demand and organic-carbon measures recorded
+  in a physically impossible order: within one entry BOD5 must not exceed COD,
+  nor dissolved organic carbon exceed total. A reversed pair is a measurement
+  or transcription error. Checked only where both members of a pair are
+  present.
 - The quality report checks that land transformation balances within each
   activity: the areas transformed *to* a use must match the areas transformed
   *from* another, since a parcel changed into one state was changed out of

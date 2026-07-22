@@ -480,8 +480,10 @@ description r = case r of
         \that merge under SimaPro's 80-character truncation, exchanges \
         \without the pedigree scores their database otherwise carries, \
         \reference products nothing in the database consumes (expected for \
-        \final products), and land transformation whose 'to' and 'from' \
-        \areas don't balance within an activity. Each \
+        \final products), land transformation whose 'to' and 'from' \
+        \areas don't balance within an activity, and oxygen-demand or \
+        \organic-carbon measures in a physically impossible order (BOD5 above \
+        \COD, or dissolved above total organic carbon). Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \
