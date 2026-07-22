@@ -151,6 +151,40 @@ spec = do
                         _ -> expectationFailure "expected exactly one factor"
                 Left err -> expectationFailure ("parse failed: " ++ err)
 
+    describe "factor direction derivation" $ do
+        -- Real openLCA files carry no per-factor direction field; a resource
+        -- CF mis-defaulted to Output resolves against the output synonym
+        -- view and silently loses input-only bridges. The signals below are
+        -- tried most-specific first.
+        it "the factor's own direction field wins over the category path" $
+            factorDirections
+                (directionDoc "" "\"direction\":\"OUTPUT\"," "natural resource/in water")
+                `shouldBe` Right [Output]
+
+        it "a resource category path means Input" $
+            factorDirections (directionDoc "" "" "natural resource/in water")
+                `shouldBe` Right [Input]
+
+        it "recognizes the resource segment behind openLCA's category-tree root" $
+            factorDirections (directionDoc "" "" "Elementary flows/Resource/in ground")
+                `shouldBe` Right [Input]
+
+        it "an emission category path stays Output" $
+            factorDirections (directionDoc "" "" "Emission to air/urban")
+                `shouldBe` Right [Output]
+
+        it "falls back to the document-level direction when the path says nothing" $
+            factorDirections (directionDoc "\"direction\":\"INPUT\"," "" "water")
+                `shouldBe` Right [Input]
+
+        it "a resource category path beats the document-level direction" $
+            factorDirections (directionDoc "\"direction\":\"OUTPUT\"," "" "resource/land")
+                `shouldBe` Right [Input]
+
+        it "defaults to Output with no signal at all" $
+            factorDirections (directionDoc "" "" "water")
+                `shouldBe` Right [Output]
+
     describe "buildMethodTables on parsed openLCA methods" $ do
         it "leaves mtRegionalizedCF empty when no flow matched (Nothing in mappings)" $ do
             -- Without database flows to match against, every CF stays unmapped, so
@@ -164,3 +198,23 @@ spec = do
                     let mappings = [(cf, Nothing) | cf <- methodFactors method]
                         tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
                     M.size (mtRegionalizedCF tables) `shouldBe` 0
+
+{- | A one-factor ImpactCategory document: @docFields@ / @factorFields@ are
+raw JSON fragments (trailing comma when non-empty), @categoryPath@ the
+flow's category name.
+-}
+directionDoc :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString
+directionDoc docFields factorFields categoryPath =
+    "{\"@type\":\"ImpactCategory\",\"name\":\"D\","
+        <> docFields
+        <> "\"impactFactors\":[{\"@type\":\"ImpactFactor\",\"value\":1.0,"
+        <> factorFields
+        <> "\"flow\":{\"@type\":\"Flow\",\"name\":\"f\",\
+           \\"category\":{\"@type\":\"Category\",\"name\":\""
+        <> categoryPath
+        <> "\"}}}]}"
+
+-- | The direction of every parsed factor of the given document.
+factorDirections :: BS.ByteString -> Either String [FlowDirection]
+factorDirections bytes =
+    map mcfDirection . methodFactors <$> parseOlcaImpactCategoryBytes bytes
