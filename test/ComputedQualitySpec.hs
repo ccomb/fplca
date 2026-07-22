@@ -69,6 +69,12 @@ spec = do
                 [d] -> d `shouldSatisfy` T.isInfixOf "below the median"
                 other -> expectationFailure ("expected one detail, got " <> show other)
 
+        it "ranks outliers by deviation, wildest first, not by name" $ do
+            let check =
+                    cqScoreOutliers
+                        (reportOf (crowd <> [entry "a mild outlier" [cch 1e4], entry "z wild outlier" [cch 1e8]]))
+            names check `shouldBe` ["z wild outlier", "a mild outlier"]
+
         it "judges nothing in a group smaller than the minimum" $ do
             let check = cqScoreOutliers (reportOf (take 10 crowd <> [entry "monster" [cch 1e6]]))
             qcOffenders check `shouldBe` []

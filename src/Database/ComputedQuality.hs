@@ -89,7 +89,10 @@ computedQualityReport dbName collection entries =
         { cqDbName = dbName
         , cqCollection = collection
         , cqProcessCount = length entries
-        , cqScoreOutliers = QualityCheck True (worstFirst outlierOffenders)
+        , -- Every outlier shares one severity, so the generic worst-first order
+          -- would fall back to names; the maintainer wants the wildest
+          -- deviation on top — that is where the unit slip sits.
+          cqScoreOutliers = QualityCheck True (map fst (sortOn (Down . snd) outlierOffenders))
         , cqZeroScores = QualityCheck True (worstFirst zeroOffenders)
         , cqNegativeScores = QualityCheck True (worstFirst negativeOffenders)
         }
@@ -119,25 +122,28 @@ computedQualityReport dbName collection entries =
             -- norm that would flag any honest variation, so judge nothing.
             if mad > 0 then Just (m, 1.4826 * mad) else Nothing
 
+    -- Each element carries the entry's worst absolute deviation, the sort key
+    -- above.
     outlierOffenders = mapMaybe entryOutlier entries
     entryOutlier e = case sortOn (Down . abs . snd) (mapMaybe deviation (seScores e)) of
         [] -> Nothing
         (s, d) : rest ->
-            Just . offender WarningSev e $
-                T.pack (show (1 + length rest))
-                    <> " category score(s) far off the database norm for "
-                    <> seRefUnit e
-                    <> "-referenced entries (worst: "
-                    <> csCategory s
-                    <> " at "
-                    <> fmtScore (csScore s)
-                    <> " "
-                    <> csUnit s
-                    <> ", "
-                    <> fmtSigma (abs d)
-                    <> " robust sigmas "
-                    <> (if d > 0 then "above" else "below")
-                    <> " the median)"
+            let detail =
+                    T.pack (show (1 + length rest))
+                        <> " category score(s) far off the database norm for "
+                        <> seRefUnit e
+                        <> "-referenced entries (worst: "
+                        <> csCategory s
+                        <> " at "
+                        <> fmtScore (csScore s)
+                        <> " "
+                        <> csUnit s
+                        <> ", "
+                        <> fmtSigma (abs d)
+                        <> " robust sigmas "
+                        <> (if d > 0 then "above" else "below")
+                        <> " the median)"
+             in Just (offender WarningSev e detail, abs d)
       where
         deviation s = do
             (m, sigma) <- M.lookup (csCategory s, seRefUnit e) norms
