@@ -854,6 +854,7 @@ data QualityReportAPI = QualityReportAPI
     , qraLandTransformationBalance :: QualityCheckAPI
     , qraOxygenDemandOrder :: QualityCheckAPI
     , qraInvalidCas :: QualityCheckAPI
+    , qraAllocationOutOfRange :: QualityCheckAPI
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityReportAPI)

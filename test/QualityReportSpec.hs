@@ -555,6 +555,23 @@ spec = do
             qcApplicable check `shouldBe` False
             qcOffenders check `shouldBe` []
 
+    describe "allocation range check" $ do
+        it "flags an allocation percentage above 100" $ do
+            let check = qrAllocationOutOfRange (reportOf (allocated "block" (Just 120) (Just "b1")))
+            details check `shouldBe` ["allocation percentage is 120.00%, outside the 0-100% range"]
+            severities check `shouldBe` [WarningSev]
+
+        it "flags a negative allocation percentage" $
+            details (qrAllocationOutOfRange (reportOf (allocated "block" (Just (-20)) (Just "b1"))))
+                `shouldBe` ["allocation percentage is -20.00%, outside the 0-100% range"]
+
+        it "passes percentages within the range, including the bounds" $ do
+            let db = dbOf [((actA, prodA), allocated "b" (Just 0) (Just "x")), ((actB, prodB), allocated "c" (Just 100) (Just "y"))]
+            qcOffenders (qrAllocationOutOfRange (qualityReport "testdb" db)) `shouldBe` []
+
+        it "is not applicable to a database without allocation data" $
+            qcApplicable (qrAllocationOutOfRange (reportOf (mkActivity "bread" [reference breadFlow]))) `shouldBe` False
+
     describe "report header" $
         it "counts one process per (activity, product) entry" $ do
             let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow]), ((actB, prodB), mkActivity "cake" [reference flourFlow])]

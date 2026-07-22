@@ -75,6 +75,10 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- The quality report flags individual allocation percentages outside the
+  0-100% range, alongside the existing check that a block's percentages sum to
+  100. A single factor can be out of range — a negative share, or more than the
+  whole — while the block total still lands on 100.
 - The quality report validates flow CAS numbers by their check digit: a CAS
   registry number confirms itself, so a corrupt one — which silently breaks
   the name-to-CAS bridge that matches flows across databases — is flagged. The

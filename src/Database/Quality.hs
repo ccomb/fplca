@@ -12,8 +12,9 @@ SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
 database consumes, land transformation whose "to" and "from" areas
 don't balance within an activity, oxygen-demand or organic-carbon
-measures reported in a physically impossible order, and CAS numbers
-whose check digit doesn't confirm them.
+measures reported in a physically impossible order, CAS numbers
+whose check digit doesn't confirm them, and allocation percentages
+outside the 0-100% range.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -108,6 +109,7 @@ data QualityReport = QualityReport
     , qrLandTransformationBalance :: !QualityCheck
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
+    , qrAllocationOutOfRange :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -129,6 +131,7 @@ qualityChecks r =
     , qrLandTransformationBalance r
     , qrOxygenDemandOrder r
     , qrInvalidCas r
+    , qrAllocationOutOfRange r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -214,6 +217,7 @@ qualityReport dbName db =
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
+        , qrAllocationOutOfRange = QualityCheck allocationApplicable (worstFirst allocationRangeOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -292,6 +296,19 @@ qualityReport dbName db =
         carried = mapMaybe (activityAllocationPercent . snd) group'
         missing = length group' - length carried
         total = sum carried
+
+    -- A single allocation factor outside 0–100% is wrong on its own terms: a
+    -- coproduct cannot take a negative share or more than the whole. Distinct
+    -- from the sums check, which judges the block total — a factor can be out
+    -- of range while its block still happens to sum to 100. NaN is left to the
+    -- sums check, which already reports it as a bad total.
+    allocationRangeOffenders =
+        [ offender WarningSev key act Nothing $
+            "allocation percentage is " <> formatPercent pct <> "%, outside the 0-100% range"
+        | (key, act) <- entries
+        , Just pct <- [activityAllocationPercent act]
+        , pct < 0 || pct > 100
+        ]
 
     -- Same name, same place, same product, twice: one of them is stale. Entries
     -- without exactly one reference are skipped — check 1 already reports them,
