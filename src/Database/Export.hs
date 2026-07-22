@@ -35,6 +35,7 @@ import qualified EcoSpold.Writer1 as ES1
 import qualified EcoSpold.Writer2 as ES2
 import qualified ILCD.Writer as ILCD
 import Method.Types (MethodCollection)
+import qualified Method.WriterCSV as MWC
 import qualified Method.WriterSimaPro as MW
 import qualified SimaPro.Writer as SP
 import Types (Database, toSimpleDatabase)
@@ -77,6 +78,7 @@ wall of runtime 'Left's.
 -}
 data MethodExportFormat
     = MethodSimaProCSV -- SimaPro method CSV ({methods} block)
+    | MethodColumnarCSV -- columnar CSV (one column per impact category)
     deriving (Show, Eq)
 
 {- | Parse a user-facing method-export format name (case- and
@@ -86,7 +88,8 @@ accepted spellings and the error message stay in one place.
 parseMethodExportFormat :: Text -> Either Text MethodExportFormat
 parseMethodExportFormat raw = case T.toLower (T.strip raw) of
     "simapro" -> Right MethodSimaProCSV
-    other -> Left ("unknown method export format: " <> other <> " (expected simapro)")
+    "csv" -> Right MethodColumnarCSV
+    other -> Left ("unknown method export format: " <> other <> " (expected simapro|csv)")
 
 {- | Serialize a loaded method collection in the requested format, paired with
 the projection warnings. The name is the collection's own (used as the
@@ -97,6 +100,8 @@ serializeMethodCollection fmt name mc = case fmt of
     MethodSimaProCSV ->
         first BL.fromStrict
             <$> MW.serializeSimaProMethodCSV SP.defaultWriterConfig name mc
+    MethodColumnarCSV ->
+        first BL.fromStrict <$> MWC.serializeColumnarMethodCSV mc
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted

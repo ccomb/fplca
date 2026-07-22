@@ -142,6 +142,13 @@ client-side so a typo fails before the round-trip with the same message
 shape the engine would have returned."""
 
 
+_METHOD_EXPORT_FORMATS = frozenset({"simapro", "csv"})
+"""Target keywords accepted by ``POST /api/v1/method-collections/{name}/export``.
+
+Mirrors the engine's ``parseMethodExportFormat`` — a space of its own,
+smaller than the database export formats."""
+
+
 RefDataKind = Literal["flow-synonyms", "compartment-mappings", "units"]
 """Reference-data families sharing the same ``/api/v1/{kind}`` URL scheme.
 
@@ -1878,18 +1885,18 @@ class Client:
     def export_method_collection(self, name: str, fmt: str = "simapro") -> bytes:
         """Export a loaded method collection, returning the serialized bytes.
 
-        ``fmt`` names the target format; ``simapro`` (SimaPro method CSV) is
-        the only format with a method writer today — the engine answers 400
-        for the others. Projection warnings (a CF the format cannot carry
-        faithfully) arrive in the ``X-Volca-Export-Warnings`` response header
-        and are surfaced through :mod:`warnings`. Raises VoLCAError on an
-        HTTP error, including a collection that is not loaded.
+        ``fmt`` names the target format: ``simapro`` (SimaPro method CSV) or
+        ``csv`` (columnar CSV — one column per impact category, the
+        spreadsheet view). Projection warnings (anything the format cannot
+        carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
+        header and are surfaced through :mod:`warnings`. Raises VoLCAError
+        on an HTTP error, including a collection that is not loaded.
         """
         fmt_norm = fmt.strip().lower()
-        if fmt_norm not in _EXPORT_FORMATS:
+        if fmt_norm not in _METHOD_EXPORT_FORMATS:
             raise VoLCAError(
-                f"unknown export format: {fmt!r} "
-                f"(expected {'|'.join(sorted(_EXPORT_FORMATS))})"
+                f"unknown method export format: {fmt!r} "
+                f"(expected {'|'.join(sorted(_METHOD_EXPORT_FORMATS))})"
             )
         resp = self._session.post(
             f"{self.base_url}/api/v1/method-collections/{name}/export",

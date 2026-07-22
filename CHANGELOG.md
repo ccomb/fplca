@@ -42,6 +42,21 @@
   databases.
 
 ### Added
+- Method collections can be exported as columnar CSV — one column per
+  impact category, one row per substance: the file you open in a
+  spreadsheet. `POST /api/v1/method-collections/{name}/export` with
+  `{"format": "csv"}`, `volca method export NAME --format csv`, or
+  pyvolca's `export_method_collection(name, fmt="csv")`. Anything the
+  format cannot carry (flow directions the compartment does not imply,
+  damage categories, normalization/weighting sets, formula scoring sets)
+  is reported in export warnings, never dropped silently.
+- The columnar CSV method format itself grew the columns real methods
+  need, read back by the parser and emitted by the writer: optional `cas`
+  and `unit` key columns (real methods mix kg, m3 and MJ flows inside one
+  category), and a `top/sub/qualifier` compartment path so subcompartment
+  distinctions survive — in EF 3.1, nine factors out of ten are
+  subcompartment-specific. Legacy files parse exactly as before, and
+  quoted fields now work in these files too.
 - Method collections can now be exported as SimaPro method CSV, the inverse
   of the SimaPro method import: `POST /method-collections/{name}/export`,
   `volca method export NAME --format simapro --out FILE`, and
