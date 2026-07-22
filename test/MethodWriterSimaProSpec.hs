@@ -186,6 +186,13 @@ spec = describe "Method.WriterSimaPro" $ do
             let m = (mkMethod "Climate change" []){methodMethodology = Just "Impact category"}
             serialize (collection [m]) `shouldSatisfy` isRefused "marker"
 
+        it "rejects a blank normalization-weighting set name" $ do
+            -- A blank name line would make the re-import take the next section
+            -- keyword as the name and drop that section's factors.
+            let nw = NormWeightSet "  " (M.singleton "Climate change" 1.0) M.empty
+                mc = MethodCollection [mkMethod "Climate change" []] [] [nw] []
+            serialize mc `shouldSatisfy` isRefused "blank name"
+
     describe "format dispatch (Database.Export)" $ do
         it "refuses non-SimaPro formats with a clear message" $ do
             let mc = collection [mkMethod "Climate change" []]

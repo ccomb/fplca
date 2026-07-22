@@ -119,10 +119,20 @@ checkMethodExportable mc
             )
             (dcImpacts dc)
     checkNW nw = do
-        noLineBreak "normalization-weighting set name" (nwName nw)
+        checkNWName (nwName nw)
         mapM_ (checkNamed ("normalization factor (" <> nwName nw <> ")")) (M.toAscList (nwNormalization nw))
         mapM_ (checkNamed ("weighting factor (" <> nwName nw <> ")")) (M.toAscList (nwWeighting nw))
     checkNamed label (n, v) = noLineBreak "impact category name" n *> finite (label <> " for '" <> n <> "'") v
+
+{- | The NW-set name is written verbatim on its own line, and the parser takes
+the first non-blank line after the marker as the name — a blank name would
+promote the following section keyword (@Normalization@) to the set's name and
+silently drop that section's factors on re-import.
+-}
+checkNWName :: Text -> Either Text ()
+checkNWName name
+    | T.null (T.strip name) = Left "normalization-weighting set has a blank name"
+    | otherwise = noLineBreak "normalization-weighting set name" name
 
 noLineBreak :: Text -> Text -> Either Text ()
 noLineBreak label t
