@@ -996,7 +996,10 @@ spec = do
                         Just v -> v `shouldBe` 1.32396265000545e-4
                         Nothing -> expectationFailure "Climate change not found"
                     case M.lookup "Acidification" (nwNormalization nw) of
-                        Just v -> v `shouldBe` 1.7995469781731898e-2
+                        -- The correctly-rounded parse of the fixture's
+                        -- 1.79954697817319E-2 (the old expectation had baked
+                        -- in Data.Text.Read.double's last-ulp drift).
+                        Just v -> v `shouldBe` 1.79954697817319e-2
                         Nothing -> expectationFailure "Acidification not found"
                     M.lookup "Water use" (nwWeighting nw) `shouldBe` Just 0.0851
 
