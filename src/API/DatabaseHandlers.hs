@@ -330,6 +330,7 @@ qualityReportToAPI mLimit r =
         , qraSuspiciousAmounts = checkToAPI (Quality.qrSuspiciousAmounts r)
         , qraMissingMetadata = checkToAPI (Quality.qrMissingMetadata r)
         , qraFormulaConsistency = checkToAPI (Quality.qrFormulaConsistency r)
+        , qraTruncatedNameCollisions = checkToAPI (Quality.qrTruncatedNameCollisions r)
         }
   where
     checkToAPI c =

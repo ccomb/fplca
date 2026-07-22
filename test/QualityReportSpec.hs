@@ -12,6 +12,7 @@ module QualityReportSpec (spec) where
 import Data.Aeson (decode, encode)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
@@ -312,6 +313,46 @@ spec = do
         it "is not applicable to a database without any formula" $
             qcApplicable (qrFormulaConsistency (reportOf (mkActivity "bread" [reference breadFlow])))
                 `shouldBe` False
+
+    describe "truncated name collisions check" $ do
+        -- An 80-character stem: names built on it only differ beyond the cap.
+        let stem = T.replicate 80 "x"
+
+        it "flags distinct names sharing their first 80 characters, one finding each" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity (stem <> "a") [reference breadFlow])
+                        , ((actB, prodB), mkActivity (stem <> "b") [reference flourFlow])
+                        ]
+                check = qrTruncatedNameCollisions (qualityReport "testdb" db)
+            details check
+                `shouldBe` replicate 2 "shares its first 80 characters with 1 other name(s), which a SimaPro export would merge"
+            severities check `shouldBe` [WarningSev, WarningSev]
+            processIds check `shouldBe` [pidOf actA prodA, pidOf actB prodB]
+
+        it "flags a name that is the exact 80-character prefix of a longer one" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity stem [reference breadFlow])
+                        , ((actB, prodB), mkActivity (stem <> " tail") [reference flourFlow])
+                        ]
+            length (qcOffenders (qrTruncatedNameCollisions (qualityReport "testdb" db))) `shouldBe` 2
+
+        it "passes identical long names, which are the duplicate check's business" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity (stem <> "a") [reference breadFlow])
+                        , ((actB, prodB), mkActivity (stem <> "a") [reference breadFlow])
+                        ]
+            qcOffenders (qrTruncatedNameCollisions (qualityReport "testdb" db)) `shouldBe` []
+
+        it "passes distinct names short enough to survive truncation" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "cake" [reference flourFlow])
+                        ]
+            qcOffenders (qrTruncatedNameCollisions (qualityReport "testdb" db)) `shouldBe` []
 
     describe "report header" $
         it "counts one process per (activity, product) entry" $ do

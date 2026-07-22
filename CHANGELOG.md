@@ -45,6 +45,10 @@
   databases.
 
 ### Added
+- The quality report flags distinct activity names that merge under
+  SimaPro's 80-character name truncation — each colliding name gets its own
+  finding, so an export bound for SimaPro can be repaired before the names
+  collapse into one process there.
 - Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
   of one `ImpactCategory` document per impact category, in the olca-schema
   archive layout, that loads straight back. Flow UUIDs, per-factor
