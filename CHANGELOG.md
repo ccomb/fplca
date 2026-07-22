@@ -19,6 +19,10 @@
   value (`1,23` once imported as `1.0`, truncated at the comma) or a
   non-finite one (`NaN`) is now rejected instead of imported as a wrong
   number.
+- Characterization factors loaded from an ILCD method package now parse
+  exactly. The XML reader used that same drifting number parser, so a factor
+  written as `0.0000010897906999999999` loaded one ulp off the value the file
+  states; it now reads the correctly-rounded number.
 - SimaPro CSV rows with quoted fields now parse correctly in files with
   Windows (CRLF) line endings. The carriage return left at the end of each
   line made the CSV reader give up and fall back to a naive split, which tore

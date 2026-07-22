@@ -20,11 +20,11 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import qualified Xeno.SAX as X
 
+import Amount (readAmount)
 import EcoSpold.Common (bsToText, isElement)
 import Method.FlowResolver (ILCDFlowInfo (..))
 import Method.Types
@@ -322,11 +322,15 @@ extractUUIDFromURI uri =
     lastItem [] = ""
     lastItem xs = Prelude.last xs
 
--- | Parse Double from text, return 0 on failure
+{- | Parse a characterization-factor value, returning 0 on failure.
+
+Uses the correctly-rounded 'Amount.readAmount' — the same reader the ILCD
+database importer and every export round-trip guard share — rather than
+'Data.Text.Read.double', which is off by up to one ULP on ordinary magnitudes
+and so silently loaded CFs at a slightly wrong value.
+-}
 parseDoubleSafe :: Text -> Double
-parseDoubleSafe txt = case TR.double txt of
-    Right (val, _) -> val
-    Left _ -> 0.0
+parseDoubleSafe = fromMaybe 0.0 . readAmount
 
 -- | Parse flow direction from text
 parseDirection :: Text -> FlowDirection
