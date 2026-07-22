@@ -68,6 +68,7 @@ library
                      , Method.WriterSimaPro
                      , Method.ParserNW
                      , Method.Mapping
+                     , Method.Coverage
                      , Method.Patch
                      , Method.ChemSynonyms
                      , Method.FlowResolver
@@ -294,6 +295,7 @@ test-suite lca-tests
                      , GapReportSpec
                      , QualityReportSpec
                      , ComputedQualitySpec
+                     , CoverageSpec
                      , GlobalSubstitutionSpec
                      , DatabaseStatusSpec
                      , DependencyChoiceSpec

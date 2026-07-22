@@ -74,6 +74,7 @@ data Resource
     | GetGapReport
     | GetQualityReport
     | GetComputedQualityReport
+    | GetCoverageReport
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -158,6 +159,7 @@ apiPath r = case r of
     GetGapReport -> Just (GET, ["db", "{dbName}", "gap-report"])
     GetQualityReport -> Just (GET, ["db", "{dbName}", "quality-report"])
     GetComputedQualityReport -> Just (GET, ["db", "{dbName}", "computed-quality-report"])
+    GetCoverageReport -> Just (GET, ["db", "{dbName}", "characterization-coverage"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -203,6 +205,7 @@ mcpName r = case r of
     GetGapReport -> "get_gap_report"
     GetQualityReport -> "get_quality_report"
     GetComputedQualityReport -> "get_computed_quality_report"
+    GetCoverageReport -> "get_characterization_coverage"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -244,6 +247,7 @@ cliName r = case r of
     GetGapReport -> "gap-report"
     GetQualityReport -> "quality-report"
     GetComputedQualityReport -> "computed-quality-report"
+    GetCoverageReport -> "characterization-coverage"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -504,6 +508,19 @@ description r = case r of
         \which checks what the database STORES and runs on staged databases \
         \too; this one needs the matrices and a loaded method collection. \
         \Same finding shape: severity, the entry, a readable detail."
+    GetCoverageReport ->
+        "LCA / ACV — characterization-coverage report of a database against the \
+        \loaded LCIA method collections, for the people who maintain databases. \
+        \Surfaces the flows a method scores ONLY through a name bridge: VoLCA \
+        \matches a factor to a flow that carries a different name for the same \
+        \substance (via synonym or CAS number), so the flow is characterized \
+        \here — but a tool that matches factors by their exact name has no such \
+        \bridge and scores it as zero, silently. Each \
+        \bridged flow is grouped under the name the method itself uses (its \
+        \rename target). One entry per loaded collection, so two method versions \
+        \can be compared side by side. Optionally filtered to a single \
+        \collection. Answers 'which of this database's flow names would an \
+        \exact-name tool fail to characterize?'"
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -821,4 +838,9 @@ params r = case r of
         [ pDatabase
         , Param "collection" "string" Optional "Method collection to score the catalogue against. Defaults to the single loaded collection; required when several are loaded."
         , pLimit "Max findings to return per check, worst first (default: all). Each check's offenderCount always covers its full list, so a truncated list stays countable."
+        ]
+    GetCoverageReport ->
+        [ pDatabase
+        , Param "collection" "string" Optional "Restrict the report to one loaded method collection (from list_methods). If omitted, every loaded collection is reported, so two method versions can be compared side by side."
+        , pLimit "Max bridge groups to return per collection (default: all). Each collection's bridgeGroupCount always covers its full list, so a truncated list stays countable."
         ]

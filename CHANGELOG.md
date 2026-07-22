@@ -63,6 +63,17 @@
   databases.
 
 ### Added
+- A characterization-coverage report tells database maintainers which flow
+  names a method scores only through a name bridge. When a database names a
+  substance differently from the method that characterizes it — `Bromomethane`
+  versus `Methane, bromo-, Halon 1001`, say — VoLCA still scores the flow by
+  matching on a synonym or CAS number. A tool that matches factors by their
+  exact name, as many downstream consumers do, has no such bridge and scores
+  that flow as zero without warning. The report lists each bridged flow grouped
+  under the name the method itself uses, so the fix is a rename. It is available
+  as the `get_characterization_coverage` MCP tool and at
+  `GET /api/v1/db/{db}/characterization-coverage`, with one entry per loaded
+  method collection so two method versions can be compared side by side.
 - Method collections can be exported as an ILCD LCIA-method package (`ilcd`):
   a zip of one method dataset per impact category plus the flow datasets they
   reference (`lciamethods/` + `flows/`), which loads straight back. It carries
