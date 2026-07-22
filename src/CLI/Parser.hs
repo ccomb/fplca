@@ -92,7 +92,7 @@ commandParser =
             <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
             <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
             <> OA.command "database" (info (databaseParser <**> helper) (progDesc "Manage databases (list, upload, delete)"))
-            <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections (list, upload, delete)"))
+            <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections"))
             <> OA.command "methods" (info (pure Methods <**> helper) (progDesc "List loaded methods (flattened)"))
             <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
             <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
