@@ -20,6 +20,7 @@ module API.DatabaseHandlers (
     gapReportToAPI,
     qualityReportHandler,
     qualityReportToAPI,
+    computedQualityReportToAPI,
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
@@ -81,9 +82,12 @@ import System.IO (hClose, openBinaryTempFile)
 
 -- Unit definitions
 
+import qualified Database.ComputedQuality as CQ
+
 import API.Types (
     ActivateResponse (..),
     BinaryContent (..),
+    ComputedQualityReportAPI (..),
     DatabaseListResponse (..),
     DatabaseStatusAPI (..),
     DeleteClassFilter (..),
@@ -324,23 +328,40 @@ qualityReportToAPI mLimit r =
     QualityReportAPI
         { qraDbName = Quality.qrDbName r
         , qraProcessCount = Quality.qrProcessCount r
-        , qraReferenceProduct = checkToAPI (Quality.qrReferenceProduct r)
-        , qraAllocationSums = checkToAPI (Quality.qrAllocationSums r)
-        , qraDuplicateActivities = checkToAPI (Quality.qrDuplicateActivities r)
-        , qraSuspiciousAmounts = checkToAPI (Quality.qrSuspiciousAmounts r)
-        , qraMissingMetadata = checkToAPI (Quality.qrMissingMetadata r)
-        , qraFormulaConsistency = checkToAPI (Quality.qrFormulaConsistency r)
-        , qraTruncatedNameCollisions = checkToAPI (Quality.qrTruncatedNameCollisions r)
-        , qraMissingPedigree = checkToAPI (Quality.qrMissingPedigree r)
-        , qraUnconsumedProducts = checkToAPI (Quality.qrUnconsumedProducts r)
+        , qraReferenceProduct = checkToAPI mLimit (Quality.qrReferenceProduct r)
+        , qraAllocationSums = checkToAPI mLimit (Quality.qrAllocationSums r)
+        , qraDuplicateActivities = checkToAPI mLimit (Quality.qrDuplicateActivities r)
+        , qraSuspiciousAmounts = checkToAPI mLimit (Quality.qrSuspiciousAmounts r)
+        , qraMissingMetadata = checkToAPI mLimit (Quality.qrMissingMetadata r)
+        , qraFormulaConsistency = checkToAPI mLimit (Quality.qrFormulaConsistency r)
+        , qraTruncatedNameCollisions = checkToAPI mLimit (Quality.qrTruncatedNameCollisions r)
+        , qraMissingPedigree = checkToAPI mLimit (Quality.qrMissingPedigree r)
+        , qraUnconsumedProducts = checkToAPI mLimit (Quality.qrUnconsumedProducts r)
+        }
+
+{- | Same projection for the computed report — one wire cap, one offender
+shape, shared with the structural report via 'checkToAPI'.
+-}
+computedQualityReportToAPI :: Maybe Int -> CQ.ComputedQualityReport -> ComputedQualityReportAPI
+computedQualityReportToAPI mLimit r =
+    ComputedQualityReportAPI
+        { cqaDbName = CQ.cqDbName r
+        , cqaCollection = CQ.cqCollection r
+        , cqaProcessCount = CQ.cqProcessCount r
+        , cqaScoreOutliers = checkToAPI mLimit (CQ.cqScoreOutliers r)
+        , cqaZeroScores = checkToAPI mLimit (CQ.cqZeroScores r)
+        , cqaNegativeScores = checkToAPI mLimit (CQ.cqNegativeScores r)
+        }
+
+-- | Project one domain check onto the wire, capping its list at @limit@.
+checkToAPI :: Maybe Int -> Quality.QualityCheck -> QualityCheckAPI
+checkToAPI mLimit c =
+    QualityCheckAPI
+        { qcaApplicable = Quality.qcApplicable c
+        , qcaOffenderCount = length (Quality.qcOffenders c)
+        , qcaOffenders = map offenderToAPI (maybe id take mLimit (Quality.qcOffenders c))
         }
   where
-    checkToAPI c =
-        QualityCheckAPI
-            { qcaApplicable = Quality.qcApplicable c
-            , qcaOffenderCount = length (Quality.qcOffenders c)
-            , qcaOffenders = map offenderToAPI (maybe id take mLimit (Quality.qcOffenders c))
-            }
     offenderToAPI o =
         QualityOffenderAPI
             { qoaSeverity = Quality.qoSeverity o
