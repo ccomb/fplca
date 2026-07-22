@@ -61,6 +61,7 @@ library
                      , Method.Parser.OlcaSchema
                      , Method.ParserCSV
                      , Method.ParserSimaPro
+                     , Method.WriterSimaPro
                      , Method.ParserNW
                      , Method.Mapping
                      , Method.Patch
@@ -295,6 +296,7 @@ test-suite lca-tests
                      , LicensesSpec
                      , GeographiesSpec
                      , MethodUploadSpec
+                     , MethodWriterSimaProSpec
                      , AuthSpec
                      , CLISpec
                      , RoutesSpec

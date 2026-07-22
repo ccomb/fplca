@@ -15,10 +15,13 @@ has no writer and 'UnknownFormat' is not a real target, so both fail loudly
 module Database.Export (
     serializeDatabase,
     exportDatabase,
+    serializeMethodCollection,
+    exportMethodCollection,
     parseExportFormat,
 ) where
 
 import Control.Exception (SomeException, try)
+import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BL
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -29,6 +32,8 @@ import Database.Upload (DatabaseFormat (..))
 import qualified EcoSpold.Writer1 as ES1
 import qualified EcoSpold.Writer2 as ES2
 import qualified ILCD.Writer as ILCD
+import Method.Types (MethodCollection)
+import qualified Method.WriterSimaPro as MW
 import qualified SimaPro.Writer as SP
 import Types (Database, toSimpleDatabase)
 import Zip (zipFiles)
@@ -62,6 +67,27 @@ serializeDatabase fmt db = case fmt of
     sdb = toSimpleDatabase db
     noWarn = fmap (,[])
 
+{- | Serialize a loaded method collection in the requested format, paired with
+the projection warnings. SimaPro CSV is the only format with a method writer
+today; every other target fails loudly rather than emit an empty file. The
+name is the collection's own (used as the file-level method name when the
+impact categories don't share a methodology).
+-}
+serializeMethodCollection :: DatabaseFormat -> Text -> MethodCollection -> Either Text (BL.ByteString, [Text])
+serializeMethodCollection fmt name mc = case fmt of
+    SimaProCSV ->
+        first BL.fromStrict
+            <$> MW.serializeSimaProMethodCSV SP.defaultWriterConfig name mc
+    EcoSpold1 -> noMethodWriter "ecospold1"
+    EcoSpold2 -> noMethodWriter "ecospold2"
+    ILCDProcess -> noMethodWriter "ilcd"
+    BrightwayExcel -> noMethodWriter "brightway"
+    OpenLcaJsonLd -> noMethodWriter "openlca"
+    UnknownFormat -> Left "cannot export to an unknown format"
+  where
+    noMethodWriter f =
+        Left ("method collections can only be exported as SimaPro CSV (no method writer for format: " <> f <> ")")
+
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted
 spellings and the error message stay in one place.
@@ -80,7 +106,15 @@ warnings so the caller can report them — a local export approximates exactly a
 much as a remote one.
 -}
 exportDatabase :: DatabaseFormat -> Database -> FilePath -> IO (Either Text [Text])
-exportDatabase fmt db path = case serializeDatabase fmt db of
+exportDatabase fmt db path = writeExport path (serializeDatabase fmt db)
+
+-- | File variant of 'serializeMethodCollection', for the CLI.
+exportMethodCollection :: DatabaseFormat -> Text -> MethodCollection -> FilePath -> IO (Either Text [Text])
+exportMethodCollection fmt name mc path = writeExport path (serializeMethodCollection fmt name mc)
+
+-- | Write serialized bytes to @path@, passing the warnings through.
+writeExport :: FilePath -> Either Text (BL.ByteString, [Text]) -> IO (Either Text [Text])
+writeExport path serialized = case serialized of
     Left err -> pure (Left err)
     Right (bytes, warnings) -> either (Left . renderErr) (const (Right warnings)) <$> try (BL.writeFile path bytes)
   where
