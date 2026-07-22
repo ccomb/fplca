@@ -12,14 +12,20 @@
   output is unchanged.
 
 ### Fixed
-- Resource factors in openLCA JSON-LD method files now get the input
-  direction. openLCA files carry no per-factor direction, so every factor
-  used to default to output — a resource factor (water withdrawal, land
+- openLCA JSON-LD method files now load with the right factor directions,
+  compartments, and reference unit — including files openLCA itself
+  exported. Such files carry no per-factor direction, so every factor used
+  to default to output — a resource factor (water withdrawal, land
   occupation) then matched against the wrong synonym view and could
   silently miss its flow. The direction now comes from the flow's category
-  path (`resource/…`, `Raw materials`, `Land use` → input), or from the
-  impact category's own direction when the path says nothing either way. A
-  factor that states its direction explicitly is untouched.
+  path (`resource/…`, `Raw materials`, `Land use` → input; `Emission to …`
+  → output), or from the impact category's own direction when the path
+  says nothing either way; a factor that states its direction explicitly
+  is untouched. The parser also reads the olca-schema spellings a genuine
+  export uses — the category path as a plain string on the flow reference
+  (its `Elementary flows` root is dropped) and `refUnit` — where it
+  previously only understood its own exporter's shape and silently lost
+  the compartment and reference unit.
 - Numbers in columnar CSV method files and normalization/weighting CSV
   files now parse exactly. The previous number parser drifted in the last
   decimal (`1.2227e-3` came back as `1.2227000000000002e-3`) — every such

@@ -80,6 +80,16 @@ spec = do
                 Left err -> expectationFailure ("parse failed: " ++ err)
                 Right method -> methodCategory method `shouldBe` methodName method
 
+        it "reads the olca-schema refUnit spelling of the reference unit" $ do
+            -- A genuine openLCA export writes `refUnit`; VoLCA's own exports
+            -- write `referenceUnitName`. Both must land in methodUnit.
+            let bytes =
+                    "{\"@type\":\"ImpactCategory\",\"name\":\"M\",\
+                    \\"refUnit\":\"kg CO2 eq\",\"impactFactors\":[]}"
+            case parseOlcaImpactCategoryBytes bytes of
+                Left err -> expectationFailure ("parse failed: " ++ err)
+                Right method -> methodUnit method `shouldBe` "kg CO2 eq"
+
         it "rejects a non-object top level" $
             case parseOlcaImpactCategoryBytes "[1,2,3]" of
                 Left _ -> pure ()
@@ -151,6 +161,20 @@ spec = do
                         _ -> expectationFailure "expected exactly one factor"
                 Left err -> expectationFailure ("parse failed: " ++ err)
 
+        it "reads the olca-schema string form of the category" $
+            -- A genuine openLCA export carries the category as a plain string
+            -- on the flow Ref, not as a Category Ref object.
+            factorCompartments (directionDocStr "" "" "Emission to air/urban")
+                `shouldBe` Right [Just (Compartment "Emission to air" "urban" "")]
+
+        it "drops the Elementary flows category-tree root" $
+            factorCompartments (directionDocStr "" "" "Elementary flows/Resource/in ground")
+                `shouldBe` Right [Just (Compartment "Resource" "in ground" "")]
+
+        it "a path that is only the tree root leaves no compartment" $
+            factorCompartments (directionDocStr "" "" "Elementary flows")
+                `shouldBe` Right [Nothing]
+
     describe "factor direction derivation" $ do
         -- Real openLCA files carry no per-factor direction field; a resource
         -- CF mis-defaulted to Output resolves against the output synonym
@@ -169,6 +193,14 @@ spec = do
             factorDirections (directionDoc "" "" "Elementary flows/Resource/in ground")
                 `shouldBe` Right [Input]
 
+        it "reads the olca-schema string form of the category path" $
+            factorDirections (directionDocStr "" "" "Elementary flows/Resource/in ground")
+                `shouldBe` Right [Input]
+
+        it "reads the prose resource spellings of the columnar parser" $
+            factorDirections (directionDoc "" "" "Resources from ground")
+                `shouldBe` Right [Input]
+
         it "an emission category path stays Output" $
             factorDirections (directionDoc "" "" "Emission to air/urban")
                 `shouldBe` Right [Output]
@@ -180,6 +212,13 @@ spec = do
         it "a resource category path beats the document-level direction" $
             factorDirections (directionDoc "\"direction\":\"OUTPUT\"," "" "resource/land")
                 `shouldBe` Right [Input]
+
+        it "an emission category path beats the document-level direction" $
+            -- A water-use category oriented Input at the document level still
+            -- has release factors filed under Emission to water — they must
+            -- stay Output.
+            factorDirections (directionDoc "\"direction\":\"INPUT\"," "" "Emission to water/unspecified")
+                `shouldBe` Right [Output]
 
         it "defaults to Output with no signal at all" $
             factorDirections (directionDoc "" "" "water")
@@ -201,20 +240,34 @@ spec = do
 
 {- | A one-factor ImpactCategory document: @docFields@ / @factorFields@ are
 raw JSON fragments (trailing comma when non-empty), @categoryPath@ the
-flow's category name.
+flow's category name, carried as a Category Ref object (VoLCA's own
+export shape).
 -}
 directionDoc :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString
 directionDoc docFields factorFields categoryPath =
+    olcaDoc docFields factorFields ("{\"@type\":\"Category\",\"name\":\"" <> categoryPath <> "\"}")
+
+-- | Same document with the category as the olca-schema plain string.
+directionDocStr :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString
+directionDocStr docFields factorFields categoryPath =
+    olcaDoc docFields factorFields ("\"" <> categoryPath <> "\"")
+
+olcaDoc :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString
+olcaDoc docFields factorFields categoryJson =
     "{\"@type\":\"ImpactCategory\",\"name\":\"D\","
         <> docFields
         <> "\"impactFactors\":[{\"@type\":\"ImpactFactor\",\"value\":1.0,"
         <> factorFields
-        <> "\"flow\":{\"@type\":\"Flow\",\"name\":\"f\",\
-           \\"category\":{\"@type\":\"Category\",\"name\":\""
-        <> categoryPath
-        <> "\"}}}]}"
+        <> "\"flow\":{\"@type\":\"Flow\",\"name\":\"f\",\"category\":"
+        <> categoryJson
+        <> "}}]}"
 
 -- | The direction of every parsed factor of the given document.
 factorDirections :: BS.ByteString -> Either String [FlowDirection]
 factorDirections bytes =
     map mcfDirection . methodFactors <$> parseOlcaImpactCategoryBytes bytes
+
+-- | The compartment of every parsed factor of the given document.
+factorCompartments :: BS.ByteString -> Either String [Maybe Compartment]
+factorCompartments bytes =
+    map mcfCompartment . methodFactors <$> parseOlcaImpactCategoryBytes bytes

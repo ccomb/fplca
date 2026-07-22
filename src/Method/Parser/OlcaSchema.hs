@@ -94,7 +94,7 @@ parseOlcaImpactCategoryBytes bytes = do
             name <- requireText o "name"
             let mid = parseUuidField o "@id"
                 description = lookupText o "description"
-                unit = fromMaybe "" (lookupText o "referenceUnitName")
+                unit = fromMaybe "" (lookupText o "referenceUnitName" <|> lookupText o "refUnit")
                 docDirection = parseDirection =<< lookupText o "direction"
                 factors = case KM.lookup "impactFactors" o of
                     Just (Array v) -> mapMaybe (parseImpactFactor docDirection) (V.toList v)
@@ -147,8 +147,9 @@ parseImpactFactor docDirection (Object o) = do
                     }
 parseImpactFactor _ _ = Nothing
 
-{- | Read the optional @flow.category@ Ref and turn it into a 'Compartment'.
-The category's @name@ is treated as a slash-separated path: the first
+{- | Turn the flow's category path into a 'Compartment'. The path is
+slash-separated: after dropping the @Elementary flows@ root that openLCA's
+category tree prepends (a tree artifact, not a compartment), the first
 segment is the medium ('resource', 'air', 'water', …) and the rest is the
 subcompartment ('land', 'urban air close to ground', …). Without this,
 VoLCA's matcher cannot disambiguate DB flows that share a name across
@@ -158,11 +159,9 @@ compartments (e.g. Agribalyse has 3 flows literally named
 -}
 parseCompartment :: KM.KeyMap Value -> Maybe Compartment
 parseCompartment flow = do
-    cat <- objectField flow "category"
-    catName <- lookupText cat "name"
-    -- T.splitOn always returns a non-empty list, so the empty case is
-    -- unreachable; pattern-matching avoids the partial 'head'.
-    case T.splitOn "/" catName of
+    catName <- categoryPath flow
+    -- A path that was only the tree root leaves no segments — no compartment.
+    case dropTreeRoot (T.splitOn "/" catName) of
         [] -> Nothing
         (med0 : rest) ->
             let med = T.strip med0
@@ -171,17 +170,33 @@ parseCompartment flow = do
                     then Nothing
                     else Just (Compartment med sub "")
 
+-- | Drop the @Elementary flows@ root of openLCA's category tree.
+dropTreeRoot :: [Text] -> [Text]
+dropTreeRoot (root : rest)
+    | T.toCaseFold (T.strip root) == "elementary flows" = rest
+dropTreeRoot segs = segs
+
+{- | The flow's category path. The olca schema carries it as a plain string
+on the flow Ref (@"Elementary flows/Emission to air/unspecified"@) — the
+form a genuine openLCA export uses — while VoLCA's own exports write a
+Category Ref object whose @name@ holds the same path.
+-}
+categoryPath :: KM.KeyMap Value -> Maybe Text
+categoryPath flow =
+    lookupText flow "category"
+        <|> (objectField flow "category" >>= (`lookupText` "name"))
+
 {- | Direction of one factor, most specific signal first:
 
 1. the factor's own @direction@ field — not in the olca schema (openLCA
    ignores it on import) but written by VoLCA's own exporter, so a VoLCA
    archive round-trips its directions exactly;
 2. the flow's category path — openLCA files carry no per-factor direction
-   at all, but a resource category (@resource/…@, @Elementary
-   flows\/Resource\/…@, @Raw materials@, @Land use@) marks an input the
-   same way the columnar-CSV parser reads it: a resource CF defaulted to
-   Output would resolve against the output synonym view and silently lose
-   input-only bridges;
+   at all, but the path names the boundary side: a resource segment
+   (@resource/…@, @Raw materials@, @Land use@) means Input — the same
+   spellings the columnar-CSV parser reads — and an emission segment
+   (@Emission to air/…@) means Output. A CF resolved against the wrong
+   synonym view silently loses direction-specific bridges;
 3. the document-level @ImpactCategory.direction@ (olca schema v2) — the
    category's overall orientation, for flows whose category path says
    nothing either way;
@@ -192,17 +207,22 @@ factorDirection docDirection factor flow =
     fromMaybe Output (explicit <|> fromCategory <|> docDirection)
   where
     explicit = parseDirection =<< lookupText factor "direction"
-    fromCategory = do
-        cat <- objectField flow "category"
-        catName <- lookupText cat "name"
-        if any resourceSegment (T.splitOn "/" catName)
-            then Just Input
-            else Nothing
-    resourceSegment seg =
-        let s = T.toCaseFold (T.strip seg)
-         in s `elem` ["resource", "resources", "natural resource"]
-                || "raw" `T.isPrefixOf` s
-                || "land " `T.isPrefixOf` s
+    fromCategory = pathDirection =<< categoryPath flow
+
+-- | The direction a category path implies; 'Nothing' when it says nothing.
+pathDirection :: Text -> Maybe FlowDirection
+pathDirection path
+    | any resourceSegment segments = Just Input
+    | any emissionSegment segments = Just Output
+    | otherwise = Nothing
+  where
+    segments = map (T.toCaseFold . T.strip) (T.splitOn "/" path)
+    resourceSegment s =
+        s `elem` ["resource", "resources", "natural resource"]
+            || "raw" `T.isPrefixOf` s
+            || "resources " `T.isPrefixOf` s
+            || "land " `T.isPrefixOf` s
+    emissionSegment s = "emission" `T.isPrefixOf` s
 
 -- | The olca @Direction@ enum, case-insensitively; 'Nothing' on anything else.
 parseDirection :: Text -> Maybe FlowDirection
