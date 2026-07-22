@@ -481,9 +481,10 @@ description r = case r of
         \without the pedigree scores their database otherwise carries, \
         \reference products nothing in the database consumes (expected for \
         \final products), land transformation whose 'to' and 'from' \
-        \areas don't balance within an activity, and oxygen-demand or \
+        \areas don't balance within an activity, oxygen-demand or \
         \organic-carbon measures in a physically impossible order (BOD5 above \
-        \COD, or dissolved above total organic carbon). Each \
+        \COD, or dissolved above total organic carbon), and flow CAS numbers \
+        \whose check digit does not confirm them. Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \

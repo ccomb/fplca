@@ -60,11 +60,12 @@ m2Unit = u "06"
 transFromFlow = u "07"
 transToFlow = u "08"
 
-bod5Flow, codFlow, docFlow, tocFlow :: UUID
+bod5Flow, codFlow, docFlow, tocFlow, mercuryFlow :: UUID
 bod5Flow = u "09"
 codFlow = u "0c"
 docFlow = u "0d"
 tocFlow = u "0e"
+mercuryFlow = u "0f"
 
 actA, actB, prodA, prodB :: UUID
 actA = u "0a"
@@ -196,6 +197,19 @@ processIds = map qoProcessId . qcOffenders
 -- | The canonical process id a finding on this (activity, product) entry carries.
 pidOf :: UUID -> UUID -> Text
 pidOf a p = UUID.toText a <> "_" <> UUID.toText p
+
+{- | A one-activity database whose mercury input carries the given CAS (or
+none), for the CAS check — its own registry so other fixtures stay CAS-free.
+-}
+casDbWith :: Maybe Text -> SimpleDatabase
+casDbWith cas =
+    (dbOf [((actA, prodA), mkActivity "smelter" [reference breadFlow, input mercuryFlow 1.0])])
+        { sdbTechFlows =
+            M.fromList
+                [ (breadFlow, TechnosphereFlow breadFlow "bread" kgUnit M.empty Nothing Nothing)
+                , (mercuryFlow, TechnosphereFlow mercuryFlow "mercury" kgUnit M.empty cas Nothing)
+                ]
+        }
 
 -- | An activity carrying an allocation percentage and a source block identity.
 allocated :: Text -> Maybe Double -> Maybe Text -> Activity
@@ -516,6 +530,28 @@ spec = do
 
         it "is not applicable to a database with no oxygen-demand flow" $ do
             let check = qrOxygenDemandOrder (reportOf (mkActivity "bread" [reference breadFlow]))
+            qcApplicable check `shouldBe` False
+            qcOffenders check `shouldBe` []
+
+    describe "invalid CAS number check" $ do
+        it "flags a flow whose CAS check digit does not confirm the number" $ do
+            let check = qrInvalidCas (qualityReport "testdb" (casDbWith (Just "7439-92-2")))
+            details check `shouldBe` ["CAS number \"7439-92-2\" is not a valid CAS registry number"]
+            map qoProductName (qcOffenders check) `shouldBe` [Just "mercury"]
+            severities check `shouldBe` [WarningSev]
+            processIds check `shouldBe` [pidOf actA prodA]
+
+        it "passes a flow whose CAS check digit is correct" $
+            qcOffenders (qrInvalidCas (qualityReport "testdb" (casDbWith (Just "7439-92-1")))) `shouldBe` []
+
+        it "accepts the zero-padded spelling of a valid CAS" $
+            qcOffenders (qrInvalidCas (qualityReport "testdb" (casDbWith (Just "007439-92-1")))) `shouldBe` []
+
+        it "flags a CAS that is not three dash-separated numbers" $
+            length (qcOffenders (qrInvalidCas (qualityReport "testdb" (casDbWith (Just "not-a-cas"))))) `shouldBe` 1
+
+        it "is not applicable to a database whose flows carry no CAS" $ do
+            let check = qrInvalidCas (qualityReport "testdb" (casDbWith Nothing))
             qcApplicable check `shouldBe` False
             qcOffenders check `shouldBe` []
 

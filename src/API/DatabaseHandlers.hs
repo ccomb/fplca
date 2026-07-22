@@ -339,6 +339,7 @@ qualityReportToAPI mLimit r =
         , qraUnconsumedProducts = checkToAPI mLimit (Quality.qrUnconsumedProducts r)
         , qraLandTransformationBalance = checkToAPI mLimit (Quality.qrLandTransformationBalance r)
         , qraOxygenDemandOrder = checkToAPI mLimit (Quality.qrOxygenDemandOrder r)
+        , qraInvalidCas = checkToAPI mLimit (Quality.qrInvalidCas r)
         }
 
 {- | Same projection for the computed report — one wire cap, one offender

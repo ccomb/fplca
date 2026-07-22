@@ -75,6 +75,10 @@
   `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
   `volca method export NAME --format ilcd`, and pyvolca's
   `export_method_collection(name, fmt="ilcd")`.
+- The quality report validates flow CAS numbers by their check digit: a CAS
+  registry number confirms itself, so a corrupt one — which silently breaks
+  the name-to-CAS bridge that matches flows across databases — is flagged. The
+  zero-padded and canonical spellings both pass.
 - The quality report flags oxygen-demand and organic-carbon measures recorded
   in a physically impossible order: within one entry BOD5 must not exceed COD,
   nor dissolved organic carbon exceed total. A reversed pair is a measurement

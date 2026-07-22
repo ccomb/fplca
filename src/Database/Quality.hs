@@ -11,8 +11,9 @@ with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
 database consumes, land transformation whose "to" and "from" areas
-don't balance within an activity, and oxygen-demand or organic-carbon
-measures reported in a physically impossible order.
+don't balance within an activity, oxygen-demand or organic-carbon
+measures reported in a physically impossible order, and CAS numbers
+whose check digit doesn't confirm them.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -28,7 +29,7 @@ module Database.Quality (
 ) where
 
 import Control.Applicative ((<|>))
-import Data.Char (isAlphaNum)
+import Data.Char (digitToInt, isAlphaNum, isDigit)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -106,6 +107,7 @@ data QualityReport = QualityReport
     , qrUnconsumedProducts :: !QualityCheck
     , qrLandTransformationBalance :: !QualityCheck
     , qrOxygenDemandOrder :: !QualityCheck
+    , qrInvalidCas :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -126,6 +128,7 @@ qualityChecks r =
     , qrUnconsumedProducts r
     , qrLandTransformationBalance r
     , qrOxygenDemandOrder r
+    , qrInvalidCas r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -167,6 +170,24 @@ startsWithField prefix name = case T.stripPrefix prefix name of
     Nothing -> False
     Just rest -> maybe True (not . isAlphaNum . fst) (T.uncons rest)
 
+{- | A CAS registry number is @<digits>-<2 digits>-<check digit>@, where the
+check digit confirms the rest: numbering the other digits 1, 2, 3, … from the
+right, their weighted sum modulo ten equals it. Leading zeros contribute
+nothing to that sum, so this accepts both the zero-padded spelling some formats
+emit and the canonical one.
+-}
+validCas :: Text -> Bool
+validCas cas = case T.splitOn "-" cas of
+    [body, pair, check] -> case (T.unpack body, T.unpack pair, T.unpack check) of
+        (bs@(_ : _), ps@[_, _], [c])
+            | all isDigit bs
+            , all isDigit ps
+            , isDigit c ->
+                let ds = map digitToInt (bs <> ps)
+                 in sum (zipWith (*) [1 ..] (reverse ds)) `mod` 10 == digitToInt c
+        _ -> False
+    _ -> False
+
 {- | Allowed drift when comparing two physical sums that a law says should be
 equal (land transformation in vs out, oxygen-demand ordering). Sources round
 their amounts, so an exact comparison would flag correct data; one percent is
@@ -192,6 +213,7 @@ qualityReport dbName db =
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
+        , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -482,3 +504,28 @@ qualityReport dbName db =
                , toc > 0
                , doc - toc > physicalBalanceTolerance * toc
                ]
+
+    -- A CAS registry number is self-checking: a corrupt one is silently wrong
+    -- and breaks the name→CAS bridge that matches flows across databases. One
+    -- finding per distinct flow, anchored to the lowest-addressed entry that
+    -- uses it so it stays navigable. Flows the registry lists but no activity
+    -- uses are inert and left out — the report scans what activities carry.
+    allFlowCas =
+        [(tfId f, tfName f, cas) | f <- M.elems (sdbTechFlows db), Just cas <- [tfCAS f]]
+            <> [(bfId f, bfName f, cas) | f <- M.elems (sdbBioFlows db), Just cas <- [bfCAS f]]
+            <> [(wfId f, wfName f, cas) | f <- M.elems (sdbWasteFlows db), Just cas <- [wfCAS f]]
+    casApplicable = not (null allFlowCas)
+    flowRep =
+        M.fromListWith
+            min
+            [ (exchangeFlowId ex, (pidText key, activityName act, activityLocation act))
+            | (key, act) <- entries
+            , ex <- exchanges act
+            ]
+    casOffenders =
+        [ QualityOffender WarningSev pid name loc (Just flowName) $
+            "CAS number \"" <> cas <> "\" is not a valid CAS registry number"
+        | (fid, flowName, cas) <- allFlowCas
+        , not (validCas cas)
+        , Just (pid, name, loc) <- [M.lookup fid flowRep]
+        ]
