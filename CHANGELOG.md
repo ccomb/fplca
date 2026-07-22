@@ -59,6 +59,16 @@
   databases.
 
 ### Added
+- The quality report flags distinct activity names that merge under
+  SimaPro's 80-character name truncation — each colliding name gets its own
+  finding, so an export bound for SimaPro can be repaired before the names
+  collapse into one process there.
+- The quality report counts the exchanges that carry no pedigree scores, per
+  entry — only in databases that carry pedigree scores at all, so formats
+  that cannot publish them are not drowned in noise.
+- The quality report lists the entries whose reference product nothing in
+  the database consumes. Informational by nature: expected for a final
+  product, a dangling intermediate in a background database.
 - Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
   of one `ImpactCategory` document per impact category, in the olca-schema
   archive layout, that loads straight back. Flow UUIDs, per-factor

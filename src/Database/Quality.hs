@@ -6,8 +6,11 @@ A score tells you whether a database computes; it says nothing about whether
 the dataset is well formed. These checks look for the structural defects a
 score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
-amounts that aren't finite, missing metadata, and stored amounts that
-disagree with the formulas documenting them.
+amounts that aren't finite, missing metadata, stored amounts that disagree
+with the formulas documenting them, distinct names that merge under
+SimaPro's 80-character truncation, exchanges without the pedigree scores
+their database otherwise carries, and reference products nothing in the
+database consumes.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -25,8 +28,9 @@ module Database.Quality (
 import Control.Applicative ((<|>))
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
-import Data.Semigroup (Min (..), Sum (..))
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Semigroup (First (..), Min (..), Sum (..))
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -35,15 +39,18 @@ import Numeric (showFFloat)
 import Types (
     Activity (..),
     BiosphereFlow (..),
+    Exchange (..),
     FormulaCheck (..),
     Severity (..),
     SimpleDatabase (..),
+    TechRole (..),
     TechnosphereFlow (..),
     WasteFlow (..),
     activityGroupKey,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
+    exchangePedigree,
     exchangeUnitId,
  )
 
@@ -90,6 +97,9 @@ data QualityReport = QualityReport
     , qrSuspiciousAmounts :: !QualityCheck
     , qrMissingMetadata :: !QualityCheck
     , qrFormulaConsistency :: !QualityCheck
+    , qrTruncatedNameCollisions :: !QualityCheck
+    , qrMissingPedigree :: !QualityCheck
+    , qrUnconsumedProducts :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -105,6 +115,9 @@ qualityChecks r =
     , qrSuspiciousAmounts r
     , qrMissingMetadata r
     , qrFormulaConsistency r
+    , qrTruncatedNameCollisions r
+    , qrMissingPedigree r
+    , qrUnconsumedProducts r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -114,6 +127,13 @@ costs.
 -}
 allocationTolerance :: Double
 allocationTolerance = 0.5
+
+{- | SimaPro caps process names at this many characters on import and reuses
+the truncated text verbatim, so names that only differ beyond it merge into
+one process there.
+-}
+simaproNameLimit :: Int
+simaproNameLimit = 80
 
 {- | Two-decimal rendering for detail texts. The judgement uses the exact
 double; only the message is rounded, so a drifting sum reads as @69.90@ rather
@@ -134,6 +154,9 @@ qualityReport dbName db =
         , qrSuspiciousAmounts = QualityCheck True (worstFirst amountOffenders)
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
         , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
+        , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
+        , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
+        , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -289,3 +312,64 @@ qualityReport dbName db =
                    ]
             | (key, act) <- entries
             ]
+
+    -- Names that only differ beyond SimaPro's cap become one name on export —
+    -- the over-grouping the allocation check above tolerates at parse time
+    -- turns into data loss on the way out. One finding per distinct name, each
+    -- anchored to one of its entries, so every colliding name stays navigable.
+    truncationGroups =
+        M.fromListWith
+            (M.unionWith (<>))
+            [ (T.take simaproNameLimit name, M.singleton name (Min (pidText key), First act))
+            | (key, act) <- entries
+            , let name = activityName act
+            ]
+    truncationOffenders =
+        [ QualityOffender WarningSev pid name (activityLocation act) Nothing $
+            "shares its first "
+                <> T.pack (show simaproNameLimit)
+                <> " characters with "
+                <> T.pack (show (M.size names - 1))
+                <> " other name(s), which a SimaPro export would merge"
+        | names <- M.elems truncationGroups
+        , M.size names > 1
+        , (name, (Min pid, First act)) <- M.toList names
+        ]
+
+    -- Pedigree scores travel on the data lines of formats that publish them
+    -- (SimaPro today). A database without a single one has nothing to judge —
+    -- flagging every exchange of a format that can't carry them would be
+    -- noise, not a finding. Reference exchanges are definitional rather than
+    -- measured, so they are not counted.
+    pedigreeApplicable = any (any (isJust . exchangePedigree) . exchanges) acts
+    pedigreeOffenders =
+        [ offender InfoSev key act Nothing $
+            T.pack (show missing)
+                <> " of "
+                <> T.pack (show (length dataLines))
+                <> " exchange(s) carry no pedigree scores"
+        | pedigreeApplicable
+        , (key, act) <- entries
+        , let dataLines = filter (not . exchangeIsReference) (exchanges act)
+        , let missing = length (filter (isNothing . exchangePedigree) dataLines)
+        , missing > 0
+        ]
+
+    -- A product is in use when some data line takes it in: an ordinary
+    -- technosphere input, or a waste line on either side — a producer's
+    -- waste output is exactly what exercises a treatment's reference input.
+    -- Coproduct lines are production (or avoided production), not use, and
+    -- reference lines define their own entry. Cross-database consumers are
+    -- out of sight here, hence "within this database" in the finding.
+    consumesFlow ex = case ex of
+        TechnosphereExchange{techRole = role} -> role == Input
+        BiosphereExchange{} -> False
+        WasteExchange{} -> True
+    usedFlowIds = S.fromList [exchangeFlowId ex | act <- acts, ex <- exchanges act, consumesFlow ex]
+    unconsumedOffenders =
+        [ offender InfoSev key act (Just prodName) "the reference product is never consumed within this database (expected for a final product)"
+        | (key, act) <- entries
+        , [refEx] <- [filter exchangeIsReference (exchanges act)]
+        , exchangeFlowId refEx `S.notMember` usedFlowIds
+        , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
+        ]

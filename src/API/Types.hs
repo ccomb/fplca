@@ -848,6 +848,9 @@ data QualityReportAPI = QualityReportAPI
     , qraSuspiciousAmounts :: QualityCheckAPI
     , qraMissingMetadata :: QualityCheckAPI
     , qraFormulaConsistency :: QualityCheckAPI
+    , qraTruncatedNameCollisions :: QualityCheckAPI
+    , qraMissingPedigree :: QualityCheckAPI
+    , qraUnconsumedProducts :: QualityCheckAPI
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped QualityReportAPI)
