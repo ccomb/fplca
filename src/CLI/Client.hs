@@ -130,6 +130,8 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             executeUpload mgr rc fmt jp "/api/v1/method-collections/upload" args
         Method (McDelete name) ->
             apiDelete mgr rc ("/api/v1/method-collections/" ++ T.unpack name) >>= output fmt jp
+        Method (McExport args) ->
+            executeRemoteMethodExport mgr rc fmt jp args
         Methods ->
             apiGet mgr rc "/api/v1/methods" >>= output fmt jp
         Synonyms ->
@@ -307,6 +309,19 @@ executeRemoteExport mgr rc fmt jp args = do
             mapM_ (reportProgress Warning . T.unpack) (exportWarnings r)
             BL.writeFile (deaOut args) (responseBody r)
             output fmt jp (Right (object ["database" .= deaDb args, "format" .= deaFormat args, "out" .= deaOut args]))
+
+{- | Remote counterpart of @method export@: same transport as the database
+export, against the method-collections endpoint.
+-}
+executeRemoteMethodExport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> McExportArgs -> IO ()
+executeRemoteMethodExport mgr rc fmt jp args = do
+    resp <- apiPostRaw mgr rc ("/api/v1/method-collections/" ++ T.unpack (meaName args) ++ "/export") (object ["format" .= meaFormat args])
+    case resp of
+        Left err -> reportError err >> exitFailure
+        Right r -> do
+            mapM_ (reportProgress Warning . T.unpack) (exportWarnings r)
+            BL.writeFile (meaOut args) (responseBody r)
+            output fmt jp (Right (object ["collection" .= meaName args, "format" .= meaFormat args, "out" .= meaOut args]))
 
 {- | Decode the @X-Volca-Export-Warnings@ response header: percent-decode, then
 split on the newlines the server joined with. Absent or empty header = no

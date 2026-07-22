@@ -149,6 +149,9 @@ type LCAAPI =
                 :<|> "method-collections" :> Capture "name" Text :> "unload" :> Post '[JSON] ActivateResponse
                 :<|> "method-collections" :> Capture "name" Text :> Delete '[JSON] ActivateResponse
                 :<|> "method-collections" :> "upload" :> QueryParam "name" Text :> QueryParam "description" Text :> StreamBody NoFraming OctetStream (SourceIO UploadChunk) :> Post '[JSON] UploadResponse
+                -- Export a loaded method collection as raw bytes (SimaPro CSV);
+                -- projection warnings travel percent-encoded in a response header
+                :<|> "method-collections" :> Capture "name" Text :> "export" :> ReqBody '[JSON] ExportRequest :> Post '[OctetStream] (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
                 -- Reference data endpoints (flow synonyms, compartment mappings, units)
                 :<|> "flow-synonyms" :> Get '[JSON] RefDataListResponse
                 :<|> "flow-synonyms" :> Capture "name" Text :> "load" :> Post '[JSON] ActivateResponse
@@ -2059,6 +2062,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> unloadMethodCollectionHandler
             :<|> DBHandlers.deleteMethodHandler
             :<|> DBHandlers.uploadMethodHandler
+            :<|> DBHandlers.exportMethodHandler
             :<|> DBHandlers.listRefData DBHandlers.FlowSynonyms
             :<|> DBHandlers.loadRefData DBHandlers.FlowSynonyms
             :<|> DBHandlers.unloadRefData DBHandlers.FlowSynonyms

@@ -38,6 +38,19 @@
   databases.
 
 ### Added
+- Method collections can now be exported as SimaPro method CSV, the inverse
+  of the SimaPro method import: `POST /method-collections/{name}/export`,
+  `volca method export NAME --format simapro --out FILE`, and
+  `export_method_collection` in the Python client. The file carries the
+  collection's impact categories, damage categories and
+  normalization/weighting sets, so a method imported in one format (for
+  example an ILCD Environmental Footprint package) can be handed to a
+  SimaPro user. Regionalized factors are written as name-suffixed substances
+  (`Water, FR`) and land occupation/transformation factors under the `Raw`
+  compartment — the conventions SimaPro method files use themselves; whatever
+  the format cannot carry — a factor without a compartment, a factor whose
+  direction the compartment column cannot express, formula scoring sets — is
+  listed in the export warnings instead of being dropped silently.
 - A collection-coverage endpoint:
   `GET /db/{db}/method-collection/{collection}/coverage` reports how many of
   a database's emission and resource flows at least one method of a
