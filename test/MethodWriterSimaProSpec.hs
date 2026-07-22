@@ -12,8 +12,7 @@ import qualified Data.Text.Encoding as TE
 import Data.UUID (nil)
 import Test.Hspec
 
-import Database.Export (serializeMethodCollection)
-import Database.Upload (DatabaseFormat (..))
+import Database.Export (parseMethodExportFormat)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import Method.Types
 import Method.WriterSimaPro (serializeSimaProMethodCSV)
@@ -194,11 +193,10 @@ spec = describe "Method.WriterSimaPro" $ do
             serialize mc `shouldSatisfy` isRefused "blank name"
 
     describe "format dispatch (Database.Export)" $ do
-        it "refuses non-SimaPro formats with a clear message" $ do
-            let mc = collection [mkMethod "Climate change" []]
-            case serializeMethodCollection ILCDProcess "EF" mc of
-                Left err -> err `shouldSatisfy` T.isInfixOf "SimaPro CSV"
-                Right _ -> expectationFailure "expected a Left for a format without a method writer"
+        it "refuses a format without a method writer at parse time" $ do
+            case parseMethodExportFormat "ilcd" of
+                Left err -> err `shouldSatisfy` T.isInfixOf "unknown method export format"
+                Right f -> expectationFailure ("expected a Left, got: " <> show f)
 
 isRefused :: Text -> Either Text a -> Bool
 isRefused needle result = case result of

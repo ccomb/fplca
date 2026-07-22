@@ -681,6 +681,41 @@ spec = do
                     lookup "freshwater" dirs `shouldBe` Just Input
                     lookup "CO2" dirs `shouldBe` Just Output
 
+        it "keeps the compartment of a legacy prose cell containing a slash" $ do
+            -- The path form is tried first; an unknown top must fall back to
+            -- the keyword match, not silently drop the compartment.
+            let csv =
+                    BC.unlines
+                        [ ";;Method A"
+                        , ";;kg eq"
+                        , "substance;compartment;"
+                        , "Nitrate;Emissions to water/groundwater;1.0"
+                        ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods ->
+                    [mcfCompartment cf | m <- methods, cf <- methodFactors m]
+                        `shouldBe` [Just (Compartment "water" "" "")]
+
+        it "drops a factor whose value cell is not a clean number" $ do
+            -- "NaN" would poison every score it touches; "1,23" once imported
+            -- as 1.0 (the parser stopped at the comma) — a silently truncated
+            -- value. Both must be dropped, never imported as something else.
+            let csv =
+                    BC.unlines
+                        [ ";;Method A"
+                        , ";;kg eq"
+                        , "substance;compartment;"
+                        , "CO2;air;NaN"
+                        , "Methane;air;1,23"
+                        , "N2O;air;265.0"
+                        ]
+            case parseMethodCSVBytes csv of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right methods ->
+                    [(mcfFlowName cf, mcfValue cf) | m <- methods, cf <- methodFactors m]
+                        `shouldBe` [("N2O", 265.0)]
+
         it "returns Left when fewer than 3 header rows" $ do
             let csv =
                     BC.unlines
@@ -996,7 +1031,10 @@ spec = do
                         Just v -> v `shouldBe` 1.32396265000545e-4
                         Nothing -> expectationFailure "Climate change not found"
                     case M.lookup "Acidification" (nwNormalization nw) of
-                        Just v -> v `shouldBe` 1.7995469781731898e-2
+                        -- The correctly-rounded parse of the fixture's
+                        -- 1.79954697817319E-2 (the old expectation had baked
+                        -- in Data.Text.Read.double's last-ulp drift).
+                        Just v -> v `shouldBe` 1.79954697817319e-2
                         Nothing -> expectationFailure "Acidification not found"
                     M.lookup "Water use" (nwWeighting nw) `shouldBe` Just 0.0851
 
