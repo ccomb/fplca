@@ -49,6 +49,9 @@
   SimaPro's 80-character name truncation — each colliding name gets its own
   finding, so an export bound for SimaPro can be repaired before the names
   collapse into one process there.
+- The quality report counts the exchanges that carry no pedigree scores, per
+  entry — only in databases that carry pedigree scores at all, so formats
+  that cannot publish them are not drowned in noise.
 - Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
   of one `ImpactCategory` document per impact category, in the olca-schema
   archive layout, that loads straight back. Flow UUIDs, per-factor

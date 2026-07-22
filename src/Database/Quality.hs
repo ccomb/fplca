@@ -7,8 +7,9 @@ the dataset is well formed. These checks look for the structural defects a
 score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
 amounts that aren't finite, missing metadata, stored amounts that disagree
-with the formulas documenting them, and distinct names that merge under
-SimaPro's 80-character truncation.
+with the formulas documenting them, distinct names that merge under
+SimaPro's 80-character truncation, and exchanges without the pedigree
+scores their database otherwise carries.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -26,7 +27,7 @@ module Database.Quality (
 import Control.Applicative ((<|>))
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Semigroup (First (..), Min (..), Sum (..))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -45,6 +46,7 @@ import Types (
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
+    exchangePedigree,
     exchangeUnitId,
  )
 
@@ -92,6 +94,7 @@ data QualityReport = QualityReport
     , qrMissingMetadata :: !QualityCheck
     , qrFormulaConsistency :: !QualityCheck
     , qrTruncatedNameCollisions :: !QualityCheck
+    , qrMissingPedigree :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -108,6 +111,7 @@ qualityChecks r =
     , qrMissingMetadata r
     , qrFormulaConsistency r
     , qrTruncatedNameCollisions r
+    , qrMissingPedigree r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -145,6 +149,7 @@ qualityReport dbName db =
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
         , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
+        , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -322,4 +327,23 @@ qualityReport dbName db =
         | names <- M.elems truncationGroups
         , M.size names > 1
         , (name, (Min pid, First act)) <- M.toList names
+        ]
+
+    -- Pedigree scores travel on the data lines of formats that publish them
+    -- (SimaPro today). A database without a single one has nothing to judge —
+    -- flagging every exchange of a format that can't carry them would be
+    -- noise, not a finding. Reference exchanges are definitional rather than
+    -- measured, so they are not counted.
+    pedigreeApplicable = any (any (isJust . exchangePedigree) . exchanges) acts
+    pedigreeOffenders =
+        [ offender InfoSev key act Nothing $
+            T.pack (show missing)
+                <> " of "
+                <> T.pack (show (length dataLines))
+                <> " exchange(s) carry no pedigree scores"
+        | pedigreeApplicable
+        , (key, act) <- entries
+        , let dataLines = filter (not . exchangeIsReference) (exchanges act)
+        , let missing = length (filter (isNothing . exchangePedigree) dataLines)
+        , missing > 0
         ]

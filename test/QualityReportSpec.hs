@@ -36,6 +36,7 @@ import Types (
     TechnosphereFlow (..),
     Unit (..),
     WasteFlow (..),
+    mkPedigree,
  )
 
 -- ---------------------------------------------------------------------------
@@ -104,6 +105,10 @@ input fid amount = techExchange fid amount Input
 -- | A treatment activity is defined by the waste it consumes, not by an output.
 referenceInput :: UUID -> Exchange
 referenceInput fid = techExchange fid 1.0 ReferenceInput
+
+-- | The same technosphere line with pedigree scores attached.
+pedigreed :: Exchange -> Exchange
+pedigreed ex = ex{techPedigree = mkPedigree 3 3 2 1 2}
 
 {- | Database from activities keyed by (activity, product), with the standard
 flow and unit registries every fixture shares.
@@ -353,6 +358,32 @@ spec = do
                         , ((actB, prodB), mkActivity "cake" [reference flourFlow])
                         ]
             qcOffenders (qrTruncatedNameCollisions (qualityReport "testdb" db)) `shouldBe` []
+
+    describe "missing pedigree check" $ do
+        it "is not applicable to a database without a single pedigree score" $ do
+            let check = qrMissingPedigree (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow 1.0]))
+            qcApplicable check `shouldBe` False
+            qcOffenders check `shouldBe` []
+
+        it "counts the data lines missing pedigree scores, per entry" $ do
+            let act = mkActivity "bread" [reference breadFlow, pedigreed (input flourFlow 1.0), input wasteFlow 2.0]
+                check = qrMissingPedigree (reportOf act)
+            details check `shouldBe` ["1 of 2 exchange(s) carry no pedigree scores"]
+            severities check `shouldBe` [InfoSev]
+
+        it "does not count the reference exchange, which is definitional" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, pedigreed (input flourFlow 1.0)])
+                        , ((actB, prodB), mkActivity "cake" [reference flourFlow, input breadFlow 1.0])
+                        ]
+                check = qrMissingPedigree (qualityReport "testdb" db)
+            details check `shouldBe` ["1 of 1 exchange(s) carry no pedigree scores"]
+            processIds check `shouldBe` [pidOf actB prodB]
+
+        it "passes an entry whose every data line carries pedigree scores" $
+            qcOffenders (qrMissingPedigree (reportOf (mkActivity "bread" [reference breadFlow, pedigreed (input flourFlow 1.0)])))
+                `shouldBe` []
 
     describe "report header" $
         it "counts one process per (activity, product) entry" $ do

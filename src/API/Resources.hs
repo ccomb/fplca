@@ -472,8 +472,9 @@ description r = case r of
         \zero reference amount, missing metadata (description, \
         \classification, location, units absent from the registry), stored \
         \amounts that disagree with the formulas documenting them \
-        \(mathematicalRelation, checked at parse time), and distinct names \
-        \that merge under SimaPro's 80-character truncation. Each \
+        \(mathematicalRelation, checked at parse time), distinct names \
+        \that merge under SimaPro's 80-character truncation, and exchanges \
+        \without the pedigree scores their database otherwise carries. Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
         \formed?' — the complement of the supplier-gap report, which answers \
