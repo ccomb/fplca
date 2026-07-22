@@ -41,7 +41,7 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import GHC.Generics (Generic)
 import System.Directory (doesDirectoryExist, doesFileExist, getModificationTime, listDirectory, removeFile)
-import System.FilePath (takeExtension, (</>))
+import System.FilePath (takeDirectory, takeExtension, (</>))
 import qualified Xeno.SAX as X
 
 import EcoSpold.Common (bsToText, decodeXmlEntitiesFull, distributeFiles, isElement)
@@ -67,13 +67,9 @@ resolveFlowDirectory :: FilePath -> IO (Maybe FilePath)
 resolveFlowDirectory methodDir = do
     -- methodDir is the directory containing method XMLs (e.g., .../ILCD/lciamethods)
     -- flows/ is a sibling: .../ILCD/flows
-    let parent = takeParentDir methodDir
-        flowsDir = parent </> "flows"
+    let flowsDir = takeDirectory methodDir </> "flows"
     exists <- doesDirectoryExist flowsDir
     return $ if exists then Just flowsDir else Nothing
-  where
-    -- Go up one directory level
-    takeParentDir = reverse . dropWhile (/= '/') . dropWhile (== '/') . reverse
 
 {- | Parse all flow XMLs in a directory, returning UUID → ILCDFlowInfo map.
   Uses a zstd-compressed cache to skip re-parsing on subsequent startups.
