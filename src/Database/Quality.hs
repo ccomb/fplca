@@ -8,8 +8,9 @@ score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
 amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
-SimaPro's 80-character truncation, and exchanges without the pedigree
-scores their database otherwise carries.
+SimaPro's 80-character truncation, exchanges without the pedigree scores
+their database otherwise carries, and reference products nothing in the
+database consumes.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -29,6 +30,7 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Semigroup (First (..), Min (..), Sum (..))
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -37,9 +39,11 @@ import Numeric (showFFloat)
 import Types (
     Activity (..),
     BiosphereFlow (..),
+    Exchange (..),
     FormulaCheck (..),
     Severity (..),
     SimpleDatabase (..),
+    TechRole (..),
     TechnosphereFlow (..),
     WasteFlow (..),
     activityGroupKey,
@@ -95,6 +99,7 @@ data QualityReport = QualityReport
     , qrFormulaConsistency :: !QualityCheck
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
+    , qrUnconsumedProducts :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -112,6 +117,7 @@ qualityChecks r =
     , qrFormulaConsistency r
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
+    , qrUnconsumedProducts r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -150,6 +156,7 @@ qualityReport dbName db =
         , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
+        , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -346,4 +353,23 @@ qualityReport dbName db =
         , let dataLines = filter (not . exchangeIsReference) (exchanges act)
         , let missing = length (filter (isNothing . exchangePedigree) dataLines)
         , missing > 0
+        ]
+
+    -- A product is in use when some data line takes it in: an ordinary
+    -- technosphere input, or a waste line on either side — a producer's
+    -- waste output is exactly what exercises a treatment's reference input.
+    -- Coproduct lines are production (or avoided production), not use, and
+    -- reference lines define their own entry. Cross-database consumers are
+    -- out of sight here, hence "within this database" in the finding.
+    consumesFlow ex = case ex of
+        TechnosphereExchange{techRole = role} -> role == Input
+        BiosphereExchange{} -> False
+        WasteExchange{} -> True
+    usedFlowIds = S.fromList [exchangeFlowId ex | act <- acts, ex <- exchanges act, consumesFlow ex]
+    unconsumedOffenders =
+        [ offender InfoSev key act (Just prodName) "the reference product is never consumed within this database (expected for a final product)"
+        | (key, act) <- entries
+        , [refEx] <- [filter exchangeIsReference (exchanges act)]
+        , exchangeFlowId refEx `S.notMember` usedFlowIds
+        , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
         ]

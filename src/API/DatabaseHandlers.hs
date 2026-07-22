@@ -332,6 +332,7 @@ qualityReportToAPI mLimit r =
         , qraFormulaConsistency = checkToAPI (Quality.qrFormulaConsistency r)
         , qraTruncatedNameCollisions = checkToAPI (Quality.qrTruncatedNameCollisions r)
         , qraMissingPedigree = checkToAPI (Quality.qrMissingPedigree r)
+        , qraUnconsumedProducts = checkToAPI (Quality.qrUnconsumedProducts r)
         }
   where
     checkToAPI c =
