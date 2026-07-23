@@ -1221,14 +1221,18 @@ getOpenApiSpec = return $ toJSON volcaOpenApi
 
 {- | Wire-format revision advertised on /api/v1/version. BUMP this whenever a
 breaking change to the JSON wire shape lands (field rename/removal, type
-narrowing, newly-required field) — or when an additive capability is unsafe
-to probe blindly, so clients need a discriminator (revision 3: the delete
-@ids@ selection, which an older engine would ignore and fall back to the
-whole filtered set). Clients compare it to decide compatibility and to gate
-such capabilities.
+narrowing, newly-required field), or whenever a new route or capability
+appears that a client must know about /before/ calling it. Adding a route
+does not exempt a change from the bump: an absent route answers 404, and so
+does a request naming a database the engine has not loaded, so a client
+cannot tell "this engine is too old" from "you asked for the wrong thing"
+(revision 4: the quality-report, computed-quality-report and
+characterization-coverage routes; revision 3: the delete @ids@ selection,
+which an older engine would ignore and fall back to the whole filtered set).
+Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 3
+currentWireVersion = 4
 
 getVersion :: AppM Value
 getVersion =
