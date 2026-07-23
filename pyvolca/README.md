@@ -22,7 +22,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 | `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
 | `0.6.0` … `0.7.1` | `1` | `v0.8.0` … `v0.9.0` |
 | `0.7.2` … `0.8.1` | `2` | `≥ v0.9.1` |
-| `> 0.8.1` | `2` … `3` | `≥ v0.9.1` (delete by ids: `≥ v0.9.3`) |
+| `> 0.8.1` | `2` … `4` | `≥ v0.9.1` (delete by ids: `≥ v0.9.3`; quality reports: `≥ v0.9.4`) |
 
 <!-- BEGIN: compatibility -->
 
