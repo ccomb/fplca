@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Changed
+- The engine now advertises wire revision 4 on `/api/v1/version`. The three
+  quality-report routes added since 0.9.3 arrived without a revision bump, so
+  a client had no way to know whether an engine offered them: an engine too
+  old to have the route answers 404, and so does an engine asked about a
+  database it has not loaded. Clients gate on revision 4 and can tell the two
+  apart. `pyvolca` understands the new revision.
 - Log lines now say which database they belong to. When several databases
   load at once their lines used to interleave in one anonymous stream, so a
   page following one load would show another's progress. Each line of
