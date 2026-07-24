@@ -206,6 +206,11 @@ History of manual bumps:
 - 10: Activity record gained activityFormulaCheck (mathematicalRelation
      consistency outcome, surfaced by the database quality report). Old
      caches miss the field and would fail mid-decode.
+- 11: SimaPro flow CAS now backfilled from the export's own substance
+     registry at parse time — a value change with no type change, so the
+     fingerprint alone would accept old caches. Caches built before the
+     backfill keep every SimaPro biosphere flow CAS-less, and the method
+     CAS bridge silently never fires on them.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -213,7 +218,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 10
+     in hi `xor` lo `xor` 11
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
