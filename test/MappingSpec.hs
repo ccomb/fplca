@@ -2,6 +2,7 @@
 
 module MappingSpec (spec) where
 
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
@@ -12,6 +13,7 @@ import Test.Hspec
 
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
+import Method.ParserCSV (parseMethodCSVBytes)
 import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..), Unit (..))
@@ -918,6 +920,19 @@ spec = do
             mappings <- mapMethodFlows ctx method
             map (fmap (bfId . fst) . snd) mappings
                 `shouldMatchList` map (Just . bfId) [waterRiver, occAnnual, occOrchard]
+
+    -- Lint of the shipped method file, like RegistryLintSpec for data/flows.csv:
+    -- a header typo or a misplaced comment would otherwise ship silently.
+    describe "shipped plain-indicators method (data/methods/plain-indicators.csv)" $ do
+        parsed <- runIO (parseMethodCSVBytes <$> BS.readFile "data/methods/plain-indicators.csv")
+
+        it "parses into its seven categories" $
+            fmap (map methodName) parsed
+                `shouldBe` Right ["Land occupied", "Water used", "Fossil CO2", "Methane", "Primary energy", "Waste heat", "Cadmium"]
+
+        it "carries its wildcard rows as patterns" $
+            [mcfFlowName cf | Right ms <- [parsed], m <- ms, cf <- methodFactors m, isPatternCF cf]
+                `shouldBe` ["Occupation*", "Water*", "Energy, *", "Heat, waste*"]
 
 tShow :: (Show a) => a -> Text
 tShow = T.pack . show
