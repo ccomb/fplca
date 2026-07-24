@@ -216,6 +216,29 @@ spec = do
             fid <- nextRandom
             fannedIds outputCF fid `shouldBe` []
 
+    describe "expandSynonymMappings transitivity" $ do
+        -- A curated chain routinely pivots through an alias that names no loaded
+        -- flow: "Energy, from coal" = "hard coal" = "Coal, hard", where only the
+        -- endpoints are flow or CF names. The fan-out must follow the closure
+        -- through that pivot — requiring every intermediate to be a flow or CF
+        -- name silently cut the whole coal family out of energy accounting.
+        let synDB =
+                buildFromEdges
+                    [ SynEdge "Energy, from coal" "hard coal" BridgeBoth
+                    , SynEdge "hard coal" "Coal, hard" BridgeBoth
+                    ]
+            energyCF = (mkCF "Energy, from coal" Nothing 1.0){mcfDirection = Input}
+
+        it "fans out through a pivot alias that is neither a flow nor a CF name" $ do
+            fid <- nextRandom
+            let coalFlow = mkFlow fid "Coal, hard" "resource" Nothing
+                flowsByName = M.singleton "coal hard" [coalFlow]
+            [ bfId flow
+              | (_, Just (flow, BySynonym)) <-
+                    drop 1 (expandSynonymMappings synDB flowsByName [(energyCF, Nothing)])
+              ]
+                `shouldBe` [fid]
+
     describe "directionExcludedCFs" $ do
         -- An unmapped CF whose name matches through the UNION synonym tables but
         -- not through its own direction's view was excluded by the direction
