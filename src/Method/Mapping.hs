@@ -248,7 +248,8 @@ mapMethodFlows ctx0 method = do
     parCfThreshold = 1000
     materialize cf = do
         let (rows, warnings) = expandPatternCF (mcBioFlowsByUUID ctx0) cf
-        mapM_ (reportProgress Warning . T.unpack) warnings
+            prefix = "[LCIA " <> methodName method <> "] "
+        mapM_ (reportProgress Warning . T.unpack . (prefix <>)) warnings
         pure rows
 
 {- | Resolve one method CF to a database biosphere flow. The built-in matchers
@@ -303,7 +304,7 @@ expandPatternCF flows cf
     | null matches = refuse "matches no flow in this database"
     | otherwise = ([(materialize f, Just (f, ByName)) | f <- matches], [])
   where
-    refuse why = ([(cf, Nothing)], ["[METHOD] wildcard CF '" <> mcfFlowName cf <> "' " <> why])
+    refuse why = ([(cf, Nothing)], ["wildcard CF '" <> mcfFlowName cf <> "' " <> why])
     prefix = T.toCaseFold (T.dropEnd 1 (mcfFlowName cf))
     wantCAS = normalizeCAS <$> mcfCAS cf
     constrained = not (T.null prefix) || isJust wantCAS || isJust (mcfCompartment cf)
