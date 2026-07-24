@@ -6,14 +6,14 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.UUID (UUID, nil)
+import Data.UUID (UUID, fromWords, nil)
 import Data.UUID.V4 (nextRandom)
 import Test.Hspec
 
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
-import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB)
+import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
@@ -838,5 +838,85 @@ spec = do
             cfFamily "unknown" `shouldBe` OtherCFFamily
             cfFamily "" `shouldBe` OtherCFFamily
 
+    describe "wildcard (pattern) CFs" $ do
+        let flowDB = M.fromList [(bfId f, f) | f <- allFlows]
+            allFlows =
+                [ occAnnual
+                , occOrchard
+                , transformation
+                , waterRiver
+                , methaneAir
+                , methaneWater
+                ]
+            occAnnual = mkFlow (u 1) "Occupation, annual crop" "resource" Nothing
+            occOrchard = mkFlow (u 2) "Occupation, permanent crop, fruit" "resource" Nothing
+            transformation = mkFlow (u 3) "Transformation, to annual crop" "resource" Nothing
+            waterRiver = mkFlow (u 4) "Water, river" "resource" Nothing
+            methaneAir = (mkFlow (u 5) "Methane, fossil" "air" Nothing){bfCAS = Just "74-82-8"}
+            methaneWater = (mkFlow (u 6) "Methane, fossil" "water" Nothing){bfCAS = Just "74-82-8"}
+            u = uuidFromInt
+            -- Compare by UUID: BiosphereFlow has no Eq/Show instance.
+            expandedIds = map (fmap (bfId . fst) . snd) . fst
+
+        it "detects a trailing-star name as a pattern, a literal name as not" $ do
+            isPatternCF (mkCF "Occupation*" Nothing 1.0) `shouldBe` True
+            isPatternCF (mkCF "*" Nothing 1.0) `shouldBe` True
+            isPatternCF (mkCF "Occupation, annual crop" Nothing 1.0) `shouldBe` False
+
+        it "expands a prefix pattern to every flow of the compartment, none else" $ do
+            let cf = mkCFComp "Occupation*" "natural resource" "" 1.0
+            expandedIds (expandPatternCF flowDB cf)
+                `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard]
+
+        it "materializes each match with the flow's own identity, keeping value and unit" $ do
+            let cf = (mkCFComp "Occupation*" "natural resource" "" 1.0){mcfUnit = "m2a"}
+                (rows, warnings) = expandPatternCF flowDB cf
+            warnings `shouldBe` []
+            [(mcfFlowRef m, mcfFlowName m, mcfValue m, mcfUnit m) | (m, _) <- rows]
+                `shouldMatchList` [(bfId f, bfName f, 1.0, "m2a") | f <- [occAnnual, occOrchard]]
+
+        it "a bare * with a CAS expands by CAS, filtered by the row's compartment" $ do
+            let cf = (mkCFComp "*" "air" "" 1.0){mcfCAS = Just "74-82-8"}
+            expandedIds (expandPatternCF flowDB cf) `shouldBe` [Just (bfId methaneAir)]
+
+        it "a pattern matching no flow surfaces one unmatched row and a warning" $ do
+            let cf = mkCFComp "Uranium*" "natural resource" "" 1.0
+                (rows, warnings) = expandPatternCF flowDB cf
+            map (fmap (bfId . fst) . snd) rows `shouldBe` [Nothing]
+            length warnings `shouldBe` 1
+
+        it "a bare * constrained by nothing is refused, not matched to everything" $ do
+            let cf = mkCF "*" Nothing 1.0
+                (rows, warnings) = expandPatternCF flowDB cf
+            map (fmap (bfId . fst) . snd) rows `shouldBe` [Nothing]
+            length warnings `shouldBe` 1
+
+        it "mapMethodFlows resolves literal rows via the cascade and expands patterns" $ do
+            let method =
+                    Method
+                        { methodId = nil
+                        , methodName = "Land occupied"
+                        , methodDescription = Nothing
+                        , methodUnit = "m2a"
+                        , methodCategory = "Land occupied"
+                        , methodMethodology = Nothing
+                        , methodFactors =
+                            [ mkCFComp "Water, river" "natural resource" "" 1.0
+                            , mkCFComp "Occupation*" "natural resource" "" 1.0
+                            ]
+                        }
+                ctx = MapContext flowDB (byName allFlows) M.empty emptySynonymDB M.empty M.empty
+            mappings <- mapMethodFlows ctx method
+            map (fmap (bfId . fst) . snd) mappings
+                `shouldMatchList` map (Just . bfId) [waterRiver, occAnnual, occOrchard]
+
 tShow :: (Show a) => a -> Text
 tShow = T.pack . show
+
+-- | Deterministic UUID for wildcard-CF fixtures.
+uuidFromInt :: Int -> UUID
+uuidFromInt n = fromWords (fromIntegral n) 0 0 0
+
+-- | Name index the cascade reads, keyed like the loader keys it.
+byName :: [BiosphereFlow] -> M.Map Text [BiosphereFlow]
+byName fs = M.fromListWith (++) [(normalizeName (bfName f), [f]) | f <- fs]
