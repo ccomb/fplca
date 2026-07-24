@@ -845,6 +845,7 @@ spec = do
                 , occOrchard
                 , transformation
                 , waterRiver
+                , waterWell
                 , methaneAir
                 , methaneWater
                 ]
@@ -852,6 +853,7 @@ spec = do
             occOrchard = mkFlow (u 2) "Occupation, permanent crop, fruit" "resource" Nothing
             transformation = mkFlow (u 3) "Transformation, to annual crop" "resource" Nothing
             waterRiver = mkFlow (u 4) "Water, river" "resource" Nothing
+            waterWell = mkFlow (u 7) "Water, well" "resource" (Just "in ground")
             methaneAir = (mkFlow (u 5) "Methane, fossil" "air" Nothing){bfCAS = Just "74-82-8"}
             methaneWater = (mkFlow (u 6) "Methane, fossil" "water" Nothing){bfCAS = Just "74-82-8"}
             u = uuidFromInt
@@ -874,6 +876,13 @@ spec = do
             warnings `shouldBe` []
             [(mcfFlowRef m, mcfFlowName m, mcfValue m, mcfUnit m) | (m, _) <- rows]
                 `shouldMatchList` [(bfId f, bfName f, 1.0, "m2a") | f <- [occAnnual, occOrchard]]
+
+        it "honors the sub-compartment a pattern row states, widens without one" $ do
+            let inGround = mkCFComp "Water*" "natural resource" "in ground" 1.0
+                anySub = mkCFComp "Water*" "natural resource" "" 1.0
+            expandedIds (expandPatternCF flowDB inGround) `shouldBe` [Just (bfId waterWell)]
+            expandedIds (expandPatternCF flowDB anySub)
+                `shouldMatchList` map (Just . bfId) [waterRiver, waterWell]
 
         it "a bare * with a CAS expands by CAS, filtered by the row's compartment" $ do
             let cf = (mkCFComp "*" "air" "" 1.0){mcfCAS = Just "74-82-8"}

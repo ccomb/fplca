@@ -282,7 +282,8 @@ isPatternCF = T.isSuffixOf "*" . mcfFlowName
 
 {- | Materialize one pattern CF against the database's biosphere: one concrete
 CF per flow satisfying every predicate the row carries (name prefix, CAS,
-compartment medium). Each concrete CF takes the flow's own identity (UUID,
+compartment medium and — when the row states one — subcompartment). Each
+concrete CF takes the flow's own identity (UUID,
 name, CAS, compartment) — so every table built from the mapping lands exactly
 where the inventory flow will look — and keeps the pattern row's value and
 unit. A database introducing a new flow under the pattern is thus counted on
@@ -311,8 +312,13 @@ expandPatternCF flows cf
     casFits f = maybe True (\cas -> bfCAS f == Just cas) wantCAS
     compFits f = case mcfCompartment cf of
         Nothing -> True
-        Just (Compartment med _ _) ->
-            maybe False (mediumEq med . VT.compartmentName) (bfCompartment f)
+        Just (Compartment med sub _) ->
+            maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
+    -- An empty sub means the row constrains only the medium; a stated sub
+    -- must match the flow's, or the row would silently widen to the whole
+    -- medium. Qualifiers are ignored here as 'buildMethodTables' ignores them.
+    subFits sub c =
+        T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
     mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
     materialize f =
         cf
