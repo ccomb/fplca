@@ -18,6 +18,13 @@
   output is unchanged.
 
 ### Fixed
+- Flows from a SimaPro CSV database now carry their CAS numbers. The parser
+  used to leave every flow's CAS empty, so a characterization factor that
+  could only reach its flow by CAS never matched on a SimaPro-sourced
+  database. The CAS now comes from the file's own substance registry — the
+  trailing blocks that list every substance with its CAS — filling about 89%
+  of biosphere flows on a real export, so methods can match these flows by
+  CAS instead of relying on name and synonym matching alone.
 - openLCA JSON-LD method files now load with the right factor directions,
   compartments, and reference unit — including files openLCA itself
   exported. Such files carry no per-factor direction, so every factor used

@@ -36,7 +36,7 @@ import Amount (readAmount)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
-import Control.Monad (mfilter)
+import Control.Monad (forM_, mfilter)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
@@ -54,10 +54,13 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
+import EcoSpold.Parser2 (normalizeCAS)
 import qualified Expr
 import GHC.Conc (getNumCapabilities)
 import GHC.Generics (Generic)
 import Progress (ProgressLevel (..), reportProgress)
+import SubstanceRegistry (CASNumber (..), NormName (..), casBindings)
+import SynonymDB (normalizeName)
 import Text.Printf (printf)
 import Types
 import qualified UnitConversion
@@ -219,6 +222,7 @@ data SectionType
     | SecDbCalcParams
     | SecProjInputParams
     | SecProjCalcParams
+    | SecSubstanceRegistry -- trailing name;unit;cas;comment substance list
     | SecNone
     deriving (Show, Eq)
 
@@ -234,6 +238,7 @@ data ParseState
 data ParseAcc = ParseAcc
     { paConfig :: !SimaProConfig
     , paState :: !ParseState
+    , paInProcess :: !Bool -- inside a Process…End pair (vs the file trailer)
     , paCurrentBlock :: !ProcessBlock
     , paBlocks :: ![ProcessBlock]
     , paLineNum :: !Int
@@ -241,6 +246,7 @@ data ParseAcc = ParseAcc
     , paDbCalcParams :: ![(Text, Text)]
     , paProjInputParams :: ![(Text, Text)]
     , paProjCalcParams :: ![(Text, Text)]
+    , paSubstanceCAS :: ![(Text, Text)] -- (name, CAS) from the trailer registry
     }
 
 -- ============================================================================
@@ -273,6 +279,7 @@ instance Monoid GlobalParams where
 data WorkerResult = WorkerResult
     { wrBlocks :: ![ProcessBlock]
     , wrParams :: !GlobalParams
+    , wrSubstanceCAS :: ![(Text, Text)]
     }
     deriving (Show, Eq, Generic)
 
@@ -339,6 +346,25 @@ detectSection line = case BS8.strip line of
     "Social issues" -> Just SecNone
     "Economic issues" -> Just SecNone
     _ -> Nothing
+
+{- | Classify a section header, resolving the two names a SimaPro file reuses
+for both a process section and a trailing substance-registry block. Inside a
+@Process@…@End@ pair the process meaning wins; in the file trailer (no open
+process) @Emissions to soil@ — and the registry-only @Raw materials@ /
+@Airborne emissions@ / @Waterborne emissions@ — introduce the substance
+registry, a @name;unit;cas;comment@ list of every substance with its CAS.
+The trailer's @Final waste flows@ block collides too but is deliberately left
+to its process-section reading: its substances are waste flows, not biosphere
+flows, so it has no CAS to contribute (and its productless block is discarded
+as before).
+-}
+classifyHeader :: Bool -> BS.ByteString -> Maybe SectionType
+classifyHeader inProcess line
+    | not inProcess, BS8.strip line `elem` registryHeaders = Just SecSubstanceRegistry
+    | otherwise = detectSection line
+  where
+    registryHeaders =
+        ["Raw materials", "Airborne emissions", "Waterborne emissions", "Emissions to soil"]
 
 -- | Known metadata keys in process block (ByteString)
 isMetadataKey :: BS.ByteString -> Bool
@@ -554,6 +580,21 @@ parseBioRow cfg line =
                         }
             _ -> Nothing
 
+{- | Parse one row of a trailing substance-registry block
+(@name;unit;cas;comment@), returning the @(name, CAS)@ pair when the CAS column
+is populated. The registry lists every elementary substance the file uses with
+its CAS; waste rows and a few substances leave the CAS column blank and are
+skipped (a name→CAS binding needs a CAS).
+-}
+parseSubstanceRow :: SimaProConfig -> BS.ByteString -> Maybe (Text, Text)
+parseSubstanceRow cfg line =
+    case splitCSV (spDelimiter cfg) line of
+        (name : _unit : cas : _) ->
+            let n = decodeBS (BS8.strip name)
+                c = decodeBS (BS8.strip cas)
+             in if T.null n || T.null c then Nothing else Just (n, c)
+        _ -> Nothing
+
 -- ============================================================================
 -- State Machine Processing (ByteString based)
 -- ============================================================================
@@ -574,6 +615,7 @@ processLine acc@ParseAcc{..} line
     | BS8.strip line == "Process" =
         acc
             { paState = BetweenBlocks
+            , paInProcess = True
             , paCurrentBlock = emptyProcessBlock
             }
     -- End of block
@@ -583,11 +625,12 @@ processLine acc@ParseAcc{..} line
             isValid = not (null (pbProducts block))
          in acc
                 { paState = BetweenBlocks
+                , paInProcess = False
                 , paBlocks = if isValid then block : paBlocks else paBlocks
                 , paCurrentBlock = emptyProcessBlock
                 }
-    -- Section detection
-    | Just sec <- detectSection line =
+    -- Section detection (trailer registry blocks resolve against paInProcess)
+    | Just sec <- classifyHeader paInProcess line =
         acc{paState = InSection sec}
     -- In a section, parse row (route db/project params to ParseAcc, process params to block)
     | InSection sec <- paState
@@ -604,6 +647,9 @@ processLine acc@ParseAcc{..} line
                 Nothing -> acc
             SecProjCalcParams -> case parseParamRow paConfig line of
                 Just p -> acc{paProjCalcParams = p : paProjCalcParams}
+                Nothing -> acc
+            SecSubstanceRegistry -> case parseSubstanceRow paConfig line of
+                Just nc -> acc{paSubstanceCAS = nc : paSubstanceCAS}
                 Nothing -> acc
             _ -> acc{paCurrentBlock = addRowToBlock paConfig sec line paCurrentBlock}
     -- Metadata key-value pairs
@@ -1303,6 +1349,7 @@ parseWorkerLines cfg ls =
             ParseAcc
                 { paConfig = cfg
                 , paState = BetweenBlocks
+                , paInProcess = False
                 , paCurrentBlock = emptyProcessBlock
                 , paBlocks = []
                 , paLineNum = 0
@@ -1310,6 +1357,7 @@ parseWorkerLines cfg ls =
                 , paDbCalcParams = []
                 , paProjInputParams = []
                 , paProjCalcParams = []
+                , paSubstanceCAS = []
                 }
         finalAcc = foldl' processLine initAcc ls
      in WorkerResult
@@ -1321,7 +1369,28 @@ parseWorkerLines cfg ls =
                     , gpProjInput = paProjInputParams finalAcc
                     , gpProjCalc = paProjCalcParams finalAcc
                     }
+            , -- Restore file order (rows accumulate reversed): downstream the
+              -- first binding of a name wins, and "first" must mean the file's.
+              wrSubstanceCAS = reverse (paSubstanceCAS finalAcc)
             }
+
+{- | Fill empty biosphere-flow CAS from the @(name, CAS)@ pairs a SimaPro
+export lists in its trailing substance registry. Holes only — reuses
+'fillBioFlowCAS', so a CAS the flow already carries is never overwritten. Name
+and CAS are canonicalized the same way the runtime registry bridge is
+('normalizeName' / 'normalizeCAS'), so a filled CAS keys the same as one the
+method side resolved. A registry binding one name to two different CAS follows
+the runtime registry's rule — the first wins — and the conflicts come back for
+the caller to report. A no-op when the file had no registry.
+-}
+fillCASFromRegistry :: [(Text, Text)] -> BioFlowDB -> (BioFlowDB, [(NormName, (CASNumber, CASNumber))])
+fillCASFromRegistry substanceCAS db = (fillBioFlowCAS bindings db, conflicts)
+  where
+    (bindings, conflicts) =
+        casBindings
+            [ (NormName (normalizeName nm), CASNumber (normalizeCAS cas))
+            | (nm, cas) <- substanceCAS
+            ]
 
 -- ============================================================================
 -- Main Entry Point
@@ -1357,6 +1426,7 @@ parseSimaProCSV unitCfg path = do
     results <- mapConcurrently (evaluate . force . parseWorkerLines cfg) workerChunks
     let allBlocks = concatMap wrBlocks results
         globalParams = foldMap wrParams results
+        substanceCAS = concatMap wrSubstanceCAS results
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
     converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
@@ -1370,14 +1440,26 @@ parseSimaProCSV unitCfg path = do
     -- by construction (tech flows hash with empty compartment, bio flows hash
     -- with their compartment, waste flows hash with "waste" compartment).
     let techFlowDB = M.fromList [(tfId f, f) | f <- allTechFlows]
-        bioFlowDB = M.fromList [(bfId f, f) | f <- allBioFlows]
+        -- Fill empty flow CAS from the file's own substance registry (the
+        -- trailing name;unit;cas blocks) so the native CAS bridge fires on a
+        -- SimaPro export, which otherwise carries no per-flow CAS at all.
+        (bioFlowDB, casConflicts) = fillCASFromRegistry substanceCAS (M.fromList [(bfId f, f) | f <- allBioFlows])
         wasteFlowDB = M.fromList [(wfId f, f) | f <- allWasteFlows]
         unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+
+    forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
+        reportProgress Warning $
+            printf
+                "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
+                (T.unpack n)
+                (T.unpack kept)
+                (T.unpack ignored)
 
     -- Force evaluation before returning
     let !numActivities = length activities
     let !numTechFlows = M.size techFlowDB
     let !numBioFlows = M.size bioFlowDB
+    let !numBioFlowsCAS = length [() | f <- M.elems bioFlowDB, maybe False (not . T.null) (bfCAS f)]
     let !numWasteFlows = M.size wasteFlowDB
     let !numUnits = M.size unitDB
 
@@ -1386,7 +1468,7 @@ parseSimaProCSV unitCfg path = do
     reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
     reportProgress Info $ printf "  Activities: %d processes" numActivities
     reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
-    reportProgress Info $ printf "  Biosphere flows: %d unique" numBioFlows
+    reportProgress Info $ printf "  Biosphere flows: %d unique (%d carry a CAS)" numBioFlows numBioFlowsCAS
     reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
     reportProgress Info $ printf "  Units: %d unique" numUnits
 
