@@ -34,7 +34,10 @@
   database. The CAS now comes from the file's own substance registry — the
   trailing blocks that list every substance with its CAS — filling about 89%
   of biosphere flows on a real export, so methods can match these flows by
-  CAS instead of relying on name and synonym matching alone.
+  CAS instead of relying on name and synonym matching alone. A database
+  cached before this change rebuilds its cache once on the next load, so
+  already-imported databases pick the CAS up too instead of serving the
+  old CAS-less flows forever.
 - openLCA JSON-LD method files now load with the right factor directions,
   compartments, and reference unit — including files openLCA itself
   exported. Such files carry no per-factor direction, so every factor used
