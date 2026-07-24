@@ -33,6 +33,7 @@ module SubstanceRegistry (
     classesFromEdges,
 
     -- * CAS enrichment
+    casBindings,
     casBindingsFromEdges,
 
     -- * On-disk format
@@ -192,7 +193,7 @@ second component rather than silently resolved (the first wins, but the caller
 is told).
 -}
 casBindingsFromEdges :: [SubstanceEdge] -> (Map NormName CASNumber, [(NormName, (CASNumber, CASNumber))])
-casBindingsFromEdges edges = foldl' (flip insert) (M.empty, []) pairs
+casBindingsFromEdges edges = casBindings pairs
   where
     pairs =
         [ nc
@@ -203,6 +204,15 @@ casBindingsFromEdges edges = foldl' (flip insert) (M.empty, []) pairs
     nameCasPair (ByName _ n) (ByCAS c) = [(n, c)]
     nameCasPair (ByCAS c) (ByName _ n) = [(n, c)]
     nameCasPair _ _ = []
+
+{- | Fold name→CAS pairs into bindings under the registry's conflict rule: the
+first binding of a name wins, and a later pair binding the same name to a
+/different/ CAS comes back as a conflict for the caller to report — never
+resolved silently.
+-}
+casBindings :: [(NormName, CASNumber)] -> (Map NormName CASNumber, [(NormName, (CASNumber, CASNumber))])
+casBindings = foldl' (flip insert) (M.empty, [])
+  where
     insert (n, c) (m, conflicts) =
         case M.lookup n m of
             Nothing -> (M.insert n c m, conflicts)

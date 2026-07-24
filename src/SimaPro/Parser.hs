@@ -36,7 +36,7 @@ import Amount (readAmount)
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
-import Control.Monad (mfilter)
+import Control.Monad (forM_, mfilter)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
@@ -59,7 +59,7 @@ import qualified Expr
 import GHC.Conc (getNumCapabilities)
 import GHC.Generics (Generic)
 import Progress (ProgressLevel (..), reportProgress)
-import SubstanceRegistry (CASNumber (..), NormName (..))
+import SubstanceRegistry (CASNumber (..), NormName (..), casBindings)
 import SynonymDB (normalizeName)
 import Text.Printf (printf)
 import Types
@@ -353,6 +353,10 @@ for both a process section and a trailing substance-registry block. Inside a
 process) @Emissions to soil@ — and the registry-only @Raw materials@ /
 @Airborne emissions@ / @Waterborne emissions@ — introduce the substance
 registry, a @name;unit;cas;comment@ list of every substance with its CAS.
+The trailer's @Final waste flows@ block collides too but is deliberately left
+to its process-section reading: its substances are waste flows, not biosphere
+flows, so it has no CAS to contribute (and its productless block is discarded
+as before).
 -}
 classifyHeader :: Bool -> BS.ByteString -> Maybe SectionType
 classifyHeader inProcess line
@@ -1365,8 +1369,28 @@ parseWorkerLines cfg ls =
                     , gpProjInput = paProjInputParams finalAcc
                     , gpProjCalc = paProjCalcParams finalAcc
                     }
-            , wrSubstanceCAS = paSubstanceCAS finalAcc
+            , -- Restore file order (rows accumulate reversed): downstream the
+              -- first binding of a name wins, and "first" must mean the file's.
+              wrSubstanceCAS = reverse (paSubstanceCAS finalAcc)
             }
+
+{- | Fill empty biosphere-flow CAS from the @(name, CAS)@ pairs a SimaPro
+export lists in its trailing substance registry. Holes only — reuses
+'fillBioFlowCAS', so a CAS the flow already carries is never overwritten. Name
+and CAS are canonicalized the same way the runtime registry bridge is
+('normalizeName' / 'normalizeCAS'), so a filled CAS keys the same as one the
+method side resolved. A registry binding one name to two different CAS follows
+the runtime registry's rule — the first wins — and the conflicts come back for
+the caller to report. A no-op when the file had no registry.
+-}
+fillCASFromRegistry :: [(Text, Text)] -> BioFlowDB -> (BioFlowDB, [(NormName, (CASNumber, CASNumber))])
+fillCASFromRegistry substanceCAS db = (fillBioFlowCAS bindings db, conflicts)
+  where
+    (bindings, conflicts) =
+        casBindings
+            [ (NormName (normalizeName nm), CASNumber (normalizeCAS cas))
+            | (nm, cas) <- substanceCAS
+            ]
 
 -- ============================================================================
 -- Main Entry Point
@@ -1379,25 +1403,6 @@ Reference-product amounts are normalized to the canonical base unit of their
 dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
 construction yields per-base-unit columns.
 -}
-
-{- | Fill empty biosphere-flow CAS from the @(name, CAS)@ pairs a SimaPro
-export lists in its trailing substance registry. Holes only — reuses
-'fillBioFlowCAS', so a CAS the flow already carries is never overwritten. Name
-and CAS are canonicalized the same way the runtime registry bridge is
-('normalizeName' / 'normalizeCAS'), so a filled CAS keys the same as one the
-method side resolved. A no-op when the file had no registry.
--}
-fillCASFromRegistry :: [(Text, Text)] -> BioFlowDB -> BioFlowDB
-fillCASFromRegistry substanceCAS
-    | M.null bindings = id
-    | otherwise = fillBioFlowCAS bindings
-  where
-    bindings =
-        M.fromList
-            [ (NormName (normalizeName nm), CASNumber (normalizeCAS cas))
-            | (nm, cas) <- substanceCAS
-            ]
-
 parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
 parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
@@ -1438,9 +1443,17 @@ parseSimaProCSV unitCfg path = do
         -- Fill empty flow CAS from the file's own substance registry (the
         -- trailing name;unit;cas blocks) so the native CAS bridge fires on a
         -- SimaPro export, which otherwise carries no per-flow CAS at all.
-        bioFlowDB = fillCASFromRegistry substanceCAS (M.fromList [(bfId f, f) | f <- allBioFlows])
+        (bioFlowDB, casConflicts) = fillCASFromRegistry substanceCAS (M.fromList [(bfId f, f) | f <- allBioFlows])
         wasteFlowDB = M.fromList [(wfId f, f) | f <- allWasteFlows]
         unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+
+    forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
+        reportProgress Warning $
+            printf
+                "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
+                (T.unpack n)
+                (T.unpack kept)
+                (T.unpack ignored)
 
     -- Force evaluation before returning
     let !numActivities = length activities

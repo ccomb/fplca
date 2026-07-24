@@ -26,6 +26,8 @@ giving three of them a CAS. Methane and fossil CO2 are listed under the
 registry-only @Airborne emissions@ header; Cadmium under @Emissions to soil@,
 which also names an in-process section — the trailer copy must win there.
 Dinitrogen monoxide is emitted but absent from the registry (negative case).
+A later @Waterborne emissions@ block re-binds Methane to a different CAS —
+the first binding must win (the file-order rule the fill promises).
 -}
 registryCSV :: BS.ByteString
 registryCSV =
@@ -77,6 +79,11 @@ registryCSV =
         , "Cadmium;kg;007440-43-9;Formula: Cd"
         , ""
         , "End"
+        , ""
+        , "Waterborne emissions"
+        , "Methane;kg;000056-23-5;conflicting duplicate binding"
+        , ""
+        , "End"
         ]
 
 parseRegistryCSV :: IO BioFlowDB
@@ -107,3 +114,9 @@ spec = describe "SimaPro trailing substance registry backfills flow CAS" $ do
     it "leaves a flow the registry does not list without a CAS" $ do
         db <- parseRegistryCSV
         casOf "Dinitrogen monoxide" db `shouldBe` Nothing
+
+    it "keeps the first CAS when the registry binds a name twice" $ do
+        db <- parseRegistryCSV
+        -- The later Waterborne block re-binds Methane to 56-23-5; the
+        -- Airborne binding came first in the file and must survive.
+        casOf "Methane" db `shouldBe` Just "74-82-8"
