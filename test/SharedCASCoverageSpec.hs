@@ -474,15 +474,16 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (CF 5 (CFUnit "m3"))
             M.lookup (bfId river, Location "IN") (mtRegionalizedCF tables) `shouldBe` Just (CF 100 (CFUnit "m3"))
 
-        it "keeps name-regionalized SimaPro rows out of mtCasCF (parser path)" $ do
+        it "vetoes the CAS bridge when name-regionalized rows disagree with the default (parser path)" $ do
             -- End-to-end through the real parser: 'parseCFRow' leaves
             -- 'mcfConsumerLocation' Nothing for SimaPro CFs (the region lives
-            -- in the flow name), so the consumer-location gate cannot exclude
-            -- them from the CAS bridge. Against an inventory that shares the
-            -- CAS but none of the suffixed names ('mcBioFlowsByName' is
-            -- empty), every row falls back to ByCAS — and without the
-            -- name-suffix filter the magnitude tie-break would broadcast the
-            -- arid ±100 rows instead of the region-less default.
+            -- in the flow name), so location cannot dispatch the variance —
+            -- the CH and IN rows disagree with the region-less default at one
+            -- (CAS, medium, sub). No single value stands for the CAS then:
+            -- broadcasting the region-less default used to stamp the
+            -- world-average deprivation factor onto exactly the flows the
+            -- method regionalizes or deliberately excludes (rain, ocean,
+            -- turbined water), so the bridge refuses on both sides.
             let csv =
                     BC.pack $
                         unlines
@@ -507,14 +508,10 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
                 Right coll -> do
                     mappings <- concat <$> mapM (mapMethodFlows mapCtx) (mcMethods coll)
                     let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
-                    -- Only the region-less rows may broadcast through the
-                    -- name-blind bridge, on both the withdrawal and release
-                    -- sides (the negative release default keeps AWARE's
-                    -- netting on the CAS-fallback path).
                     M.lookup (CASNumber waterCAS, Medium "resource") (mtCasCF tables)
-                        `shouldBe` Just (CF 42.95 (CFUnit "m3"))
+                        `shouldBe` Nothing
                     M.lookup (CASNumber waterCAS, Medium "water") (mtCasCF tables)
-                        `shouldBe` Just (CF (-42.95) (CFUnit "m3"))
+                        `shouldBe` Nothing
 
     describe "unspecified subcompartment is the medium-level fallback" $ do
         it "an uncovered subcompartment falls back to the unspecified CF" $ do

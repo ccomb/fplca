@@ -18,6 +18,16 @@
   output is unchanged.
 
 ### Fixed
+- The CAS bridge no longer guesses when one CAS number covers factor lines
+  with different values. Water is the canonical case: every water flow shares
+  one CAS, but a water-use method values each region differently and
+  deliberately leaves rain, ocean and turbined water out — bridging them all
+  to one arbitrary line (the world-average factor) made water scores explode
+  on databases whose flows carry CAS numbers. Such a CAS class is now left to
+  name matching alone; a CAS that identifies a single factor value still
+  bridges. Region-located factor lines and subcompartment variants keep
+  working as before — their variance is dispatched by location or arbitrated
+  to the medium-level default, not guessed.
 - Flows from a SimaPro CSV database now carry their CAS numbers. The parser
   used to leave every flow's CAS empty, so a characterization factor that
   could only reach its flow by CAS never matched on a SimaPro-sourced
