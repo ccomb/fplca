@@ -31,6 +31,7 @@ import SynonymDB (
     SynEdge (..),
     SynonymDB (..),
     buildFromEdges,
+    lookupSynonymGroup,
     normalizeName,
     parseRegistryCSV,
  )
@@ -48,13 +49,37 @@ spec = do
         case parsed of
             Left err -> it "parses" $ expectationFailure err
             Right rows -> do
-                let classes = M.elems (synIdToNames (buildFromEdges (map rrEdge rows)))
+                let db = buildFromEdges (map rrEdge rows)
+                    classes = M.elems (synIdToNames db)
+                    classOf = lookupSynonymGroup db
 
                 it "keeps every equivalence class plausibly small" $
                     filter ((> maxClassSize) . length) classes `shouldBe` []
 
                 it "never fuses distinct carbon-origin qualifiers into one class" $
                     filter ((> 1) . S.size . originQualifiers) classes `shouldBe` []
+
+                -- A parametric energy-resource variant ("Coal, 26.4 MJ per kg")
+                -- must reach its family's energy CF through the closure; the
+                -- variant's own calorific value is parsed from its name at
+                -- conversion time, so sharing the family class is safe. Coal is
+                -- the one family split in two (hard/brown), so each variant must
+                -- land in the right half — and only there.
+                it "bridges every parametric coal variant into its family's energy chain" $ do
+                    let hard = classOf "Energy, from coal"
+                        brown = classOf "Energy, from coal, brown"
+                    hard `shouldNotBe` Nothing
+                    brown `shouldNotBe` Nothing
+                    classOf "Coal, 18 MJ per kg" `shouldBe` hard
+                    classOf "Coal, 26.4 MJ per kg" `shouldBe` hard
+                    classOf "Coal, 29.3 MJ per kg" `shouldBe` hard
+                    classOf "Coal, hard" `shouldBe` hard
+                    classOf "Coal, brown, 8 MJ per kg" `shouldBe` brown
+                    classOf "Coal, brown, 10 MJ per kg" `shouldBe` brown
+
+                it "keeps hard and brown coal in separate classes" $
+                    classOf "Energy, from coal" == classOf "Energy, from coal, brown"
+                        `shouldBe` False
 
                 it "has well-formed CAS numbers (format + check digit)" $
                     [c | r <- rows, Just c <- [rrCas r], not (casValid c)] `shouldBe` []
