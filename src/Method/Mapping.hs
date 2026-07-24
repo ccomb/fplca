@@ -698,17 +698,28 @@ Pass 'M.empty' for the compartment map when no normalization is desired
 
 {- | Fan out one-to-many synonym matches: for each CF, look up the
 synonym group of the CF name and emit one extra @(cf, Just (peerFlow,
-BySynonym))@ row per BAFU flow whose name is in the group and whose
-compartment medium matches the CF's compartment. The original mapping
-list is preserved.
+BySynonym))@ row per flow whose name is in the group, resolved in the
+CF's direction view. The original mapping list is preserved.
 
 This is the missing piece when a method-side CF (e.g. ILCD's bare
-@copper@) covers many inventory-side variants (BAFU's @Copper, 2.19% in
+@copper@) covers many inventory-side variants (@Copper, 2.19% in
 sulfide, …@, @Copper, 1.18% in sulfide, …@, etc.). Without expansion,
 @buildMethodTables@ would key the CF under a single matched-flow name
 and the other variants would silently look up as @Nothing@. With
 expansion, the CF is keyed under every group member, so every inventory
 variant of the same substance finds the same CF.
+
+The fan-out follows the registry's own closure classes, exactly as
+'lookupSynonymGroup' reports them. A curated chain routinely pivots
+through an alias that names no loaded flow (@Energy, from coal@ =
+@hard coal@ = @Coal, hard@ — only the endpoints are flows), so the walk
+must not require every intermediate to be a flow or CF name: an earlier
+version re-closed the relation on that induced subgraph and silently
+cut every such bridge. Keeping junk hubs out of the closure is the
+ingestion layer's job — matching trusts only the curated registry plus
+sources the user explicitly activates, and candidates pass
+'excludeJunkSynonyms' / 'excludeOverFrequentSynonyms' with an
+'oversizedClasses' audit before they can be activated.
 
 Duplicates are harmless — 'buildMethodTables' uses @fromListWith
 preferBetter@.
@@ -721,39 +732,8 @@ expandSynonymMappings ::
 expandSynonymMappings synDB flowsByName mappings =
     mappings ++ concatMap expand mappings
   where
-    -- De-fan-out (M): restrict the synonym relation to USED flow names — the
-    -- DB's own flow-name index ∪ this method's CF names — then re-close on that
-    -- induced subgraph. Generic source-synonym tokens that are not flow names
-    -- (e.g. @organic@, listed on tens of thousands of ILCD flows) drop out, so
-    -- they stop fusing unrelated substances into one giant junk-hub class. The
-    -- global closure has already merged such a hub and cannot be re-split, so we
-    -- re-close from 'synEdges' (the original pairs) against the used set here.
-    --
-    -- Trade-off: a synonym whose name is neither a flow nor a CF is dropped, so a
-    -- substance bridged ONLY through such an intermediate would be lost. Measured
-    -- on JRC EF-3.1 × BAFU (all 25 categories), the dropped matches are junk-hub
-    -- fan-out (e.g. @arsenic → {butanol, acetone, aluminium, …}@) plus correct
-    -- CO₂/CH₄/land-use subtype discrimination (a @…, land use change@ CF must not
-    -- reach the generic @carbon dioxide@ flow); no genuine same-substance match
-    -- was lost. The restriction is sound in practice.
-    used :: S.Set Text
-    used =
-        foldr
-            (S.insert . normalizeName . mcfFlowName . fst)
-            (S.fromList (M.keys flowsByName))
-            mappings
-
-    -- Re-close so the direction tags survive: the induced DB is rebuilt from
-    -- 'SynEdge's, so it carries the same directional views as the source. A CF
-    -- then fans out only through bridges valid for its direction. The stored
-    -- edges are already normalized — re-closing must NOT re-normalize them
-    -- ('normalizeName' is not idempotent), hence 'buildFromNormalizedEdges'.
-    inducedDB :: SynonymDB
-    inducedDB =
-        buildFromNormalizedEdges [e | e <- synEdges synDB, S.member (seA e) used, S.member (seB e) used]
-
     expand (cf, _) =
-        let dirDB = viewFor (mcfDirection cf) inducedDB
+        let dirDB = viewFor (mcfDirection cf) synDB
             peers = fromMaybe [] (getSynonyms dirDB =<< lookupSynonymGroup dirDB (mcfFlowName cf))
          in [ (cf, Just (flow, BySynonym))
             | syn <- peers

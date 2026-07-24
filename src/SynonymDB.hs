@@ -159,8 +159,8 @@ buildFromEdges :: [SynEdge] -> SynonymDB
 buildFromEdges = buildFromNormalizedEdges . normalizeEdges
 
 {- | Build from edges whose endpoints already carry 'normalizeName''s output —
-the invariant every built DB's 'synEdges' satisfies. Merging and the
-induced-subgraph restriction re-close through HERE, not 'buildFromEdges':
+the invariant every built DB's 'synEdges' satisfies. 'mergeSynonymDBs'
+re-closes through HERE, not 'buildFromEdges':
 'normalizeName' is not idempotent (a suffix exposed by punctuation removal —
 @"Zinc in ground,"@ → @"zinc in ground"@ → @"zinc"@ — strips only on a second
 pass), so re-normalizing stored edges would key the rebuilt tables away from
@@ -179,10 +179,9 @@ buildFromNormalizedEdges es =
      in base{synViews = views}
   where
     edgesFor dir = filter (\e -> seDir e == BridgeBoth || seDir e == dir)
-    -- Views are terminal: nothing re-closes them (merge and the induced
-    -- restriction read the TOP-level 'synEdges'), so a view's own edge list is
-    -- dead weight in memory and in the serialized cache — store the lookup
-    -- tables only.
+    -- Views are terminal: nothing re-closes them (merging reads the TOP-level
+    -- 'synEdges'), so a view's own edge list is dead weight in memory and in
+    -- the serialized cache — store the lookup tables only.
     viewTables = clearEdges . buildTables
     clearEdges t = t{synEdges = []}
 

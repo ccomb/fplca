@@ -28,8 +28,8 @@ data BridgeDirection = BridgeBoth | BridgeInput | BridgeOutput
     deriving (Eq, Ord, Show, Generic, NFData, Store)
 
 {- | A normalized @SameAs@ edge carrying the direction it is valid for. Kept in
-'synEdges' so the relation can be re-closed (merge, induced-subgraph restriction)
-without losing the direction constraint.
+'synEdges' so the relation can be re-closed (merging) without losing the
+direction constraint.
 -}
 data SynEdge = SynEdge
     { seA :: !Text
