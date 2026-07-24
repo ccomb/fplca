@@ -225,6 +225,7 @@ test-suite lca-tests
                      , MethodSpec
                      , MethodPatchSpec
                      , SimaProParserSpec
+                     , SimaProRegistryCASSpec
                      , BrightwayExcelSpec
                      , BrightwayExcelWriterSpec
                      , UnitConversionSpec
