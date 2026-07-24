@@ -54,7 +54,8 @@ host = "127.0.0.1"             # Bind address ("0.0.0.0" for all interfaces)
 
 # ── Methods ──────────────────────────────────────────────────────────
 #
-# LCIA characterization methods (ILCD format, .zip of XML files).
+# LCIA characterization methods. Accepted: an ILCD directory or .zip of XML
+# files, a SimaPro or columnar method .csv, or an openLCA ImpactCategory .json.
 #
 # Fields:
 #   name          (required) Method collection name
@@ -62,11 +63,22 @@ host = "127.0.0.1"             # Bind address ("0.0.0.0" for all interfaces)
 #   active        = true     Enable this method
 #   description              Short description
 #
-# Example:
+# Example (bring your own):
 #
 # [[methods]]
 # name = "EF-3.1"
 # path = "DBs/EF-v3.1.zip"
+
+# "Plain indicators" — a small, license-clean method that counts raw physical
+# quantities through the supply chain (land occupied, water used, fossil CO2,
+# methane, primary energy, waste heat, cadmium), each an LCIA category whose
+# factors are all 1.0. Rule-derived, not copied from any licensed workbook, so it
+# ships with the engine and ports to any loaded database through the flow registry.
+[[methods]]
+name = "plain-indicators"
+path = "data/methods/plain-indicators.csv"
+active = true
+description = "Raw physical quantities counted through the supply chain (CF=1.0)"
 
 # ── Reference data (shipped with VoLCA) ──────────────────────────────
 

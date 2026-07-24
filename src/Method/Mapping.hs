@@ -17,6 +17,8 @@ module Method.Mapping (
     mapMethodFlows,
     mapMethodToFlows,
     resolveCF,
+    isPatternCF,
+    expandPatternCF,
     buildMapContext,
 
     -- * LCIA scoring
@@ -93,7 +95,7 @@ import Control.Exception (evaluate)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.Either (lefts, rights)
-import Data.List (find, nub, sortOn)
+import Data.List (find, nub, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
@@ -111,9 +113,11 @@ import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
+import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (Inventory, Vector, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
+import Progress (ProgressLevel (..), reportProgress)
 import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
@@ -226,7 +230,7 @@ mapMethodFlows ::
     IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodFlows ctx0 method = do
     caps <- getNumCapabilities
-    let cfs = methodFactors method
+    let (patternCFs, cfs) = partition isPatternCF (methodFactors method)
         n = length cfs
         -- Precompute the synonym-group → flows memo for the groups this method's
         -- CFs reference (each group expanded once), then resolve every CF against
@@ -234,11 +238,19 @@ mapMethodFlows ctx0 method = do
         -- large closure class — once per CF whose name lands in it.
         ctx = ctx0{mcSynGroupFlows = buildSynGroupFlows ctx0 cfs}
         resolve cf = (cf,) <$> evaluate (resolveCF ctx cf)
-    if caps <= 1 || n < parCfThreshold
-        then mapM resolve cfs
-        else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
+    concrete <-
+        if caps <= 1 || n < parCfThreshold
+            then mapM resolve cfs
+            else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
+    expanded <- fmap concat . mapM materialize $ patternCFs
+    pure (concrete ++ expanded)
   where
     parCfThreshold = 1000
+    materialize cf = do
+        let (rows, warnings) = expandPatternCF (mcBioFlowsByUUID ctx0) cf
+            prefix = "[LCIA " <> methodName method <> "] "
+        mapM_ (reportProgress Warning . T.unpack . (prefix <>)) warnings
+        pure rows
 
 {- | Resolve one method CF to a database biosphere flow. The built-in matchers
 are tried in cascade order — UUID → name → synonym → CAS — and the first whose
@@ -257,6 +269,67 @@ resolveCF ctx cf =
 -- | Convenience wrapper: map method CFs using the built-in cascade + DB.
 mapMethodToFlows :: Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodToFlows db = mapMethodFlows (buildMapContext db)
+
+{- | A CF whose substance is a wildcard pattern rather than a literal flow
+name. A trailing @*@ makes the text before it a case-insensitive prefix
+(@"Occupation, *"@ covers every occupation flow); a bare @"*"@ matches any
+name, leaving the row's CAS and compartment cells as the whole predicate.
+Pattern CFs never enter the matcher cascade — 'expandPatternCF' materializes
+them against the database — so a method can declare an open family of flows
+as one rule instead of a per-database list that silently goes stale.
+-}
+isPatternCF :: MethodCF -> Bool
+isPatternCF = T.isSuffixOf "*" . mcfFlowName
+
+{- | Materialize one pattern CF against the database's biosphere: one concrete
+CF per flow satisfying every predicate the row carries (name prefix, CAS,
+compartment medium and — when the row states one — subcompartment). Each
+concrete CF takes the flow's own identity (UUID,
+name, CAS, compartment) — so every table built from the mapping lands exactly
+where the inventory flow will look — and keeps the pattern row's value and
+unit. A database introducing a new flow under the pattern is thus counted on
+its next mapping without touching the method file.
+
+Failure is loud, not silent: a pattern matching no flow comes back as an
+unmatched row plus a warning (coverage then shows the gap instead of the
+category quietly counting zero), and a bare @"*"@ constrained by nothing is
+refused the same way — matching the entire biosphere is never intended.
+-}
+expandPatternCF ::
+    BioFlowDB ->
+    MethodCF ->
+    ([(MethodCF, Maybe (BiosphereFlow, MatchStrategy))], [Text])
+expandPatternCF flows cf
+    | not constrained = refuse "has no name prefix, CAS or compartment; refusing to match every flow"
+    | null matches = refuse "matches no flow in this database"
+    | otherwise = ([(materialize f, Just (f, ByName)) | f <- matches], [])
+  where
+    refuse why = ([(cf, Nothing)], ["wildcard CF '" <> mcfFlowName cf <> "' " <> why])
+    prefix = T.toCaseFold (T.dropEnd 1 (mcfFlowName cf))
+    wantCAS = normalizeCAS <$> mcfCAS cf
+    constrained = not (T.null prefix) || isJust wantCAS || isJust (mcfCompartment cf)
+    matches = filter fits (M.elems flows)
+    fits f = prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits f && compFits f
+    casFits f = maybe True (\cas -> bfCAS f == Just cas) wantCAS
+    compFits f = case mcfCompartment cf of
+        Nothing -> True
+        Just (Compartment med sub _) ->
+            maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
+    -- An empty sub means the row constrains only the medium; a stated sub
+    -- must match the flow's, or the row would silently widen to the whole
+    -- medium. Qualifiers are ignored here as 'buildMethodTables' ignores them.
+    subFits sub c =
+        T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
+    mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+    materialize f =
+        cf
+            { mcfFlowRef = bfId f
+            , mcfFlowName = bfName f
+            , mcfCAS = bfCAS f
+            , mcfCompartment = fromFlowCompartment <$> bfCompartment f
+            }
+    fromFlowCompartment c =
+        Compartment (VT.compartmentName c) (fromMaybe "" (VT.compartmentSub c)) ""
 
 -- | Convert strategy text back to MatchStrategy
 strategyFromText :: Text -> MatchStrategy

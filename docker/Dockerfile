@@ -239,6 +239,12 @@ active = true
 name = "Default units"
 path = "data/units.csv"
 active = true
+
+[[methods]]
+name = "plain-indicators"
+path = "data/methods/plain-indicators.csv"
+active = true
+description = "Raw physical quantities counted through the supply chain (CF=1.0)"
 EOF
 
 COPY docker/rts-flags.sh /app/rts-flags.sh
