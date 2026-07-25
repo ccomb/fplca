@@ -8,9 +8,12 @@ canonical case, one CAS across regional name variants and deliberate
 exclusions like rain or turbined water — distinguishes flows by something
 the name-blind bridge cannot see, so the bridge must refuse rather than
 stamp an arbitrary value onto exactly the flows the method separated.
-This pins the refusal and its two deliberate non-voters: consumer-located
+This pins the refusal and its two deliberate non-voters — consumer-located
 rows (dispatched by the regional tables) and rows at different
-subcompartments (arbitrated to the medium-level default).
+subcompartments (arbitrated to the medium-level default) — and the pairing
+where located rows do end up voting: against a name-suffixed database the
+regional projection materializes them into region-less copies, and both
+CAS bridges must refuse.
 -}
 module CASBridgeAmbiguitySpec (spec) where
 
@@ -20,8 +23,10 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFForFlow)
-import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
+import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFForFlow, mtCasCF, mtRegionalCasCF, projectRegionalResourceFlows)
+import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), Medium (..), MethodCF (..))
+import SubstanceRegistry (CASNumber (..))
+import SynonymDB (emptySynonymDB)
 import Types (BiosphereFlow (..))
 import qualified Types as VT
 
@@ -75,6 +80,15 @@ spec = describe "CAS bridge ambiguity guard" $ do
         -- by the method, and it must stay that way.
         score mappings (mkFlow 99 "Water, turbine use" water) `shouldBe` Nothing
 
+    it "an unmatched row votes: it proves the discrimination without resolving to a flow" $ do
+        -- "Water, lake, AT" matches nothing in this database, but its value
+        -- still shows the method regionalizes water — the bridge must refuse.
+        let mappings =
+                [ (mkCF 1 "Water" "" water 42.955, Just (mkFlow 1 "Water" water, ByCAS))
+                , (mkCF 2 "Water, lake, AT" "" water 1.89, Nothing)
+                ]
+        score mappings (mkFlow 99 "Water, turbine use" water) `shouldBe` Nothing
+
     it "still bridges a CAS with one factor line" $ do
         let mappings =
                 [(mkCF 1 "Chlorpyrifos" "" (Just "2921-88-2") 5.0, Just (mkFlow 1 "Chlorpyriphos-ethyl" (Just "2921-88-2"), ByCAS))]
@@ -100,3 +114,35 @@ spec = describe "CAS bridge ambiguity guard" $ do
                 , (mkCF 2 "Particulates" "indoor" (Just "0000-00-0") 100.0, Just (mkFlow 2 "Particulates, indoor" (Just "0000-00-0"), ByName))
                 ]
         score mappings (mkFlow 99 "Dust" (Just "0000-00-0")) `shouldBe` Just 1.0
+
+    describe "a located method against a name-suffixed database" $ do
+        -- JRC-style rows (per-country values, consumer-located) meeting
+        -- SimaPro-style flows (region in the name): location cannot dispatch
+        -- anything there, so 'projectRegionalResourceFlows' materializes the
+        -- located rows into region-less copies — and those copies vote.
+        -- Without their votes the lone region-less row would be unanimous,
+        -- and turbine water would take the world-average factor on exactly
+        -- the pairing the veto exists for.
+        let plainFlow = mkFlow 10 "Water" water
+            chFlow = mkFlow 11 "Water, lake, CH" water
+            inFlow = mkFlow 12 "Water, lake, IN" water
+            bioFlows = M.fromList [(bfId f, f) | f <- [plainFlow, chFlow, inFlow]]
+            mappings =
+                [ (mkCF 1 "Water" "" water 42.955, Just (plainFlow, ByCAS))
+                , ((mkCF 2 "Water, lake" "" water 1.44){mcfConsumerLocation = Just "CH"}, Just (chFlow, ByCAS))
+                , ((mkCF 3 "Water, lake" "" water 100.0){mcfConsumerLocation = Just "IN"}, Just (inFlow, ByCAS))
+                ]
+            tables =
+                buildMethodTables OtherCFFamily M.empty M.empty $
+                    projectRegionalResourceFlows emptySynonymDB bioFlows mappings
+
+        it "the projected copies veto both CAS bridges" $ do
+            M.lookup (CASNumber "7732-18-5", Medium "resource") (mtCasCF tables) `shouldBe` Nothing
+            M.lookup (CASNumber "7732-18-5", Medium "resource") (mtRegionalCasCF tables) `shouldBe` Nothing
+
+        it "a deliberately excluded flow stays uncharacterized" $ do
+            let turbine = mkFlow 99 "Water, turbine use" water
+            fmap cfValue (lookupCFForFlow tables (bfId turbine) (Just turbine)) `shouldBe` Nothing
+
+        it "a suffixed flow keeps its own region's projected value" $
+            fmap cfValue (lookupCFForFlow tables (bfId chFlow) (Just chFlow)) `shouldBe` Just 1.44

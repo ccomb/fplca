@@ -1168,7 +1168,15 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- location: when several subcompartment CFs collide on one
             -- (CAS, medium, location) the medium-level default wins over a
             -- niche subcompartment, rather than the largest magnitude.
-            M.map (M.map snd) $
+            --
+            -- And the same 'casDiscriminated' veto: this table feeds the
+            -- name-blind CAS fallback of the regionalized read path
+            -- ('fillRegionalActivityWeights'), so serving a discriminated
+            -- class here would hand an excluded flow (turbine water) the
+            -- consuming activity's regional factor — and would regionalize
+            -- a name-suffixed flow ("Water, lake, CH") by the consuming
+            -- activity's location instead of the flow's own projected value.
+            (`M.withoutKeys` casDiscriminated) . M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith preferUnspecifiedCas)
                     [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
@@ -1221,7 +1229,14 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     -- Two deliberate non-voters: consumer-located rows, whose variance the
     -- regional tables dispatch by the flow's own location, and rows at
     -- \*different* subcompartments, whose variance 'preferUnspecifiedCas'
-    -- already arbitrates to the medium-level default. Values compare without
+    -- already arbitrates to the medium-level default. The rule behind both:
+    -- a value votes exactly when the method can serve it with no location
+    -- attached. So located rows abstain only as such — against a database
+    -- that writes its regions into flow names,
+    -- 'projectRegionalResourceFlows' has already materialized them into
+    -- region-less copies upstream, and those copies do vote: no location
+    -- can dispatch the variance on that pairing, so both CAS bridges must
+    -- refuse instead. Values compare without
     -- their unit: the read path unit-converts the bridged CF anyway, and
     -- pattern-expanded rows carry each flow's own unit, which is flow
     -- diversity, not authored discrimination.
