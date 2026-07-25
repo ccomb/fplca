@@ -1835,8 +1835,18 @@ lookupCascadeCF tables flowDB fid =
   where
     byNameOrCas flow =
         let name = SR.NormName (normalizeName (bfName flow))
-            variantName = SR.NormName (normalizeNameKeepUnit (bfName flow))
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
+            -- 'mtUnitVariantCF' is empty for every method whose factor lines
+            -- carry no unit suffix — the common case — and 'M.lookup' is strict
+            -- in its key, so an unguarded lookup would make every flow pay a
+            -- second full name normalization on the warmup-hot path for a table
+            -- that cannot answer.
+            unitVariantCF
+                | M.null (mtUnitVariantCF tables) = Nothing
+                | otherwise =
+                    M.lookup
+                        (SR.NormName (normalizeNameKeepUnit (bfName flow)), baseMed)
+                        (mtUnitVariantCF tables)
             -- The medium-level / CAS / sub-blind fallbacks all stand for a
             -- surface, immediate emission, so gate a resolved one by the flow's
             -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
@@ -1862,8 +1872,12 @@ lookupCascadeCF tables flowDB fid =
             -- own unit ('mtUnitVariantCF') — the collapsed-name tables below
             -- crown one winner per base name, which for a sibling unit variant
             -- is dimensionally wrong and zeroes on conversion. Gated like the
-            -- other sub-blind rungs.
-            gate (M.lookup (variantName, baseMed) (mtUnitVariantCF tables))
+            -- other sub-blind rungs, but ranked ahead of the sub-exact table on
+            -- purpose: that table is keyed by the collapsed name, so it is
+            -- exactly where the wrong-unit winner sits. A right-unit,
+            -- sub-blind factor beats a right-sub, wrong-unit one — the latter
+            -- scores 0, the former scores.
+            gate unitVariantCF
                 <|> M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
                 <|> gate (M.lookup (name, baseMed) (mtFallbackCF tables))
