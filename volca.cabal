@@ -234,6 +234,7 @@ test-suite lca-tests
                      , CASBridgeAmbiguitySpec
                      , RegionFallbackSpec
                      , EnergyResourceFillSpec
+                     , UnitVariantCFSpec
                      , CharacterizedFlowsSpec
                      , SubBlindCFSpec
                      , ServerSpec

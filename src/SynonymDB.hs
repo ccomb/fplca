@@ -27,6 +27,7 @@ module SynonymDB (
     lookupSynonymGroup,
     getSynonyms,
     normalizeName,
+    normalizeNameKeepUnit,
     mergeSynonymDBs,
     synonymCount,
     oversizedClasses,
@@ -478,7 +479,19 @@ Normalization rules:
 - Remove punctuation: commas, parentheses, quotes
 -}
 normalizeName :: Text -> Text
-normalizeName name =
+normalizeName = normalizeNameWith True
+
+{- | 'normalizeName' minus the unit-suffix strip: @"Gas, natural\/m3"@ keeps its
+@\/m3@. The strip lets a unit variant borrow its base resource's CF, but it also
+collapses a method's own per-unit rows (@\/kg@ vs @\/m3@ — same substance,
+different densities) onto one key — this variant is the lookup key when those
+rows must stay apart.
+-}
+normalizeNameKeepUnit :: Text -> Text
+normalizeNameKeepUnit = normalizeNameWith False
+
+normalizeNameWith :: Bool -> Text -> Text
+normalizeNameWith stripUnits name =
     let
         -- Lowercase and strip
         t1 = T.strip $ T.toLower name
@@ -487,7 +500,7 @@ normalizeName name =
         -- Strip ", in ground" suffix
         t3 = stripSuffix ", in ground" $ stripSuffix " in ground" t2
         -- Strip a trailing SimaPro unit suffix; see 'unitSuffixes'.
-        t4 = foldr stripSuffix t3 unitSuffixes
+        t4 = if stripUnits then foldr stripSuffix t3 unitSuffixes else t3
         -- Remove punctuation. Inlined char predicate: the old version used
         -- @T.filter (`notElem` (",()'\"" :: String))@ which forces 'T.filter'
         -- to traverse a 5-cons-cell @[Char]@ list per input character. With
