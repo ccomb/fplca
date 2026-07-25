@@ -13,8 +13,8 @@ their database otherwise carries, reference products nothing in the
 database consumes, land transformation whose "to" and "from" areas
 don't balance within an activity, oxygen-demand or organic-carbon
 measures reported in a physically impossible order, CAS numbers
-whose check digit doesn't confirm them, and allocation percentages
-outside the 0-100% range.
+whose check digit doesn't confirm them, allocation percentages
+outside the 0-100% range, and amounts too small to have been measured.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
 identical on a staged database (parsed, matrices not built) and on a loaded
@@ -110,6 +110,7 @@ data QualityReport = QualityReport
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
     , qrAllocationOutOfRange :: !QualityCheck
+    , qrUnmeasurableAmounts :: !QualityCheck
     }
     deriving (Show, Eq)
 
@@ -132,6 +133,7 @@ qualityChecks r =
     , qrOxygenDemandOrder r
     , qrInvalidCas r
     , qrAllocationOutOfRange r
+    , qrUnmeasurableAmounts r
     ]
 
 {- | Allowed drift when summing coproduct allocation percentages. Sources round
@@ -199,6 +201,19 @@ far below what a dropped or mistyped flow costs.
 physicalBalanceTolerance :: Double
 physicalBalanceTolerance = 0.01
 
+{- | Magnitude below which an exchange amount cannot be a measurement.
+
+A hydrogen atom weighs 1.7e-27 kg, so a mass under 1e-27 is less than one atom;
+the same figure in joules sits eight orders below a single visible photon, and a
+count of items is quantised at one. Whatever the unit, nothing is measured this
+small — an amount under the floor is a residue of computation (an underflow, a
+conversion through a zero, an allocation of nothing) wearing the costume of
+data. Set far below the smallest real trace amounts in any inventory, so the
+check accuses only what no instrument could have produced.
+-}
+measurableMagnitudeFloor :: Double
+measurableMagnitudeFloor = 1e-27
+
 -- | Run every check over a database.
 qualityReport :: Text -> SimpleDatabase -> QualityReport
 qualityReport dbName db =
@@ -218,6 +233,7 @@ qualityReport dbName db =
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
         , qrAllocationOutOfRange = QualityCheck allocationApplicable (worstFirst allocationRangeOffenders)
+        , qrUnmeasurableAmounts = QualityCheck True (worstFirst unmeasurableOffenders)
         }
   where
     entries = M.toList (sdbActivities db)
@@ -347,6 +363,27 @@ qualityReport dbName db =
                         then Just ("reference exchange \"" <> flowName <> "\" has amount 0, which normalization would divide by")
                         else Nothing
             ]
+        ]
+
+    -- Amounts too small to have been measured (see 'measurableMagnitudeFloor').
+    -- Not a rounding complaint: at this magnitude the value is a computational
+    -- residue that reads as data, and it survives every copy of the dataset
+    -- until someone looks. Warning rather than danger — it distorts nothing in
+    -- a score, it just isn't true.
+    unmeasurableOffenders =
+        [ offender WarningSev key act Nothing $
+            "exchange \""
+                <> anyFlowName (exchangeFlowId ex)
+                <> "\" carries "
+                <> formatAmount amount
+                <> " "
+                <> unitLabel (exchangeUnitId ex)
+                <> ", smaller than anything a measurement can yield"
+        | (key, act) <- entries
+        , ex <- exchanges act
+        , let amount = abs (exchangeAmount ex)
+        , amount > 0
+        , amount < measurableMagnitudeFloor
         ]
 
     -- The parse-time mathematicalRelation check (EcoSpold2): formulas that
