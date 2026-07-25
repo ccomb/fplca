@@ -37,6 +37,7 @@ module Method.Mapping (
     buildMethodTables,
     buildMethodIndex,
     fillBroadcastVector,
+    zeroedBroadcastCFs,
     fillRegionalActivityWeights,
     RegionalActivityWeights (..),
     computeLCIAScore,
@@ -1420,6 +1421,27 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
         Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0)
+
+{- | Broadcast entries whose matched CF is nonzero yet whose effective factor
+collapsed to @0@: the flow-to-CF unit conversion was refused (dimensional
+mismatch, missing canonical base, or a failed energy bridge — the @0@ arms of
+'convertForCharacterization' and 'energyAwareConversion'). The refusal itself
+is right — wrong-dimension data must not score — but left unreported it is
+indistinguishable from an uncharacterized flow, and the method silently
+undercounts. Callers surface these once per (db, method) at build time.
+
+Re-runs the cascade only for the zero-valued entries, so scanning is free
+unless something is actually wrong.
+-}
+zeroedBroadcastCFs :: BioFlowDB -> MethodTables -> [(BiosphereFlow, CF)]
+zeroedBroadcastCFs flowDB tables =
+    [ (flow, cf)
+    | (fid, eff) <- M.toList (mtBroadcast tables)
+    , eff == 0
+    , Just flow <- [M.lookup fid flowDB]
+    , Just cf <- [lookupCascadeCF tables flowDB fid]
+    , cfValue cf /= 0
+    ]
 
 {- | Precompute per-activity-column contributions for a regionalized method.
 

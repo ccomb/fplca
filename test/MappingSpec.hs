@@ -688,6 +688,45 @@ spec = do
             -- The fallback path must NOT crash on the unknown UUID.
             fast `shouldBe` (3.0 :: Double)
 
+    describe "zeroedBroadcastCFs (matched CF the flow's unit cannot reach)" $ do
+        -- kg is a mass and m3 a volume: no conversion path between them, so a
+        -- kg-denominated CF matched by an m3 flow is refused and scores 0 —
+        -- exactly the silent undercount this scan exists to surface.
+        let cfg =
+                UnitConfig
+                    { ucDimensionOrder = []
+                    , ucUnits =
+                        M.fromList
+                            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                            , ("m3", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
+                            ]
+                    , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3")]
+                    }
+            fillFor unitName' cf = do
+                fid <- nextRandom
+                uid <- nextRandom
+                let flow = (mkFlow fid "gas" "air" Nothing){bfUnitId = uid}
+                    flowDB = M.singleton fid flow
+                    unitDB = M.singleton uid ((unitNamed unitName'){unitId = uid})
+                    filled =
+                        fillBroadcastVector cfg unitDB flowDB $
+                            buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByUUID))]
+                pure (fid, flowDB, filled)
+
+        it "flags a kg-denominated CF matched by an m3 flow" $ do
+            (fid, flowDB, filled) <- fillFor "m3" (mkCF "gas" Nothing 43.1)
+            map (bfId . fst) (zeroedBroadcastCFs flowDB filled) `shouldBe` [fid]
+
+        it "stays quiet when the conversion exists" $ do
+            (_, flowDB, filled) <- fillFor "kg" (mkCF "gas" Nothing 43.1)
+            map (bfId . fst) (zeroedBroadcastCFs flowDB filled) `shouldBe` []
+
+        it "stays quiet for a CF the method genuinely declares as 0" $ do
+            -- Same dimensional mismatch, but the factor itself is 0: the zero
+            -- contribution is the method's own value, not a refusal.
+            (_, flowDB, filled) <- fillFor "m3" (mkCF "gas" Nothing 0.0)
+            map (bfId . fst) (zeroedBroadcastCFs flowDB filled) `shouldBe` []
+
     describe "findSimilarCFs (post-scoring suggester)" $ do
         let mkMethod cfs =
                 Method

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- A warning now reports factor lines that match a flow but cannot be
+  converted into its unit — a per-kilogram factor against a flow measured in
+  cubic metres, for instance. Refusing such a factor is correct (the
+  dimensions do not agree), but the refusal used to be invisible: the flow
+  simply scored zero, indistinguishable from a flow the method does not
+  cover. Each affected method now says at load time how many factors it
+  refused and names samples, so a silent undercount of this kind can no
+  longer hide.
+
 ### Changed
 - The engine now advertises wire revision 4 on `/api/v1/version`. The three
   quality-report routes added since 0.9.3 arrived without a revision bump, so

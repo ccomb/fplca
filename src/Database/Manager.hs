@@ -155,6 +155,8 @@ import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import qualified Method.Coverage as Coverage
 import Method.Mapping (
+    CF (..),
+    CFUnit (..),
     MatchStrategy,
     MethodIndex,
     MethodSetTables,
@@ -174,6 +176,7 @@ import Method.Mapping (
     mtRegionalActivityWeights,
     mtRegionalizedCF,
     projectRegionalResourceFlows,
+    zeroedBroadcastCFs,
  )
 import Method.Types (
     CompartmentMap,
@@ -712,6 +715,22 @@ buildMethodTablesFor manager dbName collection db hier method = do
                         <> "(after walking parent regions and universal broadcast). "
                         <> "Samples: "
                         <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- rawMissingPairs raw'])
+    -- A CF that matched but cannot be unit-converted scores an (intentional)
+    -- 0 — refusing wrong-dimension data is right, hiding the refusal is not:
+    -- unreported, it reads exactly like an uncharacterized flow and the method
+    -- silently undercounts. One deduplicated WARN per (db, method), same
+    -- channel as the regionalized coverage gaps above.
+    let zeroed = zeroedBroadcastCFs mFlows withBroadcast
+        flowUnitOf f = maybe "" (T.unpack . unitName) (M.lookup (bfUnitId f) mUnits)
+    unless (null zeroed) $
+        reportProgress Warning $
+            "[LCIA "
+                <> T.unpack (methodName method)
+                <> "] "
+                <> show (length zeroed)
+                <> " matched CF(s) cannot be unit-converted from their flow's unit "
+                <> "(dimensional mismatch); their contributions score 0. Samples: "
+                <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u) | (f, CF _ (CFUnit u)) <- zeroed])
     pure tables
 
 {- | Run @build@ at most once per @key@ across concurrent callers. The first
