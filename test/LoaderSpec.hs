@@ -176,6 +176,24 @@ spec = do
                 `shouldNotBe` generateActivityUUIDFromActivity b
 
     -- -----------------------------------------------------------------------
+    -- datasetUUIDFromPath
+    -- -----------------------------------------------------------------------
+    describe "datasetUUIDFromPath" $ do
+        it "reads the identifier out of a process_<uuid>.xml file name" $
+            datasetUUIDFromPath "/db/process_0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml"
+                `shouldBe` UUID.fromText "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c"
+
+        it "reads a bare <uuid>.xml file name too" $
+            datasetUUIDFromPath "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml"
+                `shouldBe` UUID.fromText "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c"
+
+        it "declines a numbered file name, so the minted UUID stands" $
+            datasetUUIDFromPath "/db/1234.xml" `shouldBe` Nothing
+
+        it "declines a name that only looks like an identifier" $
+            datasetUUIDFromPath "process_not-a-uuid.xml" `shouldBe` Nothing
+
+    -- -----------------------------------------------------------------------
     -- getReferenceProductUUID
     -- -----------------------------------------------------------------------
     describe "getReferenceProductUUID" $ do

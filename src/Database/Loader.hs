@@ -76,6 +76,7 @@ module Database.Loader (
     mergeTechFlows,
     mergeBioFlows,
     generateActivityUUIDFromActivity,
+    datasetUUIDFromPath,
     getReferenceProductUUID,
     UnlinkedSummary (..),
     buildSupplierIndex,
@@ -211,6 +212,10 @@ History of manual bumps:
      fingerprint alone would accept old caches. Caches built before the
      backfill keep every SimaPro biosphere flow CAS-less, and the method
      CAS bridge silently never fires on them.
+- 12: EcoSpold1 activity UUID now taken from the dataset file's own name
+     when that name carries one, instead of always being minted from
+     name and location. Old caches key the same dataset under the minted
+     UUID, so a mixed pair would compare as two disjoint databases.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -218,7 +223,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 11
+     in hi `xor` lo `xor` 12
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -239,6 +244,20 @@ generateActivityUUIDFromActivity :: Activity -> UUID.UUID
 generateActivityUUIDFromActivity act =
     let key = activityName act <> ":" <> activityLocation act
      in UUID5.generateNamed ecospold1Namespace (BS.unpack $ T.encodeUtf8 key)
+
+{- | The identifier an EcoSpold1 dataset publishes in its own file name,
+@process_<uuid>.xml@ or plain @<uuid>.xml@.
+
+Publishers that keep this identifier stable across releases (it survives a
+rename, which a name-derived UUID does not) let two versions of a database be
+compared dataset by dataset. Files named any other way — ecoinvent's EcoSpold1
+exports are numbered, not identified — yield 'Nothing' and keep the minted
+UUID.
+-}
+datasetUUIDFromPath :: FilePath -> Maybe UUID.UUID
+datasetUUIDFromPath path =
+    let base = T.pack (takeBaseName path)
+     in UUID.fromText (fromMaybe base (T.stripPrefix "process_" base))
 
 -- | Get reference product UUID from activity exchanges
 getReferenceProductUUID :: Activity -> UUID.UUID
@@ -871,9 +890,11 @@ loadEcoSpoldDirectory locationAliases dir = do
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
-    buildProcEntry True _filepath activity =
-        -- EcoSpold1: Generate activity UUID from name and location
-        let actUUID = generateActivityUUIDFromActivity activity
+    buildProcEntry True filepath activity =
+        -- EcoSpold1: prefer the identifier the file itself carries, so a
+        -- dataset keeps its identity across releases; mint from name and
+        -- location only when the file name carries none.
+        let actUUID = fromMaybe (generateActivityUUIDFromActivity activity) (datasetUUIDFromPath filepath)
             prodUUID = getReferenceProductUUID activity
          in Right ((actUUID, prodUUID), activity)
     buildProcEntry False filepath activity =
