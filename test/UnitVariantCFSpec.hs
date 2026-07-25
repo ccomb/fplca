@@ -39,8 +39,16 @@ mkCF ref name unit val =
         , mcfConsumerLocation = Nothing
         }
 
+-- | Move a row to a named subcompartment ('mkCF' writes the unspecified one).
+inSub :: Text -> MethodCF -> MethodCF
+inSub sub cf = cf{mcfCompartment = Just (Compartment "resource" sub "")}
+
 mkFlow :: Integer -> Text -> BiosphereFlow
-mkFlow i name =
+mkFlow i name = mkFlowAt i name Nothing
+
+-- | 'mkFlow' emitted at a named subcompartment.
+mkFlowAt :: Integer -> Text -> Maybe Text -> BiosphereFlow
+mkFlowAt i name sub =
     BiosphereFlow
         { bfId = mkUUID i
         , bfName = name
@@ -48,7 +56,7 @@ mkFlow i name =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "resource" Nothing)
+        , bfCompartment = Just (VT.Compartment "resource" sub)
         }
 
 lookupFor :: MethodTables -> BiosphereFlow -> Maybe Double
@@ -108,3 +116,33 @@ spec = describe "per-unit method rows (unit-suffixed homonyms)" $ do
         -- matches no row, so the answer comes from the name cascade, not
         -- 'mtUuidCF'.
         lookupFor dup (mkFlow 99 "Gas, natural/kg") `shouldBe` Just 10.0
+
+    it "outranks a sub-exact row keyed by the collapsed name" $ do
+        -- The precedence this rung buys, and its price. The method writes the
+        -- /m3 factor at no particular subcompartment and a DIFFERENT factor for
+        -- the bare name at "in water"; the flow is /m3 emitted in water, so the
+        -- two rows key apart and 'agreedValue' never sees the disagreement.
+        -- Before this table the sub-exact row answered — right subcompartment,
+        -- wrong unit, hence 0 after conversion. The unit-matched row wins now:
+        -- a factor that scores beats one that cannot.
+        let subExact =
+                buildMethodTables
+                    OtherCFFamily
+                    M.empty
+                    M.empty
+                    [ (mkCF 1 "Gas, natural/m3" "m3" 34.5, Nothing)
+                    , (inSub "in water" (mkCF 2 "Gas, natural" "kg" 43.1), Nothing)
+                    ]
+        lookupFor subExact (mkFlowAt 5 "Gas, natural/m3" (Just "in water")) `shouldBe` Just 34.5
+
+    it "stays silent for a subcompartment no medium-level row may reach" $ do
+        -- Sub-blind like its siblings, so it takes the same gate: an ocean
+        -- emission is a foreign medium and must not borrow the freshwater
+        -- factor, unit-matched or not.
+        let oceanic =
+                buildMethodTables
+                    OtherCFFamily
+                    M.empty
+                    M.empty
+                    [(mkCF 1 "Water/m3" "m3" 42.95, Nothing)]
+        lookupFor oceanic (mkFlowAt 6 "Water/m3" (Just "ocean")) `shouldBe` Nothing
