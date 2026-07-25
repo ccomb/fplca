@@ -18,13 +18,29 @@
   output is unchanged.
 
 ### Fixed
+- The CAS bridge no longer guesses when one CAS number covers factor lines
+  with different values. Water is the canonical case: every water flow shares
+  one CAS, but a water-use method values each region differently and
+  deliberately leaves rain, ocean and turbined water out — bridging them all
+  to one arbitrary line (the world-average factor) made water scores explode
+  on databases whose flows carry CAS numbers. Such a CAS class is now left to
+  name matching alone; a CAS that identifies a single factor value still
+  bridges. The refusal covers the per-location CAS bridge too, so an excluded
+  flow cannot pick up a regional factor instead, and a flow that names its
+  own region keeps that region's value rather than the consuming activity's.
+  Region-located factor lines and subcompartment variants keep working as
+  before — their variance is dispatched by location or arbitrated to the
+  medium-level default, not guessed.
 - Flows from a SimaPro CSV database now carry their CAS numbers. The parser
   used to leave every flow's CAS empty, so a characterization factor that
   could only reach its flow by CAS never matched on a SimaPro-sourced
   database. The CAS now comes from the file's own substance registry — the
   trailing blocks that list every substance with its CAS — filling about 89%
   of biosphere flows on a real export, so methods can match these flows by
-  CAS instead of relying on name and synonym matching alone.
+  CAS instead of relying on name and synonym matching alone. A database
+  cached before this change rebuilds its cache once on the next load, so
+  already-imported databases pick the CAS up too instead of serving the
+  old CAS-less flows forever.
 - openLCA JSON-LD method files now load with the right factor directions,
   compartments, and reference unit — including files openLCA itself
   exported. Such files carry no per-factor direction, so every factor used

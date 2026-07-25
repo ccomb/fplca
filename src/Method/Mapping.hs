@@ -1140,7 +1140,17 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- factor — rather than the largest. The largest is often a niche
             -- subcompartment (indoor air can be ~100x the outdoor value) that
             -- would over-characterize every same-CAS flow the bridge reaches.
-            M.map snd $
+            --
+            -- And no bridge at all for a CAS class the method discriminates
+            -- within ('casDiscriminated'): when rows at one (CAS, medium,
+            -- subcompartment) carry different factor values — water is the
+            -- canonical case, one CAS across regional name variants and
+            -- deliberate exclusions like rain, ocean and turbined water — no
+            -- single value is "the" factor for that CAS, and a name-blind
+            -- bridge would stamp an arbitrary one (AWARE's region-less 42.95)
+            -- onto exactly the flows the method chose to distinguish or leave
+            -- out. Same never-guess rule as 'agreedValue'.
+            (`M.withoutKeys` casDiscriminated) . M.map snd $
                 M.fromListWith
                     preferUnspecifiedCas
                     [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, cfOf cf))
@@ -1158,7 +1168,15 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- location: when several subcompartment CFs collide on one
             -- (CAS, medium, location) the medium-level default wins over a
             -- niche subcompartment, rather than the largest magnitude.
-            M.map (M.map snd) $
+            --
+            -- And the same 'casDiscriminated' veto: this table feeds the
+            -- name-blind CAS fallback of the regionalized read path
+            -- ('fillRegionalActivityWeights'), so serving a discriminated
+            -- class here would hand an excluded flow (turbine water) the
+            -- consuming activity's regional factor — and would regionalize
+            -- a name-suffixed flow ("Water, lake, CH") by the consuming
+            -- activity's location instead of the flow's own projected value.
+            (`M.withoutKeys` casDiscriminated) . M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith preferUnspecifiedCas)
                     [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
@@ -1200,6 +1218,47 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     agreedValue vus = case nub vus of
         [vu] -> Just vu
         _ -> Nothing
+
+    -- (CAS, medium) keys the CAS bridge must not serve: two rows agreeing on
+    -- (CAS, medium, subcompartment) but not on the factor value prove the
+    -- method distinguishes flows by something the name-blind bridge cannot
+    -- see — a name-suffixed region ("Water, lake, CH" against the region-less
+    -- "Water" default) or a plain name distinction (fossil against non-fossil
+    -- methane). Every such row votes whatever it resolved to: an unmatched
+    -- "Water, lake, AT" row still proves the method regionalizes water.
+    -- Two deliberate non-voters: consumer-located rows, whose variance the
+    -- regional tables dispatch by the flow's own location, and rows at
+    -- \*different* subcompartments, whose variance 'preferUnspecifiedCas'
+    -- already arbitrates to the medium-level default. The rule behind both:
+    -- a value votes exactly when the method can serve it with no location
+    -- attached. So located rows abstain only as such — against a database
+    -- that writes its regions into flow names,
+    -- 'projectRegionalResourceFlows' has already materialized them into
+    -- region-less copies upstream, and those copies do vote: no location
+    -- can dispatch the variance on that pairing, so both CAS bridges must
+    -- refuse instead. Values compare without
+    -- their unit: the read path unit-converts the bridged CF anyway, and
+    -- pattern-expanded rows carry each flow's own unit, which is flow
+    -- diversity, not authored discrimination.
+    casDiscriminated =
+        S.fromList
+            [ (casKey, med)
+            | ((casKey, med, _), vals) <- M.toList casValuesBySub
+            , S.size vals > 1
+            ]
+    casValuesBySub =
+        M.fromListWith
+            S.union
+            [ ((SR.CASNumber cas, Medium normMed, Subcompartment subClass), S.singleton (mcfValue cf))
+            | (cf, _) <- mappings
+            , Just cas <- [mcfCAS cf]
+            , not (T.null cas)
+            , Nothing <- [mcfConsumerLocation cf]
+            , Just comp <- [mcfCompartment cf]
+            , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+            , let normMed = normalizeMedium (T.toLower normMedRaw)
+            , let subClass = if isUnspecifiedSub normSub then "" else normSub
+            ]
 
     -- For the CAS bridge: rank the unspecified / empty subcompartment ahead of
     -- any specific one, so 'preferUnspecifiedCas' keeps the medium-level

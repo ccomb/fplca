@@ -231,6 +231,7 @@ test-suite lca-tests
                      , UnitConversionSpec
                      , ProxyEdgeSpec
                      , CASBackfillSpec
+                     , CASBridgeAmbiguitySpec
                      , RegionFallbackSpec
                      , EnergyResourceFillSpec
                      , CharacterizedFlowsSpec
