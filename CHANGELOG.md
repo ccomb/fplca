@@ -18,6 +18,17 @@
   output is unchanged.
 
 ### Fixed
+- A method's own per-unit factor lines no longer cancel each other. SimaPro
+  names can bake the unit into the flow name — "Gas, natural/m3" and
+  "Gas, natural/kg" are the same substance declared in two units, with two
+  densities — and name normalization collapses both onto one key, where a
+  single winner was crowned. The flow declared in the losing unit then read a
+  dimensionally incompatible factor whose unit conversion silently zeroed its
+  score: on a real SimaPro database, natural gas contributed nothing to
+  fossil resource use, undercounting every gas-heated product by a factor of
+  four. Unit-suffixed flows now match the factor line written for their exact
+  name first, so each variant scores in its own unit; a lone variant still
+  borrows its base resource's factor as before.
 - The CAS bridge no longer guesses when one CAS number covers factor lines
   with different values. Water is the canonical case: every water flow shares
   one CAS, but a water-use method values each region differently and

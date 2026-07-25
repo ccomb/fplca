@@ -505,6 +505,18 @@ should be computed once per method and reused across inventories.
 data MethodTables = MethodTables
     { mtUuidCF :: !(M.Map UUID CF)
     -- ^ UUID-matched CFs: exact flow id → CF
+    , mtUnitVariantCF :: !(M.Map (SR.NormName, Medium) CF)
+    {- ^ (unit-suffix-preserving normalized name, medium) → CF, holding only
+    rows whose name carries a SimaPro unit suffix (@"Gas, natural\/m3"@).
+    'normalizeName' strips that suffix, so a method's own per-unit rows
+    (@\/kg@ 43.1 vs @\/m3@ 34.5 — same substance, different densities)
+    collapse onto one name key where a single winner is crowned; the losing
+    variant's flow then reads a dimensionally incompatible CF and its unit
+    conversion silently zeroes the score. This table keys each variant by its
+    full name ('normalizeNameKeepUnit') so a suffixed flow finds the row
+    declared in its own unit. Consulted before the collapsed-name tables;
+    same-key rows that disagree are dropped ('agreedValue' — never guess).
+    -}
     , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) CF)
     -- ^ (normalized name, medium, subcompartment) → CF
     , mtFallbackCF :: !(M.Map (SR.NormName, Medium) CF)
@@ -1038,6 +1050,28 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 | (cf, Just (flow, ByUUID)) <- mappings
                 , Nothing <- [mcfConsumerLocation cf]
                 ]
+        , mtUnitVariantCF =
+            -- Keyed by the CF's OWN name with the unit suffix kept, so each
+            -- per-unit row serves the flow declared in its unit — including a
+            -- row whose build-time resolution went to a sibling variant (the
+            -- collapsed-name pick is exactly what this table corrects). Only
+            -- names that actually carry a suffix enter ('normalizeNameKeepUnit'
+            -- differs from 'normalizeName'), keeping the table tiny.
+            -- Subcompartment-blind like 'mtSubBlindCF', with the same
+            -- 'agreedValue' veto: a variant name whose rows disagree (across
+            -- subs or true duplicates) resolves nothing rather than guessing.
+            M.mapMaybe agreedValue $
+                M.fromListWith
+                    (++)
+                    [ ((SR.NormName rawName, Medium normMed), [cfOf cf])
+                    | (cf, _) <- mappings
+                    , let rawName = normalizeNameKeepUnit (mcfFlowName cf)
+                    , rawName /= normalizeName (mcfFlowName cf)
+                    , Nothing <- [mcfConsumerLocation cf]
+                    , Just comp <- [mcfCompartment cf]
+                    , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
+                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    ]
         , -- The broadcast name tables (exact + fallback) hold only
           -- non-regionalized CFs. Location-specific rows belong to
           -- 'mtRegionalizedCF' / 'mtRegionalCasCF'; letting them in here makes
@@ -1801,6 +1835,7 @@ lookupCascadeCF tables flowDB fid =
   where
     byNameOrCas flow =
         let name = SR.NormName (normalizeName (bfName flow))
+            variantName = SR.NormName (normalizeNameKeepUnit (bfName flow))
             (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
             -- The medium-level / CAS / sub-blind fallbacks all stand for a
             -- surface, immediate emission, so gate a resolved one by the flow's
@@ -1823,7 +1858,13 @@ lookupCascadeCF tables flowDB fid =
             -- emission first tries the method's long-term default
             -- ('mtLongTermFallbackCF') so it inherits the long-term factor, not
             -- the immediate-emission one; if the method has none it falls through.
-            M.lookup (name, baseMed, normSub) (mtExactCF tables)
+            -- A unit-suffixed flow first tries the method row declared in its
+            -- own unit ('mtUnitVariantCF') — the collapsed-name tables below
+            -- crown one winner per base name, which for a sibling unit variant
+            -- is dimensionally wrong and zeroes on conversion. Gated like the
+            -- other sub-blind rungs.
+            gate (M.lookup (variantName, baseMed) (mtUnitVariantCF tables))
+                <|> M.lookup (name, baseMed, normSub) (mtExactCF tables)
                 <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
                 <|> gate (M.lookup (name, baseMed) (mtFallbackCF tables))
                 <|> gate (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))

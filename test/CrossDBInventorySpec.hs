@@ -173,6 +173,7 @@ spec = do
                             [ (uuidRoot, CF 27.0 (CFUnit "kg CO2 eq"))
                             , (uuidDep, CF 1.0 (CFUnit "kg CO2 eq"))
                             ]
+                    , mtUnitVariantCF = M.empty
                     , mtExactCF = M.empty
                     , mtFallbackCF = M.empty
                     , mtLongTermFallbackCF = M.empty
