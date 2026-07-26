@@ -37,6 +37,7 @@ module Method.Mapping (
     buildMethodTables,
     buildMethodIndex,
     fillBroadcastVector,
+    zeroedMatchedCFs,
     fillRegionalActivityWeights,
     RegionalActivityWeights (..),
     computeLCIAScore,
@@ -1420,6 +1421,48 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
     buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
         Nothing -> Nothing
         Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0)
+
+{- | Matched CFs whose effective factor collapses to @0@ although the factor
+itself is nonzero: the flow-to-CF unit conversion was refused (dimensional
+mismatch, missing canonical base, or a failed energy bridge — the @0@ arms of
+'convertForCharacterization' and 'energyAwareConversion'). The refusal itself
+is right — wrong-dimension data must not score — but left unreported it is
+indistinguishable from an uncharacterized flow, and the method silently
+undercounts. Callers surface these once per (db, method) at build time.
+
+Covers both read paths: the broadcast vector (re-running the cascade only for
+its zero-valued entries, so a healthy method pays nothing) and the
+regionalized CF table (one representative CF per flow — whether a conversion
+is refused depends on the units, not on the per-location value). The
+name-blind regional CAS bridge is not scanned: it has no fixed flow to
+convert against until scoring. One entry per flow.
+-}
+zeroedMatchedCFs :: UnitConfig -> UnitDB -> BioFlowDB -> MethodTables -> [(BiosphereFlow, CF)]
+zeroedMatchedCFs unitConfig unitDB flowDB tables =
+    M.elems (M.union broadcastZeroed regionalZeroed)
+  where
+    broadcastZeroed =
+        M.fromList
+            [ (fid, (flow, cf))
+            | (fid, eff) <- M.toList (mtBroadcast tables)
+            , eff == 0
+            , Just flow <- [M.lookup fid flowDB]
+            , Just cf <- [lookupCascadeCF tables flowDB fid]
+            , cfValue cf /= 0
+            ]
+    regionalZeroed =
+        M.fromList
+            [ (fid, (flow, cf))
+            | (fid, cf) <- M.toList regionalRep
+            , Just flow <- [M.lookup fid flowDB]
+            , convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0 == 0
+            ]
+    regionalRep =
+        M.fromList
+            [ (fid, cf)
+            | ((fid, _), cf) <- M.toList (mtRegionalizedCF tables)
+            , cfValue cf /= 0
+            ]
 
 {- | Precompute per-activity-column contributions for a regionalized method.
 

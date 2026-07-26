@@ -14,7 +14,7 @@ import Test.Hspec
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.ParserCSV (parseMethodCSVBytes)
-import Method.Types (Compartment (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
+import Method.Types (Compartment (..), EnergyDensity (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
@@ -687,6 +687,65 @@ spec = do
             -- fidLocal contributes 2.0 * 1.5 = 3.0; fidExtra has no CF → 0.
             -- The fallback path must NOT crash on the unknown UUID.
             fast `shouldBe` (3.0 :: Double)
+
+    describe "zeroedMatchedCFs (matched CF the flow's unit cannot reach)" $ do
+        -- kg is a mass and m3 a volume: no conversion path between them, so a
+        -- kg-denominated CF matched by an m3 flow is refused and scores 0 —
+        -- exactly the silent undercount this scan exists to surface.
+        let cfg =
+                UnitConfig
+                    { ucDimensionOrder = []
+                    , ucUnits =
+                        M.fromList
+                            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                            , ("m3", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
+                            , ("mj", UnitDef [0, 0, 1, 0, 0, 0, 0, 0] 1.0)
+                            ]
+                    , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3"), ("mj", "MJ")]
+                    }
+            fillWith densities unitName' cf = do
+                fid <- nextRandom
+                uid <- nextRandom
+                let flow = (mkFlow fid "gas" "air" Nothing){bfUnitId = uid}
+                    flowDB = M.singleton fid flow
+                    unitDB = M.singleton uid ((unitNamed unitName'){unitId = uid})
+                    filled =
+                        fillBroadcastVector cfg unitDB flowDB $
+                            buildMethodTables OtherCFFamily M.empty densities [(cf, Just (flow, ByUUID))]
+                pure (fid, map (bfId . fst) (zeroedMatchedCFs cfg unitDB flowDB filled))
+            fillFor = fillWith M.empty
+
+        it "flags a kg-denominated CF matched by an m3 flow" $ do
+            (fid, zeroed) <- fillFor "m3" (mkCF "gas" Nothing 43.1)
+            zeroed `shouldBe` [fid]
+
+        it "stays quiet when the conversion exists" $ do
+            (_, zeroed) <- fillFor "kg" (mkCF "gas" Nothing 43.1)
+            zeroed `shouldBe` []
+
+        it "stays quiet for a CF the method genuinely declares as 0" $ do
+            -- Same dimensional mismatch, but the factor itself is 0: the zero
+            -- contribution is the method's own value, not a refusal.
+            (_, zeroed) <- fillFor "m3" (mkCF "gas" Nothing 0.0)
+            zeroed `shouldBe` []
+
+        it "flags a refused CF that is only regionalized (no broadcast entry)" $ do
+            -- A located CF never reaches the broadcast tables, so a
+            -- broadcast-only scan would stay silent about its refusal.
+            (fid, zeroed) <-
+                fillFor "m3" ((mkCF "gas" Nothing 43.1){mcfConsumerLocation = Just "FR"})
+            zeroed `shouldBe` [fid]
+
+        it "flags a failed energy-density bridge" $ do
+            -- CF per MJ, density native to kg, flow in m3: the bridge fires
+            -- (MJ matches the density unit) but m3 cannot reach kg, so the
+            -- conversion is refused.
+            (fid, zeroed) <-
+                fillWith
+                    (M.singleton "gas" (EnergyDensity 43.1 "MJ" "kg"))
+                    "m3"
+                    ((mkCF "gas" Nothing 50.0){mcfUnit = "MJ"})
+            zeroed `shouldBe` [fid]
 
     describe "findSimilarCFs (post-scoring suggester)" $ do
         let mkMethod cfs =
