@@ -38,7 +38,8 @@
   databases name. Containment comes from Natural Earth's public-domain country
   polygons rather than from hand-written guesses; codes whose membership is a
   judgement call, such as the aluminium industry's IAI areas, carry their
-  region and nothing finer.
+  region and nothing finer. The global codes close every fallback list, so a
+  nearer regional factor always wins over the global average.
 - A location whose name contains a comma is no longer cut in half. The
   geographies file was split on commas without regard for quoting, so
   `Europe, Western` — the location of 863 Agribalyse activities — parsed as a

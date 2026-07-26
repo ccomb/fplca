@@ -1,5 +1,7 @@
 # Location hierarchy: a code, its display name, and every wider
-# location its data may fall back to, nearest first.
+# location its data may fall back to, nearest first. Order matters:
+# the characterization cascade walks the parents in order and stops
+# at the first factor it finds, so GLO and RoW close every list.
 #
 # Vocabulary and names come from ecoinvent 3.11's own
 # MasterData/Geographies.xml. Containment -- which country sits in
@@ -9,37 +11,37 @@
 # region and nothing finer: a wrong parent silently lends one
 # region's characterisation factors to another.
 code,display_name,parents
-FR,France,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-DE,Germany,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-IT,Italy,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-ES,Spain,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-GB,United Kingdom,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|GLO|RoW|UN-NEUROPE
-UK,United Kingdom,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|GLO|RoW
-PL,Poland,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-NL,Netherlands,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-BE,Belgium,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-AT,Austria,"Europe without Switzerland|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-CH,Switzerland,"Europe without Austria|Europe|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-SE,Sweden,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|GLO|RoW|UN-NEUROPE
-NO,Norway,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|NORDEL|GLO|RoW|UN-NEUROPE
-DK,Denmark,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|GLO|RoW|UN-NEUROPE
-FI,Finland,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|GLO|RoW|UN-NEUROPE
-PT,Portugal,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-GR,Greece,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-IE,Ireland,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-NEUROPE
-CZ,Czech Republic,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-RO,Romania,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-HU,Hungary,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-SK,Slovakia,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-BG,Bulgaria,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-EEUROPE|Europe, Eastern"
-HR,Croatia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-SI,Slovenia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-SEUROPE
-LT,Lithuania,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-NEUROPE
-LV,Latvia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-NEUROPE
-EE,Estonia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|UN-NEUROPE
-LU,Luxembourg,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|GLO|RoW|WEU|Europe, Western"
-MT,Malta,Europe without Switzerland|Europe without Austria|Europe|EU|RER|GLO|RoW|UN-SEUROPE
-CY,Cyprus,Europe without Switzerland|Europe without Austria|Europe|EU|RER|GLO|RoW|UN-WASIA|Asia
+FR,France,"France, including overseas territories|Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+DE,Germany,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+IT,Italy,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+ES,Spain,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+GB,United Kingdom,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+UK,United Kingdom,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+PL,Poland,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+NL,Netherlands,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+BE,Belgium,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+AT,Austria,"Europe without Switzerland|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+CH,Switzerland,"Europe without Austria|Europe|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+SE,Sweden,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|UN-NEUROPE|GLO|RoW
+NO,Norway,Europe without Switzerland|Europe without Austria|Europe|RER|ENTSO-E|NORDEL|UN-NEUROPE|GLO|RoW
+DK,Denmark,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|UN-NEUROPE|GLO|RoW
+FI,Finland,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|NORDEL|UN-NEUROPE|GLO|RoW
+PT,Portugal,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+GR,Greece,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+IE,Ireland,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+CZ,Czech Republic,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+RO,Romania,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+HU,Hungary,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+SK,Slovakia,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+BG,Bulgaria,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-EEUROPE|Europe, Eastern|GLO|RoW"
+HR,Croatia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+SI,Slovenia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-SEUROPE|GLO|RoW
+LT,Lithuania,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+LV,Latvia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+EE,Estonia,Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|UN-NEUROPE|GLO|RoW
+LU,Luxembourg,"Europe without Switzerland|Europe without Austria|Europe|EU|RER|ENTSO-E|WEU|Europe, Western|GLO|RoW"
+MT,Malta,Europe without Switzerland|Europe without Austria|Europe|EU|RER|UN-SEUROPE|GLO|RoW
+CY,Cyprus,Europe without Switzerland|Europe without Austria|Europe|EU|RER|UN-WASIA|Asia|GLO|RoW
 EU,European Union,Europe without Switzerland|Europe without Austria|Europe|RER|GLO|RoW
 EU-27,European Union (27),Europe without Switzerland|Europe without Austria|Europe|EU|RER|GLO|RoW
 EU-28,European Union (28),Europe without Switzerland|Europe without Austria|Europe|EU|RER|GLO|RoW
@@ -52,58 +54,58 @@ Europe without Austria,Europe without Austria,Europe|RER|GLO|RoW
 Europe,Europe,GLO|RoW
 US,United States,North America|NAFTA|GLO|RoW
 CA,Canada,North America|NAFTA|GLO|RoW
-MX,Mexico,North America|Latin America|NAFTA|GLO|RoW|UN-CAMERICA
+MX,Mexico,North America|Latin America|NAFTA|UN-CAMERICA|GLO|RoW
 NAFTA,NAFTA,North America|GLO|RoW
 Canada without Quebec,Canada without Quebec,North America|CA|NAFTA|GLO|RoW
 North America,North America,GLO|RoW
 RNA,Rest of North America,North America|GLO|RoW
-CN,China,Asia|GLO|RoW|UN-EASIA
-JP,Japan,Asia|GLO|RoW|UN-EASIA
-KR,South Korea,Asia|GLO|RoW|UN-EASIA
-IN,India,Asia|GLO|RoW|SAS
-IN-Southern grid,India (Southern grid),IN|Asia|GLO|RoW|SAS
-IN-North-eastern grid,India (North-eastern grid),IN|Asia|GLO|RoW|SAS
-IN-Eastern grid,India (Eastern grid),IN|Asia|GLO|RoW|SAS
-IN-Northern grid,India (Northern grid),IN|Asia|GLO|RoW|SAS
-IN-Western grid,India (Western grid),IN|Asia|GLO|RoW|SAS
-TW,Taiwan,Asia|GLO|RoW|UN-EASIA
-ID,Indonesia,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
-TH,Thailand,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
-MY,Malaysia,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
-VN,Vietnam,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
-PH,Philippines,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
-SG,Singapore,"Asia|GLO|RoW|UN-SEASIA|Asia, South East"
+CN,China,Asia|UN-EASIA|GLO|RoW
+JP,Japan,Asia|UN-EASIA|GLO|RoW
+KR,South Korea,Asia|UN-EASIA|GLO|RoW
+IN,India,Asia|SAS|GLO|RoW
+IN-Southern grid,India (Southern grid),IN|Asia|SAS|GLO|RoW
+IN-North-eastern grid,India (North-eastern grid),IN|Asia|SAS|GLO|RoW
+IN-Eastern grid,India (Eastern grid),IN|Asia|SAS|GLO|RoW
+IN-Northern grid,India (Northern grid),IN|Asia|SAS|GLO|RoW
+IN-Western grid,India (Western grid),IN|Asia|SAS|GLO|RoW
+TW,Taiwan,Asia|UN-EASIA|GLO|RoW
+ID,Indonesia,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
+TH,Thailand,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
+MY,Malaysia,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
+VN,Vietnam,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
+PH,Philippines,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
+SG,Singapore,"Asia|UN-SEASIA|Asia, South East|GLO|RoW"
 Asia,Asia,GLO|RoW
 RAS,Rest of Asia,Asia|GLO|RoW
-BR,Brazil,Latin America|South America|GLO|RoW|UN-SAMERICA
-AR,Argentina,Latin America|South America|GLO|RoW|UN-SAMERICA
-CL,Chile,Latin America|South America|GLO|RoW|UN-SAMERICA
-CO,Colombia,Latin America|South America|GLO|RoW|UN-SAMERICA
-PE,Peru,Latin America|South America|GLO|RoW|UN-SAMERICA
+BR,Brazil,Latin America|South America|UN-SAMERICA|GLO|RoW
+AR,Argentina,Latin America|South America|UN-SAMERICA|GLO|RoW
+CL,Chile,Latin America|South America|UN-SAMERICA|GLO|RoW
+CO,Colombia,Latin America|South America|UN-SAMERICA|GLO|RoW
+PE,Peru,Latin America|South America|UN-SAMERICA|GLO|RoW
 Latin America,Latin America,GLO|RoW
 South America,South America,Latin America|GLO|RoW
 RLA,Rest of Latin America,Latin America|GLO|RoW
 ZA,South Africa,Africa|GLO|RoW
-EG,Egypt,Africa|Middle East|GLO|RoW|UN-NAFRICA
-NG,Nigeria,Africa|GLO|RoW|UN-WAFRICA
-MA,Morocco,Africa|GLO|RoW|UN-NAFRICA
+EG,Egypt,Africa|Middle East|UN-NAFRICA|GLO|RoW
+NG,Nigeria,Africa|UN-WAFRICA|GLO|RoW
+MA,Morocco,Africa|UN-NAFRICA|GLO|RoW
 Africa,Africa,GLO|RoW
 RAF,Rest of Africa,Africa|GLO|RoW
-AU,Australia,Oceania|GLO|RoW|UN-AUSTRALIANZ
-NZ,New Zealand,Oceania|GLO|RoW|UN-AUSTRALIANZ
+AU,Australia,"Australia, including overseas territorie|Oceania|UN-AUSTRALIANZ|GLO|RoW"
+NZ,New Zealand,Oceania|UN-AUSTRALIANZ|GLO|RoW
 Oceania,Oceania,GLO|RoW
-SA,Saudi Arabia,Middle East|Asia|GLO|RoW|UN-WASIA
-AE,United Arab Emirates,Middle East|Asia|GLO|RoW|UN-WASIA
-IL,Israel,Middle East|GLO|RoW|UN-WASIA|Asia
-TR,Turkey,Middle East|Europe|GLO|RoW|UN-WASIA|Asia
+SA,Saudi Arabia,Middle East|Asia|UN-WASIA|GLO|RoW
+AE,United Arab Emirates,Middle East|Asia|UN-WASIA|GLO|RoW
+IL,Israel,Middle East|UN-WASIA|Asia|GLO|RoW
+TR,Turkey,Middle East|Europe|UN-WASIA|Asia|GLO|RoW
 Middle East,Middle East,GLO|RoW
 RME,Rest of Middle East,Middle East|GLO|RoW
 GLO,Global,RoW
 RoW,Rest of World,GLO
 AD,Andorra,UN-SEUROPE|Europe|GLO|RoW
 AF,Afghanistan,SAS|Asia|GLO|RoW
-AG,Antigua and Barbuda,UN-CARIBBEAN|North America|GLO|RoW
-AI,Anguilla,UN-CARIBBEAN|North America|GLO|RoW
+AG,Antigua and Barbuda,UN-CARIBBEAN|North America|Latin America|GLO|RoW
+AI,Anguilla,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 AL,Albania,UN-SEUROPE|Europe|GLO|RoW
 AM,Armenia,UN-WASIA|Asia|GLO|RoW
 AO,Angola,UN-MAFRICA|Africa|GLO|RoW
@@ -111,74 +113,74 @@ AQ,Antarctica,GLO|RoW
 AS,American Samoa,UN-POLYNESIA|Oceania|GLO|RoW
 ASCC,Alaska Systems Coordinating Council,US|North America|NAFTA|GLO|RoW
 "ASCC, US only",Alaska Systems Coordinating Council,US|North America|NAFTA|GLO|RoW
-AU-AC,"Australia, Ashmore and Cartier Islands",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-ACT,"Australia, Australian Capital Territory",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-IOT,"Australia, Indian Ocean Territories",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-JBT,"Australia, Jervis Bay Territory",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-NSW,"Australia, New South Wales",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-NT,"Australia, Northern Territory",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-QLD,"Australia, Queensland",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-SA,"Australia, South Australia",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-TAS,"Australia, Tasmania",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-VIC,"Australia, Victoria",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AU-WA,"Australia, Western Australia",AU|Oceania|GLO|RoW|UN-AUSTRALIANZ
-AW,Aruba,UN-CARIBBEAN|North America|GLO|RoW
+AU-AC,"Australia, Ashmore and Cartier Islands",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-ACT,"Australia, Australian Capital Territory",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-IOT,"Australia, Indian Ocean Territories",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-JBT,"Australia, Jervis Bay Territory",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-NSW,"Australia, New South Wales",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-NT,"Australia, Northern Territory",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-QLD,"Australia, Queensland",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-SA,"Australia, South Australia",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-TAS,"Australia, Tasmania",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-VIC,"Australia, Victoria",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AU-WA,"Australia, Western Australia",AU|Oceania|UN-AUSTRALIANZ|GLO|RoW
+AW,Aruba,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 AX,Aland,UN-NEUROPE|Europe|GLO|RoW
 AZ,Azerbaijan,UN-WASIA|Asia|GLO|RoW
 Akrotiri,Akrotiri Sovereign Base Area,Asia|GLO|RoW
 Asia without China,Asia without China,Asia|GLO|RoW
 "Asia, South East",South-Eastern Asia,Asia|GLO|RoW
-"Australia, including overseas territorie","Australia, including overseas territories",AU|Oceania|GLO|RoW
+"Australia, including overseas territorie","Australia, including overseas territories",Oceania|GLO|RoW
 BA,Bosnia and Herzegovina,UN-SEUROPE|Europe|GLO|RoW
 BALTSO,Baltic System Operator,Europe|RER|ENTSO-E|GLO|RoW
-BB,Barbados,UN-CARIBBEAN|North America|GLO|RoW
+BB,Barbados,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 BD,Bangladesh,SAS|Asia|GLO|RoW
 BF,Burkina Faso,UN-WAFRICA|Africa|GLO|RoW
 BH,Bahrain,UN-WASIA|Asia|GLO|RoW
 BI,Burundi,UN-EAFRICA|Africa|GLO|RoW
 BJ,Benin,UN-WAFRICA|Africa|GLO|RoW
-BL,Saint Barthelemy,UN-CARIBBEAN|North America|GLO|RoW
+BL,Saint Barthelemy,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 BM,Bermuda,North America|GLO|RoW
 BN,Brunei,"UN-SEASIA|Asia, South East|Asia|GLO|RoW"
 BO,Bolivia,UN-SAMERICA|South America|Latin America|GLO|RoW
-BR-AC,"Brazil, Acre",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-AL,"Brazil, Alagoas",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-AM,"Brazil, Amazonas",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-AP,"Brazil, Amapá",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-BA,"Brazil, Bahia",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-CE,"Brazil, Ceará",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-DF,"Brazil, Distrito Federal",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-ES,"Brazil, Espírito Santo",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-GO,"Brazil, Goiás",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-MA,"Brazil, Maranhão",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-MG,"Brazil, Minas Gerais",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-MS,"Brazil, Mato Grosso do Sul",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-MT,"Brazil, Mato Grosso",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-Mid-western grid,"Brazil, Mid-western grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-North-eastern grid,"Brazil, North-eastern grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-Northern grid,"Brazil, Northern grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-PA,"Brazil, Pará",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-PB,"Brazil, Paraíba",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-PE,"Brazil, Pernambuco",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-PI,"Brazil, Piauí",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-PR,"Brazil, Paraná",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-RJ,"Brazil, Rio de Janeiro",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-RN,"Brazil, Rio Grande do Norte",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-RO,"Brazil, Rondônia",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-RR,"Brazil, Roraima",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-RS,"Brazil, Rio Grande do Sul",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-SC,"Brazil, Santa Catarina",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-SE,"Brazil, Sergipe",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-SP,"Brazil, São Paulo",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-South-eastern grid,"Brazil, South-eastern grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-South-eastern/Mid-western grid,"Brazil, South-eastern and Mid-western grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-Southern grid,"Brazil, Southern grid",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BR-TO,"Brazil, Tocantins",BR|Latin America|South America|GLO|RoW|UN-SAMERICA
-BS,The Bahamas,UN-CARIBBEAN|North America|GLO|RoW
+BR-AC,"Brazil, Acre",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-AL,"Brazil, Alagoas",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-AM,"Brazil, Amazonas",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-AP,"Brazil, Amapá",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-BA,"Brazil, Bahia",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-CE,"Brazil, Ceará",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-DF,"Brazil, Distrito Federal",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-ES,"Brazil, Espírito Santo",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-GO,"Brazil, Goiás",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-MA,"Brazil, Maranhão",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-MG,"Brazil, Minas Gerais",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-MS,"Brazil, Mato Grosso do Sul",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-MT,"Brazil, Mato Grosso",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-Mid-western grid,"Brazil, Mid-western grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-North-eastern grid,"Brazil, North-eastern grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-Northern grid,"Brazil, Northern grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-PA,"Brazil, Pará",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-PB,"Brazil, Paraíba",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-PE,"Brazil, Pernambuco",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-PI,"Brazil, Piauí",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-PR,"Brazil, Paraná",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-RJ,"Brazil, Rio de Janeiro",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-RN,"Brazil, Rio Grande do Norte",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-RO,"Brazil, Rondônia",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-RR,"Brazil, Roraima",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-RS,"Brazil, Rio Grande do Sul",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-SC,"Brazil, Santa Catarina",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-SE,"Brazil, Sergipe",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-SP,"Brazil, São Paulo",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-South-eastern grid,"Brazil, South-eastern grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-South-eastern/Mid-western grid,"Brazil, South-eastern and Mid-western grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-Southern grid,"Brazil, Southern grid",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BR-TO,"Brazil, Tocantins",BR|Latin America|South America|UN-SAMERICA|GLO|RoW
+BS,The Bahamas,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 BT,Bhutan,SAS|Asia|GLO|RoW
 BW,Botswana,Africa|GLO|RoW
 BY,Belarus,"UN-EEUROPE|Europe, Eastern|Europe|GLO|RoW"
-BZ,Belize,UN-CAMERICA|North America|GLO|RoW
+BZ,Belize,UN-CAMERICA|North America|Latin America|GLO|RoW
 Bajo Nuevo,Bajo Nuevo Bank (Petrel Is.),Latin America|GLO|RoW
 CA-AB,"Canada, Alberta",CA|North America|NAFTA|GLO|RoW
 CA-BC,"Canada, British Columbia",CA|North America|NAFTA|GLO|RoW
@@ -200,60 +202,60 @@ CG,Congo,UN-MAFRICA|Africa|GLO|RoW
 CI,Ivory Coast,UN-WAFRICA|Africa|GLO|RoW
 CK,Cook Islands,UN-POLYNESIA|Oceania|GLO|RoW
 CM,Cameroon,UN-MAFRICA|Africa|GLO|RoW
-CN-AH,"China, Anhui (安徽)",CN|Asia|GLO|RoW|UN-EASIA
-CN-BJ,"China, Beijing (北京)",CN|Asia|GLO|RoW|UN-EASIA
-CN-CCG,"China, Central Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-CQ,"China, Chongqing (重庆)",CN|Asia|GLO|RoW|UN-EASIA
-CN-CSG,"China, China Southern Power Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-ECGC,"China, East Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-FJ,"China, Fujian (福建)",CN|Asia|GLO|RoW|UN-EASIA
-CN-GD,"China, Guangdong (广东)",CN|Asia|GLO|RoW|UN-EASIA
-CN-GS,"China, Gansu (甘肃)",CN|Asia|GLO|RoW|UN-EASIA
-CN-GX,"China, Guangxi (广西壮族自治区)",CN|Asia|GLO|RoW|UN-EASIA
-CN-GZ,"China, Guizhou (贵州)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HA,"China, Hainan (海南)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HB,"China, Hebei (河北)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HE,"China, Henan (河南)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HL,"China, Heilongjiang (黑龙江省)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HN,"China, Hunan (湖南)",CN|Asia|GLO|RoW|UN-EASIA
-CN-HU,"China, Hubei (湖北)",CN|Asia|GLO|RoW|UN-EASIA
-CN-JL,"China, Jilin (吉林)",CN|Asia|GLO|RoW|UN-EASIA
-CN-JS,"China, Jiangsu (江苏)",CN|Asia|GLO|RoW|UN-EASIA
-CN-JX,"China, Jiangxi (江西)",CN|Asia|GLO|RoW|UN-EASIA
-CN-LN,"China, Liaoning (辽宁)",CN|Asia|GLO|RoW|UN-EASIA
-CN-NCGC,"China, North Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-NECG,"China, Northeast Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-NM,"China, Inner Mongol (内蒙古自治区)",CN|Asia|GLO|RoW|UN-EASIA
-CN-NWG,"China, Northwest Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-NX,"China, Ningxia (宁夏回族自治区)",CN|Asia|GLO|RoW|UN-EASIA
-CN-QH,"China, Qinghai (青海)",CN|Asia|GLO|RoW|UN-EASIA
-CN-SA,"China, Shaanxi (陕西)",CN|Asia|GLO|RoW|UN-EASIA
-CN-SC,"China, Sichuan (四川)",CN|Asia|GLO|RoW|UN-EASIA
-CN-SD,"China, Shandong (山东)",CN|Asia|GLO|RoW|UN-EASIA
-CN-SGCC,"China, State Grid Corporation of China",CN|Asia|GLO|RoW|UN-EASIA
-CN-SH,"China, Shanghai (上海)",CN|Asia|GLO|RoW|UN-EASIA
-CN-SWG,"China, Southwest Grid",CN|Asia|GLO|RoW|UN-EASIA
-CN-SX,"China, Shanxi (山西)",CN|Asia|GLO|RoW|UN-EASIA
-CN-TJ,"China, Tianjin (天津)",CN|Asia|GLO|RoW|UN-EASIA
-CN-XJ,"China, Xinjiang (新疆维吾尔自治区)",CN|Asia|GLO|RoW|UN-EASIA
-CN-XZ,"China, Xizang (西藏自治区)",CN|Asia|GLO|RoW|UN-EASIA
-CN-YN,"China, Yunnan (云南)",CN|Asia|GLO|RoW|UN-EASIA
-CN-ZJ,"China, Zhejiang (浙江)",CN|Asia|GLO|RoW|UN-EASIA
-CR,Costa Rica,UN-CAMERICA|North America|GLO|RoW
-CU,Cuba,UN-CARIBBEAN|North America|GLO|RoW
+CN-AH,"China, Anhui (安徽)",CN|Asia|UN-EASIA|GLO|RoW
+CN-BJ,"China, Beijing (北京)",CN|Asia|UN-EASIA|GLO|RoW
+CN-CCG,"China, Central Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-CQ,"China, Chongqing (重庆)",CN|Asia|UN-EASIA|GLO|RoW
+CN-CSG,"China, China Southern Power Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-ECGC,"China, East Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-FJ,"China, Fujian (福建)",CN|Asia|UN-EASIA|GLO|RoW
+CN-GD,"China, Guangdong (广东)",CN|Asia|UN-EASIA|GLO|RoW
+CN-GS,"China, Gansu (甘肃)",CN|Asia|UN-EASIA|GLO|RoW
+CN-GX,"China, Guangxi (广西壮族自治区)",CN|Asia|UN-EASIA|GLO|RoW
+CN-GZ,"China, Guizhou (贵州)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HA,"China, Hainan (海南)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HB,"China, Hebei (河北)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HE,"China, Henan (河南)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HL,"China, Heilongjiang (黑龙江省)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HN,"China, Hunan (湖南)",CN|Asia|UN-EASIA|GLO|RoW
+CN-HU,"China, Hubei (湖北)",CN|Asia|UN-EASIA|GLO|RoW
+CN-JL,"China, Jilin (吉林)",CN|Asia|UN-EASIA|GLO|RoW
+CN-JS,"China, Jiangsu (江苏)",CN|Asia|UN-EASIA|GLO|RoW
+CN-JX,"China, Jiangxi (江西)",CN|Asia|UN-EASIA|GLO|RoW
+CN-LN,"China, Liaoning (辽宁)",CN|Asia|UN-EASIA|GLO|RoW
+CN-NCGC,"China, North Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-NECG,"China, Northeast Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-NM,"China, Inner Mongol (内蒙古自治区)",CN|Asia|UN-EASIA|GLO|RoW
+CN-NWG,"China, Northwest Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-NX,"China, Ningxia (宁夏回族自治区)",CN|Asia|UN-EASIA|GLO|RoW
+CN-QH,"China, Qinghai (青海)",CN|Asia|UN-EASIA|GLO|RoW
+CN-SA,"China, Shaanxi (陕西)",CN|Asia|UN-EASIA|GLO|RoW
+CN-SC,"China, Sichuan (四川)",CN|Asia|UN-EASIA|GLO|RoW
+CN-SD,"China, Shandong (山东)",CN|Asia|UN-EASIA|GLO|RoW
+CN-SGCC,"China, State Grid Corporation of China",CN|Asia|UN-EASIA|GLO|RoW
+CN-SH,"China, Shanghai (上海)",CN|Asia|UN-EASIA|GLO|RoW
+CN-SWG,"China, Southwest Grid",CN|Asia|UN-EASIA|GLO|RoW
+CN-SX,"China, Shanxi (山西)",CN|Asia|UN-EASIA|GLO|RoW
+CN-TJ,"China, Tianjin (天津)",CN|Asia|UN-EASIA|GLO|RoW
+CN-XJ,"China, Xinjiang (新疆维吾尔自治区)",CN|Asia|UN-EASIA|GLO|RoW
+CN-XZ,"China, Xizang (西藏自治区)",CN|Asia|UN-EASIA|GLO|RoW
+CN-YN,"China, Yunnan (云南)",CN|Asia|UN-EASIA|GLO|RoW
+CN-ZJ,"China, Zhejiang (浙江)",CN|Asia|UN-EASIA|GLO|RoW
+CR,Costa Rica,UN-CAMERICA|North America|Latin America|GLO|RoW
+CU,Cuba,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 CV,Cape Verde,UN-WAFRICA|Africa|GLO|RoW
-CW,Curaçao,UN-CARIBBEAN|North America|GLO|RoW
+CW,Curaçao,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 Canada without Alberta,Canada without Alberta,CA|North America|NAFTA|GLO|RoW
 Canada without Alberta and Quebec,Canada without Alberta and Quebec,CA|North America|NAFTA|GLO|RoW
 Canary Islands,Canary Islands,ES|Europe|GLO|RoW
 Central Asia,Central Asia,Asia|GLO|RoW
-China w/o Inner Mongol,China without Inner Mongol,CN|Asia|GLO|RoW
+China w/o Inner Mongol,China without Inner Mongol,CN|Asia|UN-EASIA|GLO|RoW
 Clipperton Island,Clipperton Island,Oceania|GLO|RoW
 Coral Sea Islands,Coral Sea Islands,Oceania|GLO|RoW
 Cyprus No Mans Area,Cyprus No Mans Area,Asia|GLO|RoW
 DJ,Djibouti,UN-EAFRICA|Africa|GLO|RoW
-DM,Dominica,UN-CARIBBEAN|North America|GLO|RoW
-DO,Dominican Republic,UN-CARIBBEAN|North America|GLO|RoW
+DM,Dominica,UN-CARIBBEAN|North America|Latin America|GLO|RoW
+DO,Dominican Republic,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 DZ,Algeria,UN-NAFRICA|Africa|GLO|RoW
 Dhekelia Base,Dhekelia Sovereign Base Area,Asia|GLO|RoW
 EC,Ecuador,UN-SAMERICA|South America|Latin America|GLO|RoW
@@ -263,17 +265,17 @@ ET,Ethiopia,UN-EAFRICA|Africa|GLO|RoW
 Europe without NORDEL (NCPA),Europe without NORDEL (NCPA),Europe|RER|GLO|RoW
 Europe without Switzerland and Austria,Europe without Switzerland and Austria,Europe|RER|GLO|RoW
 Europe without Switzerland and France,Europe without Switzerland and France,Europe|RER|GLO|RoW
-"Europe, Eastern",Eastern Europe,Europe|GLO|RoW
-"Europe, Western",Western Europe,Europe|GLO|RoW
+"Europe, Eastern",Eastern Europe,Europe|RER|GLO|RoW
+"Europe, Western",Western Europe,Europe|RER|GLO|RoW
 "Europe, without Russia and Türkiye","Europe, without Russia and Türkiye",Europe|RER|GLO|RoW
 FJ,Fiji,UN-MELANESIA|Oceania|GLO|RoW
 FK,Falkland Islands,UN-SAMERICA|South America|Latin America|GLO|RoW
 FM,"Micronesia, Federated States of",UN-MICRONESIA|Oceania|GLO|RoW
 FO,Faroe Islands,UN-NEUROPE|Europe|GLO|RoW
 FSU,Commonwealth of Independent States,Europe|Asia|GLO|RoW
-"France, including overseas territories","France, including overseas territories",FR|Europe|GLO|RoW
+"France, including overseas territories","France, including overseas territories",Europe|GLO|RoW
 GA,Gabon,UN-MAFRICA|Africa|GLO|RoW
-GD,Grenada,UN-CARIBBEAN|North America|GLO|RoW
+GD,Grenada,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 GE,Georgia,UN-WASIA|Asia|GLO|RoW
 GG,Guernsey,UN-NEUROPE|Europe|GLO|RoW
 GH,Ghana,UN-WAFRICA|Africa|GLO|RoW
@@ -283,7 +285,7 @@ GN,Guinea,UN-WAFRICA|Africa|GLO|RoW
 GP,Guadeloupe,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 GQ,Equatorial Guinea,UN-MAFRICA|Africa|GLO|RoW
 GS,South Georgia and South Sandwich Islands,GLO|RoW
-GT,Guatemala,UN-CAMERICA|North America|GLO|RoW
+GT,Guatemala,UN-CAMERICA|North America|Latin America|GLO|RoW
 GU,Guam,UN-MICRONESIA|Oceania|GLO|RoW
 GW,Guinea Bissau,UN-WAFRICA|Africa|GLO|RoW
 GY,Guyana,UN-SAMERICA|South America|Latin America|GLO|RoW
@@ -292,8 +294,8 @@ HICC,Hawaiian Islands Coordinating Council,US|North America|NAFTA|GLO|RoW
 "HICC, US only",Hawaiian Islands Coordinating Council,US|North America|NAFTA|GLO|RoW
 HK,Hong Kong S.A.R.,UN-EASIA|Asia|GLO|RoW
 HM,Heard Island and McDonald Islands,GLO|RoW
-HN,Honduras,UN-CAMERICA|North America|GLO|RoW
-HT,Haiti,UN-CARIBBEAN|North America|GLO|RoW
+HN,Honduras,UN-CAMERICA|North America|Latin America|GLO|RoW
+HT,Haiti,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 "IAI Area, Africa","IAI Area, Africa",Africa|GLO|RoW
 "IAI Area, Asia, without China and GCC","IAI Area, Asia, without China and GCC",Asia|GLO|RoW
 "IAI Area, EU27 & EFTA","IAI Area, EU27 & EFTA",Europe|RER|GLO|RoW
@@ -303,62 +305,62 @@ HT,Haiti,UN-CARIBBEAN|North America|GLO|RoW
 "IAI Area, Russia & RER w/o EU27 & EFTA","IAI Area, Russia & Europe outside EU27 & EFTA",Europe|GLO|RoW
 "IAI Area, South America","IAI Area, South America",South America|Latin America|GLO|RoW
 IM,Isle of Man,UN-NEUROPE|Europe|GLO|RoW
-IN-AN,"India, Andaman and Nicobar",IN|Asia|GLO|RoW|SAS
-IN-AP,"India, Andhra Pradesh",IN|Asia|GLO|RoW|SAS
-IN-AR,"India, Arunachal Pradesh",IN|Asia|GLO|RoW|SAS
-IN-AS,"India, Assam",IN|Asia|GLO|RoW|SAS
-IN-BR,"India, Bihar",IN|Asia|GLO|RoW|SAS
-IN-CH,"India, Chandigarh",IN|Asia|GLO|RoW|SAS
-IN-CT,"India, Chhattisgarh",IN|Asia|GLO|RoW|SAS
-IN-DD,"India, Daman and Diu",IN|Asia|GLO|RoW|SAS
-IN-DL,"India, Delhi",IN|Asia|GLO|RoW|SAS
-IN-DN,"India, Dadra and Nagar Haveli",IN|Asia|GLO|RoW|SAS
-IN-GA,"India, Goa",IN|Asia|GLO|RoW|SAS
-IN-GJ,"India, Gujarat",IN|Asia|GLO|RoW|SAS
-IN-HP,"India, Himachal Pradesh",IN|Asia|GLO|RoW|SAS
-IN-HR,"India, Haryana",IN|Asia|GLO|RoW|SAS
-IN-Islands,"India, Islands",IN|Asia|GLO|RoW|SAS
-IN-JH,"India, Jharkhand",IN|Asia|GLO|RoW|SAS
-IN-JK,"India, Jammu and Kashmir",IN|Asia|GLO|RoW|SAS
-IN-KA,"India, Karnataka",IN|Asia|GLO|RoW|SAS
-IN-KL,"India, Kerala",IN|Asia|GLO|RoW|SAS
-IN-LD,"India, Lakshadweep",IN|Asia|GLO|RoW|SAS
-IN-MH,"India, Maharashtra",IN|Asia|GLO|RoW|SAS
-IN-ML,"India, Meghalaya",IN|Asia|GLO|RoW|SAS
-IN-MN,"India, Manipur",IN|Asia|GLO|RoW|SAS
-IN-MP,"India, Madhya Pradesh",IN|Asia|GLO|RoW|SAS
-IN-MZ,"India, Mizoram",IN|Asia|GLO|RoW|SAS
-IN-NL,"India, Nagaland",IN|Asia|GLO|RoW|SAS
-IN-OR,"India, Odisha",IN|Asia|GLO|RoW|SAS
-IN-PB,"India, Punjab",IN|Asia|GLO|RoW|SAS
-IN-PY,"India, Puducherry",IN|Asia|GLO|RoW|SAS
-IN-RJ,"India, Rajasthan",IN|Asia|GLO|RoW|SAS
-IN-SK,"India, Sikkim",IN|Asia|GLO|RoW|SAS
-IN-TN,"India, Tamil Nadu",IN|Asia|GLO|RoW|SAS
-IN-TR,"India, Tripura",IN|Asia|GLO|RoW|SAS
-IN-UP,"India, Uttar Pradesh",IN|Asia|GLO|RoW|SAS
-IN-UT,"India, Uttarakhand",IN|Asia|GLO|RoW|SAS
-IN-WB,"India, West Bengal",IN|Asia|GLO|RoW|SAS
+IN-AN,"India, Andaman and Nicobar",IN|Asia|SAS|GLO|RoW
+IN-AP,"India, Andhra Pradesh",IN|Asia|SAS|GLO|RoW
+IN-AR,"India, Arunachal Pradesh",IN|Asia|SAS|GLO|RoW
+IN-AS,"India, Assam",IN|Asia|SAS|GLO|RoW
+IN-BR,"India, Bihar",IN|Asia|SAS|GLO|RoW
+IN-CH,"India, Chandigarh",IN|Asia|SAS|GLO|RoW
+IN-CT,"India, Chhattisgarh",IN|Asia|SAS|GLO|RoW
+IN-DD,"India, Daman and Diu",IN|Asia|SAS|GLO|RoW
+IN-DL,"India, Delhi",IN|Asia|SAS|GLO|RoW
+IN-DN,"India, Dadra and Nagar Haveli",IN|Asia|SAS|GLO|RoW
+IN-GA,"India, Goa",IN|Asia|SAS|GLO|RoW
+IN-GJ,"India, Gujarat",IN|Asia|SAS|GLO|RoW
+IN-HP,"India, Himachal Pradesh",IN|Asia|SAS|GLO|RoW
+IN-HR,"India, Haryana",IN|Asia|SAS|GLO|RoW
+IN-Islands,"India, Islands",IN|Asia|SAS|GLO|RoW
+IN-JH,"India, Jharkhand",IN|Asia|SAS|GLO|RoW
+IN-JK,"India, Jammu and Kashmir",IN|Asia|SAS|GLO|RoW
+IN-KA,"India, Karnataka",IN|Asia|SAS|GLO|RoW
+IN-KL,"India, Kerala",IN|Asia|SAS|GLO|RoW
+IN-LD,"India, Lakshadweep",IN|Asia|SAS|GLO|RoW
+IN-MH,"India, Maharashtra",IN|Asia|SAS|GLO|RoW
+IN-ML,"India, Meghalaya",IN|Asia|SAS|GLO|RoW
+IN-MN,"India, Manipur",IN|Asia|SAS|GLO|RoW
+IN-MP,"India, Madhya Pradesh",IN|Asia|SAS|GLO|RoW
+IN-MZ,"India, Mizoram",IN|Asia|SAS|GLO|RoW
+IN-NL,"India, Nagaland",IN|Asia|SAS|GLO|RoW
+IN-OR,"India, Odisha",IN|Asia|SAS|GLO|RoW
+IN-PB,"India, Punjab",IN|Asia|SAS|GLO|RoW
+IN-PY,"India, Puducherry",IN|Asia|SAS|GLO|RoW
+IN-RJ,"India, Rajasthan",IN|Asia|SAS|GLO|RoW
+IN-SK,"India, Sikkim",IN|Asia|SAS|GLO|RoW
+IN-TN,"India, Tamil Nadu",IN|Asia|SAS|GLO|RoW
+IN-TR,"India, Tripura",IN|Asia|SAS|GLO|RoW
+IN-UP,"India, Uttar Pradesh",IN|Asia|SAS|GLO|RoW
+IN-UT,"India, Uttarakhand",IN|Asia|SAS|GLO|RoW
+IN-WB,"India, West Bengal",IN|Asia|SAS|GLO|RoW
 IO,British Indian Ocean Territory,GLO|RoW
 IQ,Iraq,UN-WASIA|Asia|GLO|RoW
 IR,Iran,SAS|Asia|GLO|RoW
 IS,Iceland,UN-NEUROPE|Europe|GLO|RoW
 JE,Jersey,UN-NEUROPE|Europe|GLO|RoW
-JM,Jamaica,UN-CARIBBEAN|North America|GLO|RoW
+JM,Jamaica,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 JO,Jordan,UN-WASIA|Asia|GLO|RoW
 KE,Kenya,UN-EAFRICA|Africa|GLO|RoW
 KG,Kyrgyzstan,Central Asia|Asia|GLO|RoW
 KH,Cambodia,"UN-SEASIA|Asia, South East|Asia|GLO|RoW"
 KI,Kiribati,UN-MICRONESIA|Oceania|GLO|RoW
 KM,Comoros,UN-EAFRICA|Africa|GLO|RoW
-KN,Saint Kitts and Nevis,UN-CARIBBEAN|North America|GLO|RoW
+KN,Saint Kitts and Nevis,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 KP,North Korea,UN-EASIA|Asia|GLO|RoW
 KW,Kuwait,UN-WASIA|Asia|GLO|RoW
-KY,Cayman Islands,UN-CARIBBEAN|North America|GLO|RoW
+KY,Cayman Islands,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 KZ,Kazakhstan,Central Asia|Asia|GLO|RoW
 LA,Laos,"UN-SEASIA|Asia, South East|Asia|GLO|RoW"
 LB,Lebanon,UN-WASIA|Asia|GLO|RoW
-LC,Saint Lucia,UN-CARIBBEAN|North America|GLO|RoW
+LC,Saint Lucia,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 LI,Liechtenstein,"WEU|Europe, Western|Europe|GLO|RoW"
 LK,Sri Lanka,SAS|Asia|GLO|RoW
 LR,Liberia,UN-WAFRICA|Africa|GLO|RoW
@@ -367,7 +369,7 @@ LY,Libya,UN-NAFRICA|Africa|GLO|RoW
 MC,Monaco,"WEU|Europe, Western|Europe|GLO|RoW"
 MD,Moldova,"UN-EEUROPE|Europe, Eastern|Europe|GLO|RoW"
 ME,Montenegro,UN-SEUROPE|Europe|GLO|RoW
-MF,Saint Martin,UN-CARIBBEAN|North America|GLO|RoW
+MF,Saint Martin,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 MG,Madagascar,UN-EAFRICA|Africa|GLO|RoW
 MH,Marshall Islands,UN-MICRONESIA|Oceania|GLO|RoW
 MK,North Macedonia,UN-SEUROPE|Europe|GLO|RoW
@@ -380,16 +382,16 @@ MQ,Martinique,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 MR,Mauritania,UN-WAFRICA|Africa|GLO|RoW
 MRO,Midwest Reliability Organization,US|North America|NAFTA|GLO|RoW
 "MRO, US only",Midwest Reliability Organization,US|North America|NAFTA|GLO|RoW
-MS,Montserrat,UN-CARIBBEAN|North America|GLO|RoW
-MU,Mauritius,UN-EAFRICA|GLO|RoW
-MV,Maldives,SAS|GLO|RoW
+MS,Montserrat,UN-CARIBBEAN|North America|Latin America|GLO|RoW
+MU,Mauritius,UN-EAFRICA|Africa|GLO|RoW
+MV,Maldives,SAS|Asia|GLO|RoW
 MW,Malawi,UN-EAFRICA|Africa|GLO|RoW
 MZ,Mozambique,UN-EAFRICA|Africa|GLO|RoW
 NA,Namibia,Africa|GLO|RoW
 NC,New Caledonia,UN-MELANESIA|Oceania|GLO|RoW
 NE,Niger,UN-WAFRICA|Africa|GLO|RoW
 NF,Norfolk Island,UN-AUSTRALIANZ|Oceania|GLO|RoW
-NI,Nicaragua,UN-CAMERICA|North America|GLO|RoW
+NI,Nicaragua,UN-CAMERICA|North America|Latin America|GLO|RoW
 NP,Nepal,SAS|Asia|GLO|RoW
 NPCC,Northeast Power Coordinating Council,US|North America|NAFTA|GLO|RoW
 "NPCC, US only",Northeast Power Coordinating Council,US|North America|NAFTA|GLO|RoW
@@ -398,13 +400,13 @@ NU,Niue,UN-POLYNESIA|Oceania|GLO|RoW
 North America without Quebec,North America without Quebec,North America|GLO|RoW
 Northern Cyprus,Northern Cyprus,Asia|GLO|RoW
 OM,Oman,UN-WASIA|Asia|GLO|RoW
-PA,Panama,UN-CAMERICA|North America|GLO|RoW
+PA,Panama,UN-CAMERICA|North America|Latin America|GLO|RoW
 PF,French Polynesia,UN-POLYNESIA|Oceania|GLO|RoW
 PG,Papua New Guinea,UN-MELANESIA|Oceania|GLO|RoW
 PK,Pakistan,SAS|Asia|GLO|RoW
 PM,Saint Pierre and Miquelon,North America|GLO|RoW
 PN,Pitcairn Islands,UN-POLYNESIA|Oceania|GLO|RoW
-PR,PR,UN-CARIBBEAN|North America|GLO|RoW
+PR,Puerto Rico,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 PS,Palestine,UN-WASIA|Asia|GLO|RoW
 PW,Palau,UN-MICRONESIA|Oceania|GLO|RoW
 PY,Paraguay,UN-SAMERICA|South America|Latin America|GLO|RoW
@@ -426,11 +428,11 @@ Russia (Asia),Russia (Asia),RU|Asia|GLO|RoW
 Russia (Europe),Russia (Europe),RU|Europe|GLO|RoW
 SAS,Southern Asia,Asia|GLO|RoW
 SB,Solomon Islands,UN-MELANESIA|Oceania|GLO|RoW
-SC,Seychelles,UN-EAFRICA|GLO|RoW
+SC,Seychelles,UN-EAFRICA|Africa|GLO|RoW
 SD,Sudan,UN-NAFRICA|Africa|GLO|RoW
 SERC,SERC Reliability Corporation,US|North America|NAFTA|GLO|RoW
 "SERC, US only",SERC Reliability Corporation,US|North America|NAFTA|GLO|RoW
-SH,Saint Helena,UN-WAFRICA|GLO|RoW
+SH,Saint Helena,UN-WAFRICA|Africa|GLO|RoW
 SL,Sierra Leone,UN-WAFRICA|Africa|GLO|RoW
 SM,San Marino,UN-SEUROPE|Europe|GLO|RoW
 SN,Senegal,UN-WAFRICA|Africa|GLO|RoW
@@ -438,8 +440,8 @@ SO,Somalia,UN-EAFRICA|Africa|GLO|RoW
 SR,Suriname,UN-SAMERICA|South America|Latin America|GLO|RoW
 SS,South Sudan,UN-EAFRICA|Africa|GLO|RoW
 ST,Sao Tome and Principe,UN-MAFRICA|Africa|GLO|RoW
-SV,El Salvador,UN-CAMERICA|North America|GLO|RoW
-SX,Sint Maarten,UN-CARIBBEAN|North America|GLO|RoW
+SV,El Salvador,UN-CAMERICA|North America|Latin America|GLO|RoW
+SX,Sint Maarten,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 SY,Syria,UN-WASIA|Asia|GLO|RoW
 SZ,Eswatini,Africa|GLO|RoW
 Scarborough Reef,Scarborough Reef,Asia|GLO|RoW
@@ -448,7 +450,7 @@ Siachen Glacier,Siachen Glacier,Asia|GLO|RoW
 Somaliland,Somaliland,Africa|GLO|RoW
 South and Central America,South and Central America,Latin America|GLO|RoW
 Spratly Islands,Spratly Islands,Asia|GLO|RoW
-TC,Turks and Caicos Islands,UN-CARIBBEAN|North America|GLO|RoW
+TC,Turks and Caicos Islands,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 TD,Chad,UN-MAFRICA|Africa|GLO|RoW
 TF,French Southern and Antarctic Lands,GLO|RoW
 TG,Togo,UN-WAFRICA|Africa|GLO|RoW
@@ -459,7 +461,7 @@ TN,Tunisia,UN-NAFRICA|Africa|GLO|RoW
 TO,Tonga,UN-POLYNESIA|Oceania|GLO|RoW
 TRE,Texas Reliability Entity,US|North America|NAFTA|GLO|RoW
 "TRE, US only",Texas Reliability Entity,US|North America|NAFTA|GLO|RoW
-TT,Trinidad and Tobago,UN-CARIBBEAN|North America|GLO|RoW
+TT,Trinidad and Tobago,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 TV,Tuvalu,UN-POLYNESIA|Oceania|GLO|RoW
 TZ,Tanzania,UN-EAFRICA|Africa|GLO|RoW
 UA,Ukraine,"UN-EEUROPE|Europe, Eastern|Europe|GLO|RoW"
@@ -474,19 +476,19 @@ UN-CAMERICA,Central America,North America|Latin America|GLO|RoW
 UN-CARIBBEAN,Caribbean,North America|Latin America|GLO|RoW
 UN-EAFRICA,Eastern Africa,Africa|GLO|RoW
 UN-EASIA,Eastern Asia,Asia|GLO|RoW
-UN-EEUROPE,Eastern Europe,Europe|GLO|RoW
-UN-EUROPE,"Europe, UN Region",Europe|GLO|RoW
+UN-EEUROPE,Eastern Europe,Europe|RER|GLO|RoW
+UN-EUROPE,"Europe, UN Region",Europe|RER|GLO|RoW
 UN-MAFRICA,Middle Africa,Africa|GLO|RoW
 UN-MELANESIA,Melanesia,Oceania|GLO|RoW
 UN-MICRONESIA,Micronesia,Oceania|GLO|RoW
 UN-NAFRICA,Northern Africa,Africa|GLO|RoW
-UN-NEUROPE,Northern Europe,Europe|GLO|RoW
+UN-NEUROPE,Northern Europe,Europe|RER|GLO|RoW
 UN-OCEANIA,Oceania,Oceania|GLO|RoW
 UN-POLYNESIA,Polynesia,Oceania|GLO|RoW
 UN-SAMERICA,South America (UN region),South America|Latin America|GLO|RoW
 UN-SEASIA,South-Eastern Asia,Asia|GLO|RoW
-UN-SEUROPE,Southern Europe,Europe|GLO|RoW
-UN-WAFRICA,Western Africa,GLO|RoW
+UN-SEUROPE,Southern Europe,Europe|RER|GLO|RoW
+UN-WAFRICA,Western Africa,Africa|GLO|RoW
 UN-WASIA,Western Asia,Asia|GLO|RoW
 US-AK,"United States of America, Alaska",US|North America|NAFTA|GLO|RoW
 US-AL,"United States of America, Alabama",US|North America|NAFTA|GLO|RoW
@@ -502,7 +504,7 @@ US-FL,"United States of America, Florida",US|North America|NAFTA|GLO|RoW
 US-FRCC,Florida Reliability Coordinating Council,US|North America|NAFTA|GLO|RoW
 US-GA,"United States of America, Georgia",US|North America|NAFTA|GLO|RoW
 US-HI,"United States of America, Hawaii",US|North America|NAFTA|GLO|RoW
-US-HICC,HICC,US|North America|NAFTA|GLO|RoW
+US-HICC,Hawaiian Islands Coordinating Council,US|North America|NAFTA|GLO|RoW
 US-IA,"United States of America, Iowa",US|North America|NAFTA|GLO|RoW
 US-ID,"United States of America, Idaho",US|North America|NAFTA|GLO|RoW
 US-IL,"United States of America, Illinois",US|North America|NAFTA|GLO|RoW
@@ -553,14 +555,14 @@ US-WY,"United States of America, Wyoming",US|North America|NAFTA|GLO|RoW
 UY,Uruguay,UN-SAMERICA|South America|Latin America|GLO|RoW
 UZ,Uzbekistan,Central Asia|Asia|GLO|RoW
 VA,Vatican,UN-SEUROPE|Europe|GLO|RoW
-VC,Saint Vincent and the Grenadines,UN-CARIBBEAN|North America|GLO|RoW
+VC,Saint Vincent and the Grenadines,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 VE,Venezuela,UN-SAMERICA|South America|Latin America|GLO|RoW
-VG,British Virgin Islands,UN-CARIBBEAN|North America|GLO|RoW
-VI,United States Virgin Islands,UN-CARIBBEAN|North America|GLO|RoW
+VG,British Virgin Islands,UN-CARIBBEAN|North America|Latin America|GLO|RoW
+VI,United States Virgin Islands,UN-CARIBBEAN|North America|Latin America|GLO|RoW
 VU,Vanuatu,UN-MELANESIA|Oceania|GLO|RoW
 WECC,Western Electricity Coordinating Council,US|North America|NAFTA|GLO|RoW
 "WECC, US only",Western Electricity Coordinating Council,US|North America|NAFTA|GLO|RoW
-WEU,Western Europe,Europe|GLO|RoW|RER
+WEU,Western Europe,Europe|RER|GLO|RoW
 WF,Wallis and Futuna,UN-POLYNESIA|Oceania|GLO|RoW
 WS,Samoa,UN-POLYNESIA|Oceania|GLO|RoW
 World,World,GLO|RoW

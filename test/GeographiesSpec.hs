@@ -75,20 +75,40 @@ spec = do
             dangling `shouldBe` []
 
         it "no location is its own ancestor" $ do
-            -- Two locations that each list the other as a parent make
-            -- "wider than" meaningless: the matcher would accept either as a
-            -- fallback for the other, in both directions. GLO and RoW are the
+            -- A cycle through the parent lists makes "wider than"
+            -- meaningless: two locations on it would each be accepted as a
+            -- fallback for the other, in both directions. Checked
+            -- transitively, not just for mutual pairs. GLO and RoW are the
             -- deliberate exception — they are the same breadth.
             geos <- table
-            let mutual =
-                    [ (code, parent)
-                    | (code, (_, parents)) <- M.toList geos
-                    , parent <- parents
-                    , code `elem` maybe [] snd (M.lookup parent geos)
-                    , [code, parent] /= ["GLO", "RoW"]
-                    , [code, parent] /= ["RoW", "GLO"]
+            let parentsOf c = maybe [] snd (M.lookup c geos)
+                ancestors c = go [] (parentsOf c)
+                  where
+                    go seen [] = seen
+                    go seen (p : ps)
+                        | p `elem` seen = go seen ps
+                        | otherwise = go (p : seen) (parentsOf p ++ ps)
+                cyclic =
+                    [ code
+                    | code <- M.keys geos
+                    , code `notElem` ["GLO", "RoW"]
+                    , code `elem` ancestors code
                     ]
-            mutual `shouldBe` []
+            cyclic `shouldBe` []
+
+        it "GLO and RoW close every parents list" $ do
+            -- The regionalized CF cascade walks the parents in order and
+            -- stops at the first factor it finds, so a parent listed after
+            -- the global codes could never beat the global average — exactly
+            -- the fallback the nearer parents exist to improve on.
+            geos <- table
+            let placeless = ["GLO", "RoW"] :: [Text]
+                misordered =
+                    [ code
+                    | (code, (_, parents)) <- M.toList geos
+                    , any (`notElem` placeless) (dropWhile (`notElem` placeless) parents)
+                    ]
+            misordered `shouldBe` []
 
         it "keeps a code that contains a comma in one piece" $ do
             -- "Europe, Western" is one location, not a code called "Europe"
@@ -136,4 +156,17 @@ spec = do
         it "does not offer one Brazilian state to another" $ do
             hier <- hierarchy
             acceptableLocation GeoParent hier (Location "BR-MG") (Location "BR-SP")
+                `shouldBe` Nothing
+
+        it "offers the country-plus-territories aggregate to the bare country" $ do
+            -- Same shape as the Canada / "Canada without Quebec" correction:
+            -- "France, including overseas territories" is wider than FR, so
+            -- the aggregate is a fallback for France — never the reverse.
+            hier <- hierarchy
+            acceptableLocation GeoParent hier (Location "FR") (Location "France, including overseas territories")
+                `shouldBe` Just ParentLoc
+
+        it "refuses bare-country data for the country-plus-territories aggregate" $ do
+            hier <- hierarchy
+            acceptableLocation GeoParent hier (Location "France, including overseas territories") (Location "FR")
                 `shouldBe` Nothing
