@@ -126,8 +126,9 @@ import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
+import qualified Data.Csv as Csv
 import Data.Either (lefts, partitionEithers, rights)
-import Data.List (isPrefixOf, sort, sortOn, unsnoc)
+import Data.List (isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
@@ -136,6 +137,7 @@ import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
@@ -941,7 +943,15 @@ initDatabaseManager config noCache configPath = do
 
     geographies <- case cfgGeographies config of
         Nothing -> return M.empty
-        Just path -> parseGeographiesCSV (resolveRelative path)
+        Just path -> do
+            result <- parseGeographiesCSV (resolveRelative path)
+            case result of
+                Right geos -> pure geos
+                -- Falling back to the built-in hierarchy silently would change
+                -- every regionalized score without anyone asking for it.
+                Left err -> do
+                    putStrLn $ "warning: could not load geographies from " <> T.unpack err
+                    pure M.empty
 
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
@@ -3637,38 +3647,45 @@ removeUnitDefs = removeRefDataG unitDefOps
 
 {- | Parse a geographies CSV file (code,display_name,parents) into a lookup map.
 Parents field uses '|' as separator. display_name is optional (falls back to code).
-Lines starting with "code" are treated as headers and skipped.
+Comment lines start with '#', and the header row starts with "code".
+
+Quoting is the reason this goes through a real CSV reader rather than splitting
+on commas: several location codes carry one -- @Europe, Western@,
+@IAI Area, EU27 & EFTA@ -- and a hand-split would cut them in half, turning a
+region into two codes that match nothing.
 -}
-parseGeographiesCSV :: FilePath -> IO (Map Text (Text, [Text]))
+parseGeographiesCSV :: FilePath -> IO (Either Text (Map Text (Text, [Text])))
 parseGeographiesCSV path = do
     exists <- doesFileExist path
     if not exists
         then do
             reportProgress Info $ "Geographies file not found: " <> path <> " (using built-in hierarchy)"
-            return M.empty
+            return (Right M.empty)
         else do
             content <- TIO.readFile path
-            let ls = T.lines content
-                parsed = concatMap parseLine ls
-            reportProgress Info $ "Loaded " <> show (length parsed) <> " geographies from " <> path
-            return $ M.fromList parsed
+            let body = T.unlines (filter meaningful (T.lines content))
+            case Csv.decode Csv.NoHeader (BL.fromStrict (TE.encodeUtf8 body)) of
+                Left err -> return $ Left $ T.pack path <> ": " <> T.pack err
+                Right rows -> do
+                    let parsed = map entry (V.toList rows)
+                    reportProgress Info $ "Loaded " <> show (length parsed) <> " geographies from " <> path
+                    return $ Right $ M.fromList parsed
   where
-    parseLine line
-        | T.null (T.strip line) = []
-        | "code" `T.isPrefixOf` line = [] -- header row
-        | "#" `T.isPrefixOf` T.strip line = [] -- comment
-        | otherwise = case T.splitOn "," line of
-            [] -> []
-            [_] -> []
-            parts@(codeRaw : _) -> case unsnoc parts of
-                Nothing -> [] -- unreachable: parts is non-empty by pattern
-                Just (initPart, parentsRaw) ->
-                    let code = T.strip codeRaw
-                        parentsStr = T.strip parentsRaw
-                        displayRaw = T.intercalate "," (drop 1 initPart)
-                        displayName = let d = T.strip displayRaw in if T.null d then code else d
-                        parents = if T.null parentsStr then [] else T.splitOn "|" parentsStr
-                     in [(code, (displayName, parents))]
+    meaningful line =
+        let stripped = T.strip line
+         in not (T.null stripped)
+                && not ("#" `T.isPrefixOf` stripped)
+                && not ("code," `T.isPrefixOf` stripped)
+    entry (codeRaw, displayRaw, parentsRaw) =
+        let code = T.strip codeRaw
+            display = T.strip displayRaw
+            parents = T.strip parentsRaw
+         in ( code
+            ,
+                ( if T.null display then code else display
+                , if T.null parents then [] else T.splitOn "|" parents
+                )
+            )
 
 -- | Load CSV file content from path.
 loadRefDataCSV :: FilePath -> IO (Either Text BL.ByteString)
