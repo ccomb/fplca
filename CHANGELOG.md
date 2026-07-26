@@ -43,6 +43,20 @@
   output is unchanged.
 
 ### Fixed
+- A SimaPro activity is now placed by the location its producer wrote down,
+  rather than by one guessed from a name. SimaPro cuts its "Process name"
+  field at 80 characters, which on a long name takes the `{FR}` tag off the
+  end and leaves only a slash the name has for its own reasons — so
+  "Bresaola … Already packed - PP/PE | No preparation" was filed under Peru,
+  PE being the plastic. Reading a slash off the end of a name is how the
+  WFLDB convention states a location and still works, but it is a reading of
+  the name and now loses to a tag, wherever the tag sits. On Agribalyse 3.2
+  this moves 73 activities, mostly to France, and retires the four
+  "locations" that named no place: `PE` where it meant polyethylene,
+  `F-Organic`, `F-Org(Farrrowin` and `Mid-western`. Names stop being cut
+  short too, which separates 39 pairs of activities that until now shared one
+  identity. Databases whose names really do end in a location — WFLDB, which
+  relies on it 1876 times — are unaffected.
 - Locations the databases actually use now have a place in the geography
   hierarchy. `data/geographies.csv` listed 91 codes; the databases use several
   hundred, so a Kenyan, Ukrainian or Brazilian-state activity had no wider

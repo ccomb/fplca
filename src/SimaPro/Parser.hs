@@ -17,6 +17,9 @@ module SimaPro.Parser (
     generateFlowUUID,
     generateUnitUUID,
     normalizeSimaProCompartment,
+    extractLocation,
+    Located (..),
+    LocationSource (..),
 
     -- * Shared utilities (used by Method.ParserSimaPro)
     defaultConfig,
@@ -42,9 +45,9 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isUpper, toLower)
 import qualified Data.Csv as Csv
-import Data.List (dropWhileEnd)
+import Data.List (dropWhileEnd, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -788,6 +791,29 @@ generateUnitUUID unitName =
 -- Conversion to volca Types
 -- ============================================================================
 
+{- | How a location was read out of a SimaPro name.
+
+A tag is a location the producer wrote down. A slash suffix is a guess made by
+cutting the name, and names end in a slash for reasons that have nothing to do
+with geography — in "Already packed - PP/PE", PE is a plastic, not Peru. So the
+ordering here says a tag beats a suffix, wherever each of the two sits.
+-}
+data LocationSource
+    = Tagged
+    | SlashSuffix
+    deriving (Eq, Ord, Show)
+
+-- | A location read out of a name, with the name the reading leaves behind.
+data Located = Located
+    { locatedName :: Text
+    {- ^ The name without the location: unchanged for a tag, which is only
+    informational, shortened for a suffix, which is part of the name.
+    -}
+    , locatedLocation :: Text
+    , locatedSource :: LocationSource
+    }
+    deriving (Eq, Show)
+
 {- | Extract location from SimaPro-style names
 Handles three forms:
   * Curly-brace tag (ecoinvent 3.10+): "Name {FR}| market for ..."
@@ -795,8 +821,11 @@ Handles three forms:
   * WFLDB-style "/XX" suffix: "Ammonium nitrate .../CN".
 The first two preserve the full name (the tag is informational); the WFLDB
 form strips at the slash because the geo code is a true suffix.
+
+Nothing when the name states no location — callers keep the name they passed in
+rather than a shortened one.
 -}
-extractLocation :: Text -> (Text, Text)
+extractLocation :: Text -> Maybe Located
 extractLocation name =
     case T.breakOn "{" name of
         (_, rest) | not (T.null rest) ->
@@ -805,14 +834,14 @@ extractLocation name =
                     | not (T.null afterBrace) ->
                         let cleanLoc = T.strip loc
                          in if T.length cleanLoc >= 2
-                                then (T.strip name, cleanLoc)
-                                else (name, "")
-                _ -> (name, "")
+                                then Just (Located (T.strip name) cleanLoc Tagged)
+                                else Nothing
+                _ -> Nothing
         _ -> case extractBracketLocation name of
-            Just loc -> (T.strip name, loc)
+            Just loc -> Just (Located (T.strip name) loc Tagged)
             Nothing -> case extractSlashLocation name of
-                Just (cleanName, loc) -> (cleanName, loc)
-                Nothing -> (name, "")
+                Just (cleanName, loc) -> Just (Located cleanName loc SlashSuffix)
+                Nothing -> Nothing
   where
     -- Match "//[XX]" anywhere in the string (older SimaPro exports of
     -- ecoinvent embed the geo code mid-name, so we keep the full name).
@@ -889,24 +918,35 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
     -- coproduct inherits the reference product's name and location, so a
     -- multi-product block still collapses onto one activityUUID (which is
     -- derived from name + location) instead of splitting into N activities.
-    (fallbackName, fallbackLoc) = case productsInFileOrder of
-        (p : _) -> extractLocation (prName p)
-        [] -> ("", "")
+    referenceName = case productsInFileOrder of
+        (p : _) -> prName p
+        [] -> ""
+    referenceReading = extractLocation referenceName
+    fallbackName = maybe referenceName locatedName referenceReading
     (env, exprMap) =
         buildParamEnv
             (reverse <$> [gpDbInput, gpProjInput, pbInputParams])
             (reverse <$> [gpDbCalc, gpProjCalc, pbCalcParams])
 
-    -- Extract location from process name if not specified.
-    (cleanProcessNameRaw, locFromName) = extractLocation pbName
-    location =
-        if T.null pbLocation || T.toLower pbLocation == "unspecified"
-            then locFromName
-            else pbLocation
-    -- Trimmed Process name (without curly-brace location tag). Empty when the
-    -- SimaPro "Process name" field is empty (typical for mono-product blocks
-    -- where only the Product line carries the human-readable name).
-    processNameTrimmed = T.strip cleanProcessNameRaw
+    processReading = extractLocation pbName
+
+    -- The Geography field, when the producer filled it in. It outranks anything
+    -- read out of a name, being the one place meant to hold a location.
+    statedLocation = mfilter ((/= "unspecified") . T.toLower) (nonEmptyText pbLocation)
+
+    {- Trimmed Process name (without curly-brace location tag). Empty when the
+    SimaPro "Process name" field is empty (typical for mono-product blocks
+    where only the Product line carries the human-readable name).
+
+    A name only loses its tail when that tail is what named the place. When the
+    reference product states a tag, the tail was never a location and the whole
+    name stays: "… - PP/PE | No preparation" keeps its packaging and its
+    preparation step instead of ending at the PP. -}
+    processNameTrimmed
+        | (locatedSource <$> processReading) == Just SlashSuffix
+        , (locatedSource <$> referenceReading) == Just Tagged =
+            T.strip pbName
+        | otherwise = T.strip (maybe pbName locatedName processReading)
 
     -- Convert each section's rows to (exchange, flow, unit) triples in one pass.
     -- 'Final waste flows' route to WasteExchange so the cross-DB linker doesn't
@@ -949,17 +989,27 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
             effUnitName = unitName productUnit
             allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
             allocFraction = allocPercent / 100.0
-            (cleanProductName, locFromProduct) = extractLocation (prName prod)
+            productReading = extractLocation (prName prod)
+            cleanProductName = maybe (prName prod) locatedName productReading
             -- Activity name = Process name when present, otherwise the reference
             -- product's name (with its location) — never the coproduct's own,
             -- so all coproducts of a name-less block share one activityUUID.
             -- A blank reference name (malformed row) must not blank the whole
             -- block: degrade per-product, as before the shared fallback.
-            (effectiveActivityName, locFallback)
-                | not (T.null processNameTrimmed) = (processNameTrimmed, locFromProduct)
-                | not (T.null fallbackName) = (fallbackName, fallbackLoc)
-                | otherwise = (cleanProductName, locFromProduct)
-            effectiveLoc = if T.null location then locFallback else location
+            -- The readings that may name the place are the ones behind the name
+            -- we settled on.
+            (effectiveActivityName, readings)
+                | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, productReading])
+                | not (T.null fallbackName) = (fallbackName, [referenceReading])
+                | otherwise = (cleanProductName, [productReading])
+            -- Best-founded reading wins; sortOn is stable, so a tie goes to the
+            -- Process name, which is what named the block.
+            readLocation =
+                foldMap locatedLocation
+                    . listToMaybe
+                    . sortOn locatedSource
+                    $ catMaybes readings
+            effectiveLoc = fromMaybe readLocation statedLocation
             allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
             activity =
                 Activity
@@ -1014,7 +1064,9 @@ unknown-unit errors with a clear message).
 -}
 productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
 productToExchange unitCfg env isRef ProductRow{..} =
-    let (cleanName, prodRowLoc) = extractLocation prName
+    let reading = extractLocation prName
+        cleanName = maybe prName locatedName reading
+        prodRowLoc = foldMap locatedLocation reading
         rawAmount = resolveAmount env prAmountRaw prAmount
         (effUnitName, amount) =
             if isRef
@@ -1104,7 +1156,9 @@ Always returns the flow/unit; exchange is Nothing for zero-amount rows.
 -}
 techRowToExchange :: M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
 techRowToExchange env TechExchangeRow{..} =
-    let (cleanName, location) = extractLocation terName
+    let reading = extractLocation terName
+        cleanName = maybe terName locatedName reading
+        location = foldMap locatedLocation reading
         flowUUID = generateFlowUUID cleanName "" terUnit
         unitUUID = generateUnitUUID terUnit
         resolvedAmount = resolveAmount env terAmountRaw terAmount
