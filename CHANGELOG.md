@@ -44,8 +44,10 @@
   geographies file was split on commas without regard for quoting, so
   `Europe, Western` — the location of 863 Agribalyse activities — parsed as a
   code called `Europe` followed by a stray field, and matched nothing. The file
-  now goes through a real CSV reader, and a file it cannot read is reported
-  instead of being quietly replaced by the built-in fallback table.
+  now goes through a real CSV reader and is decoded as UTF-8 whatever the
+  system locale; a file it cannot read — bad quoting, bad encoding, duplicated
+  codes — is reported instead of being quietly replaced by the built-in
+  fallback table.
 
 - A method's own per-unit factor lines no longer cancel each other. SimaPro
   names can bake the unit into the flow name — "Gas, natural/m3" and

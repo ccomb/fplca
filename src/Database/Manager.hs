@@ -238,7 +238,6 @@ import qualified UnitConversion
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
 
 import API.Types (DepLoadResult (..))
-import qualified Data.Text.IO as TIO
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
 import qualified Database.CrossLinking as CrossLinking
 import Database.Upload (detectMethodFormat, detectedFormatLabel, findMethodDirectory, listDirectoryRecursive)
@@ -950,7 +949,7 @@ initDatabaseManager config noCache configPath = do
                 -- Falling back to the built-in hierarchy silently would change
                 -- every regionalized score without anyone asking for it.
                 Left err -> do
-                    putStrLn $ "warning: could not load geographies from " <> T.unpack err
+                    reportProgress Warning $ "Could not load geographies from " <> T.unpack err <> " — using built-in hierarchy"
                     pure M.empty
 
     methodMappingCacheVar <- newTVarIO M.empty
@@ -3662,14 +3661,26 @@ parseGeographiesCSV path = do
             reportProgress Info $ "Geographies file not found: " <> path <> " (using built-in hierarchy)"
             return (Right M.empty)
         else do
-            content <- TIO.readFile path
-            let body = T.unlines (filter meaningful (T.lines content))
-            case Csv.decode Csv.NoHeader (BL.fromStrict (TE.encodeUtf8 body)) of
-                Left err -> return $ Left $ T.pack path <> ": " <> T.pack err
-                Right rows -> do
-                    let parsed = map entry (V.toList rows)
-                    reportProgress Info $ "Loaded " <> show (length parsed) <> " geographies from " <> path
-                    return $ Right $ M.fromList parsed
+            -- Decode the bytes as UTF-8 ourselves: the file carries non-ASCII
+            -- display names, and a locale-driven read would give mojibake or
+            -- a crash on a non-UTF-8 system.
+            bytes <- BS.readFile path
+            case TE.decodeUtf8' bytes of
+                Left decodeErr -> return $ Left $ T.pack path <> ": not valid UTF-8 (" <> T.pack (show decodeErr) <> ")"
+                Right content -> do
+                    let body = T.unlines (filter meaningful (T.lines content))
+                    case Csv.decode Csv.NoHeader (BL.fromStrict (TE.encodeUtf8 body)) of
+                        Left err -> return $ Left $ T.pack path <> ": " <> T.pack err
+                        Right rows -> do
+                            let parsed = map entry (V.toList rows)
+                                dups = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(fst p, 1) | p <- parsed]))
+                            if null dups
+                                then do
+                                    reportProgress Info $ "Loaded " <> show (length parsed) <> " geographies from " <> path
+                                    return $ Right $ M.fromList parsed
+                                else -- A duplicated code would silently shadow the earlier
+                                -- row in the map; refuse the file instead.
+                                    return $ Left $ T.pack path <> ": duplicate codes: " <> T.intercalate ", " dups
   where
     meaningful line =
         let stripped = T.strip line
