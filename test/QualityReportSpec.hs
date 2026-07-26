@@ -572,6 +572,33 @@ spec = do
         it "is not applicable to a database without allocation data" $
             qcApplicable (qrAllocationOutOfRange (reportOf (mkActivity "bread" [reference breadFlow]))) `shouldBe` False
 
+    describe "unmeasurable amount check" $ do
+        it "flags an amount smaller than a single atom" $ do
+            let check = qrUnmeasurableAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow 4.11e-37]))
+            details check `shouldBe` ["exchange \"flour\" carries 4.110e-37 kg, smaller than anything a measurement can yield"]
+            severities check `shouldBe` [WarningSev]
+
+        it "flags a negative amount of the same magnitude" $
+            length (qcOffenders (qrUnmeasurableAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow (-4.11e-37)])))) `shouldBe` 1
+
+        it "flags an unmeasurable reference amount as danger, since normalization divides by it" $ do
+            let check = qrUnmeasurableAmounts (reportOf (mkActivity "bread" [techExchange breadFlow 4.11e-37 ReferenceProduct]))
+            details check `shouldBe` ["reference exchange \"bread\" carries 4.110e-37 kg, smaller than anything a measurement can yield, and normalization divides by it"]
+            severities check `shouldBe` [DangerSev]
+
+        it "flags a negative unmeasurable reference amount as danger too" $
+            severities (qrUnmeasurableAmounts (reportOf (mkActivity "bread" [techExchange breadFlow (-4.11e-37) ReferenceProduct])))
+                `shouldBe` [DangerSev]
+
+        it "passes a small but measurable trace amount" $
+            qcOffenders (qrUnmeasurableAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow 1e-15]))) `shouldBe` []
+
+        it "passes an amount at exactly the floor" $
+            qcOffenders (qrUnmeasurableAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow 1e-27]))) `shouldBe` []
+
+        it "passes an amount of exactly zero, which says the input is absent" $
+            qcOffenders (qrUnmeasurableAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow 0]))) `shouldBe` []
+
     describe "report header" $
         it "counts one process per (activity, product) entry" $ do
             let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow]), ((actB, prodB), mkActivity "cake" [reference flourFlow])]

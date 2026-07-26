@@ -11,6 +11,13 @@
   cover. Each affected method now says at load time how many flows are
   affected and names samples — for its global factors and its regionalized
   ones alike — so a silent undercount of this kind can no longer hide.
+- The database quality report now flags exchange amounts too small to have
+  been measured. Below 1e-27 — whatever the unit — a value is smaller than
+  anything an instrument can produce (a hydrogen atom weighs 1.7e-27 kg), so
+  it is a residue of computation wearing the costume of data. An ordinary
+  exchange this small is a warning; a reference exchange this small is a
+  danger, because normalization divides every other amount in the process
+  by it.
 
 ### Changed
 - An EcoSpold 1 dataset published as `process_<uuid>.xml` (or `<uuid>.xml`)
