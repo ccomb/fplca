@@ -368,22 +368,31 @@ qualityReport dbName db =
     -- Amounts too small to have been measured (see 'measurableMagnitudeFloor').
     -- Not a rounding complaint: at this magnitude the value is a computational
     -- residue that reads as data, and it survives every copy of the dataset
-    -- until someone looks. Warning rather than danger — it distorts nothing in
-    -- a score, it just isn't true.
+    -- until someone looks. An ordinary exchange this small distorts nothing in
+    -- a score — it just isn't true — hence Warning. A reference exchange is
+    -- what normalization divides by: dividing by ~1e-37 scales every other
+    -- amount in the process by its reciprocal (a negative one flips their
+    -- signs too), the near-zero cousin of the zero-reference case above,
+    -- hence Danger.
     unmeasurableOffenders =
-        [ offender WarningSev key act Nothing $
-            "exchange \""
+        [ offender sev key act Nothing $
+            role
+                <> " \""
                 <> anyFlowName (exchangeFlowId ex)
                 <> "\" carries "
-                <> formatAmount amount
+                <> formatAmount (exchangeAmount ex)
                 <> " "
                 <> unitLabel (exchangeUnitId ex)
                 <> ", smaller than anything a measurement can yield"
+                <> consequence
         | (key, act) <- entries
         , ex <- exchanges act
         , let amount = abs (exchangeAmount ex)
         , amount > 0
         , amount < measurableMagnitudeFloor
+        , let (sev, role, consequence)
+                | exchangeIsReference ex = (DangerSev, "reference exchange", ", and normalization divides by it")
+                | otherwise = (WarningSev, "exchange", "")
         ]
 
     -- The parse-time mathematicalRelation check (EcoSpold2): formulas that
