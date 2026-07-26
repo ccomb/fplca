@@ -8,9 +8,9 @@
   cubic metres, for instance. Refusing such a factor is correct (the
   dimensions do not agree), but the refusal used to be invisible: the flow
   simply scored zero, indistinguishable from a flow the method does not
-  cover. Each affected method now says at load time how many factors it
-  refused and names samples, so a silent undercount of this kind can no
-  longer hide.
+  cover. Each affected method now says at load time how many flows are
+  affected and names samples — for its global factors and its regionalized
+  ones alike — so a silent undercount of this kind can no longer hide.
 
 ### Changed
 - The engine now advertises wire revision 4 on `/api/v1/version`. The three

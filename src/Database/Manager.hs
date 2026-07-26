@@ -176,7 +176,7 @@ import Method.Mapping (
     mtRegionalActivityWeights,
     mtRegionalizedCF,
     projectRegionalResourceFlows,
-    zeroedBroadcastCFs,
+    zeroedMatchedCFs,
  )
 import Method.Types (
     CompartmentMap,
@@ -715,21 +715,22 @@ buildMethodTablesFor manager dbName collection db hier method = do
                         <> "(after walking parent regions and universal broadcast). "
                         <> "Samples: "
                         <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- rawMissingPairs raw'])
-    -- A CF that matched but cannot be unit-converted scores an (intentional)
-    -- 0 — refusing wrong-dimension data is right, hiding the refusal is not:
-    -- unreported, it reads exactly like an uncharacterized flow and the method
-    -- silently undercounts. One deduplicated WARN per (db, method), same
-    -- channel as the regionalized coverage gaps above.
-    let zeroed = zeroedBroadcastCFs mFlows withBroadcast
-        flowUnitOf f = maybe "" (T.unpack . unitName) (M.lookup (bfUnitId f) mUnits)
+    -- A CF that matched (broadcast or regionalized) but cannot be
+    -- unit-converted scores an (intentional) 0 — refusing wrong-dimension data
+    -- is right, hiding the refusal is not: unreported, it reads exactly like an
+    -- uncharacterized flow and the method silently undercounts. One
+    -- deduplicated WARN per (db, method), same channel as the regionalized
+    -- coverage gaps above.
+    let zeroed = zeroedMatchedCFs unitConfig mUnits mFlows withBroadcast
+        flowUnitOf f = maybe "<unknown unit>" (T.unpack . unitName) (M.lookup (bfUnitId f) mUnits)
     unless (null zeroed) $
         reportProgress Warning $
             "[LCIA "
                 <> T.unpack (methodName method)
                 <> "] "
                 <> show (length zeroed)
-                <> " matched CF(s) cannot be unit-converted from their flow's unit "
-                <> "(dimensional mismatch); their contributions score 0. Samples: "
+                <> " flow(s) matched a CF that cannot be converted from the flow's unit "
+                <> "(no unit-conversion path); their contributions score 0. Samples: "
                 <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u) | (f, CF _ (CFUnit u)) <- zeroed])
     pure tables
 
