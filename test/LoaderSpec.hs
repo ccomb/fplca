@@ -88,6 +88,31 @@ actUUID2, missingActUUID :: UUID.UUID
 actUUID2 = read "cccccccc-0000-0000-0000-000000000002"
 missingActUUID = read "dddddddd-0000-0000-0000-000000000099"
 
+{- | A minimal EcoSpold1 document, one @<dataset>@ per (name, location) pair.
+Each dataset declares "<name> production" as its activity and @name@ as its
+reference product, mirroring @test-data/SAMPLE.ecospold1@.
+-}
+es1Xml :: [(String, String)] -> String
+es1Xml datasets =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        <> "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">\n"
+        <> concat (zipWith dataset [1 :: Int ..] datasets)
+        <> "</ecoSpold>\n"
+  where
+    dataset n (name, loc) =
+        "  <dataset number=\""
+            <> show n
+            <> "\" generator=\"Test\" timestamp=\"2025-01-01T00:00:00\">\n"
+            <> "    <metaInformation><processInformation>\n"
+            <> ("      <referenceFunction name=\"" <> name <> " production\" category=\"Energy\" subCategory=\"Electricity\" unit=\"kWh\" />\n")
+            <> ("      <geography location=\"" <> loc <> "\" />\n")
+            <> "      <timePeriod startYear=\"2020\" endYear=\"2024\" />\n"
+            <> "    </processInformation></metaInformation>\n"
+            <> "    <flowData>\n"
+            <> ("      <exchange number=\"1\" name=\"" <> name <> "\" category=\"Energy\" subCategory=\"Electricity\" unit=\"kWh\" meanValue=\"1.0\"><outputGroup>0</outputGroup></exchange>\n")
+            <> "    </flowData>\n"
+            <> "  </dataset>\n"
+
 -- | An input linked (non-nil) to producer activity @actId@ producing @prodId@.
 linkedInput :: UUID.UUID -> UUID.UUID -> Exchange
 linkedInput actId prodId = (inputExchange prodId "GLO"){techActivityLinkId = actId}
@@ -174,6 +199,53 @@ spec = do
                 b = minimalActivity "wheat production" "FR" []
             generateActivityUUIDFromActivity a
                 `shouldNotBe` generateActivityUUIDFromActivity b
+
+    -- -----------------------------------------------------------------------
+    -- datasetUUIDFromPath
+    -- -----------------------------------------------------------------------
+    describe "datasetUUIDFromPath" $ do
+        it "reads the identifier out of a process_<uuid>.xml file name" $
+            datasetUUIDFromPath "/db/process_0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml"
+                `shouldBe` UUID.fromText "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c"
+
+        it "reads a bare <uuid>.xml file name too" $
+            datasetUUIDFromPath "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml"
+                `shouldBe` UUID.fromText "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c"
+
+        it "declines a numbered file name, so the minted UUID stands" $
+            datasetUUIDFromPath "/db/1234.xml" `shouldBe` Nothing
+
+        it "declines a name that only looks like an identifier" $
+            datasetUUIDFromPath "process_not-a-uuid.xml" `shouldBe` Nothing
+
+    -- -----------------------------------------------------------------------
+    -- EcoSpold1 file-name identity, end to end through loadDatabase
+    -- -----------------------------------------------------------------------
+    describe "EcoSpold1 file-name identity" $ do
+        let fileUUID = read "0004e814-c18d-42e2-a3f7-ce1fa51a3c2c" :: UUID.UUID
+            loadedActUUIDs dir = do
+                result <- loadDatabase defaultUnitConfig dir
+                either (fail . show) (return . map fst . M.keys . sdbActivities) result
+
+        it "keys each per-dataset file on its own identifier, minting only where the name carries none" $
+            withSystemTempDirectory "es1-ident" $ \dir -> do
+                writeFile (dir </> "process_0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml") (es1Xml [("wind", "DE")])
+                writeFile (dir </> "dataset2.xml") (es1Xml [("solar", "FR")])
+                actUUIDs <- loadedActUUIDs dir
+                actUUIDs `shouldMatchList` [fileUUID, generateActivityUUIDFromActivity (minimalActivity "solar production" "FR" [])]
+
+        it "keys a lone single-dataset file on its identifier too" $
+            withSystemTempDirectory "es1-ident" $ \dir -> do
+                writeFile (dir </> "process_0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml") (es1Xml [("wind", "DE")])
+                actUUIDs <- loadedActUUIDs dir
+                actUUIDs `shouldBe` [fileUUID]
+
+        it "never hands one file's identifier to several datasets inside it" $
+            withSystemTempDirectory "es1-ident" $ \dir -> do
+                writeFile (dir </> "process_0004e814-c18d-42e2-a3f7-ce1fa51a3c2c.xml") (es1Xml [("wind", "DE"), ("solar", "FR")])
+                actUUIDs <- loadedActUUIDs dir
+                length actUUIDs `shouldBe` 2
+                actUUIDs `shouldSatisfy` notElem fileUUID
 
     -- -----------------------------------------------------------------------
     -- getReferenceProductUUID
