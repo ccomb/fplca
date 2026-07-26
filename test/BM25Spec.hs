@@ -29,6 +29,7 @@ mkActivity name loc xs =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = xs
         , activityParams = M.empty

@@ -776,13 +776,16 @@ parseWithXeno xmlContent processId = do
     buildResult st _pid =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
+            -- "GLO" above is this loader's stand-in, not something the dataset
+            -- said: a dataset without a geography declares none.
+            locationSource = maybe LocationUnspecified declaredLocationSource (psLocation st)
             description = reverse (psDescription st) -- Reverse to get correct order
             refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
             nativeType = ecoSpoldNativeType (psActivityType st) (psSpecialActivityType st)
             pairs = reverse (psExchanges st)
             formulaCheck = checkFormulas (psParams st) pairs
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing formulaCheck
+            activity = Activity name description M.empty (psClassifications st) location locationSource refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing formulaCheck
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

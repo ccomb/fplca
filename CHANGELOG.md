@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- The quality report now says when a geography was never declared. Nearly every
+  process of some SimaPro databases leaves the `Geography` field at
+  `Unspecified` — 97% of Agribalyse 3.2 — and the only geography left is the
+  code inside the dataset name (`… {FR}`, `…//[RER]`, `…/CN U`). VoLCA reads
+  it, which is what makes those databases usable, but the result is a reading of
+  a name and not a declaration, and downstream the two are the same text. An
+  EcoSpold dataset with no geography at all is filled in with `GLO`, likewise
+  silently. The new `undeclaredGeography` check counts both, one finding per
+  entry, so a maintainer can see how much of a database's geography is source
+  data before treating it as such.
 - A warning now reports factor lines that match a flow but cannot be
   converted into its unit — a per-kilogram factor against a flow measured in
   cubic metres, for instance. Refusing such a factor is correct (the

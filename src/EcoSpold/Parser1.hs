@@ -453,6 +453,9 @@ buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [Biosp
 buildResult st =
     let name = fromMaybe "Unknown Activity" (psActivityName st)
         location = fromMaybe "GLO" (psLocation st)
+        -- "GLO" above is this loader's stand-in, not something the dataset said:
+        -- a dataset without a geography is recorded as declaring none.
+        locationSource = maybe LocationUnspecified declaredLocationSource (psLocation st)
         refUnit = fromMaybe "UNKNOWN_UNIT" (psRefUnit st)
         description = reverse (psDescription st)
         classifications =
@@ -460,7 +463,7 @@ buildResult st =
                 filter
                     (not . T.null . snd)
                     [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-        activity = Activity name description M.empty classifications location refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+        activity = Activity name description M.empty classifications location locationSource refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
         pack act =
             ( act
             , reverse (psTechFlows st)

@@ -47,6 +47,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LinkBlocker (..),
+    LocationSource (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -70,6 +71,7 @@ targetDB =
                 , activitySynonyms = M.empty
                 , activityClassification = M.empty
                 , activityLocation = loc
+                , activityLocationSource = LocationDeclared
                 , activityUnit = "kg"
                 , exchanges =
                     [ TechnosphereExchange

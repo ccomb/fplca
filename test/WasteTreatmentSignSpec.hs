@@ -60,6 +60,7 @@ emptyActivity =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = []
         , activityParams = M.empty

@@ -47,6 +47,7 @@ import Types (
     Database (..),
     Exchange (..),
     GeographyPolicy (..),
+    LocationSource (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -244,6 +245,7 @@ supplierDB offset products =
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
+                        , activityLocationSource = LocationDeclared
                         , activityUnit = "kg"
                         , exchanges = [refOut]
                         , activityParams = M.empty
@@ -306,6 +308,7 @@ consumerDB offset products =
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
+                        , activityLocationSource = LocationDeclared
                         , activityUnit = "kg"
                         , exchanges = [refOut, unlinkedInput]
                         , activityParams = M.empty

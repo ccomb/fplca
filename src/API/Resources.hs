@@ -478,7 +478,10 @@ description r = case r of
         \coproducts carry one), entries duplicated outright \
         \(same name, location and reference product), non-finite amounts or a \
         \zero reference amount, missing metadata (description, \
-        \classification, location, units absent from the registry), stored \
+        \classification, location, units absent from the registry), \
+        \geography the source never declared — read off the dataset name \
+        \(SimaPro writes 'Unspecified' in whole databases) or filled in by the \
+        \loader — stored \
         \amounts that disagree with the formulas documenting them \
         \(mathematicalRelation, checked at parse time), distinct names \
         \that merge under SimaPro's 80-character truncation, exchanges \

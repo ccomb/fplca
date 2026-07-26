@@ -261,6 +261,7 @@ elec =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kilowatt hour"
         , exchanges = [prodExch, gasExch, co2Exch]
         , activityParams = M.empty

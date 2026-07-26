@@ -109,6 +109,7 @@ fixtureSimple =
             M.empty
             (M.fromList [("ISIC rev.4 ecoinvent", "2011:Manufacture of food products"), ("CPC", "2399: Other food products n.e.c.")])
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , TechnosphereExchange prodB 2.0 unitMJ Input actB Nothing "" (Just "energy input") Nothing
@@ -128,6 +129,7 @@ fixtureSimple =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "MJ"
             [ TechnosphereExchange prodB 1.0 unitMJ ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , BiosphereExchange land 0.1 unitM2a Resource "" Nothing Nothing
@@ -166,6 +168,7 @@ fixtureDupBio =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
@@ -200,6 +203,7 @@ fixtureWithExchange ex =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , ex
@@ -237,6 +241,7 @@ fixtureWithBioSynonyms =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
@@ -283,6 +288,7 @@ fixtureWasteCoproduct =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , TechnosphereExchange coprodU 0.4 unitKg Coproduct UUID.nil Nothing "" Nothing Nothing

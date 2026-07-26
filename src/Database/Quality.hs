@@ -10,10 +10,11 @@ amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
-database consumes, land transformation whose "to" and "from" areas
-don't balance within an activity, oxygen-demand or organic-carbon
-measures reported in a physically impossible order, CAS numbers
-whose check digit doesn't confirm them, allocation percentages
+database consumes, geography no dataset declared (read off the name
+or filled in by the loader instead), land transformation whose "to" and
+"from" areas don't balance within an activity, oxygen-demand or
+organic-carbon measures reported in a physically impossible order, CAS
+numbers whose check digit doesn't confirm them, allocation percentages
 outside the 0-100% range, and amounts too small to have been measured.
 
 Every check is a pure scan over a 'SimpleDatabase', so the report is
@@ -46,6 +47,7 @@ import Types (
     BiosphereFlow (..),
     Exchange (..),
     FormulaCheck (..),
+    LocationSource (..),
     Severity (..),
     SimpleDatabase (..),
     TechRole (..),
@@ -102,6 +104,7 @@ data QualityReport = QualityReport
     , qrDuplicateActivities :: !QualityCheck
     , qrSuspiciousAmounts :: !QualityCheck
     , qrMissingMetadata :: !QualityCheck
+    , qrUndeclaredGeography :: !QualityCheck
     , qrFormulaConsistency :: !QualityCheck
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
@@ -125,6 +128,7 @@ qualityChecks r =
     , qrDuplicateActivities r
     , qrSuspiciousAmounts r
     , qrMissingMetadata r
+    , qrUndeclaredGeography r
     , qrFormulaConsistency r
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
@@ -225,6 +229,7 @@ qualityReport dbName db =
         , qrDuplicateActivities = QualityCheck True (worstFirst duplicateOffenders)
         , qrSuspiciousAmounts = QualityCheck True (worstFirst amountOffenders)
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
+        , qrUndeclaredGeography = QualityCheck True (worstFirst geographyOffenders)
         , qrFormulaConsistency = QualityCheck formulaApplicable (worstFirst formulaOffenders)
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
@@ -434,6 +439,27 @@ qualityReport dbName db =
                    ]
             | (key, act) <- entries
             ]
+
+    -- A geography the source declares is a fact about the dataset; one read off
+    -- the dataset name is this loader's reading of a string, and one supplied by
+    -- the loader is neither. SimaPro writes "Unspecified" in the Geography field
+    -- of entire databases, so their geography survives only in names like
+    -- "… {FR}"; an EcoSpold dataset with no geography is filled in with "GLO".
+    -- Both are usable and neither was declared, and downstream the two are the
+    -- same text — hence Info, and hence a count: a maker reads it before
+    -- treating the geography as source data.
+    geographyOffenders =
+        [ offender InfoSev key act Nothing detail
+        | (key, act) <- entries
+        , Just detail <- [undeclaredGeography (activityLocationSource act) (activityLocation act)]
+        ]
+    undeclaredGeography src loc = case src of
+        LocationDeclared -> Nothing
+        LocationInferredFromName ->
+            Just ("geography \"" <> loc <> "\" was read from the dataset name, not declared by the source")
+        LocationUnspecified
+            | T.null (T.strip loc) -> Just "the source declares no geography"
+            | otherwise -> Just ("the source declares no geography; \"" <> loc <> "\" stands in for it")
 
     -- Names that only differ beyond SimaPro's cap become one name on export —
     -- the over-grouping the allocation check above tolerates at parse time

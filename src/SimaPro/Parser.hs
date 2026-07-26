@@ -19,7 +19,7 @@ module SimaPro.Parser (
     normalizeSimaProCompartment,
     extractLocation,
     Located (..),
-    LocationSource (..),
+    NameReading (..),
 
     -- * Shared utilities (used by Method.ParserSimaPro)
     defaultConfig,
@@ -791,14 +791,16 @@ generateUnitUUID unitName =
 -- Conversion to volca Types
 -- ============================================================================
 
-{- | How a location was read out of a SimaPro name.
+{- | How a location was read out of a SimaPro name. (Not to be confused with
+'Types.LocationSource', which says whether an activity's location was declared
+at all — every reading here is an inferred one by that measure.)
 
 A tag is a location the producer wrote down. A slash suffix is a guess made by
 cutting the name, and names end in a slash for reasons that have nothing to do
 with geography — in "Already packed - PP/PE", PE is a plastic, not Peru. So the
 ordering here says a tag beats a suffix, wherever each of the two sits.
 -}
-data LocationSource
+data NameReading
     = Tagged
     | SlashSuffix
     deriving (Eq, Ord, Show)
@@ -810,7 +812,7 @@ data Located = Located
     informational, shortened for a suffix, which is part of the name.
     -}
     , locatedLocation :: Text
-    , locatedSource :: LocationSource
+    , locatedSource :: NameReading
     }
     deriving (Eq, Show)
 
@@ -931,7 +933,8 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
     processReading = extractLocation pbName
 
     -- The Geography field, when the producer filled it in. It outranks anything
-    -- read out of a name, being the one place meant to hold a location.
+    -- read out of a name, being the one place meant to hold a location — a name
+    -- reading is recorded as such below, for the quality report.
     statedLocation = mfilter ((/= "unspecified") . T.toLower) (nonEmptyText pbLocation)
 
     {- Trimmed Process name (without curly-brace location tag). Empty when the
@@ -1013,6 +1016,10 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
                     . sortOn locatedSource
                     $ catMaybes readings
             effectiveLoc = fromMaybe readLocation statedLocation
+            effectiveLocSource
+                | isJust statedLocation = LocationDeclared
+                | T.null effectiveLoc = LocationUnspecified
+                | otherwise = LocationInferredFromName
             allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
             activity =
                 Activity
@@ -1027,6 +1034,7 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
                                 , ("Category", prCategory prod)
                                 ]
                     , activityLocation = effectiveLoc
+                    , activityLocationSource = effectiveLocSource
                     , activityUnit = effUnitName
                     , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
                     , activityParams = env

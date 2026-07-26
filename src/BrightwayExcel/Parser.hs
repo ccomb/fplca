@@ -328,6 +328,7 @@ rawToActivity cfg ra =
             , activitySynonyms = M.empty
             , activityClassification = M.empty
             , activityLocation = fromMaybe "" (metaText meta "location")
+            , activityLocationSource = declaredLocationSource (fromMaybe "" (metaText meta "location"))
             , activityUnit = refUnitName
             , exchanges = exchanges'
             , activityParams = M.empty

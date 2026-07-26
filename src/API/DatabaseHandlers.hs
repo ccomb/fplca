@@ -342,6 +342,7 @@ qualityReportToAPI mLimit r =
         , qraDuplicateActivities = checkToAPI mLimit (Quality.qrDuplicateActivities r)
         , qraSuspiciousAmounts = checkToAPI mLimit (Quality.qrSuspiciousAmounts r)
         , qraMissingMetadata = checkToAPI mLimit (Quality.qrMissingMetadata r)
+        , qraUndeclaredGeography = checkToAPI mLimit (Quality.qrUndeclaredGeography r)
         , qraFormulaConsistency = checkToAPI mLimit (Quality.qrFormulaConsistency r)
         , qraTruncatedNameCollisions = checkToAPI mLimit (Quality.qrTruncatedNameCollisions r)
         , qraMissingPedigree = checkToAPI mLimit (Quality.qrMissingPedigree r)

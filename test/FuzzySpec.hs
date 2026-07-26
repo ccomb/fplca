@@ -20,6 +20,7 @@ mkActivity name xs =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = xs
         , activityParams = M.empty

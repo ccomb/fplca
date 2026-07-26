@@ -51,6 +51,7 @@ import Types (
     Database (..),
     Exchange (..),
     GeographyPolicy (..),
+    LocationSource (..),
     ProcessId,
     SparseTriple (..),
     TechRole (..),
@@ -501,6 +502,7 @@ mkActivity name loc classif exs =
         , activitySynonyms = M.empty
         , activityClassification = classif
         , activityLocation = loc
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
         , activityParams = M.empty
