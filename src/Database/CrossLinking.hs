@@ -943,6 +943,11 @@ placelessLocations = map Location ["GLO", "RoW", "Unspecified"]
 
 {- | Location hierarchy for common LCA regions
 Maps a location code to its parent regions
+
+The floor, not the table: a configuration that names no geographies file gets
+this. Every shipped configuration points at @data/geographies.csv@, which is
+where a location belongs — it covers the whole ecoinvent vocabulary, this
+covers the handful of regions needed to start up without it.
 -}
 locationHierarchy :: M.Map Location [Location]
 locationHierarchy = M.mapKeysMonotonic Location (M.map (map Location) rawLocationHierarchy)
