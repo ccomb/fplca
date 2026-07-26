@@ -28,6 +28,24 @@
   output is unchanged.
 
 ### Fixed
+- Locations the databases actually use now have a place in the geography
+  hierarchy. `data/geographies.csv` listed 91 codes; the databases use several
+  hundred, so a Kenyan, Ukrainian or Brazilian-state activity had no wider
+  location at all and its characterisation factors fell straight through to the
+  global average with nothing said. The table now covers ecoinvent's whole
+  vocabulary — every country in its UN subregion and continent, every province
+  and grid inside the country it belongs to, and the regional aggregates the
+  databases name. Containment comes from Natural Earth's public-domain country
+  polygons rather than from hand-written guesses; codes whose membership is a
+  judgement call, such as the aluminium industry's IAI areas, carry their
+  region and nothing finer.
+- A location whose name contains a comma is no longer cut in half. The
+  geographies file was split on commas without regard for quoting, so
+  `Europe, Western` — the location of 863 Agribalyse activities — parsed as a
+  code called `Europe` followed by a stray field, and matched nothing. The file
+  now goes through a real CSV reader, and a file it cannot read is reported
+  instead of being quietly replaced by the built-in fallback table.
+
 - A method's own per-unit factor lines no longer cancel each other. SimaPro
   names can bake the unit into the flow name — "Gas, natural/m3" and
   "Gas, natural/kg" are the same substance declared in two units, with two
