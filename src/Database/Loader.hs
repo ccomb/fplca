@@ -908,7 +908,11 @@ loadEcoSpoldDirectory locationAliases dir = do
                 _ -> Left $ T.pack $ "Invalid filename format (expected activityUUID_productUUID.spold): " ++ filepath
 
 {- | Load a single EcoSpold1 file containing multiple datasets
-This handles files where <ecoSpold> contains multiple <dataset> elements
+This handles files where <ecoSpold> contains multiple <dataset> elements.
+
+A file holding exactly one dataset is keyed like the per-file directory
+path: the identifier its file name carries wins over the minted UUID.
+Several datasets share one file name, so none of them can claim it.
 -}
 loadSingleEcoSpold1File :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSingleEcoSpold1File locationAliases filepath = do
@@ -917,7 +921,10 @@ loadSingleEcoSpold1File locationAliases filepath = do
     reportProgress Info $ "Parsed " ++ show (length results) ++ " datasets from file"
 
     -- Build activity map from all parsed activities
-    let expanded = map buildProcEntryFromResult results
+    let fileUUID = case results of
+            [_] -> datasetUUIDFromPath filepath
+            _ -> Nothing
+        expanded = map (buildProcEntryFromResult fileUUID) results
         !procMap = M.fromList expanded
         !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
         !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
@@ -939,9 +946,9 @@ loadSingleEcoSpold1File locationAliases filepath = do
 
     Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
-    buildProcEntryFromResult :: (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
-    buildProcEntryFromResult (activity, _, _, _, _, _, _) =
-        let actUUID = generateActivityUUIDFromActivity activity
+    buildProcEntryFromResult :: Maybe UUID.UUID -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult fileUUID (activity, _, _, _, _, _, _) =
+        let actUUID = fromMaybe (generateActivityUUIDFromActivity activity) fileUUID
             prodUUID = getReferenceProductUUID activity
          in ((actUUID, prodUUID), activity)
 
