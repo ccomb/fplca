@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Changed
+- An EcoSpold 1 dataset published as `process_<uuid>.xml` (or `<uuid>.xml`)
+  now keeps that identifier as its activity UUID instead of getting one
+  minted from its name and location. Two releases of such a database can be
+  compared dataset by dataset: a renamed dataset no longer reads as one
+  deletion plus one creation. The process ids of these databases change once
+  when the new engine first loads them, and their caches rebuild
+  automatically. Files named any other way, and files holding several
+  datasets, keep the minted UUID.
 - The engine now advertises wire revision 4 on `/api/v1/version`. The three
   quality-report routes added since 0.9.3 arrived without a revision bump, so
   a client had no way to know whether an engine offered them: an engine too
