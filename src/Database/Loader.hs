@@ -216,6 +216,9 @@ History of manual bumps:
      when that name carries one, instead of always being minted from
      name and location. Old caches key the same dataset under the minted
      UUID, so a mixed pair would compare as two disjoint databases.
+- 13: Activity record gained activityLocationSource (declared, read off the
+     dataset name, or neither). Old caches miss the field; the Store layout
+     is positional, so decoding them would misread every field after it.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -223,7 +226,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 12
+     in hi `xor` lo `xor` 13
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
