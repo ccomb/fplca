@@ -1059,6 +1059,21 @@ spec = do
             activityName act
                 `shouldBe` "Bresaola, processed in FR | Chilled | Already packed - PP/PE | No preparation |"
 
+        -- A coproduct whose own name states no location inherits the reference
+        -- product's tag rather than the slash guess, so the whole block stays
+        -- on one location — and therefore on one activityUUID.
+        it "keeps every coproduct of a block on the reference product's tag" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Bresaola, processed in FR | Chilled | Already packed - PP/PE | No preparation |"
+                    [ "Bresaola, processed in FR | Chilled | Already packed - PP/PE | at consumer {FR} U;kg;1;60;not defined;material;"
+                    , "Beef trimmings, at plant;kg;1;40;not defined;material;"
+                    ]
+            map activityLocation activities `shouldBe` ["FR", "FR"]
+            case map generateActivityUUID activities of
+                [refUUID, coproductUUID] -> coproductUUID `shouldBe` refUUID
+                other -> length other `shouldBe` 2
+
         it "keeps a region whose own name contains a slash" $ do
             (activities, _, _, _, _) <-
                 parseProductsCSV

@@ -997,9 +997,12 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
             -- A blank reference name (malformed row) must not blank the whole
             -- block: degrade per-product, as before the shared fallback.
             -- The readings that may name the place are the ones behind the name
-            -- we settled on.
+            -- we settled on. The reference product's reading comes last: a
+            -- coproduct whose own name states nothing inherits the reference's
+            -- location rather than a guess read off the process name, keeping
+            -- every coproduct of the block on one location.
             (effectiveActivityName, readings)
-                | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, productReading])
+                | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, productReading, referenceReading])
                 | not (T.null fallbackName) = (fallbackName, [referenceReading])
                 | otherwise = (cleanProductName, [productReading])
             -- Best-founded reading wins; sortOn is stable, so a tie goes to the
