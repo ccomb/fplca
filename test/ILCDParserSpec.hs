@@ -32,6 +32,7 @@ activityWithRefExchange fid =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges =
             [ TechnosphereExchange
@@ -64,6 +65,7 @@ activityWithInputExchange fid =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , activityAllocationPercent = Nothing
         , activityAllocationFormula = Nothing

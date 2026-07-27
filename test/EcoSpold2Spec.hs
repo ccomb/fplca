@@ -237,6 +237,31 @@ spec = describe "per-exchange comments" $ do
             any ("mathematicalRelation" `isInfixOf`) newTexts
                 `shouldBe` False
 
+    -- A dataset without a <geography> element gets "GLO" as a stand-in; the
+    -- source declared nothing, and the record keeps that distinction for the
+    -- quality report.
+    describe "geography stand-in" $ do
+        let runOnBytes bytes = withSystemTempDirectory "es2-geo" $ \dir -> do
+                let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+                BS.writeFile path bytes
+                streamParseActivityAndFlowsFromFile path
+
+        it "records a geography the dataset declares as declared" $ do
+            result <- runOnBytes (activityTypeFixtureXml "1" Nothing)
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) -> do
+                    activityLocation act `shouldBe` "TEST"
+                    activityLocationSource act `shouldBe` LocationDeclared
+
+        it "fills in GLO for a dataset with no geography, recorded as undeclared" $ do
+            result <- runOnBytes noGeographyXml
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _) -> do
+                    activityLocation act `shouldBe` "GLO"
+                    activityLocationSource act `shouldBe` LocationUnspecified
+
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and
 optional specialActivityType code. One reference output, no other exchanges.
 -}
@@ -269,6 +294,28 @@ activityTypeFixtureXml actType mSpec =
                \    </flowData>\n\
                \  </activityDataset>\n\
                \</ecoSpold>\n"
+
+-- | Same dataset as 'activityTypeFixtureXml' but with no @\<geography\>@ element.
+noGeographyXml :: BS.ByteString
+noGeographyXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+    \  <activityDataset>\n\
+    \    <activityDescription>\n\
+    \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"geo-test\">\n\
+    \        <activityName xml:lang=\"en\">geography test activity</activityName>\n\
+    \      </activity>\n\
+    \    </activityDescription>\n\
+    \    <flowData>\n\
+    \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
+    \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+    \        <name xml:lang=\"en\">geography test product</name>\n\
+    \        <unitName xml:lang=\"en\">kg</unitName>\n\
+    \        <outputGroup>0</outputGroup>\n\
+    \      </intermediateExchange>\n\
+    \    </flowData>\n\
+    \  </activityDataset>\n\
+    \</ecoSpold>\n"
 
 withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do

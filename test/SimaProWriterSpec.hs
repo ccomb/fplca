@@ -592,6 +592,7 @@ emissionDb comp =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , BiosphereExchange bioU 0.5 unitU Emission "" Nothing Nothing
@@ -639,6 +640,7 @@ allocationDb =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing
@@ -681,6 +683,7 @@ zeroAllocationDb =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing
@@ -726,6 +729,7 @@ commentDb ped cmt =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped
@@ -762,6 +766,7 @@ namedDb name =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
             M.empty
@@ -824,4 +829,4 @@ guardDb alloc ntype exs =
         }
   where
     act =
-        Activity "guard maker" [] M.empty M.empty "GLO" "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing
+        Activity "guard maker" [] M.empty M.empty "GLO" LocationDeclared "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing

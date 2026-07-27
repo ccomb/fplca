@@ -13,7 +13,7 @@ import Expr (evaluate, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
     Located (..),
-    LocationSource (..),
+    NameReading (..),
     ProductRow (..),
     TechExchangeRow (..),
     defaultConfig,
@@ -37,6 +37,7 @@ import Types (
     Activity (..),
     BiosphereFlow,
     Exchange (..),
+    LocationSource (..),
     NativeActivityType (..),
     NativeProcessId (..),
     Pedigree (..),
@@ -1034,6 +1035,18 @@ spec = do
             (activities, _, _, _, _) <- parseNamedCSV "Widget {FR} U" []
             activityLocation (head activities) `shouldBe` "FR"
 
+        -- The geography is usable either way, but only the parser still knows
+        -- which of the two it read, so it records the difference for the
+        -- quality report: a name is a reading, a Geography field a declaration.
+        it "records a location read off the name as inferred, not declared" $ do
+            (activities, _, _, _, _) <- parseNamedCSV "Widget {FR} U" []
+            activityLocationSource (head activities) `shouldBe` LocationInferredFromName
+
+        it "records no location source when neither the field nor the name carries one" $ do
+            (activities, _, _, _, _) <- parseNamedCSV "Widget U" []
+            activityLocation (head activities) `shouldBe` ""
+            activityLocationSource (head activities) `shouldBe` LocationUnspecified
+
         it "parses location from process name //[XX] pattern (ecoinvent 3.9.1 SimaPro export)" $ do
             (activities, _, _, _, _) <- parseNamedCSV "mango//[BR] mango production" []
             activityLocation (head activities) `shouldBe` "BR"
@@ -1042,6 +1055,7 @@ spec = do
             (activities, _, _, _, _) <- parseTestCSV
             let a = head activities
             activityLocation a `shouldBe` "GLO"
+            activityLocationSource a `shouldBe` LocationDeclared
 
         -- SimaPro cuts the "Process name" field at 80 characters, which takes
         -- the "{FR}" tag off the end of a long name and leaves only a slash the

@@ -103,6 +103,7 @@ mkActivity _ loc =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = []
         , activityParams = M.empty

@@ -29,6 +29,7 @@ import Types (
     BiosphereFlow (..),
     Database (..),
     Indexes (..),
+    LocationSource (..),
     SparseTriple (..),
     Unit (..),
     emptyProductIndex,
@@ -85,6 +86,7 @@ mkActivity loc =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = []
         , activityParams = M.empty

@@ -58,6 +58,7 @@ minimalActivity name exs =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
         , activityParams = M.empty

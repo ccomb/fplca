@@ -847,6 +847,7 @@ data QualityReportAPI = QualityReportAPI
     , qraDuplicateActivities :: QualityCheckAPI
     , qraSuspiciousAmounts :: QualityCheckAPI
     , qraMissingMetadata :: QualityCheckAPI
+    , qraUndeclaredGeography :: QualityCheckAPI
     , qraFormulaConsistency :: QualityCheckAPI
     , qraTruncatedNameCollisions :: QualityCheckAPI
     , qraMissingPedigree :: QualityCheckAPI

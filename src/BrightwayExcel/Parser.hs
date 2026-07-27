@@ -321,13 +321,15 @@ rawToActivity cfg ra =
                | not (any exchangeIsReference exchanges')
                ]
 
+    location = fromMaybe "" (metaText meta "location")
     activity =
         Activity
             { activityName = raName ra
             , activityDescription = maybeToList (metaText meta "comment")
             , activitySynonyms = M.empty
             , activityClassification = M.empty
-            , activityLocation = fromMaybe "" (metaText meta "location")
+            , activityLocation = location
+            , activityLocationSource = declaredLocationSource location
             , activityUnit = refUnitName
             , exchanges = exchanges'
             , activityParams = M.empty

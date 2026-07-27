@@ -524,6 +524,7 @@ multiOutputDb =
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
             M.empty
@@ -595,6 +596,7 @@ oneActivityDb bios exs =
             , activitySynonyms = M.empty
             , activityClassification = M.empty
             , activityLocation = "GLO"
+            , activityLocationSource = LocationDeclared
             , activityUnit = "kg"
             , exchanges = exs
             , activityParams = M.empty

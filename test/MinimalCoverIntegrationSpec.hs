@@ -29,6 +29,7 @@ import Types (
     CrossDBLinkingStats (..),
     Exchange (..),
     GeographyPolicy (..),
+    LocationSource (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -139,6 +140,7 @@ supplierDB offset =
                 , activitySynonyms = M.empty
                 , activityClassification = M.empty
                 , activityLocation = "GLO"
+                , activityLocationSource = LocationDeclared
                 , activityUnit = "kg"
                 , exchanges = [refExchange]
                 , activityParams = M.empty
@@ -217,6 +219,7 @@ consumerDB offset n =
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
+                        , activityLocationSource = LocationDeclared
                         , activityUnit = "kg"
                         , exchanges = [refOut, unlinkedInput]
                         , activityParams = M.empty

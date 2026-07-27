@@ -560,6 +560,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
         , activitySynonyms = M.empty
         , activityClassification = iprClassifications p
         , activityLocation = iprLocation p
+        , activityLocationSource = declaredLocationSource (iprLocation p)
         , activityUnit = refUnit
         , exchanges = map (mkExchange (iprRefFlowIdx p)) (iprExchanges p)
         , activityParams = M.empty

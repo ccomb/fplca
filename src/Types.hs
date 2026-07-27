@@ -483,6 +483,31 @@ data FormulaCheck = FormulaCheck
     }
     deriving (Generic, NFData, Store)
 
+{- | Where an activity's 'activityLocation' came from. A format with a geography
+field publishes one ('LocationDeclared'); when it is blank or says
+@Unspecified@, the parser falls back to the code embedded in the dataset name
+(@"… {FR}"@, @"…//[RER]"@, @"…/CN U"@), which is a reading of the name and not
+a declaration ('LocationInferredFromName'). 'LocationUnspecified' when neither
+yielded anything, and 'activityLocation' is empty.
+
+Recorded at parse time because only the parser can still tell the two apart:
+downstream, a declared @FR@ and a guessed @FR@ are the same text. The quality
+report is what surfaces the difference.
+-}
+data LocationSource
+    = LocationDeclared
+    | LocationInferredFromName
+    | LocationUnspecified
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | The source of a geography a format declares directly: the field itself when
+it carries something, nothing to infer from when it doesn't.
+-}
+declaredLocationSource :: Text -> LocationSource
+declaredLocationSource loc
+    | T.null (T.strip loc) = LocationUnspecified
+    | otherwise = LocationDeclared
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
@@ -492,6 +517,7 @@ data Activity = Activity
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonyms by language, same structure as flows
     , activityClassification :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
     , activityLocation :: !Text -- Location code (e.g. FR, RER)
+    , activityLocationSource :: !LocationSource -- Whether the source declared that location or the parser read it off the dataset name
     , activityUnit :: !Text -- Reference unit
     , exchanges :: ![Exchange] -- List of exchanges
     , activityParams :: !(M.Map Text Double) -- Resolved dataset parameter values (SimaPro parameters, EcoSpold2 <parameter> variables)

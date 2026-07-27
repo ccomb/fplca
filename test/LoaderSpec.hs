@@ -45,6 +45,7 @@ minimalActivity name loc exs =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
         , activityParams = M.empty

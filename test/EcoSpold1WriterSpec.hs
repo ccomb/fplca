@@ -138,7 +138,7 @@ soloDb name prodU extra techs bios wastes =
         }
   where
     ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-    act = Activity name [] M.empty M.empty "GLO" "kg" (ref : extra) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+    act = Activity name [] M.empty M.empty "GLO" LocationDeclared "kg" (ref : extra) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
 
 -- | Empty database: no activities, no flows.
 emptyDb :: SimpleDatabase
@@ -166,7 +166,7 @@ linkedDb link =
   where
     supU = supplierLink
     conU = read "33333333-0000-4000-8000-000000000001"
-    mkAct nm prodU exs = Activity nm [] M.empty M.empty "GLO" "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+    mkAct nm prodU exs = Activity nm [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
     refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
     supplier = mkAct "aaa supplier" supU []
     -- The consumer's input consumes the supplier's product and links to it.
@@ -555,6 +555,7 @@ spec = do
                         M.empty
                         M.empty
                         "GLO"
+                        LocationDeclared
                         "kg"
                         [ref]
                         M.empty

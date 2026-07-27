@@ -71,6 +71,7 @@ buildFixture comp = do
             M.empty
             M.empty
             "GLO"
+            LocationDeclared
             "kg"
             [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
             , BiosphereExchange co2U 0.5 unitU Emission "" Nothing Nothing

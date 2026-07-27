@@ -31,6 +31,7 @@ import Types (
     BiosphereFlow (..),
     Exchange (..),
     FormulaCheck (..),
+    LocationSource (..),
     NativeProcessId (..),
     Severity (..),
     SimpleDatabase (..),
@@ -85,6 +86,7 @@ mkActivity name exs =
         , activitySynonyms = M.empty
         , activityClassification = M.singleton "ISIC" "1071"
         , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
         , activityParams = M.empty
@@ -367,6 +369,24 @@ spec = do
 
         it "passes a fully documented activity" $
             qcOffenders (qrMissingMetadata (reportOf (mkActivity "bread" [reference breadFlow]))) `shouldBe` []
+
+    describe "undeclared geography check" $ do
+        it "flags a geography read off the dataset name as info" $ do
+            let act = (mkActivity "bread {FR}" [reference breadFlow]){activityLocationSource = LocationInferredFromName}
+                check = qrUndeclaredGeography (reportOf act)
+            details check `shouldBe` ["geography \"FR\" was read from the dataset name, not declared by the source"]
+            severities check `shouldBe` [InfoSev]
+
+        it "flags a stand-in geography the source never declared" $
+            details (qrUndeclaredGeography (reportOf (mkActivity "bread" [reference breadFlow]){activityLocation = "GLO", activityLocationSource = LocationUnspecified}))
+                `shouldBe` ["the source declares no geography; \"GLO\" stands in for it"]
+
+        it "flags an entry left with no geography at all" $
+            details (qrUndeclaredGeography (reportOf (mkActivity "bread" [reference breadFlow]){activityLocation = "", activityLocationSource = LocationUnspecified}))
+                `shouldBe` ["the source declares no geography"]
+
+        it "passes a geography the source declared" $
+            qcOffenders (qrUndeclaredGeography (reportOf (mkActivity "bread" [reference breadFlow]))) `shouldBe` []
 
     describe "formula consistency check" $ do
         it "flags an activity whose formulas diverge, with counts and the example" $ do

@@ -42,6 +42,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LinkBlocker (..),
+    LocationSource (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -84,6 +85,7 @@ mkActivity name exs =
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
         , activityParams = M.empty
