@@ -12,9 +12,12 @@ import Database.MatrixBuild (InterningTables (..), buildInterningTables)
 import Expr (evaluate, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
+    Located (..),
+    LocationSource (..),
     ProductRow (..),
     TechExchangeRow (..),
     defaultConfig,
+    extractLocation,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -1039,6 +1042,77 @@ spec = do
             (activities, _, _, _, _) <- parseTestCSV
             let a = head activities
             activityLocation a `shouldBe` "GLO"
+
+        -- SimaPro cuts the "Process name" field at 80 characters, which takes
+        -- the "{FR}" tag off the end of a long name and leaves only a slash the
+        -- name has for its own reasons. The product name is not cut and still
+        -- states the tag, so the tag is what the activity is placed by.
+        it "believes a tag on the product over a slash in the process name" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Bresaola, processed in FR | Chilled | Already packed - PP/PE | No preparation |"
+                    ["Bresaola, processed in FR | Chilled | Already packed - PP/PE | at consumer {FR} U;kg;1;100;not defined;material;"]
+            let act = head activities
+            -- PE is the plastic, not Peru.
+            activityLocation act `shouldBe` "FR"
+            -- And the name keeps the tail the slash reading would have cut off.
+            activityName act
+                `shouldBe` "Bresaola, processed in FR | Chilled | Already packed - PP/PE | No preparation |"
+
+        -- A coproduct whose own name states no location inherits the reference
+        -- product's tag rather than the slash guess, so the whole block stays
+        -- on one location — and therefore on one activityUUID.
+        it "keeps every coproduct of a block on the reference product's tag" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Bresaola, processed in FR | Chilled | Already packed - PP/PE | No preparation |"
+                    [ "Bresaola, processed in FR | Chilled | Already packed - PP/PE | at consumer {FR} U;kg;1;60;not defined;material;"
+                    , "Beef trimmings, at plant;kg;1;40;not defined;material;"
+                    ]
+            map activityLocation activities `shouldBe` ["FR", "FR"]
+            case map generateActivityUUID activities of
+                [refUUID, coproductUUID] -> coproductUUID `shouldBe` refUUID
+                other -> length other `shouldBe` 2
+
+        it "keeps a region whose own name contains a slash" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Electricity, low voltage BR-South-eastern/Mid-western grid| market for electr"
+                    ["Electricity, low voltage {BR-South-eastern/Mid-western grid}| market for U;MJ;1;100;not defined;material;"]
+            let act = head activities
+            activityLocation act `shouldBe` "BR-South-eastern/Mid-western grid"
+            activityName act
+                `shouldBe` "Electricity, low voltage BR-South-eastern/Mid-western grid| market for electr"
+
+        -- The reading the slash form exists for, with nothing better on offer.
+        it "still reads a WFLDB slash suffix, and still drops it from the name" $ do
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    "Maize grain, non-irrigated, at farm (WFLDB)/US U"
+                    ["Maize grain, non-irrigated, at farm (WFLDB)/US U;kg;1;100;not defined;material;"]
+            let act = head activities
+            activityLocation act `shouldBe` "US"
+            activityName act `shouldBe` "Maize grain, non-irrigated, at farm (WFLDB)"
+
+    describe "extractLocation" $ do
+        it "reads a curly-brace tag, leaving the name whole" $
+            extractLocation "Wheat grain {FR}| production | Cut-off, U"
+                `shouldBe` Just (Located "Wheat grain {FR}| production | Cut-off, U" "FR" Tagged)
+
+        it "reads an embedded bracket tag, leaving the name whole" $
+            extractLocation "mango//[BR] mango production"
+                `shouldBe` Just (Located "mango//[BR] mango production" "BR" Tagged)
+
+        it "reads a slash suffix, which is part of the name and goes with it" $
+            extractLocation "Maize grain, at farm (WFLDB)/US U"
+                `shouldBe` Just (Located "Maize grain, at farm (WFLDB)" "US" SlashSuffix)
+
+        it "scans past a slash segment that names no place" $
+            extractLocation "Product/ha/GLO/I U"
+                `shouldBe` Just (Located "Product/ha" "GLO" SlashSuffix)
+
+        it "says nothing when the name states nothing, rather than a blank" $
+            extractLocation "Diesel, burned in machinery" `shouldBe` Nothing
 
         -- WFLDB convention: the Process name carries the data-collection
         -- country (/CH) while the Products row carries the geographic scope
