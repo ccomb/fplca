@@ -1935,6 +1935,12 @@ lookupCascadeCF tables flowDB fid =
     -- for "Ammonia" applies to the emission wherever it occurs. Only fires
     -- after every direct lookup misses, and only when the suffix is a real
     -- region code (extractLocationSuffix leaves "Methane, fossil" untouched).
+    --
+    -- The borrowed CF keeps the base substance's *unit*, which may differ in
+    -- dimension from the flow's. 'lookupEnergyDensity' therefore strips the
+    -- suffix with this same 'extractLocationSuffix' before looking a density
+    -- up: whatever name lends the factor must also lend the density, or the
+    -- flow holds a factor it cannot be converted to and scores 0.
     regionBaseFallback flow baseMed normSub =
         case extractLocationSuffix (bfName flow) of
             (base, Just _) ->
@@ -2145,43 +2151,61 @@ flowMediumSub cmap flow =
 {- | Flow→CF conversion factor for @qty@ units of flow, applying the
 energy-density bridge when it is needed and available.
 
-The bridge fires only when the CF is energy-denominated, the flow is __not__
-(its unit isn't an energy unit), and the flow carries an 'EnergyDensity'. The
-inventory quantity is first brought into the density's native unit, then turned
-into energy: @qNative × E@, where @E@ is the density value converted from its
-declared energy unit into the CF's unit. Either conversion failing — the flow
-unit can't reach the native unit, or the energy unit can't reach the CF unit —
-yields @0@: we refuse a wrong-basis or wrong-dimension factor rather than
-silently using the raw value.
+A density relates two dimensions — @target@ per @native@, MJ per kg for a
+calorific value, m³ per kg for a mass density — and a flow can meet a CF from
+either side of it, so the bridge reads the ratio both ways:
 
-Every other case (matching dimensions, no density, or an energy flow) defers
-to 'convertForCharacterization', so flows without a density are unchanged.
+  * __forward__, the CF is in the target unit and the flow in the native one
+    (a mass flow against a per-MJ or per-m³ factor): @qNative × E@;
+  * __inverse__, the mirror image, the flow is in the target unit and the CF in
+    the native one (a volume flow against a per-kg factor): @qTarget ÷ E@.
+
+Both require the flow's own unit to be dimensionally unreachable from the CF's
+— a pair the ordinary conversion can already handle is its business, not the
+bridge's — and both require a positive density: a zero would divide, and a
+negative one would silently flip the sign of a score.
+
+Any leg failing to convert yields @0@, and so does a non-positive density: we
+refuse a wrong-basis or wrong-dimension factor rather than silently using the
+raw value, and 'zeroedMatchedCFs' reports the refusal. Every other case
+(matching dimensions, no density) defers to 'convertForCharacterization', so
+flows without a density are unchanged.
 -}
 energyAwareConversion :: UnitConfig -> Text -> CFUnit -> Maybe EnergyDensity -> Double -> Double
 energyAwareConversion cfg flowUnit cfu@(CFUnit rawCfUnit) mDensity qty =
     case mDensity of
-        -- The bridge fires when the CF is denominated in the density's target
-        -- unit (MJ for a calorific value, m³ for a mass density) and the flow is
-        -- a different dimension (mass). Generalizing the guard from "energy" to
-        -- "same dimension as the density unit" lets one mechanism serve both the
-        -- fossil energy CF (kg → MJ via calorific value) and the water-scarcity
-        -- CF (kg → m³ via density), which are the two cases where a per-physical-
-        -- quantity CF meets a mass inventory flow.
-        Just (EnergyDensity ev densityUnit nativeUnit)
-            | unitsCompatible cfg rawCfUnit densityUnit
-            , not (unitsCompatible cfg rawCfUnit flowUnit) ->
+        -- Generalizing the guard from "energy" to "same dimension as one leg of
+        -- the density" lets one mechanism serve the fossil energy CF (kg → MJ
+        -- via calorific value), the water-scarcity CF (kg → m³ via density) and
+        -- their mirrors, which is every case where a per-physical-quantity CF
+        -- meets an inventory flow of another dimension.
+        Just (EnergyDensity ev targetUnit nativeUnit)
+            | crossDimension
+            , ev > 0
+            , unitsCompatible cfg rawCfUnit targetUnit ->
                 fromMaybe 0 $ do
-                    qtyNative <- toNativeQty flowUnit nativeUnit
-                    factor <- convertUnit cfg densityUnit rawCfUnit ev
+                    qtyNative <- toUnit nativeUnit
+                    factor <- convertUnit cfg targetUnit rawCfUnit ev
                     pure (qtyNative * factor)
+            | crossDimension
+            , ev > 0
+            , unitsCompatible cfg rawCfUnit nativeUnit ->
+                fromMaybe 0 $ do
+                    qtyTarget <- toUnit targetUnit
+                    convertUnit cfg nativeUnit rawCfUnit (qtyTarget / ev)
         _ -> convertForCharacterization cfg flowUnit cfu qty
   where
-    -- Bring the inventory quantity into the unit the density is denominated
+    -- Both arms need the flow's unit to be unreachable from the CF's: a
+    -- same-dimension pair belongs to the ordinary conversion, and a CF unit the
+    -- config does not know (a result expression like "kg CO2 eq") is compatible
+    -- with neither leg, so it is never bridged.
+    crossDimension = not (unitsCompatible cfg rawCfUnit flowUnit)
+    -- Bring the inventory quantity into the leg the arm applies the density
     -- against: identical units need no table entry, otherwise a same-dimension
     -- conversion. An incompatible or unknown unit yields 'Nothing' → 0.
-    toNativeQty fu nu
-        | normalizeUnit fu == normalizeUnit nu = Just qty
-        | otherwise = convertUnit cfg fu nu qty
+    toUnit u
+        | normalizeUnit flowUnit == normalizeUnit u = Just qty
+        | otherwise = convertUnit cfg flowUnit u qty
 
 {- | Apply the flow→CF unit conversion factor and multiply by the CF value.
 
@@ -2206,13 +2230,10 @@ convertAndMultiply ::
     Double
 convertAndMultiply unitConfig unitDB energyDensities mflow (CF cfVal cfu) qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
-        -- Density from the curated CSV first; else parse it from the flow name
-        -- ("Coal, 18 MJ per kg" → 18 MJ), so energy-resource variants the CSV
-        -- doesn't enumerate still convert mass/volume → energy.
-        mDensity =
-            mflow >>= \f ->
-                M.lookup (normalizeName (bfName f)) energyDensities
-                    <|> fmap snd (parseEnergyDensitySuffix (bfName f))
+        -- 'lookupEnergyDensity' walks the same names the CF lookup walks —
+        -- including the region-stripped one, so a flow lent the base substance's
+        -- factor is lent its density too.
+        mDensity = mflow >>= \f -> lookupEnergyDensity energyDensities (bfName f)
         converted = energyAwareConversion unitConfig flowUnit cfu mDensity qty
      in converted * cfVal
 

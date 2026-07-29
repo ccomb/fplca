@@ -42,6 +42,7 @@ module Method.Types (
     buildEnergyDensityMapFromCSV,
     energyDensityMapSize,
     parseEnergyDensitySuffix,
+    lookupEnergyDensity,
 
     -- * Region-suffixed flow names
     extractLocationSuffix,
@@ -51,6 +52,7 @@ module Method.Types (
     MatchType (..),
 ) where
 
+import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData)
 import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.ByteString.Lazy as BL
@@ -456,6 +458,32 @@ parseEnergyDensitySuffix name =
   where
     isJouleUnit u = T.toUpper u `elem` map T.pack ["KJ", "MJ", "GJ", "TJ"]
     cleanBase ws = T.dropWhileEnd (\c -> c == ',' || c == ' ') (T.unwords ws)
+
+{- | The density for a flow name, following the same cascade of names the CF
+lookup follows: the curated map under the flow's own name, then under its
+region-stripped base name (@"Water, SERC"@ → @"Water"@), then the density the
+name itself encodes (@"Coal, 18 MJ per kg"@).
+
+The region rung is what keeps the two lookups on the same key. A
+region-suffixed flow is lent the base substance's CF (see
+'extractLocationSuffix'), and that CF carries the base substance's unit — so if
+the density is only ever looked up under the full name, the flow ends up
+holding a factor of a dimension it cannot be converted to and nothing to bridge
+with, and scores 0. Stripping here exactly as the CF lookup strips there is the
+invariant: whatever name lent the factor must also lend the density.
+
+Curated rows outrank the name-encoded density, so a database that spells a
+density into its flow names cannot override a curated correction.
+-}
+lookupEnergyDensity :: EnergyDensityMap -> Text -> Maybe EnergyDensity
+lookupEnergyDensity densities name =
+    M.lookup (normalizeName name) densities
+        <|> regionBase
+        <|> fmap snd (parseEnergyDensitySuffix name)
+  where
+    regionBase = case extractLocationSuffix name of
+        (base, Just _) -> M.lookup (normalizeName base) densities
+        (_, Nothing) -> Nothing
 
 {- | SimaPro encodes regional variants of a flow as a suffix on the flow name:
 @"Nitrogen dioxide, FR"@. Split that suffix off, returning the base name and
