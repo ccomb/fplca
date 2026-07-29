@@ -53,6 +53,21 @@
   output is unchanged.
 
 ### Fixed
+- A region-tagged flow now gets the density that goes with the factor it
+  borrows. When a method has no line for `Water, SERC`, VoLCA lends it the line
+  written for `Water` — but that line can be denominated per kilogram while the
+  flow is measured in cubic metres, and the density that bridges the two was
+  only ever looked up under the flow's full name, region tag included. The tag
+  was stripped to find the factor and not to find the density, so the flow ended
+  up holding a factor of a dimension it could not reach, and scored nothing.
+  Both lookups now strip it the same way.
+- A density is now read in both directions. It relates two dimensions — mass to
+  energy for a calorific value, mass to volume for a density proper — and a flow
+  can meet a factor from either side of it, but only one side was handled: a
+  flow in kilograms against a per-cubic-metre factor converted, while the same
+  substance in cubic metres against a per-kilogram factor scored zero. A
+  non-positive density is now refused outright rather than divided by, and the
+  refusal is reported like any other.
 - A SimaPro activity is now placed by the location its producer wrote down,
   rather than by one guessed from a name. SimaPro cuts its "Process name"
   field at 80 characters, which on a long name takes the `{FR}` tag off the

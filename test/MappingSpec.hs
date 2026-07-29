@@ -747,6 +747,21 @@ spec = do
                     ((mkCF "gas" Nothing 50.0){mcfUnit = "MJ"})
             zeroed `shouldBe` [fid]
 
+        it "stays quiet when the bridge converts the other way round" $ do
+            -- The mirror: flow in the density's target unit (m3), CF in its
+            -- native one (kg). The inverse arm divides, so nothing is refused
+            -- and the scan must not keep reporting it.
+            (_, zeroed) <-
+                fillWith (M.singleton "gas" (EnergyDensity 0.001 "m3" "kg")) "m3" (mkCF "gas" Nothing 43.1)
+            zeroed `shouldBe` []
+
+        it "still flags a pair neither direction of the bridge can span" $ do
+            -- Density between m3 and kg, but the flow is in MJ: neither leg is
+            -- reachable, so the refusal stands and stays visible.
+            (fid, zeroed) <-
+                fillWith (M.singleton "gas" (EnergyDensity 0.001 "m3" "kg")) "mj" (mkCF "gas" Nothing 43.1)
+            zeroed `shouldBe` [fid]
+
     describe "findSimilarCFs (post-scoring suggester)" $ do
         let mkMethod cfs =
                 Method

@@ -52,10 +52,11 @@ unitConfig =
     fromRight defaultUnitConfig $
         buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\ntonne,mass,1000.0\nm3,volume,1.0\nmj,energy,1.0e6\n")
 
-uidKg, uidTonne, uidM3 :: UUID
+uidKg, uidTonne, uidM3, uidMJ :: UUID
 uidKg = UUID.fromWords64 1 0
 uidTonne = UUID.fromWords64 2 0
 uidM3 = UUID.fromWords64 3 0
+uidMJ = UUID.fromWords64 4 0
 
 mkUnit :: UUID -> Text -> Unit
 mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}
@@ -67,6 +68,7 @@ unitDB =
         [ (uidKg, mkUnit uidKg "kg")
         , (uidTonne, mkUnit uidTonne "tonne")
         , (uidM3, mkUnit uidM3 "m3")
+        , (uidMJ, mkUnit uidMJ "mj")
         ]
 
 -- ---------------------------------------------------------------------------
@@ -127,15 +129,40 @@ waterFlowIn unitId = (coalFlowIn unitId){bfId = waterId, bfName = "Water"}
 volumeCF :: MethodCF
 volumeCF = energyCF{mcfFlowRef = waterId, mcfFlowName = "Water", mcfValue = 42.95, mcfUnit = "m3"}
 
+-- A per-kilogram water CF — the shape a non-regionalized method takes when it
+-- writes water deprivation against a mass basis instead of a volume one.
+waterMassCF :: MethodCF
+waterMassCF = volumeCF{mcfValue = -0.042955, mcfUnit = "kg"}
+
 -- Mass density of water: 0.001 m³ per kg — same shape as a calorific value.
 waterDensities :: EnergyDensityMap
 waterDensities = M.fromList [(normalizeName "Water", EnergyDensity 0.001 "m3" "kg")]
+
+-- The same water, tagged with a US grid region the method does not enumerate.
+-- Its own UUID keeps it out of 'mtUuidCF', so it can only reach a CF through
+-- the region base-name fallback.
+regionWaterId :: UUID
+regionWaterId = UUID.fromWords64 12 0
+
+regionWaterFlowIn :: UUID -> BiosphereFlow
+regionWaterFlowIn unitId = (waterFlowIn unitId){bfId = regionWaterId, bfName = "Water, SERC"}
 
 -- Build tables (with broadcast) for a flow + energy-density set + CF.
 tablesFor :: BiosphereFlow -> EnergyDensityMap -> MethodCF -> MethodTables
 tablesFor flow densities cf =
     let fdb = M.singleton (bfId flow) flow
         raw = buildMethodTables OtherCFFamily M.empty densities [(cf, Just (flow, ByUUID))]
+     in fillBroadcastVector unitConfig unitDB fdb raw
+
+{- | Tables where the CF is name-matched to the __base__ substance while the
+inventory holds a __region-suffixed__ flow — the situation a non-regionalized
+method meets in a regionalized database, and the only one that exercises the
+region rung of both the CF lookup and the density lookup.
+-}
+tablesForRegion :: BiosphereFlow -> BiosphereFlow -> EnergyDensityMap -> MethodCF -> MethodTables
+tablesForRegion baseFlow regionFlow densities cf =
+    let fdb = M.singleton (bfId regionFlow) regionFlow
+        raw = buildMethodTables OtherCFFamily M.empty densities [(cf, Just (baseFlow, ByName))]
      in fillBroadcastVector unitConfig unitDB fdb raw
 
 -- Score a @qty@-unit inventory of @flow@ against the given tables.
@@ -210,6 +237,56 @@ spec = do
             let flow = waterFlowIn uidKg
                 tables = tablesFor flow M.empty volumeCF
             scoreFlow flow 1.0 tables `shouldSatisfy` near 0
+
+    describe "Density bridge, inverse direction: mass CF vs. volume flow" $ do
+        -- The mirror of the arm above. A density relates two dimensions, and a
+        -- flow can meet a CF from either side of it: here the flow is in the
+        -- density's target unit (m³) and the CF in its native one (per kg), so
+        -- the ratio divides instead of multiplying.
+        it "divides a volume flow by the density to reach a per-kg CF" $ do
+            let flow = waterFlowIn uidM3
+                tables = tablesFor flow waterDensities waterMassCF
+            scoreFlow flow 0.283452 tables `shouldSatisfy` near ((0.283452 / 0.001) * (-0.042955))
+
+        it "leaves a flow already in the CF's own unit to the ordinary conversion" $ do
+            let flow = waterFlowIn uidKg
+                tables = tablesFor flow waterDensities waterMassCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near (-0.042955)
+
+        it "still scores 0 without a density" $ do
+            let flow = waterFlowIn uidM3
+                tables = tablesFor flow M.empty waterMassCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near 0
+
+        it "refuses a non-positive density rather than dividing by it" $ do
+            let flow = waterFlowIn uidM3
+                zeroDensity = M.fromList [(normalizeName "Water", EnergyDensity 0 "m3" "kg")]
+                score = scoreFlow flow 1.0 (tablesFor flow zeroDensity waterMassCF)
+            score `shouldSatisfy` near 0
+            score `shouldSatisfy` (not . isNaN)
+
+        it "mirrors for fuel too: an MJ flow against a per-kg CF divides by the calorific value" $ do
+            let flow = coalFlowIn uidMJ
+                tables = tablesFor flow coalDensities massCF
+            scoreFlow flow 1.0 tables `shouldSatisfy` near ((1.0 / 26.4) * 3.0)
+
+    describe "Region-suffixed flow, end to end" $ do
+        -- The defect this whole arm exists for. The CF lookup lends "Water,
+        -- SERC" the base "Water" factor, which is written per kilogram; the
+        -- flow is in m³. Scoring it needs the region rung of the CF lookup, the
+        -- region rung of the density lookup, and the inverse bridge — remove
+        -- any one of the three and this returns 0.
+        it "characterizes a region-tagged m3 flow through the base per-kg CF" $ do
+            let base = waterFlowIn uidM3
+                flow = regionWaterFlowIn uidM3
+                tables = tablesForRegion base flow waterDensities waterMassCF
+            scoreFlow flow 0.283452 tables `shouldSatisfy` near ((0.283452 / 0.001) * (-0.042955))
+
+        it "scores 0 without the density, so the bridge is what carries it" $ do
+            let base = waterFlowIn uidM3
+                flow = regionWaterFlowIn uidM3
+                tables = tablesForRegion base flow M.empty waterMassCF
+            scoreFlow flow 0.283452 tables `shouldSatisfy` near 0
 
     describe "buildEnergyDensityMapFromCSV" $ do
         it "parses a valid row, keyed by normalized flow name" $
