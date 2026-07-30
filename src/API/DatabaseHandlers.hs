@@ -117,7 +117,7 @@ import API.Types (
     UploadResponse (..),
  )
 import App.Env (AppEnv (..), AppM)
-import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly)
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusal)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
@@ -923,7 +923,7 @@ guardMutation :: AppM ()
 guardMutation = do
     readOnly <- asks (hostingReadOnly . aeHostingConfig)
     when (isReadOnly readOnly) $
-        throwError err403{errBody = "This instance is read-only: it answers queries but changes nothing."}
+        throwError err403{errBody = BSL.fromStrict (T.encodeUtf8 readOnlyRefusal)}
 
 {- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse.
 

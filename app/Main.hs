@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), hostingReadOnly, loadConfigOrDefault)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), hostingReadOnly, loadConfigOrDefault, readOnlyRefusal)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -41,7 +41,7 @@ import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
 import App.Env (AppEnv (..))
-import Data.Aeson (encode)
+import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as C8
@@ -481,7 +481,7 @@ shutdownEndpoint readOnly lastRequestRef idleActiveRef app req respond =
             responseLBS
                 status403
                 [(hContentType, "application/json")]
-                "{\"error\":\"This instance is read-only: it answers queries but changes nothing.\"}"
+                (encode (object ["error" .= readOnlyRefusal]))
 
 -- | Background thread that exits the server after idle timeout (in seconds)
 idleWatchdog :: IORef UTCTime -> IORef Bool -> Int -> IO ()

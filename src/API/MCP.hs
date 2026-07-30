@@ -27,7 +27,7 @@ import System.Random (randomIO)
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..))
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), readOnlyRefusal)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -343,7 +343,7 @@ newly added mutating tool is covered here without touching this function.
 callTool :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
 callTool _ _ readOnly _ rid name _
     | isReadOnly readOnly && mutatingTool name =
-        return $ toolError rid "This instance is read-only: it answers queries but changes nothing."
+        return $ toolError rid readOnlyRefusal
 callTool dbManager presets _ mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "load_database" -> callLoadDatabase dbManager rid args

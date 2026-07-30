@@ -16,6 +16,7 @@ module Config (
     HostingConfig (..),
     ReadOnly (..),
     hostingReadOnly,
+    readOnlyRefusal,
     ClassificationPreset (..),
     ClassificationEntry (..),
 
@@ -114,6 +115,12 @@ newtype ReadOnly = ReadOnly {isReadOnly :: Bool}
 -- | Read the read-only stance of an instance; unconfigured hosting is writable.
 hostingReadOnly :: Maybe HostingConfig -> ReadOnly
 hostingReadOnly = ReadOnly . maybe False hcReadOnly
+
+{- | The one sentence every surface refuses with. Shared so REST, MCP and the
+lifetime middleware cannot drift into three different explanations.
+-}
+readOnlyRefusal :: Text
+readOnlyRefusal = "This instance is read-only: it answers queries but changes nothing."
 
 -- | Server configuration
 data ServerConfig = ServerConfig
