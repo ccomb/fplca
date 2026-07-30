@@ -14,6 +14,9 @@ module Config (
     CFPatchOp (..),
     RefDataConfig (..),
     HostingConfig (..),
+    ReadOnly (..),
+    hostingReadOnly,
+    readOnlyRefusal,
     ClassificationPreset (..),
     ClassificationEntry (..),
 
@@ -88,11 +91,36 @@ data HostingConfig = HostingConfig
     { hcMaxUploads :: !Int -- Max database uploads (-1 = unlimited, 0 = disabled)
     , hcMaxUploadMb :: !Int -- Max upload size in MB (-1 = unlimited, 0 = disabled)
     , hcApiAccess :: !Bool -- Programmatic API access allowed
+    , hcReadOnly :: !Bool -- Refuse every state-changing operation
     , hcUpgradeUpload :: !Text -- Upgrade message when upload restricted
     , hcUpgradeApi :: !Text -- Upgrade message when API restricted
     , hcUpgradeVmSize :: !Text -- Upgrade message when memory is high
     }
     deriving (Show, Eq, Generic)
+
+{- | Whether this instance refuses every state-changing operation.
+
+One instance serving many unrelated callers cannot let any of them load,
+unload, upload, delete — or shut the server down — since each of those acts
+on process-wide state that all the others share. A read-only instance still
+answers every analysis question; it only declines to change anything.
+
+Its own type rather than a bare 'Bool' because it travels through several
+signatures alongside other flags, where a positional swap would silently
+invert the guarantee.
+-}
+newtype ReadOnly = ReadOnly {isReadOnly :: Bool}
+    deriving (Show, Eq)
+
+-- | Read the read-only stance of an instance; unconfigured hosting is writable.
+hostingReadOnly :: Maybe HostingConfig -> ReadOnly
+hostingReadOnly = ReadOnly . maybe False hcReadOnly
+
+{- | The one sentence every surface refuses with. Shared so REST, MCP and the
+lifetime middleware cannot drift into three different explanations.
+-}
+readOnlyRefusal :: Text
+readOnlyRefusal = "This instance is read-only: it answers queries but changes nothing."
 
 -- | Server configuration
 data ServerConfig = ServerConfig
@@ -372,6 +400,7 @@ instance DecodeTOML HostingConfig where
         hcMaxUploads <- fromMaybe (-1) <$> getFieldOpt "max_uploads"
         hcMaxUploadMb <- fromMaybe 100 <$> getFieldOpt "max_upload_mb"
         hcApiAccess <- fromMaybe True <$> getFieldOpt "api_access"
+        hcReadOnly <- fromMaybe False <$> getFieldOpt "read_only"
         hcUpgradeUpload <- fromMaybe "" <$> getFieldOpt "upgrade_upload"
         hcUpgradeApi <- fromMaybe "" <$> getFieldOpt "upgrade_api"
         hcUpgradeVmSize <- fromMaybe "" <$> getFieldOpt "upgrade_vm_size"

@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ServerConfig (..), loadConfigOrDefault)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), hostingReadOnly, loadConfigOrDefault, readOnlyRefusal)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -41,13 +41,13 @@ import API.Licenses (licensesResponse)
 import API.MCP (mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
 import App.Env (AppEnv (..))
-import Data.Aeson (encode)
+import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.String (fromString)
-import Network.HTTP.Types (status200)
+import Network.HTTP.Types (status200, status403)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Middleware, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
 import Network.Wai.Application.Static (StaticSettings, defaultWebAppSettings, ssIndices, staticApp)
@@ -78,7 +78,7 @@ main = do
 
     case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
         (Just DumpOpenApi, _) -> BSL.putStrLn (encode volcaOpenApi)
-        (Just DumpMcpTools, _) -> BSL.putStrLn (encode toolDefinitions)
+        (Just DumpMcpTools, _) -> BSL.putStrLn (encode (toolDefinitions (ReadOnly False)))
         (Just (Server serverOpts), mCfgFile) -> runServerWithConfig cliConfig serverOpts mCfgFile
         (Just Repl, Just cfgFile) -> runReplMode cliConfig cfgFile
         (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
@@ -218,11 +218,11 @@ setupIdleTimeout serverOpts = do
     pure (lastRequestRef, idleActiveRef)
 
 -- | Stack idle-tracking, shutdown-endpoint and (optionally) auth middleware.
-wrapWithMiddleware :: Maybe String -> IORef UTCTime -> IORef Bool -> Application -> Application
-wrapWithMiddleware password lastRequestRef idleActiveRef baseApp =
+wrapWithMiddleware :: Maybe String -> ReadOnly -> IORef UTCTime -> IORef Bool -> Application -> Application
+wrapWithMiddleware password readOnly lastRequestRef idleActiveRef baseApp =
     let withIdleAndShutdown =
             idleTrackingMiddleware lastRequestRef $
-                shutdownEndpoint lastRequestRef idleActiveRef baseApp
+                shutdownEndpoint readOnly lastRequestRef idleActiveRef baseApp
      in case password of
             Just pwd -> authMiddleware (C8.pack pwd) withIdleAndShutdown
             Nothing -> withIdleAndShutdown
@@ -262,7 +262,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             (cfgClassificationPresets config)
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
-                wrapWithMiddleware password lastRequestRef idleActiveRef baseApp
+                wrapWithMiddleware password (hostingReadOnly (cfgHosting config)) lastRequestRef idleActiveRef baseApp
         settings = setTimeout 600 defaultSettings
     if port == 0
         then do
@@ -383,7 +383,7 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
-    mcp <- mcpApp dbManager filterPresets hasFrontend
+    mcp <- mcpApp dbManager filterPresets hasFrontend (hostingReadOnly hostingConfig)
     let env =
             AppEnv
                 { aeDbManager = dbManager
@@ -441,40 +441,47 @@ idleTrackingMiddleware ref app req respond = do
 
 {- | Middleware that handles POST /api/v1/idle-timeout/{seconds} and POST /api/v1/shutdown
 0 = cancel timeout, N>0 = activate/restart idle watchdog
+
+Both endpoints decide the lifetime of the whole process, so a read-only
+instance refuses them: on a server answering many unrelated callers, one of
+them must not be able to shut it down under the others.
 -}
-shutdownEndpoint :: IORef UTCTime -> IORef Bool -> Application -> Application
-shutdownEndpoint lastRequestRef idleActiveRef app req respond = do
-    let path = rawPathInfo req
-        method = requestMethod req
-    case (method, BS.stripPrefix "/api/v1/idle-timeout/" path, path) of
-        ("POST", _, "/api/v1/shutdown") -> do
-            reportProgress Info "Shutdown requested via API"
-            _ <- forkIO $ threadDelay 500000 >> hardExit
-            respond $
-                responseLBS
-                    status200
-                    [(hContentType, "application/json")]
-                    "{\"ok\":true}"
-        ("POST", Just secondsBS, _) -> do
-            let seconds = fromMaybe 30 (readMaybe (C8.unpack secondsBS)) :: Int
-            if seconds <= 0
-                then do
-                    writeIORef idleActiveRef False
-                    reportProgress Info "Idle timeout cancelled"
-                else do
-                    alreadyActive <- readIORef idleActiveRef
-                    writeIORef idleActiveRef True
-                    getCurrentTime >>= writeIORef lastRequestRef
-                    unless alreadyActive $ do
-                        _ <- forkIO $ idleWatchdog lastRequestRef idleActiveRef seconds
-                        pure ()
-                    reportProgress Info $ "Idle timeout: " ++ show seconds ++ "s"
-            respond $
-                responseLBS
-                    status200
-                    [(hContentType, "application/json")]
-                    "{\"ok\":true}"
+shutdownEndpoint :: ReadOnly -> IORef UTCTime -> IORef Bool -> Application -> Application
+shutdownEndpoint readOnly lastRequestRef idleActiveRef app req respond =
+    case (requestMethod req, BS.stripPrefix "/api/v1/idle-timeout/" path, path) of
+        ("POST", _, "/api/v1/shutdown")
+            | isReadOnly readOnly -> refuse
+            | otherwise -> do
+                reportProgress Info "Shutdown requested via API"
+                _ <- forkIO $ threadDelay 500000 >> hardExit
+                ok
+        ("POST", Just secondsBS, _)
+            | isReadOnly readOnly -> refuse
+            | otherwise -> do
+                let seconds = fromMaybe 30 (readMaybe (C8.unpack secondsBS)) :: Int
+                if seconds <= 0
+                    then do
+                        writeIORef idleActiveRef False
+                        reportProgress Info "Idle timeout cancelled"
+                    else do
+                        alreadyActive <- readIORef idleActiveRef
+                        writeIORef idleActiveRef True
+                        getCurrentTime >>= writeIORef lastRequestRef
+                        unless alreadyActive $ do
+                            _ <- forkIO $ idleWatchdog lastRequestRef idleActiveRef seconds
+                            pure ()
+                        reportProgress Info $ "Idle timeout: " ++ show seconds ++ "s"
+                ok
         (_, _, _) -> app req respond
+  where
+    path = rawPathInfo req
+    ok = respond $ responseLBS status200 [(hContentType, "application/json")] "{\"ok\":true}"
+    refuse =
+        respond $
+            responseLBS
+                status403
+                [(hContentType, "application/json")]
+                (encode (object ["error" .= readOnlyRefusal]))
 
 -- | Background thread that exits the server after idle timeout (in seconds)
 idleWatchdog :: IORef UTCTime -> IORef Bool -> Int -> IO ()

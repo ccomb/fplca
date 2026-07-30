@@ -19,6 +19,7 @@ hostingWithLimit limitMb =
         { hcMaxUploads = -1
         , hcMaxUploadMb = limitMb
         , hcApiAccess = True
+        , hcReadOnly = False
         , hcUpgradeUpload = ""
         , hcUpgradeApi = ""
         , hcUpgradeVmSize = ""

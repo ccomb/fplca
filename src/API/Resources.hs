@@ -28,6 +28,7 @@ module API.Resources (
     params,
     requiredParams,
     optionalParams,
+    resourceMutates,
     apiPath,
     apiPathText,
 ) where
@@ -106,6 +107,47 @@ requiredParams = filter (\p -> paramKind p == Required) . params
 -- | Filter to just the optional parameters of a resource.
 optionalParams :: Resource -> [Param]
 optionalParams = filter (\p -> paramKind p == Optional) . params
+
+{- | Whether the operation changes state shared by every caller of the server,
+as opposed to only reading it. Loading and unloading a database change the
+working set for the whole process, so they count; every analysis operation
+reads and does not.
+
+An instance configured read-only refuses the 'True' ones on every surface.
+The match is exhaustive on purpose: a new operation cannot be added without
+declaring which side of that line it falls on.
+-}
+resourceMutates :: Resource -> Bool
+resourceMutates r = case r of
+    LoadDatabase -> True
+    UnloadDatabase -> True
+    ListDatabases -> False
+    ListPresets -> False
+    SearchActivities -> False
+    SearchFlows -> False
+    GetActivity -> False
+    Aggregate -> False
+    GetSupplyChain -> False
+    GetInventory -> False
+    GetImpacts -> False
+    ComputeSensitivity -> False
+    ListMethods -> False
+    GetFlowMapping -> False
+    GetCharacterization -> False
+    GetContributingFlows -> False
+    GetContributingActivities -> False
+    ListGeographies -> False
+    ListClassifications -> False
+    GetPathTo -> False
+    GetConsumers -> False
+    CompareImpacts -> False
+    ScoreActivity -> False
+    ScoreActivities -> False
+    ListScoringSets -> False
+    GetGapReport -> False
+    GetQualityReport -> False
+    GetComputedQualityReport -> False
+    GetCoverageReport -> False
 
 -- ---------------------------------------------------------------------------
 -- Projection: canonical HTTP route (primary GET)

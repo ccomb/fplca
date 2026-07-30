@@ -16,14 +16,14 @@ import qualified Data.Text as T
 import Test.Hspec
 
 import API.MCP (callTool, toolDefinitions)
-import Config (defaultConfig)
+import Config (ReadOnly (..), defaultConfig)
 import Database.Manager (initDatabaseManager)
 
 -- | The tool definition advertised under a given MCP name.
 toolByName :: Text -> Maybe Value
 toolByName name =
     listToMaybe
-        [t | t@(Object o) <- toolDefinitions, KM.lookup "name" o == Just (String name)]
+        [t | t@(Object o) <- toolDefinitions (ReadOnly False), KM.lookup "name" o == Just (String name)]
 
 -- | The 'required' parameter names declared in a tool's input schema.
 requiredOf :: Value -> [Text]
@@ -57,7 +57,7 @@ isError _ = False
 call :: Text -> IO Value
 call name = do
     manager <- initDatabaseManager defaultConfig True Nothing
-    callTool manager [] Nothing Null name (KM.singleton "database" (String "no-such-db"))
+    callTool manager [] (ReadOnly False) Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
 spec :: Spec
 spec = describe "MCP database load/unload tools" $ do
