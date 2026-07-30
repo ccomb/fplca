@@ -41,6 +41,8 @@ module Database.Edit (
     DeleteSelection (..),
     DeleteRequest (..),
     deleteActivitiesInDB,
+    insertActivities,
+    replaceActivities,
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
@@ -62,6 +64,7 @@ import Database (
     buildProductIndex,
     findActivitiesByFields,
  )
+import Database.Author (ResolvedInsert (..))
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
 import Database.Manager (
     DatabaseManager (..),
@@ -86,10 +89,12 @@ import Service (bm25Retrieve)
 import SharedSolver (createSharedSolver)
 import Types (
     Activity (..),
+    BiosphereFlow (..),
     Database (..),
     Exchange (..),
     ProcessId,
     SparseTriple (..),
+    TechnosphereFlow (..),
     UUID,
     findProcessId,
     findProcessIdByActivityUUID,
@@ -325,6 +330,81 @@ rebuildFromActivities unitConfig db activityMap =
                         , dbProductSearchIndex = M.empty
                         , dbBM25Index = Nothing
                         }
+
+-- ---------------------------------------------------------------------------
+-- Insert / replace
+-- ---------------------------------------------------------------------------
+
+{- | Whether a batch means to add rows the database does not have, or to
+rewrite rows it does. There is deliberately no upsert: a mistyped identity
+must fail, not quietly become a second copy of an activity the author thought
+they were correcting.
+-}
+data WriteIntent = Insert | Replace
+
+{- | Add authored activities to a database and rebuild everything that depends
+on them.
+
+Every key must be absent — 'Database.Author' mints identity from the activity's
+own name, location, product and unit, so a key that already exists means the
+author is re-describing something the database already holds and wants
+'replaceActivities' instead.
+-}
+insertActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
+insertActivities = writeActivities Insert
+
+{- | Rewrite activities the database already holds, keeping their identity.
+
+Every key must be present. Replacing keeps the old version's flows in the
+vocabulary, exactly as deletion does: a flow no activity uses any more is
+inert, and dropping it would break a relink that still resolves through it.
+-}
+replaceActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
+replaceActivities = writeActivities Replace
+
+{- | Shared write path. The vocabulary the batch brings (its product flows and
+any new biosphere flows) lands in the same step as the activities that
+reference it, so no intermediate value exists in which an exchange points at a
+flow the database cannot name.
+
+An empty batch returns the database untouched rather than rebuilding: a
+rebuild resets cross-database links ('rebuildFromActivities'), so treating "no
+activities to write" as a no-op is what keeps a caller's empty request from
+silently unlinking the database.
+-}
+writeActivities :: WriteIntent -> UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
+writeActivities intent unitConfig inserts db
+    | null inserts = Right db
+    | otherwise = do
+        let existing = surviving db S.empty
+        checkKeys intent existing (map riKey inserts)
+        rebuildFromActivities
+            unitConfig
+            db
+                { dbTechFlows = M.union (indexBy tfId (concatMap riNewTechFlows inserts)) (dbTechFlows db)
+                , dbBioFlows = M.union (indexBy bfId (concatMap riNewBioFlows inserts)) (dbBioFlows db)
+                }
+            (M.union (M.fromList [(riKey i, riActivity i) | i <- inserts]) existing)
+  where
+    indexBy key xs = M.fromList [(key x, x) | x <- xs]
+
+{- | Refuse a batch whose keys contradict the intent, naming every offending
+identity at once so a long batch is not fixed one round-trip at a time.
+-}
+checkKeys :: WriteIntent -> M.Map (UUID, UUID) Activity -> [(UUID, UUID)] -> Either Text ()
+checkKeys intent existing keys = case intent of
+    Insert -> refuse "already exists" (filter (`M.member` existing) keys)
+    Replace -> refuse "does not exist" (filter (not . (`M.member` existing)) keys)
+  where
+    refuse _ [] = Right ()
+    refuse what offenders =
+        Left $
+            "Refusing to write: "
+                <> T.intercalate ", " (map renderKey offenders)
+                <> " "
+                <> what
+                <> " in this database"
+    renderKey (a, p) = UUID.toText a <> "_" <> UUID.toText p
 
 -- ---------------------------------------------------------------------------
 -- Selection resolver
