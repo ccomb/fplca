@@ -312,11 +312,14 @@ def readme_namespace() -> dict[str, Any]:
         entries=[
             SupplyChainEntry(
                 process_id="cccc3333-aaaa-bbbb-cccc-111122223333_aaaa4444-eeee-ffff-aaaa-444455556666",
+                database_name="agribalyse-3-2",
                 activity_name="Soft wheat grain, at farm",
                 location="FR",
                 quantity=1.31,
                 unit="kg",
                 scaling_factor=1.31,
+                depth=1,
+                upstream_count=1,
             ),
         ],
     )

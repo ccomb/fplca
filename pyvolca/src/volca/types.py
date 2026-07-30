@@ -590,14 +590,21 @@ class SupplyChainEntry(FromJson):
     ``classifications`` mirrors the producing activity's classifications
     (ISIC, CPC, Category, …) so callers can filter by taxonomy without a
     second :meth:`Client.get_activity` round trip.
+    ``depth`` is the BFS shortest-path distance from the queried root
+    (0 = the root itself), ``upstream_count`` the number of direct
+    consumers of this activity inside the chain, and ``database_name``
+    the database the entry lives in (they differ across linked databases).
     """
 
     process_id: str
+    database_name: str
     activity_name: str
     location: str
     quantity: float
     unit: str
     scaling_factor: float
+    depth: int  # hops from the queried root (0 = root), BFS shortest path
+    upstream_count: int
     classifications: dict[str, str] = field(default_factory=dict)
 
 

@@ -18,6 +18,37 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.9.0] - 2026-07-31
+
+### Changed — breaking
+
+- `SupplyChainEntry` gains three **required** fields the engine has emitted
+  since v0.6.0 and pyvolca silently dropped at decoding: `depth` (BFS
+  shortest-path distance from the queried root, 0 = the root itself),
+  `upstream_count` (direct consumers of the entry inside the chain), and
+  `database_name` (which loaded database the entry lives in). Every engine
+  this client accepts (wire revision >= 2, i.e. >= v0.9.1) emits them, so
+  they are required without defaults — the type guarantees what the wire
+  guarantees, like `ConsumerResult.depth` already did. **Breaking only for
+  code that constructs `SupplyChainEntry` by hand** (mocks, fixtures): add
+  the three fields. Code that reads decoded entries just gains data — a
+  filtered `get_supply_chain` response is no longer flat, `depth` finally
+  tells a packaging system from the stage that consumes it without a
+  hand-rolled traversal.
+
+### Added
+
+- `export_method_collection(name, fmt=…)` exports a loaded method
+  collection as SimaPro method CSV (`simapro`), columnar CSV (`csv`),
+  openLCA JSON-LD (`openlca`), or an ILCD LCIA-method package (`ilcd`),
+  returning the serialized bytes.
+- `get_collection_coverage` reports how much of a database a whole method
+  collection characterizes (typed `CollectionCoverage`), counting coverage
+  the way scoring counts it.
+- The client now understands wire revision 4 (engines >= v0.9.4, which
+  advertise the quality-report routes); nothing changes against older
+  engines.
+
 ## [0.8.2] - 2026-07-15
 
 ### Added
