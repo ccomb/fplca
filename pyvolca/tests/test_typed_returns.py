@@ -56,8 +56,9 @@ class TestSupplyChainHasMore:
 
     def _entry(self, name: str) -> SupplyChainEntry:
         return SupplyChainEntry(
-            process_id=f"{name}_pid", activity_name=name, location="FR",
-            quantity=1.0, unit="kg", scaling_factor=1.0,
+            process_id=f"{name}_pid", database_name="db", activity_name=name,
+            location="FR", quantity=1.0, unit="kg", scaling_factor=1.0,
+            depth=1, upstream_count=1,
         )
 
     def test_has_more_false_when_entries_match_filtered(self):
@@ -73,6 +74,46 @@ class TestSupplyChainHasMore:
             entries=[self._entry("a"), self._entry("b")],  # only 2 of 50
         )
         assert sc.has_more is True
+
+
+class TestSupplyChainEntryDecoding:
+    """Decode a wire-shaped entry: the engine has emitted ``depth``,
+    ``databaseName`` and ``upstreamCount`` since v0.6.0, and 0.8.2 silently
+    dropped them — these tests pin that they now survive ``from_json``."""
+
+    WIRE_ENTRY = {
+        "processId": "act_prod",
+        "databaseName": "agribalyse-3-2",
+        "activityName": "market for electricity, low voltage FR",
+        "location": "FR",
+        "quantity": 6.59e8,
+        "unit": "j",
+        "scalingFactor": 138549.0,
+        "depth": 1,
+        "upstreamCount": 2,
+        "classifications": {"Category": "Energy"},
+    }
+
+    def test_wire_entry_keeps_depth_database_and_upstream_count(self):
+        e = SupplyChainEntry.from_json(self.WIRE_ENTRY)
+        assert e.process_id == "act_prod"
+        assert e.database_name == "agribalyse-3-2"
+        assert e.depth == 1
+        assert e.upstream_count == 2
+        assert e.classifications["Category"] == "Energy"
+
+    def test_supply_chain_response_decodes_its_entries(self):
+        sc = SupplyChain.from_json({
+            "root": {
+                "processId": "root", "activityName": "Aioli", "location": "FR",
+                "productName": "aioli", "productAmount": 1.0, "productUnit": "kg",
+            },
+            "totalActivities": 1,
+            "filteredActivities": 1,
+            "supplyChain": [self.WIRE_ENTRY],
+        })
+        assert sc.entries[0].depth == 1
+        assert sc.entries[0].database_name == "agribalyse-3-2"
 
 
 class TestCharacterizationHasMore:
