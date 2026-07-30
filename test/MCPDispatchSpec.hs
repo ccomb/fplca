@@ -16,7 +16,7 @@ import qualified Data.Text as T
 import Test.Hspec
 
 import API.MCP (callTool, toolDefinitions)
-import Config (defaultConfig)
+import Config (ReadOnly (..), defaultConfig)
 import Database.Manager (initDatabaseManager)
 
 -- | The tool definition advertised under a given MCP name.
@@ -57,7 +57,7 @@ isError _ = False
 call :: Text -> IO Value
 call name = do
     manager <- initDatabaseManager defaultConfig True Nothing
-    callTool manager [] Nothing Null name (KM.singleton "database" (String "no-such-db"))
+    callTool manager [] (ReadOnly False) Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
 spec :: Spec
 spec = describe "MCP database load/unload tools" $ do

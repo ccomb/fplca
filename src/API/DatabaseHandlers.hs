@@ -51,6 +51,7 @@ module API.DatabaseHandlers (
 
     -- * Helpers
     convertDbStatus,
+    guardMutation,
     simpleAction,
     formatToText,
     uploadSizeCap,
@@ -59,7 +60,7 @@ module API.DatabaseHandlers (
 ) where
 
 import Control.Exception (SomeException, try)
-import Control.Monad (mfilter, void)
+import Control.Monad (mfilter, void, when)
 import Control.Monad.Catch (finally)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
@@ -72,7 +73,7 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Data.Word (Word64)
 import Network.HTTP.Types.URI (urlEncode)
-import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err404, err500, errBody, throwError)
+import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err403, err404, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import qualified System.Directory
 import System.FilePath ((</>))
@@ -116,7 +117,7 @@ import API.Types (
     UploadResponse (..),
  )
 import App.Env (AppEnv (..), AppM)
-import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), RefDataConfig (..))
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
@@ -202,6 +203,7 @@ getDatabases = do
 -- | Load a database on demand
 loadDatabaseHandler :: Text -> AppM LoadDatabaseResponse
 loadDatabaseHandler dbName = do
+    guardMutation
     dbManager <- asks aeDbManager
     result <- liftIO $ loadDatabase dbManager dbName
     case result of
@@ -230,6 +232,7 @@ dependency.
 -}
 relinkDatabaseHandler :: Text -> RelinkRequest -> AppM RelinkResponse
 relinkDatabaseHandler dbName req = do
+    guardMutation
     dbManager <- asks aeDbManager
     case (rmrDepDb req, rmrMappingCsv req) of
         (Nothing, Nothing) ->
@@ -463,6 +466,7 @@ surviving references; returns the count removed.
 -}
 deleteActivitiesHandler :: Text -> DeleteSelectionRequest -> AppM DeleteSelectionResponse
 deleteActivitiesHandler dbName req = do
+    guardMutation
     dbManager <- asks aeDbManager
     let classFilters = [(dcfSystem f, dcfValue f, dcfExact f) | f <- dsqClassifications req]
         -- A present-but-blank filter (e.g. JSON "name":"") is no filter at all.
@@ -597,7 +601,8 @@ withStreamedUpload ::
     SourceIO UploadChunk ->
     (Text -> Maybe Text -> BSL.ByteString -> AppM UploadResponse) ->
     AppM UploadResponse
-withStreamedUpload mName mDesc src k =
+withStreamedUpload mName mDesc src k = do
+    guardMutation
     case mfilter (not . T.null) (T.strip <$> mName) of
         Nothing -> return (rejectUpload "Missing upload name. Pass it as the ?name= query parameter.")
         Just name -> do
@@ -797,6 +802,7 @@ Runs cross-DB linking and returns updated setup info
 -}
 addDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 addDependencyHandler dbName depName = do
+    guardMutation
     dbManager <- asks aeDbManager
     ioEither400 (addDependencyToStaged dbManager dbName depName)
 
@@ -805,12 +811,14 @@ Re-runs cross-DB linking and returns updated setup info
 -}
 removeDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 removeDependencyHandler dbName depName = do
+    guardMutation
     dbManager <- asks aeDbManager
     ioEither400 (removeDependencyFromStaged dbManager dbName depName)
 
 -- | Change the data path for an uploaded (staged) database
 setDataPathHandler :: Text -> Value -> AppM DatabaseSetupInfo
 setDataPathHandler dbName body = do
+    guardMutation
     dbManager <- asks aeDbManager
     -- Extract "path" from JSON body
     let mPath = case body of
@@ -827,6 +835,7 @@ Builds matrices and makes it ready for queries
 -}
 finalizeDatabaseHandler :: Text -> AppM ActivateResponse
 finalizeDatabaseHandler dbName = do
+    guardMutation
     dbManager <- asks aeDbManager
     eitherResult <- liftIO $ try $ finalizeDatabase dbManager dbName
     case eitherResult of
@@ -904,9 +913,26 @@ deleteMethodHandler name = do
     dbManager <- asks aeDbManager
     simpleAction (removeMethodCollection dbManager name) ("Deleted method: " <> name)
 
--- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse
+{- | Refuse the caller when this instance is configured read-only.
+
+Every operation that changes state shared by all callers of the server calls
+this first. The refusal is a 403 rather than a silent no-op so a client can
+tell the difference between "done" and "not allowed here".
+-}
+guardMutation :: AppM ()
+guardMutation = do
+    readOnly <- asks (hostingReadOnly . aeHostingConfig)
+    when (isReadOnly readOnly) $
+        throwError err403{errBody = "This instance is read-only: it answers queries but changes nothing."}
+
+{- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse.
+
+Every caller performs a state change, so the read-only guard lives here rather
+than being repeated at each of them.
+-}
 simpleAction :: IO (Either Text ()) -> Text -> AppM ActivateResponse
 simpleAction action successMsg = do
+    guardMutation
     result <- liftIO action
     return $ case result of
         Left err -> ActivateResponse False err Nothing

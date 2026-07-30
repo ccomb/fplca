@@ -55,6 +55,20 @@ withMinimalConfig action = do
     removeFile cfgPath
     return result
 
+{- | The same minimal config, declared read-only.
+
+A read-only instance is one many unrelated callers share, so none of them may
+end it: both lifetime endpoints must refuse rather than obey.
+-}
+withReadOnlyConfig :: (FilePath -> IO a) -> IO a
+withReadOnlyConfig action = do
+    tmpDir <- getTemporaryDirectory
+    let cfgPath = tmpDir </> "volca-test-server-readonly.toml"
+    writeFile cfgPath "[server]\nport = 18199\nhost = \"127.0.0.1\"\n\n[hosting]\nread_only = true\n"
+    result <- action cfgPath
+    removeFile cfgPath
+    return result
+
 -- | Start the server, run action, ensure cleanup
 withServer :: FilePath -> (ProcessHandle -> Manager -> IO a) -> IO a
 withServer cfgPath action = do
@@ -163,6 +177,26 @@ serverSpecs = do
                     mCode <- waitForExit ph 25
                     mCode `shouldBe` Just ExitSuccess
                     isAlive mgr `shouldReturn` False
+
+    describe "Read-only instance" $ do
+        it "refuses to be shut down, and survives the attempt" $ do
+            withReadOnlyConfig $ \cfgPath ->
+                withServer cfgPath $ \ph mgr -> do
+                    code <- postEndpoint mgr "/api/v1/shutdown"
+                    code `shouldBe` 403
+                    -- Give a shutdown that wrongly went through time to land.
+                    waitForExit ph 10 `shouldReturn` Nothing
+                    isAlive mgr `shouldReturn` True
+
+        it "refuses to have an idle timeout armed on it" $ do
+            withReadOnlyConfig $ \cfgPath ->
+                withServer cfgPath $ \ph mgr -> do
+                    code <- postEndpoint mgr "/api/v1/idle-timeout/2"
+                    code `shouldBe` 403
+                    -- Stay quiet past the timer that was refused, then check
+                    -- the process (not the socket, which would reset a timer).
+                    threadDelay 2200000
+                    waitForExit ph 10 `shouldReturn` Nothing
 
     describe "Server idle timeout" $ do
         it "POST /api/v1/idle-timeout/N shuts down after N seconds" $ do

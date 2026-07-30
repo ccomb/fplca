@@ -27,7 +27,7 @@ import System.Random (randomIO)
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..))
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..))
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -116,8 +116,8 @@ newtype McpState = McpState
     { mcpSessionId :: Text
     }
 
-mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> IO Application
-mcpApp dbManager presets hasFrontend = do
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> ReadOnly -> IO Application
+mcpApp dbManager presets hasFrontend readOnly = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState{mcpSessionId = sessionId}
@@ -153,7 +153,7 @@ mcpApp dbManager presets hasFrontend = do
                     Left err ->
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
-                        resp <- handleRpc dbManager presets mBaseUrl st rpcReq
+                        resp <- handleRpc dbManager presets readOnly mBaseUrl st rpcReq
                         case resp of
                             Nothing ->
                                 respond $
@@ -196,12 +196,12 @@ mcpApp dbManager presets hasFrontend = do
 -- RPC dispatch
 -- ---------------------------------------------------------------------------
 
-handleRpc :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
-handleRpc dbManager presets mBaseUrl _st req = case rpcMethod req of
+handleRpc :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
+handleRpc dbManager presets readOnly mBaseUrl _st req = case rpcMethod req of
     "initialize" -> Just <$> handleInitialize req
     "notifications/initialized" -> return Nothing -- notification, no response
     "tools/list" -> return $ Just $ handleToolsList req
-    "tools/call" -> Just <$> handleToolsCall dbManager presets mBaseUrl req
+    "tools/call" -> Just <$> handleToolsCall dbManager presets readOnly mBaseUrl req
     "ping" -> return $ Just $ rpcResult (rid req) (object [])
     other ->
         return $
@@ -318,12 +318,12 @@ paramsToSchema ps =
 -- tools/call dispatch
 -- ---------------------------------------------------------------------------
 
-handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> RpcRequest -> IO Value
-handleToolsCall dbManager presets mBaseUrl req = do
+handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> RpcRequest -> IO Value
+handleToolsCall dbManager presets readOnly mBaseUrl req = do
     let rid = fromMaybe Null (rpcId req)
     case rpcParams req >>= parseCallParams of
         Nothing -> return $ rpcError rid (-32602) "Invalid params: expected {name, arguments}"
-        Just (toolName, args) -> callTool dbManager presets mBaseUrl rid toolName args
+        Just (toolName, args) -> callTool dbManager presets readOnly mBaseUrl rid toolName args
 
 parseCallParams :: Value -> Maybe (Text, KeyMap Value)
 parseCallParams (Object o) = do
@@ -334,8 +334,17 @@ parseCallParams (Object o) = do
     return (name, args)
 parseCallParams _ = Nothing
 
-callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
-callTool dbManager presets mBaseUrl rid name args = case name of
+{- | Route a tool call to its handler.
+
+A read-only instance refuses the state-changing tools before dispatch. Which
+tools those are comes from the resource registry ('resourceMutates'), so a
+newly added mutating tool is covered here without touching this function.
+-}
+callTool :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
+callTool _ _ readOnly _ rid name _
+    | isReadOnly readOnly && mutatingTool name =
+        return $ toolError rid "This instance is read-only: it answers queries but changes nothing."
+callTool dbManager presets _ mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "load_database" -> callLoadDatabase dbManager rid args
     "unload_database" -> callUnloadDatabase dbManager rid args
@@ -368,6 +377,14 @@ callTool dbManager presets mBaseUrl rid name args = case name of
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
+
+{- | Whether a tool name denotes an operation that changes state shared by
+every caller. Read from the resource registry rather than a list kept here,
+so the two cannot drift apart.
+-}
+mutatingTool :: Text -> Bool
+mutatingTool name = any (\r -> R.mcpName r == name && R.resourceMutates r) R.allResources
+
 withDb ::
     DatabaseManager ->
     Value ->
