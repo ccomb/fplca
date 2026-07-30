@@ -18,7 +18,9 @@ module Method.Mapping (
     mapMethodToFlows,
     resolveCF,
     isPatternCF,
+    isExclusionCF,
     expandPatternCF,
+    exclusionWarning,
     buildMapContext,
 
     -- * LCIA scoring
@@ -100,7 +102,7 @@ import Data.List (find, nub, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -231,7 +233,8 @@ mapMethodFlows ::
     IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodFlows ctx0 method = do
     caps <- getNumCapabilities
-    let (patternCFs, cfs) = partition isPatternCF (methodFactors method)
+    let (exclusionCFs, plainCFs) = partition isExclusionCF (methodFactors method)
+        (patternCFs, cfs) = partition isPatternCF plainCFs
         n = length cfs
         -- Precompute the synonym-group → flows memo for the groups this method's
         -- CFs reference (each group expanded once), then resolve every CF against
@@ -243,14 +246,15 @@ mapMethodFlows ctx0 method = do
         if caps <= 1 || n < parCfThreshold
             then mapM resolve cfs
             else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
-    expanded <- fmap concat . mapM materialize $ patternCFs
+    mapM_ (warn . pure) (mapMaybe (exclusionWarning (mcBioFlowsByUUID ctx0)) exclusionCFs)
+    expanded <- fmap concat . mapM (materialize exclusionCFs) $ patternCFs
     pure (concrete ++ expanded)
   where
     parCfThreshold = 1000
-    materialize cf = do
-        let (rows, warnings) = expandPatternCF (mcBioFlowsByUUID ctx0) cf
-            prefix = "[LCIA " <> methodName method <> "] "
-        mapM_ (reportProgress Warning . T.unpack . (prefix <>)) warnings
+    warn = mapM_ (reportProgress Warning . T.unpack . (("[LCIA " <> methodName method <> "] ") <>))
+    materialize exclusions cf = do
+        let (rows, warnings) = expandPatternCF (mcBioFlowsByUUID ctx0) exclusions cf
+        warn warnings
         pure rows
 
 {- | Resolve one method CF to a database biosphere flow. The built-in matchers
@@ -280,39 +284,45 @@ them against the database — so a method can declare an open family of flows
 as one rule instead of a per-database list that silently goes stale.
 -}
 isPatternCF :: MethodCF -> Bool
-isPatternCF = T.isSuffixOf "*" . mcfFlowName
+isPatternCF cf = not (isExclusionCF cf) && T.isSuffixOf "*" (mcfFlowName cf)
 
-{- | Materialize one pattern CF against the database's biosphere: one concrete
-CF per flow satisfying every predicate the row carries (name prefix, CAS,
-compartment medium and — when the row states one — subcompartment). Each
-concrete CF takes the flow's own identity (UUID,
-name, CAS, compartment) — so every table built from the mapping lands exactly
-where the inventory flow will look — and keeps the pattern row's value and
-unit. A database introducing a new flow under the pattern is thus counted on
-its next mapping without touching the method file.
+{- | A row whose substance starts with @!@: an exception carved out of the
+patterns declared for the same impact category. Some open families have members
+that do not belong to the quantity the category counts — an occupation family
+holds the sea floor as well as the fields — and no set of prefixes can separate
+them, because @"Occupation, industrial area, benthos"@ shares its prefix with
+real industrial land.
 
-Failure is loud, not silent: a pattern matching no flow comes back as an
-unmatched row plus a warning (coverage then shows the gap instead of the
-category quietly counting zero), and a bare @"*"@ constrained by nothing is
-refused the same way — matching the entire biosphere is never intended.
+The substance after the @!@ reads exactly like a pattern's: a case-insensitive
+name prefix, with the trailing @*@ optional since a full flow name is already
+the prefix of nothing else. The value cell says which categories the exception
+applies to; its magnitude is never used.
+
+Exceptions narrow patterns only. A literal row is a deliberate statement about
+one flow, so excluding it would be the method contradicting itself rather than
+qualifying an open family.
 -}
-expandPatternCF ::
-    BioFlowDB ->
-    MethodCF ->
-    ([(MethodCF, Maybe (BiosphereFlow, MatchStrategy))], [Text])
-expandPatternCF flows cf
-    | not constrained = refuse "has no name prefix, CAS or compartment; refusing to match every flow"
-    | null matches = refuse "matches no flow in this database"
-    | otherwise = ([(materialize f, Just (f, ByName)) | f <- matches], [])
+isExclusionCF :: MethodCF -> Bool
+isExclusionCF = T.isPrefixOf "!" . mcfFlowName
+
+{- | The case-insensitive name prefix a pattern or exclusion row selects on:
+the substance cell without its @!@ marker and without its trailing @*@.
+-}
+patternPrefix :: MethodCF -> Text
+patternPrefix = T.toCaseFold . dropStar . T.dropWhile (== '!') . mcfFlowName
   where
-    refuse why = ([(cf, Nothing)], ["wildcard CF '" <> mcfFlowName cf <> "' " <> why])
-    prefix = T.toCaseFold (T.dropEnd 1 (mcfFlowName cf))
-    wantCAS = normalizeCAS <$> mcfCAS cf
-    constrained = not (T.null prefix) || isJust wantCAS || isJust (mcfCompartment cf)
-    matches = filter fits (M.elems flows)
-    fits f = prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits f && compFits f
-    casFits f = maybe True (\cas -> bfCAS f == Just cas) wantCAS
-    compFits f = case mcfCompartment cf of
+    dropStar t = fromMaybe t (T.stripSuffix "*" t)
+
+{- | Does a pattern-shaped row select that flow? Every predicate the row
+carries must hold: name prefix, CAS, compartment medium and — when the row
+states one — subcompartment. Shared by 'expandPatternCF' and by the exclusions
+that narrow it, so a family and its exceptions are read by one rule.
+-}
+selectsFlow :: MethodCF -> BiosphereFlow -> Bool
+selectsFlow cf f = patternPrefix cf `T.isPrefixOf` T.toCaseFold (bfName f) && casFits && compFits
+  where
+    casFits = maybe True ((\cas -> bfCAS f == Just cas) . normalizeCAS) (mcfCAS cf)
+    compFits = case mcfCompartment cf of
         Nothing -> True
         Just (Compartment med sub _) ->
             maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
@@ -322,6 +332,45 @@ expandPatternCF flows cf
     subFits sub c =
         T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
     mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+
+{- | Is the row constrained by anything at all? A selector with no name prefix,
+no CAS and no compartment would match the entire biosphere, which is never what
+a method means.
+-}
+isConstrainedCF :: MethodCF -> Bool
+isConstrainedCF cf =
+    not (T.null (patternPrefix cf)) || isJust (mcfCAS cf) || isJust (mcfCompartment cf)
+
+{- | Materialize one pattern CF against the database's biosphere: one concrete
+CF per flow the row selects and no exclusion of the same category takes back.
+Each concrete CF takes the flow's own identity (UUID, name, CAS, compartment) —
+so every table built from the mapping lands exactly where the inventory flow
+will look — and keeps the pattern row's value and unit. A database introducing
+a new flow under the pattern is thus counted on its next mapping without
+touching the method file.
+
+Failure is loud, not silent: a pattern matching no flow comes back as an
+unmatched row plus a warning (coverage then shows the gap instead of the
+category quietly counting zero), and a bare @"*"@ constrained by nothing is
+refused the same way — matching the entire biosphere is never intended. A
+pattern whose every match is excluded is refused on the same grounds: a family
+that survives as nothing is a method file that has stopped saying anything.
+-}
+expandPatternCF ::
+    BioFlowDB ->
+    -- | exclusions declared for this category, see 'isExclusionCF'
+    [MethodCF] ->
+    MethodCF ->
+    ([(MethodCF, Maybe (BiosphereFlow, MatchStrategy))], [Text])
+expandPatternCF flows exclusions cf
+    | not (isConstrainedCF cf) = refuse "has no name prefix, CAS or compartment; refusing to match every flow"
+    | null selected = refuse "matches no flow in this database"
+    | null matches = refuse "matches only flows its exclusions take back"
+    | otherwise = ([(materialize f, Just (f, ByName)) | f <- matches], [])
+  where
+    refuse why = ([(cf, Nothing)], ["wildcard CF '" <> mcfFlowName cf <> "' " <> why])
+    selected = filter (selectsFlow cf) (M.elems flows)
+    matches = filter (\f -> not (any (`selectsFlow` f) exclusions)) selected
     materialize f =
         cf
             { mcfFlowRef = bfId f
@@ -331,6 +380,18 @@ expandPatternCF flows cf
             }
     fromFlowCompartment c =
         Compartment (VT.compartmentName c) (fromMaybe "" (VT.compartmentSub c)) ""
+
+{- | Why an exclusion row could not do its job, if it could not. An exclusion
+that takes nothing back is almost always a misspelling, and left unsaid it
+reads exactly like a category that never needed the exception.
+-}
+exclusionWarning :: BioFlowDB -> MethodCF -> Maybe Text
+exclusionWarning flows cf
+    | not (isConstrainedCF cf) = Just (why "has no name prefix, CAS or compartment; refusing to exclude every flow")
+    | not (any (selectsFlow cf) (M.elems flows)) = Just (why "matches no flow in this database")
+    | otherwise = Nothing
+  where
+    why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
 -- | Convert strategy text back to MatchStrategy
 strategyFromText :: Text -> MatchStrategy

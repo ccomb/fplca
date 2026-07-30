@@ -7,11 +7,21 @@
 # flow is counted without touching this file. Single substances are ordinary
 # rows; the flow registry bridges their spelling variants across databases
 # (e.g. "Methane, biogenic" / "Methane, non-fossil").
+# A substance starting with ! is an exception carved out of the patterns of the
+# same category: "Land occupied" counts fields, roads and roofs, but an
+# occupation family also holds the sea floor, which is neither land nor
+# anybody's ground. The value cell only says which category the exception
+# applies to. Inland water bodies stay counted: a reservoir is a real surface
+# somebody flooded.
 ;;;;Land occupied;Water used;Fossil CO2;Methane;Primary energy;Waste heat;Cadmium
 ;;;;Land occupied;Water used;Fossil CO2;Methane;Primary energy;Waste heat;Cadmium
 ;;;;m2a;m3;kg;kg;MJ;MJ;kg
 substance;compartment;cas;unit;;;;;;;
 Occupation*;resource;;;1.0;;;;;;
+!Occupation, sea*;resource;;;1.0;;;;;;
+!Occupation, seabed*;resource;;;1.0;;;;;;
+!Occupation, dump site, benthos;resource;;;1.0;;;;;;
+!Occupation, industrial area, benthos;resource;;;1.0;;;;;;
 Water*;resource;;;;1.0;;;;;
 Carbon dioxide, fossil;air;;;;;1.0;;;;
 Methane;air;;;;;;1.0;;;
