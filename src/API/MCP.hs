@@ -200,7 +200,7 @@ handleRpc :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text
 handleRpc dbManager presets readOnly mBaseUrl _st req = case rpcMethod req of
     "initialize" -> Just <$> handleInitialize req
     "notifications/initialized" -> return Nothing -- notification, no response
-    "tools/list" -> return $ Just $ handleToolsList req
+    "tools/list" -> return $ Just $ handleToolsList readOnly req
     "tools/call" -> Just <$> handleToolsCall dbManager presets readOnly mBaseUrl req
     "ping" -> return $ Just $ rpcResult (rid req) (object [])
     other ->
@@ -246,18 +246,23 @@ handleInitialize req =
 -- tools/list
 -- ---------------------------------------------------------------------------
 
-handleToolsList :: RpcRequest -> Value
-handleToolsList req =
+handleToolsList :: ReadOnly -> RpcRequest -> Value
+handleToolsList readOnly req =
     rpcResult (fromMaybe Null $ rpcId req) $
         object
-            ["tools" .= toolDefinitions]
+            ["tools" .= toolDefinitions readOnly]
 
-{- | MCP tool list, derived from 'API.Resources'.
+{- | MCP tool list, derived from 'API.Resources'. A read-only instance hides
+the mutating tools instead of advertising calls that can only fail; the
+dispatch guard in 'callTool' still refuses them should a client call one
+anyway.
 
 See note [Tool definitions come from Resources.hs].
 -}
-toolDefinitions :: [Value]
-toolDefinitions = map toolFromResource R.allResources
+toolDefinitions :: ReadOnly -> [Value]
+toolDefinitions readOnly =
+    map toolFromResource $
+        filter (\r -> not (isReadOnly readOnly && R.resourceMutates r)) R.allResources
 
 -- Note [Tool definitions come from Resources.hs]
 --

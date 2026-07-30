@@ -29,7 +29,7 @@ import API.DatabaseHandlers (
     unloadDatabaseHandler,
     uploadDatabaseHandler,
  )
-import API.MCP (callTool)
+import API.MCP (callTool, toolDefinitions)
 import API.Resources (Resource (..), allResources, resourceMutates)
 import API.Types (DeleteSelectionRequest (..), RelinkRequest (..))
 import App.Env (AppEnv (..), runApp)
@@ -149,3 +149,10 @@ spec = do
             manager <- initDatabaseManager defaultConfig True Nothing
             listed <- callTool manager [] (ReadOnly True) Nothing Null "list_databases" KM.empty
             isToolError listed `shouldBe` False
+
+        it "hide the state-changing tools from tools/list" $ do
+            let names ro = [n | Object o <- toolDefinitions ro, Just (String n) <- [KM.lookup "name" o]]
+            names (ReadOnly True) `shouldNotContain` ["load_database"]
+            names (ReadOnly True) `shouldNotContain` ["unload_database"]
+            names (ReadOnly True) `shouldContain` ["list_databases"]
+            names (ReadOnly False) `shouldContain` ["load_database"]

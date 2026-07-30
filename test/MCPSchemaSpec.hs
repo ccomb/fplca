@@ -10,12 +10,13 @@ import qualified Data.Text as T
 import Test.Hspec
 
 import API.MCP (toolDefinitions)
+import Config (ReadOnly (..))
 
 spec :: Spec
 spec =
     describe "MCP tool schemas" $
         it "emit a valid JSON Schema shape for every tool" $
-            mapM_ checkTool toolDefinitions
+            mapM_ checkTool (toolDefinitions (ReadOnly False))
 
 -- Every tool entry must be an object carrying 'name' and 'inputSchema', and
 -- every property in its inputSchema must be a well-formed JSON Schema node.

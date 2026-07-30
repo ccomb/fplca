@@ -78,7 +78,7 @@ main = do
 
     case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
         (Just DumpOpenApi, _) -> BSL.putStrLn (encode volcaOpenApi)
-        (Just DumpMcpTools, _) -> BSL.putStrLn (encode toolDefinitions)
+        (Just DumpMcpTools, _) -> BSL.putStrLn (encode (toolDefinitions (ReadOnly False)))
         (Just (Server serverOpts), mCfgFile) -> runServerWithConfig cliConfig serverOpts mCfgFile
         (Just Repl, Just cfgFile) -> runReplMode cliConfig cfgFile
         (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile

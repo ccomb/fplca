@@ -23,7 +23,7 @@ import Database.Manager (initDatabaseManager)
 toolByName :: Text -> Maybe Value
 toolByName name =
     listToMaybe
-        [t | t@(Object o) <- toolDefinitions, KM.lookup "name" o == Just (String name)]
+        [t | t@(Object o) <- toolDefinitions (ReadOnly False), KM.lookup "name" o == Just (String name)]
 
 -- | The 'required' parameter names declared in a tool's input schema.
 requiredOf :: Value -> [Text]
