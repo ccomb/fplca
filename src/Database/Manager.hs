@@ -170,10 +170,12 @@ import Method.Mapping (
     buildMethodTables,
     characterizedFlowIds,
     directionExcludedCFs,
+    dropExcludedMappings,
     expandProxyEdges,
     expandSynonymMappings,
     fillBroadcastVector,
     fillRegionalActivityWeights,
+    isExclusionCF,
     mapMethodToFlows,
     mtRegionalActivityWeights,
     mtRegionalizedCF,
@@ -613,6 +615,10 @@ than the raw cascade, or they under-report what the score tables contain.
 Uses the database's frozen-at-load-time synonym DB, which holds the curated
 registry plus any source the user had explicitly activated at load time
 (auto-extracted candidates are persisted but never loaded by the engine).
+
+The method's exclusions are re-applied last: the expansions travel by flow
+name and would otherwise hand an excepted flow the factor of a sibling it
+shares a synonym group with (see 'dropExcludedMappings').
 -}
 effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 effectiveMethodMappings manager dbName collection db method = do
@@ -620,9 +626,10 @@ effectiveMethodMappings manager dbName collection db method = do
     let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
         proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
     pure $
-        expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-            projectRegionalResourceFlows synDB (dbBioFlows db) $
-                expandSynonymMappings synDB (dbFlowsByName db) mappings
+        dropExcludedMappings (filter isExclusionCF (methodFactors method)) $
+            expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
+                projectRegionalResourceFlows synDB (dbBioFlows db) $
+                    expandSynonymMappings synDB (dbFlowsByName db) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables

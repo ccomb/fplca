@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- A method can now write an exception to one of its own wildcard rules: a
+  substance starting with `!` takes its flows back out of the patterns declared
+  for the same impact category. Some open families hold members that do not
+  belong to the quantity the category counts, and no set of prefixes separates
+  them — `Occupation, industrial area, benthos` is the sea floor and shares its
+  prefix with a real factory yard. Writing the family out as a list instead
+  would be the stale, per-database list that patterns exist to avoid. An
+  exception that matches nothing is announced at load time, like a pattern that
+  matches nothing. Exporting such a method to SimaPro, openLCA or ILCD leaves
+  the exception rows out — those formats have no way to say "except this", and a
+  row written as a flow would characterize exactly what it removes; VoLCA's own
+  CSV keeps them and reads them back.
 - The quality report now says when a geography was never declared. Nearly every
   process of some SimaPro databases leaves the `Geography` field at
   `Unspecified` — 97% of Agribalyse 3.2 — and the only geography left is the
@@ -53,6 +65,17 @@
   output is unchanged.
 
 ### Fixed
+- "Land occupied", in the shipped Plain indicators method, no longer counts the
+  sea. Its rule takes every `Occupation, …` flow, and that family holds the open
+  ocean and the sea floor alongside fields and roads. Anything fed from the sea
+  was reported as standing on it: one aggregated fish-meal process declares 679
+  m²·year of `Occupation, sea and ocean`, and a farmed trout came out at 388
+  m²·year of land — it now reads 0.87. A land crop is barely touched, since all
+  it loses is the water a cargo ship crossed on its behalf: across Agribalyse's
+  455 farm-gate products the median change is −0.004%, an apricot orchard goes
+  from 6.96202 to 6.96198, and nothing anywhere rises. Sea, seabed and benthic
+  occupation are now excepted; inland water bodies stay counted, a reservoir
+  being a real surface somebody flooded.
 - A region-tagged flow now gets the density that goes with the factor it
   borrows. When a method has no line for `Water, SERC`, VoLCA lends it the line
   written for `Water` — but that line can be denominated per kilogram while the

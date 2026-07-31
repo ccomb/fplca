@@ -11,6 +11,7 @@ import Data.UUID (UUID, fromWords, nil)
 import Data.UUID.V4 (nextRandom)
 import Test.Hspec
 
+import Data.Maybe (isJust)
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.ParserCSV (parseMethodCSVBytes)
@@ -924,14 +925,24 @@ spec = do
                 , waterWell
                 , methaneAir
                 , methaneWater
+                , occSea
+                , occIndustrial
+                , occBenthos
                 ]
             occAnnual = mkFlow (u 1) "Occupation, annual crop" "resource" Nothing
             occOrchard = mkFlow (u 2) "Occupation, permanent crop, fruit" "resource" Nothing
+            -- The sea floor and a factory yard sit in one occupation family, and
+            -- the drowned one shares its prefix with the dry one: the case
+            -- exclusions exist for, since no set of prefixes separates them.
+            occSea = mkFlow (u 8) "Occupation, sea and ocean" "resource" Nothing
+            occIndustrial = mkFlow (u 9) "Occupation, industrial area" "resource" Nothing
+            occBenthos = mkFlow (u 10) "Occupation, industrial area, benthos" "resource" Nothing
             transformation = mkFlow (u 3) "Transformation, to annual crop" "resource" Nothing
             waterRiver = mkFlow (u 4) "Water, river" "resource" Nothing
             waterWell = mkFlow (u 7) "Water, well" "resource" (Just "in ground")
             methaneAir = (mkFlow (u 5) "Methane, fossil" "air" Nothing){bfCAS = Just "74-82-8"}
             methaneWater = (mkFlow (u 6) "Methane, fossil" "water" Nothing){bfCAS = Just "74-82-8"}
+            occupationFlows = [occAnnual, occOrchard, occSea, occIndustrial, occBenthos]
             u = uuidFromInt
             -- Compare by UUID: BiosphereFlow has no Eq/Show instance.
             expandedIds = map (fmap (bfId . fst) . snd) . fst
@@ -943,38 +954,131 @@ spec = do
 
         it "expands a prefix pattern to every flow of the compartment, none else" $ do
             let cf = mkCFComp "Occupation*" "natural resource" "" 1.0
-            expandedIds (expandPatternCF flowDB cf)
-                `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard]
+            expandedIds (expandPatternCF flowDB [] cf)
+                `shouldMatchList` map (Just . bfId) occupationFlows
 
         it "materializes each match with the flow's own identity, keeping value and unit" $ do
             let cf = (mkCFComp "Occupation*" "natural resource" "" 1.0){mcfUnit = "m2a"}
-                (rows, warnings) = expandPatternCF flowDB cf
+                (rows, warnings) = expandPatternCF flowDB [] cf
             warnings `shouldBe` []
             [(mcfFlowRef m, mcfFlowName m, mcfValue m, mcfUnit m) | (m, _) <- rows]
-                `shouldMatchList` [(bfId f, bfName f, 1.0, "m2a") | f <- [occAnnual, occOrchard]]
+                `shouldMatchList` [(bfId f, bfName f, 1.0, "m2a") | f <- occupationFlows]
 
         it "honors the sub-compartment a pattern row states, widens without one" $ do
             let inGround = mkCFComp "Water*" "natural resource" "in ground" 1.0
                 anySub = mkCFComp "Water*" "natural resource" "" 1.0
-            expandedIds (expandPatternCF flowDB inGround) `shouldBe` [Just (bfId waterWell)]
-            expandedIds (expandPatternCF flowDB anySub)
+            expandedIds (expandPatternCF flowDB [] inGround) `shouldBe` [Just (bfId waterWell)]
+            expandedIds (expandPatternCF flowDB [] anySub)
                 `shouldMatchList` map (Just . bfId) [waterRiver, waterWell]
 
         it "a bare * with a CAS expands by CAS, filtered by the row's compartment" $ do
             let cf = (mkCFComp "*" "air" "" 1.0){mcfCAS = Just "74-82-8"}
-            expandedIds (expandPatternCF flowDB cf) `shouldBe` [Just (bfId methaneAir)]
+            expandedIds (expandPatternCF flowDB [] cf) `shouldBe` [Just (bfId methaneAir)]
 
         it "a pattern matching no flow surfaces one unmatched row and a warning" $ do
             let cf = mkCFComp "Uranium*" "natural resource" "" 1.0
-                (rows, warnings) = expandPatternCF flowDB cf
+                (rows, warnings) = expandPatternCF flowDB [] cf
             map (fmap (bfId . fst) . snd) rows `shouldBe` [Nothing]
             length warnings `shouldBe` 1
 
         it "a bare * constrained by nothing is refused, not matched to everything" $ do
             let cf = mkCF "*" Nothing 1.0
-                (rows, warnings) = expandPatternCF flowDB cf
+                (rows, warnings) = expandPatternCF flowDB [] cf
             map (fmap (bfId . fst) . snd) rows `shouldBe` [Nothing]
             length warnings `shouldBe` 1
+
+        it "reads a leading ! as an exclusion, not as a pattern" $ do
+            isExclusionCF (mkCF "!Occupation, sea*" Nothing 1.0) `shouldBe` True
+            isExclusionCF (mkCF "Occupation*" Nothing 1.0) `shouldBe` False
+            -- An exclusion ends in a star too; whichever test runs first must
+            -- not claim it, or the row would be expanded instead of subtracted.
+            isPatternCF (mkCF "!Occupation, sea*" Nothing 1.0) `shouldBe` False
+
+        it "an exclusion takes its flows back out of the family the pattern opened" $ do
+            let cf = mkCFComp "Occupation*" "natural resource" "" 1.0
+                sea = mkCFComp "!Occupation, sea*" "natural resource" "" 1.0
+            expandedIds (expandPatternCF flowDB [sea] cf)
+                `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard, occIndustrial, occBenthos]
+
+        it "an exclusion needs no trailing star: a whole flow name is a prefix of nothing else" $ do
+            let cf = mkCFComp "Occupation*" "natural resource" "" 1.0
+                benthos = mkCFComp "!Occupation, industrial area, benthos" "natural resource" "" 1.0
+            -- The dry industrial area survives, though it shares the prefix up
+            -- to the comma: the exclusion is read in full, not truncated.
+            expandedIds (expandPatternCF flowDB [benthos] cf)
+                `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard, occSea, occIndustrial]
+
+        it "an exclusion matching no flow is announced, never silently ignored" $ do
+            let typo = mkCFComp "!Occupation, seaa*" "natural resource" "" 1.0
+            exclusionWarning flowDB typo `shouldSatisfy` isJust
+
+        it "an exclusion constrained by nothing is refused, like a bare pattern" $
+            exclusionWarning flowDB (mkCF "!" Nothing 1.0) `shouldSatisfy` isJust
+
+        it "an exclusion that does its job says nothing" $ do
+            let sea = mkCFComp "!Occupation, sea*" "natural resource" "" 1.0
+            exclusionWarning flowDB sea `shouldBe` Nothing
+
+        it "a pattern whose every match is excluded is refused, not silently empty" $ do
+            let cf = mkCFComp "Transformation*" "natural resource" "" 1.0
+                all' = mkCFComp "!Transformation*" "natural resource" "" 1.0
+                (rows, warnings) = expandPatternCF flowDB [all'] cf
+            map (fmap (bfId . fst) . snd) rows `shouldBe` [Nothing]
+            length warnings `shouldBe` 1
+
+        it "mapMethodFlows subtracts the category's exclusions from its patterns" $ do
+            let method =
+                    Method
+                        { methodId = nil
+                        , methodName = "Land occupied"
+                        , methodDescription = Nothing
+                        , methodUnit = "m2a"
+                        , methodCategory = "Land occupied"
+                        , methodMethodology = Nothing
+                        , methodFactors =
+                            [ mkCFComp "Occupation*" "natural resource" "" 1.0
+                            , mkCFComp "!Occupation, sea*" "natural resource" "" 1.0
+                            , mkCFComp "!Occupation, industrial area, benthos" "natural resource" "" 1.0
+                            ]
+                        }
+                ctx = MapContext flowDB (byName allFlows) M.empty emptySynonymDB M.empty M.empty
+            mappings <- mapMethodFlows ctx method
+            -- The exclusion rows themselves never become factors: a method that
+            -- kept them would characterize the very flows it just disowned.
+            map (fmap (bfId . fst) . snd) mappings
+                `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard, occIndustrial]
+
+        it "an exclusion still holds when the synonym fan-out re-reaches its flow" $ do
+            let method =
+                    Method
+                        { methodId = nil
+                        , methodName = "Land occupied"
+                        , methodDescription = Nothing
+                        , methodUnit = "m2a"
+                        , methodCategory = "Land occupied"
+                        , methodMethodology = Nothing
+                        , methodFactors =
+                            [ mkCFComp "Occupation*" "natural resource" "" 1.0
+                            , mkCFComp "!Occupation, industrial area, benthos" "natural resource" "" 1.0
+                            ]
+                        }
+                ctx = MapContext flowDB (byName allFlows) M.empty emptySynonymDB M.empty M.empty
+                -- The curated registry bridges the dry industrial area and its
+                -- drowned namesake through the label they share, as data/flows.csv
+                -- does; the fan-out then travels by name, knowing no exceptions.
+                synDB =
+                    buildFromPairs
+                        [ ("Occupation, industrial area", "industrial area")
+                        , ("Occupation, industrial area, benthos", "industrial area")
+                        ]
+            mappings <- mapMethodFlows ctx method
+            let expanded = expandSynonymMappings synDB (byName allFlows) mappings
+                ids = map (fmap (bfId . fst) . snd)
+            -- The bridge really does hand the excluded flow back — without this
+            -- the test below would pass on an expansion that never reached it.
+            ids expanded `shouldSatisfy` elem (Just (bfId occBenthos))
+            ids (dropExcludedMappings (filter isExclusionCF (methodFactors method)) expanded)
+                `shouldSatisfy` notElem (Just (bfId occBenthos))
 
         it "mapMethodFlows resolves literal rows via the cascade and expands patterns" $ do
             let method =
@@ -993,7 +1097,7 @@ spec = do
                 ctx = MapContext flowDB (byName allFlows) M.empty emptySynonymDB M.empty M.empty
             mappings <- mapMethodFlows ctx method
             map (fmap (bfId . fst) . snd) mappings
-                `shouldMatchList` map (Just . bfId) [waterRiver, occAnnual, occOrchard]
+                `shouldMatchList` map (Just . bfId) (waterRiver : occupationFlows)
 
     -- Lint of the shipped method file, like RegistryLintSpec for data/flows.csv:
     -- a header typo or a misplaced comment would otherwise ship silently.
@@ -1007,6 +1111,19 @@ spec = do
         it "carries its wildcard rows as patterns" $
             [mcfFlowName cf | Right ms <- [parsed], m <- ms, cf <- methodFactors m, isPatternCF cf]
                 `shouldBe` ["Occupation*", "Water*", "Energy, *", "Heat, waste*"]
+
+        it "carries its marine exceptions as exclusions of Land occupied" $
+            [ (methodName m, mcfFlowName cf)
+            | Right ms <- [parsed]
+            , m <- ms
+            , cf <- methodFactors m
+            , isExclusionCF cf
+            ]
+                `shouldBe` [ ("Land occupied", "!Occupation, sea*")
+                           , ("Land occupied", "!Occupation, seabed*")
+                           , ("Land occupied", "!Occupation, dump site, benthos")
+                           , ("Land occupied", "!Occupation, industrial area, benthos")
+                           ]
 
 tShow :: (Show a) => a -> Text
 tShow = T.pack . show
