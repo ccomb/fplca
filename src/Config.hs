@@ -90,6 +90,7 @@ data Config = Config
 data HostingConfig = HostingConfig
     { hcMaxUploads :: !Int -- Max database uploads (-1 = unlimited, 0 = disabled)
     , hcMaxUploadMb :: !Int -- Max upload size in MB (-1 = unlimited, 0 = disabled)
+    , hcMaxLoadedUploads :: !Int -- Max uploaded databases held in memory at once (-1 = unlimited)
     , hcApiAccess :: !Bool -- Programmatic API access allowed
     , hcReadOnly :: !Bool -- Refuse every state-changing operation
     , hcUpgradeUpload :: !Text -- Upgrade message when upload restricted
@@ -399,6 +400,7 @@ instance DecodeTOML HostingConfig where
     tomlDecoder = do
         hcMaxUploads <- fromMaybe (-1) <$> getFieldOpt "max_uploads"
         hcMaxUploadMb <- fromMaybe 100 <$> getFieldOpt "max_upload_mb"
+        hcMaxLoadedUploads <- fromMaybe (-1) <$> getFieldOpt "max_loaded_uploads"
         hcApiAccess <- fromMaybe True <$> getFieldOpt "api_access"
         hcReadOnly <- fromMaybe False <$> getFieldOpt "read_only"
         hcUpgradeUpload <- fromMaybe "" <$> getFieldOpt "upgrade_upload"

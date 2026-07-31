@@ -27,7 +27,7 @@ import System.Random (randomIO)
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), readOnlyRefusal)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), hostingReadOnly, readOnlyRefusal)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -35,7 +35,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, qualityReportToAPI)
+import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -116,8 +116,8 @@ newtype McpState = McpState
     { mcpSessionId :: Text
     }
 
-mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> ReadOnly -> IO Application
-mcpApp dbManager presets hasFrontend readOnly = do
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> Maybe HostingConfig -> IO Application
+mcpApp dbManager presets hasFrontend mHosting = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState{mcpSessionId = sessionId}
@@ -153,7 +153,7 @@ mcpApp dbManager presets hasFrontend readOnly = do
                     Left err ->
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
-                        resp <- handleRpc dbManager presets readOnly mBaseUrl st rpcReq
+                        resp <- handleRpc dbManager presets mHosting mBaseUrl st rpcReq
                         case resp of
                             Nothing ->
                                 respond $
@@ -196,12 +196,12 @@ mcpApp dbManager presets hasFrontend readOnly = do
 -- RPC dispatch
 -- ---------------------------------------------------------------------------
 
-handleRpc :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
-handleRpc dbManager presets readOnly mBaseUrl _st req = case rpcMethod req of
+handleRpc :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
+handleRpc dbManager presets mHosting mBaseUrl _st req = case rpcMethod req of
     "initialize" -> Just <$> handleInitialize req
     "notifications/initialized" -> return Nothing -- notification, no response
-    "tools/list" -> return $ Just $ handleToolsList readOnly req
-    "tools/call" -> Just <$> handleToolsCall dbManager presets readOnly mBaseUrl req
+    "tools/list" -> return $ Just $ handleToolsList (hostingReadOnly mHosting) req
+    "tools/call" -> Just <$> handleToolsCall dbManager presets mHosting mBaseUrl req
     "ping" -> return $ Just $ rpcResult (rid req) (object [])
     other ->
         return $
@@ -323,12 +323,12 @@ paramsToSchema ps =
 -- tools/call dispatch
 -- ---------------------------------------------------------------------------
 
-handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> RpcRequest -> IO Value
-handleToolsCall dbManager presets readOnly mBaseUrl req = do
+handleToolsCall :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> RpcRequest -> IO Value
+handleToolsCall dbManager presets mHosting mBaseUrl req = do
     let rid = fromMaybe Null (rpcId req)
     case rpcParams req >>= parseCallParams of
         Nothing -> return $ rpcError rid (-32602) "Invalid params: expected {name, arguments}"
-        Just (toolName, args) -> callTool dbManager presets readOnly mBaseUrl rid toolName args
+        Just (toolName, args) -> callTool dbManager presets mHosting mBaseUrl rid toolName args
 
 parseCallParams :: Value -> Maybe (Text, KeyMap Value)
 parseCallParams (Object o) = do
@@ -345,13 +345,13 @@ A read-only instance refuses the state-changing tools before dispatch. Which
 tools those are comes from the resource registry ('resourceMutates'), so a
 newly added mutating tool is covered here without touching this function.
 -}
-callTool :: DatabaseManager -> [ClassificationPreset] -> ReadOnly -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
-callTool _ _ readOnly _ rid name _
-    | isReadOnly readOnly && mutatingTool name =
+callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
+callTool _ _ mHosting _ rid name _
+    | isReadOnly (hostingReadOnly mHosting) && mutatingTool name =
         return $ toolError rid readOnlyRefusal
-callTool dbManager presets _ mBaseUrl rid name args = case name of
+callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
-    "load_database" -> callLoadDatabase dbManager rid args
+    "load_database" -> callLoadDatabase dbManager mHosting rid args
     "unload_database" -> callUnloadDatabase dbManager rid args
     "list_presets" -> callListPresets presets rid
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
@@ -521,11 +521,14 @@ callListDatabases dbManager rid = do
 {- | Load a configured database into the working set. Wraps
 'DM.loadDatabase', which also auto-loads declared dependencies. Any
 dependency that fails to load is surfaced in the 'dependencies' array
-(as a DepLoadFailed entry) rather than swallowed.
+(as a DepLoadFailed entry) rather than swallowed. The hosting memory
+budget applies here exactly as on the REST endpoint — a quota that only
+guards one door is not a quota.
 -}
-callLoadDatabase :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callLoadDatabase dbManager rid args = runTool rid $ do
+callLoadDatabase :: DatabaseManager -> Maybe HostingConfig -> Value -> KeyMap Value -> IO Value
+callLoadDatabase dbManager mHosting rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
+    liftIO (loadQuotaRefusal dbManager mHosting dbName) >>= maybe (pure ()) throwE
     (_loaded, deps) <- ExceptT (DM.loadDatabase dbManager dbName)
     pure $
         toolSuccessJson rid $
