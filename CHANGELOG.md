@@ -11,7 +11,10 @@
   prefix with a real factory yard. Writing the family out as a list instead
   would be the stale, per-database list that patterns exist to avoid. An
   exception that matches nothing is announced at load time, like a pattern that
-  matches nothing.
+  matches nothing. Exporting such a method to SimaPro, openLCA or ILCD leaves
+  the exception rows out — those formats have no way to say "except this", and a
+  row written as a flow would characterize exactly what it removes; VoLCA's own
+  CSV keeps them and reads them back.
 - The quality report now says when a geography was never declared. Nearly every
   process of some SimaPro databases leaves the `Geography` field at
   `Unspecified` — 97% of Agribalyse 3.2 — and the only geography left is the

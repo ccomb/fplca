@@ -12,14 +12,17 @@ module ExportSpec (spec) where
 import Control.Monad (forM_)
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
+import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import Test.Hspec
 
 import qualified Database as DB
-import Database.Export (serializeDatabase)
+import Database.Export (MethodExportFormat (..), serializeDatabase, serializeMethodCollection)
 import Database.Upload (DatabaseFormat (..))
+import qualified Method.Types as MT
 import Types
 import UnitConversion (defaultUnitConfig)
 
@@ -36,6 +39,40 @@ spec = describe "Database.Export dispatcher" $ do
         db <- buildFixture (Compartment "air" (Just "unspecified"))
         serializeDatabase OpenLcaJsonLd db `shouldSatisfy` isLeft
         serializeDatabase UnknownFormat db `shouldSatisfy` isLeft
+
+    it "writes an exclusion row only to the format that reads the marker back" $ do
+        -- VoLCA's own columnar CSV parses "!…" as an exception and must keep it,
+        -- or a round-trip loses it and the category counts what it excepted.
+        -- SimaPro has no such notion: the row would land as a characterized flow
+        -- named "!Occupation, sea*" — the sea counted at 1, the exception inverted.
+        let mc = MT.MethodCollection [landOccupied] [] [] []
+            landOccupied =
+                MT.Method
+                    { MT.methodId = UUID.nil
+                    , MT.methodName = "Land occupied"
+                    , MT.methodDescription = Nothing
+                    , MT.methodUnit = "m2a"
+                    , MT.methodCategory = "Land occupied"
+                    , MT.methodMethodology = Nothing
+                    , MT.methodFactors = [mkFactor "Occupation, annual crop", mkFactor "!Occupation, sea*"]
+                    }
+            mkFactor name =
+                MT.MethodCF
+                    { MT.mcfFlowRef = UUID.nil
+                    , MT.mcfFlowName = name
+                    , MT.mcfDirection = MT.Input
+                    , MT.mcfValue = 1.0
+                    , MT.mcfCompartment = Just (MT.Compartment "natural resource" "" "")
+                    , MT.mcfCAS = Nothing
+                    , MT.mcfUnit = "m2a"
+                    , MT.mcfConsumerLocation = Nothing
+                    }
+            written fmt = case serializeMethodCollection fmt "plain-indicators" mc of
+                Left err -> T.unpack err
+                Right (bytes, _warnings) -> T.unpack (TE.decodeUtf8 (BL.toStrict bytes))
+        written MethodColumnarCSV `shouldSatisfy` isInfixOf "!Occupation, sea*"
+        written MethodSimaProCSV `shouldSatisfy` (not . isInfixOf "!Occupation")
+        written MethodSimaProCSV `shouldSatisfy` isInfixOf "Occupation, annual crop"
 
     it "propagates a writer's export-guard failure" $ do
         -- A "raw" emission compartment has no faithful SimaPro section, so the

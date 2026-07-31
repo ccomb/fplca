@@ -34,7 +34,8 @@ import Database.Upload (DatabaseFormat (..))
 import qualified EcoSpold.Writer1 as ES1
 import qualified EcoSpold.Writer2 as ES2
 import qualified ILCD.Writer as ILCD
-import Method.Types (MethodCollection)
+import Method.Mapping (isExclusionCF)
+import Method.Types (Method (..), MethodCollection (..))
 import qualified Method.WriterCSV as MWC
 import qualified Method.WriterILCD as MWI
 import qualified Method.WriterOlcaSchema as MWO
@@ -105,13 +106,24 @@ serializeMethodCollection :: MethodExportFormat -> Text -> MethodCollection -> E
 serializeMethodCollection fmt name mc = case fmt of
     MethodSimaProCSV ->
         first BL.fromStrict
-            <$> MW.serializeSimaProMethodCSV SP.defaultWriterConfig name mc
+            <$> MW.serializeSimaProMethodCSV SP.defaultWriterConfig name (withoutExclusions mc)
     MethodColumnarCSV ->
         first BL.fromStrict <$> MWC.serializeColumnarMethodCSV mc
     MethodOpenLcaJsonLd ->
-        first zipFiles <$> MWO.serializeOlcaMethodEntries mc
+        first zipFiles <$> MWO.serializeOlcaMethodEntries (withoutExclusions mc)
     MethodIlcdXml ->
-        first zipFiles <$> MWI.serializeIlcdMethodEntries mc
+        first zipFiles <$> MWI.serializeIlcdMethodEntries (withoutExclusions mc)
+
+{- | Drop the exclusion rows before writing a format that has no notion of one.
+A @"!Occupation, sea*"@ row would otherwise land as a flow characterized at the
+number its value cell only ever used to name a category — the export would
+characterize exactly what the exception takes out. The columnar CSV is VoLCA's
+own method format and reads the marker back, so it keeps them and round-trips.
+-}
+withoutExclusions :: MethodCollection -> MethodCollection
+withoutExclusions mc = mc{mcMethods = map dropExclusionRows (mcMethods mc)}
+  where
+    dropExclusionRows m = m{methodFactors = filter (not . isExclusionCF) (methodFactors m)}
 
 {- | Parse a user-facing export-format name (case- and whitespace-insensitive)
 to a 'DatabaseFormat'. Shared by the CLI and the HTTP handler so the accepted
