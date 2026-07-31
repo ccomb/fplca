@@ -360,6 +360,36 @@ class TestDispatcher:
             "substitutions": [{"from": "a", "to": "b", "consumer": "c"}]
         }
 
+    def test_get_impacts_batch_passes_exclude_long_term(self, mocked_client, make_response):
+        """The engine route takes exclude-long-term; a caller comparing against a
+        source that zeroes long-term factors needs to be able to say so here too,
+        not only through score_activities.
+        """
+        client, session = mocked_client
+        empty = {
+            "results": [],
+            "availableNWsets": [],
+            "scoringResults": {},
+            "scoringUnits": {},
+            "scoringIndicators": {},
+        }
+        session.get.return_value = make_response(empty)
+        client.get_impacts_batch("abc_def", exclude_long_term=True)
+        assert session.get.call_args[1]["params"] == {"exclude-long-term": "true"}
+
+        # Left unsaid, the engine keeps its own default: no query parameter at all.
+        session.get.return_value = make_response(empty)
+        client.get_impacts_batch("abc_def")
+        assert session.get.call_args[1]["params"] == {}
+
+        session.post.return_value = make_response(empty)
+        client.get_impacts_batch(
+            "abc_def",
+            substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
+            exclude_long_term=True,
+        )
+        assert session.post.call_args[1]["params"] == {"exclude-long-term": "true"}
+
     def test_get_impacts_batch_requires_db(self, fixture_spec, make_response):
         client = Client(base_url="http://test.local", db="")
         client._operations = _parse_spec(fixture_spec)
