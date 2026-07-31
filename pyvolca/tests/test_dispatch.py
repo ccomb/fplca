@@ -375,7 +375,7 @@ class TestDispatcher:
         }
         session.get.return_value = make_response(empty)
         client.get_impacts_batch("abc_def", exclude_long_term=True)
-        assert session.get.call_args[1]["params"] == {"exclude-long-term": True}
+        assert session.get.call_args[1]["params"] == {"exclude-long-term": "true"}
 
         # Left unsaid, the engine keeps its own default: no query parameter at all.
         session.get.return_value = make_response(empty)
@@ -388,7 +388,7 @@ class TestDispatcher:
             substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
             exclude_long_term=True,
         )
-        assert session.post.call_args[1]["params"] == {"exclude-long-term": True}
+        assert session.post.call_args[1]["params"] == {"exclude-long-term": "true"}
 
     def test_get_impacts_batch_requires_db(self, fixture_spec, make_response):
         client = Client(base_url="http://test.local", db="")

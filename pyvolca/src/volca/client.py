@@ -1680,7 +1680,9 @@ class Client:
             f"/impacts/{collection}"
         )
         params = (
-            {} if exclude_long_term is None else {"exclude-long-term": exclude_long_term}
+            {}
+            if exclude_long_term is None
+            else {"exclude-long-term": _format_query_value(exclude_long_term)}
         )
         if substitutions:
             r = self._session.post(
