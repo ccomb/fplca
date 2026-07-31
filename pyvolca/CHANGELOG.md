@@ -45,6 +45,11 @@ Then paste the rendered block at the top of this file and tighten wording.
 - `get_collection_coverage` reports how much of a database a whole method
   collection characterizes (typed `CollectionCoverage`), counting coverage
   the way scoring counts it.
+- `get_impacts_batch(..., exclude_long_term=True)` drops long-term emissions
+  before scoring — the switch `score_activities` already carried. The engine
+  route has always accepted it and only this wrapper had no way to say so, so
+  scoring a whole list and scoring one process could not be asked the same
+  question.
 - The client now understands wire revision 4 (engines >= v0.9.4, which
   advertise the quality-report routes); nothing changes against older
   engines.

@@ -645,7 +645,7 @@ Args:
         single collection.
     top_flows: Max top contributing flows to return (default 5).
 
-##### `Client.get_impacts_batch(process_id: str, *, collection: str = 'methods', substitutions: list[SubstitutionLike] | None = None) -> LCIABatchResult`
+##### `Client.get_impacts_batch(process_id: str, *, collection: str = 'methods', substitutions: list[SubstitutionLike] | None = None, exclude_long_term: bool | None = None) -> LCIABatchResult`
 
 Compute LCIA for every impact category in a collection, in one call.
 
@@ -653,6 +653,8 @@ The response carries the per-method :class:`LCIAResult` list plus any
 formula-based scoring sets declared in the engine config (PEF, ECS…).
 ``scoring_indicators`` gives the per-variable breakdown of each
 scoring set, pre-multiplied by the set's ``displayMultiplier``.
+``exclude_long_term`` drops long-term emissions before scoring, the
+same switch :meth:`score_activities` carries.
 
 Uses a direct HTTP call: the batch endpoint has no operationId in the
 OpenAPI spec (the dispatcher primary is the single-method variant), so

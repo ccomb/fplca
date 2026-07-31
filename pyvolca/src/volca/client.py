@@ -1656,6 +1656,7 @@ class Client:
         *,
         collection: str = "methods",
         substitutions: list[SubstitutionLike] | None = None,
+        exclude_long_term: bool | None = None,
     ) -> LCIABatchResult:
         """Compute LCIA for every impact category in a collection, in one call.
 
@@ -1663,6 +1664,8 @@ class Client:
         formula-based scoring sets declared in the engine config (PEF, ECS…).
         ``scoring_indicators`` gives the per-variable breakdown of each
         scoring set, pre-multiplied by the set's ``displayMultiplier``.
+        ``exclude_long_term`` drops long-term emissions before scoring, the
+        same switch :meth:`score_activities` carries.
 
         Uses a direct HTTP call: the batch endpoint has no operationId in the
         OpenAPI spec (the dispatcher primary is the single-method variant), so
@@ -1676,10 +1679,15 @@ class Client:
             f"{self.base_url}/api/v1/db/{self.db}/activity/{process_id}"
             f"/impacts/{collection}"
         )
+        params = (
+            {} if exclude_long_term is None else {"exclude-long-term": exclude_long_term}
+        )
         if substitutions:
-            r = self._session.post(url, json=_substitution_body(substitutions))
+            r = self._session.post(
+                url, json=_substitution_body(substitutions), params=params
+            )
         else:
-            r = self._session.get(url)
+            r = self._session.get(url, params=params)
         return LCIABatchResult.from_json(self._json(r))
 
     def compute_sensitivity(
