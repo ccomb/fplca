@@ -1048,6 +1048,38 @@ spec = do
             map (fmap (bfId . fst) . snd) mappings
                 `shouldMatchList` map (Just . bfId) [occAnnual, occOrchard, occIndustrial]
 
+        it "an exclusion still holds when the synonym fan-out re-reaches its flow" $ do
+            let method =
+                    Method
+                        { methodId = nil
+                        , methodName = "Land occupied"
+                        , methodDescription = Nothing
+                        , methodUnit = "m2a"
+                        , methodCategory = "Land occupied"
+                        , methodMethodology = Nothing
+                        , methodFactors =
+                            [ mkCFComp "Occupation*" "natural resource" "" 1.0
+                            , mkCFComp "!Occupation, industrial area, benthos" "natural resource" "" 1.0
+                            ]
+                        }
+                ctx = MapContext flowDB (byName allFlows) M.empty emptySynonymDB M.empty M.empty
+                -- The curated registry bridges the dry industrial area and its
+                -- drowned namesake through the label they share, as data/flows.csv
+                -- does; the fan-out then travels by name, knowing no exceptions.
+                synDB =
+                    buildFromPairs
+                        [ ("Occupation, industrial area", "industrial area")
+                        , ("Occupation, industrial area, benthos", "industrial area")
+                        ]
+            mappings <- mapMethodFlows ctx method
+            let expanded = expandSynonymMappings synDB (byName allFlows) mappings
+                ids = map (fmap (bfId . fst) . snd)
+            -- The bridge really does hand the excluded flow back — without this
+            -- the test below would pass on an expansion that never reached it.
+            ids expanded `shouldSatisfy` elem (Just (bfId occBenthos))
+            ids (dropExcludedMappings (filter isExclusionCF (methodFactors method)) expanded)
+                `shouldSatisfy` notElem (Just (bfId occBenthos))
+
         it "mapMethodFlows resolves literal rows via the cascade and expands patterns" $ do
             let method =
                     Method

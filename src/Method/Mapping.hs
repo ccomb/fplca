@@ -20,6 +20,7 @@ module Method.Mapping (
     isPatternCF,
     isExclusionCF,
     expandPatternCF,
+    dropExcludedMappings,
     exclusionWarning,
     buildMapContext,
 
@@ -309,8 +310,9 @@ isExclusionCF = T.isPrefixOf "!" . mcfFlowName
 the substance cell without its @!@ marker and without its trailing @*@.
 -}
 patternPrefix :: MethodCF -> Text
-patternPrefix = T.toCaseFold . dropStar . T.dropWhile (== '!') . mcfFlowName
+patternPrefix = T.toCaseFold . dropStar . dropBang . mcfFlowName
   where
+    dropBang t = fromMaybe t (T.stripPrefix "!" t)
     dropStar t = fromMaybe t (T.stripSuffix "*" t)
 
 {- | Does a pattern-shaped row select that flow? Every predicate the row
@@ -319,10 +321,15 @@ states one — subcompartment. Shared by 'expandPatternCF' and by the exclusions
 that narrow it, so a family and its exceptions are read by one rule.
 -}
 selectsFlow :: MethodCF -> BiosphereFlow -> Bool
-selectsFlow cf f = patternPrefix cf `T.isPrefixOf` T.toCaseFold (bfName f) && casFits && compFits
+-- Written as a lambda over the flow so the row's own share of the work — case
+-- folding its prefix, normalizing its CAS — is done once per row rather than
+-- once per (row, flow) pair: this runs over the whole biosphere.
+selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits f && compFits f
   where
-    casFits = maybe True ((\cas -> bfCAS f == Just cas) . normalizeCAS) (mcfCAS cf)
-    compFits = case mcfCompartment cf of
+    prefix = patternPrefix cf
+    wantCAS = normalizeCAS <$> mcfCAS cf
+    casFits f = maybe True (\cas -> bfCAS f == Just cas) wantCAS
+    compFits f = case mcfCompartment cf of
         Nothing -> True
         Just (Compartment med sub _) ->
             maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
@@ -332,6 +339,14 @@ selectsFlow cf f = patternPrefix cf `T.isPrefixOf` T.toCaseFold (bfName f) && ca
     subFits sub c =
         T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
     mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+
+{- | Is that flow taken back by any of these exclusion rows? The predicates are
+built once for the row set, then run over as many flows as the caller has.
+-}
+excludedBy :: [MethodCF] -> BiosphereFlow -> Bool
+excludedBy exclusions = \f -> any ($ f) predicates
+  where
+    predicates = map selectsFlow exclusions
 
 {- | Is the row constrained by anything at all? A selector with no name prefix,
 no CAS and no compartment would match the entire biosphere, which is never what
@@ -370,7 +385,7 @@ expandPatternCF flows exclusions cf
   where
     refuse why = ([(cf, Nothing)], ["wildcard CF '" <> mcfFlowName cf <> "' " <> why])
     selected = filter (selectsFlow cf) (M.elems flows)
-    matches = filter (\f -> not (any (`selectsFlow` f) exclusions)) selected
+    matches = filter (not . excludedBy exclusions) selected
     materialize f =
         cf
             { mcfFlowRef = bfId f
@@ -380,6 +395,31 @@ expandPatternCF flows exclusions cf
             }
     fromFlowCompartment c =
         Compartment (VT.compartmentName c) (fromMaybe "" (VT.compartmentSub c)) ""
+
+{- | Take the exclusions' flows back out of a finished mapping list.
+
+'expandPatternCF' already leaves them out when it materializes a family, but
+the mappings scoring reads are that output re-expanded — synonym fan-out,
+regional projection, proxy edges — and those expansions travel by flow name,
+knowing nothing of the method's exceptions. The curated flow registry bridges
+@"Occupation, industrial area"@ and @"Occupation, industrial area, benthos"@
+through the label they share, so a surviving sibling would hand the excluded
+sea floor its own factor back. Applied after the expansions, this holds the
+exception wherever the flow re-enters.
+-}
+dropExcludedMappings ::
+    -- | exclusions declared for this category, see 'isExclusionCF'
+    [MethodCF] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
+    [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+dropExcludedMappings [] = id
+dropExcludedMappings exclusions = filter kept
+  where
+    excluded = excludedBy exclusions
+    -- An unmatched row carries no flow to judge, and dropping it would hide the
+    -- gap the coverage report exists to show.
+    kept (_, Just (f, _)) = not (excluded f)
+    kept (_, Nothing) = True
 
 {- | Why an exclusion row could not do its job, if it could not. An exclusion
 that takes nothing back is almost always a misspelling, and left unsaid it
