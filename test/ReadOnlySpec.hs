@@ -139,7 +139,7 @@ spec = do
         it "refuse the state-changing tools" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
             let call name =
-                    callTool manager [] (ReadOnly True) Nothing Null name $
+                    callTool manager [] (Just (hosting True)) Nothing Null name $
                         KM.singleton "database" (String "nope")
             loadResp <- call "load_database"
             unloadResp <- call "unload_database"
@@ -148,7 +148,7 @@ spec = do
 
         it "still answer a read-only tool" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
-            listed <- callTool manager [] (ReadOnly True) Nothing Null "list_databases" KM.empty
+            listed <- callTool manager [] (Just (hosting True)) Nothing Null "list_databases" KM.empty
             isToolError listed `shouldBe` False
 
         it "hide the state-changing tools from tools/list" $ do

@@ -57,7 +57,7 @@ isError _ = False
 call :: Text -> IO Value
 call name = do
     manager <- initDatabaseManager defaultConfig True Nothing
-    callTool manager [] (ReadOnly False) Nothing Null name (KM.singleton "database" (String "no-such-db"))
+    callTool manager [] Nothing Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
 spec :: Spec
 spec = describe "MCP database load/unload tools" $ do

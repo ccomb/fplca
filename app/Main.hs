@@ -383,7 +383,7 @@ createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingCon
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
-    mcp <- mcpApp dbManager filterPresets hasFrontend (hostingReadOnly hostingConfig)
+    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig
     let env =
             AppEnv
                 { aeDbManager = dbManager
