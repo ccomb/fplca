@@ -195,9 +195,16 @@ filters = [{ system = "ISIC", value = "01", mode = "contains" }]  # mode: exact 
 # substance-edges = "data/substance_edges.csv" # typed flow-correspondence edges
 
 # [hosting] tunes upload/API limits when the engine runs behind a manager:
-# max_uploads, max_upload_mb, api_access, upgrade_upload, upgrade_api,
-# upgrade_vm_size, read_only
+# max_uploads, max_upload_mb, max_loaded_uploads, api_access,
+# upgrade_upload, upgrade_api, upgrade_vm_size, read_only
 ```
+
+`max_uploads` bounds how many databases of their own a caller may keep, and
+`max_loaded_uploads` how many of those may sit in memory at once. Both count
+only uploaded databases — the ones the config declares are what an uploaded
+inventory links against, so counting them would forbid the very thing
+uploading is for. A copy spends the same budget as an upload. Negative means
+unlimited; with no `[hosting]` section (local, CLI, desktop) neither applies.
 
 `read_only = true` makes the instance answer every analysis request and refuse
 every state change: loading and unloading, uploads, deletes, copies, relinks,

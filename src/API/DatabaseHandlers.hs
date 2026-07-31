@@ -52,6 +52,9 @@ module API.DatabaseHandlers (
     -- * Helpers
     convertDbStatus,
     guardMutation,
+    hostingQuotaRefusal,
+    uploadedDatabases,
+    loadedUploadedDatabases,
     simpleAction,
     formatToText,
     uploadSizeCap,
@@ -205,11 +208,19 @@ loadDatabaseHandler :: Text -> AppM LoadDatabaseResponse
 loadDatabaseHandler dbName = do
     guardMutation
     dbManager <- asks aeDbManager
-    result <- liftIO $ loadDatabase dbManager dbName
-    case result of
-        Left err -> return $ LoadFailed err
-        Right (loadedDb, depResults) ->
-            return $ LoadSucceeded (makeStatusFromLoadedDb loadedDb) depResults
+    hostingConfig <- asks aeHostingConfig
+    -- Only counted for a database the plan does not already hold in memory:
+    -- re-loading one that is loaded must not be refused by its own presence.
+    alreadyLoaded <- liftIO (elem dbName <$> loadedUploadedDatabases dbManager)
+    refusal <- if alreadyLoaded then pure Nothing else liftIO (loadQuotaRefusal dbManager hostingConfig)
+    case refusal of
+        Just msg -> return $ LoadFailed msg
+        Nothing -> do
+            result <- liftIO $ loadDatabase dbManager dbName
+            case result of
+                Left err -> return $ LoadFailed err
+                Right (loadedDb, depResults) ->
+                    return $ LoadSucceeded (makeStatusFromLoadedDb loadedDb) depResults
 
 -- | Unload a database from memory
 unloadDatabaseHandler :: Text -> AppM ActivateResponse
@@ -450,8 +461,17 @@ in-memory database registered under @newName@; the source is untouched.
 -}
 copyDatabaseHandler :: Text -> Text -> AppM ActivateResponse
 copyDatabaseHandler dbName newName = do
+    guardMutation
     dbManager <- asks aeDbManager
-    simpleAction (copyDatabase dbManager dbName newName) ("Copied database: " <> dbName <> " -> " <> newName)
+    hostingConfig <- asks aeHostingConfig
+    -- A copy produces another database of the user's own, so it spends the
+    -- same budget an upload does; without this, the quota is one rename away
+    -- from meaningless.
+    refusal <- liftIO (uploadQuotaRefusal dbManager hostingConfig)
+    case refusal of
+        Just msg -> pure (ActivateResponse False msg Nothing)
+        Nothing ->
+            simpleAction (copyDatabase dbManager dbName newName) ("Copied database: " <> dbName <> " -> " <> newName)
 
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: Text -> AppM ActivateResponse
@@ -542,6 +562,69 @@ encodeExportWarnings = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.interca
 
 exportErr :: ServerError -> Text -> AppM a
 exportErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
+
+{- | The message to refuse with when a hosting quota is already met, or
+'Nothing' when the operation is within budget.
+
+A negative limit is unlimited and an absent hosting config is local/CLI use,
+where no quota applies. Pure so the policy can be tested without a server, and
+shared so storage and memory quotas cannot drift into different rules.
+-}
+hostingQuotaRefusal ::
+    (HostingConfig -> Int) ->
+    (HostingConfig -> Text) ->
+    Text ->
+    Int ->
+    Maybe HostingConfig ->
+    Maybe Text
+hostingQuotaRefusal limitOf messageOf fallback current mHosting = case mHosting of
+    Nothing -> Nothing
+    Just hc
+        | limitOf hc < 0 -> Nothing
+        | current < limitOf hc -> Nothing
+        | T.null (messageOf hc) -> Just fallback
+        | otherwise -> Just (messageOf hc)
+
+-- | The databases the user brought, as opposed to those the config declares.
+uploadedDatabases :: DatabaseManager -> IO [Text]
+uploadedDatabases dbManager =
+    M.keys . M.filter dcIsUploaded <$> readTVarIO (dmAvailableDbs dbManager)
+
+{- | Of the user's own databases, those currently held in memory.
+
+Only these count against the memory quota: the databases a tier preloads are
+what an uploaded inventory has to link against, so counting them would make
+the quota forbid the very thing uploading is for.
+-}
+loadedUploadedDatabases :: DatabaseManager -> IO [Text]
+loadedUploadedDatabases dbManager = do
+    uploaded <- uploadedDatabases dbManager
+    loaded <- readTVarIO (dmLoadedDbs dbManager)
+    pure (filter (`M.member` loaded) uploaded)
+
+-- | Refuse a new upload once the plan's stored-database budget is used up.
+uploadQuotaRefusal :: DatabaseManager -> Maybe HostingConfig -> IO (Maybe Text)
+uploadQuotaRefusal dbManager mHosting = do
+    stored <- uploadedDatabases dbManager
+    pure $
+        hostingQuotaRefusal
+            hcMaxUploads
+            hcUpgradeUpload
+            "You have reached the number of databases this plan can store. Delete one to add another."
+            (length stored)
+            mHosting
+
+-- | Refuse a load once the plan's in-memory budget for uploads is used up.
+loadQuotaRefusal :: DatabaseManager -> Maybe HostingConfig -> IO (Maybe Text)
+loadQuotaRefusal dbManager mHosting = do
+    inMemory <- loadedUploadedDatabases dbManager
+    pure $
+        hostingQuotaRefusal
+            hcMaxLoadedUploads
+            hcUpgradeVmSize
+            "This plan holds one uploaded database in memory at a time. Unload the other one first."
+            (length inMemory)
+            mHosting
 
 {- | Resolve the hosting upload-size policy into a streaming byte cap.
 Local/CLI mode (no hosting config) is unlimited. A configured limit of 0
@@ -657,10 +740,22 @@ streamToTempFile mCap src = do
 removeQuietly :: FilePath -> IO ()
 removeQuietly p = void (try (System.Directory.removeFile p) :: IO (Either SomeException ()))
 
--- | Upload a new database (streamed octet-stream body; metadata in query params)
+{- | Upload a new database (streamed octet-stream body; metadata in query params).
+
+The stored-database quota is checked before the body is read, like the size
+cap: there is no point receiving a hundred megabytes only to refuse them.
+-}
 uploadDatabaseHandler :: Maybe Text -> Maybe Text -> SourceIO UploadChunk -> AppM UploadResponse
-uploadDatabaseHandler mName mDesc src =
-    withStreamedUpload mName mDesc src $ \name mDescription zipBytes -> do
+uploadDatabaseHandler mName mDesc src = do
+    guardMutation -- read-only outranks any quota message
+    dbManager0 <- asks aeDbManager
+    hostingConfig <- asks aeHostingConfig
+    refusal <- liftIO (uploadQuotaRefusal dbManager0 hostingConfig)
+    case refusal of
+        Just msg -> pure (UploadResponse False msg Nothing Nothing)
+        Nothing -> uploadAccepted
+  where
+    uploadAccepted = withStreamedUpload mName mDesc src $ \name mDescription zipBytes -> do
         dbManager <- asks aeDbManager
         let uploadData =
                 UploadData

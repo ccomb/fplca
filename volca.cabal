@@ -274,6 +274,7 @@ test-suite lca-tests
                      , SynonymDBSpec
                      , UploadedDatabaseSpec
                      , UploadSizeSpec
+                     , UploadQuotaSpec
                      , ReadOnlySpec
                      , ProgressSpec
                      , RegistryLintSpec

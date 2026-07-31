@@ -44,6 +44,7 @@ hosting ro =
     HostingConfig
         { hcMaxUploads = -1
         , hcMaxUploadMb = -1
+        , hcMaxLoadedUploads = -1
         , hcApiAccess = True
         , hcReadOnly = ro
         , hcUpgradeUpload = ""
