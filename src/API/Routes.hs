@@ -23,7 +23,7 @@ import Data.Aeson
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (asum)
-import Data.List (find, intercalate, sortBy, sortOn)
+import Data.List (intercalate, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
