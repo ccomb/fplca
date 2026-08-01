@@ -60,6 +60,7 @@ module Matrix (
     computeInventoryMatrixBatch,
     clearCachedSolver,
     chunksOf,
+    readSolveCounter,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -80,6 +81,7 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (SomeException, catch, evaluate, throwIO, toException, try)
 import Control.Monad (forM_, unless, void, when)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
 import qualified Data.Map as M
 import Data.Maybe (catMaybes)
@@ -161,6 +163,33 @@ solves across DBs while leaving the per-DB coalescing workers intact.
 {-# NOINLINE mumpsSolveMutex #-}
 mumpsSolveMutex :: MVar ()
 mumpsSolveMutex = unsafePerformIO $ newMVar ()
+
+{- | Count of matrix solves performed since the process started.
+
+A solve is the expensive thing this server does, and the only work that can
+outlast a request: an analysis started just before an idle deadline must not
+have the process exit under it. Callers therefore only ever ask whether the
+number moved between two moments, never what it means, so the double count on
+a fallback path (a batch solve that degrades to per-demand solves) is harmless.
+-}
+{-# NOINLINE solveCounter #-}
+solveCounter :: IORef Int
+solveCounter = unsafePerformIO $ newIORef 0
+
+-- | Record that one matrix solve happened.
+bumpSolveCounter :: IO ()
+bumpSolveCounter = atomicModifyIORef' solveCounter (\n -> (n + 1, ()))
+
+-- | Read the running solve count. Meaningful only compared against itself.
+readSolveCounter :: IO Int
+readSolveCounter = readIORef solveCounter
+
+{- | Bracket a solve. The count moves when the work starts and again when it
+ends, so a solve begun moments before an idle deadline is not cut off in
+flight, and a long chain of solves keeps the deadline moving throughout.
+-}
+countingSolve :: IO a -> IO a
+countingSolve act = bumpSolveCounter *> act <* bumpSolveCounter
 
 -- ---------------------------------------------------------------------------
 -- Coalescing solver: per-database worker that batches concurrent requests
@@ -337,7 +366,7 @@ The solver is looked up by database ID from the per-database cache, enabling
 instant switching between databases without re-factorization.
 -}
 solveSparseLinearSystemWithFactorization :: MatrixFactorization -> Vector -> IO Vector
-solveSparseLinearSystemWithFactorization factorization demandVec = do
+solveSparseLinearSystemWithFactorization factorization demandVec = countingSolve $ do
     let dbId = mfDatabaseId factorization
     cachedSolvers <- readMVar cachedSolver
     case M.lookup dbId cachedSolvers of
@@ -388,7 +417,7 @@ if the cached solver is absent or the multi-solve raises an exception.
 -}
 solveSparseLinearSystemWithFactorizationMulti :: MatrixFactorization -> [Vector] -> IO [Vector]
 solveSparseLinearSystemWithFactorizationMulti _ [] = pure []
-solveSparseLinearSystemWithFactorizationMulti factorization demandVecs = do
+solveSparseLinearSystemWithFactorizationMulti factorization demandVecs = countingSolve $ do
     let dbId = mfDatabaseId factorization
         k = length demandVecs
     cachedSolvers <- readMVar cachedSolver
@@ -461,7 +490,7 @@ Performance: ~3s for 14,457 activities with 116K technosphere entries
 
 -- | Uses global mutex: MUMPS_SEQ create/factorize/destroy have global Fortran state.
 solveSparseLinearSystemMUMPS :: [(Int, Int, Double)] -> Int -> Vector -> IO Vector
-solveSparseLinearSystemMUMPS techTriples n demandVec = withMVar mumpsFactorizationMutex $ \_ -> do
+solveSparseLinearSystemMUMPS techTriples n demandVec = countingSolve $ withMVar mumpsFactorizationMutex $ \_ -> do
     let identityTriples = [(i, i, 1.0) | i <- [0 .. n - 1]]
         systemTechTriples = [(i, j, -value) | (i, j, value) <- techTriples]
         allTriples = aggregateMatrixEntries (identityTriples ++ systemTechTriples)

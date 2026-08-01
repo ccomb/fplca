@@ -47,6 +47,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.String (fromString)
+import qualified Matrix
 import Network.HTTP.Types (status200, status403)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Middleware, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
@@ -260,6 +261,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             password
             (cfgHosting config)
             (cfgClassificationPresets config)
+            (getCurrentTime >>= writeIORef lastRequestRef)
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
                 wrapWithMiddleware password (hostingReadOnly (cfgHosting config)) lastRequestRef idleActiveRef baseApp
@@ -375,15 +377,15 @@ logRequest req = do
     hFlush stdout
 
 -- | Create a Wai application with DatabaseManager.
-createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO Application
-createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets = do
+createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO () -> IO Application
+createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets markActivity = do
     -- The MCP @web_url@ deep links point at Elm SPA routes served from
     -- 'staticDir'. When the SPA is not bundled (backend-only image), those
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
-    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig
+    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig markActivity
     let env =
             AppEnv
                 { aeDbManager = dbManager
@@ -433,10 +435,16 @@ validateCLIConfig (CLIConfig globalOpts _) =
                 die "--jsonpath can only be used with --format csv"
         _ -> pure ()
 
--- | WAI middleware that updates last-request timestamp on every request
+{- | WAI middleware that updates the last-request timestamp on every request.
+
+@\/mcp@ is exempt: a connected assistant polls it on its own initiative, so
+counting those requests would keep an idle server alive with nobody at the
+other end. That endpoint marks activity itself, for the calls that are someone
+asking a question ('API.MCP.mcpCountsAsActivity').
+-}
 idleTrackingMiddleware :: IORef UTCTime -> Application -> Application
 idleTrackingMiddleware ref app req respond = do
-    getCurrentTime >>= writeIORef ref
+    unless (rawPathInfo req == "/mcp") (getCurrentTime >>= writeIORef ref)
     app req respond
 
 {- | Middleware that handles POST /api/v1/idle-timeout/{seconds} and POST /api/v1/shutdown
@@ -483,17 +491,27 @@ shutdownEndpoint readOnly lastRequestRef idleActiveRef app req respond =
                 [(hContentType, "application/json")]
                 (encode (object ["error" .= readOnlyRefusal]))
 
--- | Background thread that exits the server after idle timeout (in seconds)
+{- | Background thread that exits the server after the idle timeout (seconds).
+
+Two things count as being in use, because one alone would be wrong. An HTTP
+request proves someone is there — reading a process sheet resolves no matrix,
+and that reader must not lose the server under them. A matrix solve proves
+expensive work is under way, which may well outlast the request that asked for
+it. So the deadline moves on either, and the solve count is read first: a solve
+that lands in the last seconds has to be seen before the deadline is judged.
+-}
 idleWatchdog :: IORef UTCTime -> IORef Bool -> Int -> IO ()
-idleWatchdog ref activeRef timeoutSecs = go
+idleWatchdog ref activeRef timeoutSecs = go =<< Matrix.readSolveCounter
   where
     checkInterval = min (timeoutSecs * 1000000) (5 * 1000000) -- check every 5s or timeout, whichever is shorter
-    go = do
+    go lastSeen = do
         threadDelay checkInterval
         active <- readIORef activeRef
         if not active
             then pure ()
             else do
+                solves <- Matrix.readSolveCounter
+                when (solves /= lastSeen) (getCurrentTime >>= writeIORef ref)
                 now <- getCurrentTime
                 lastReq <- readIORef ref
                 let idleSeconds = realToFrac (diffUTCTime now lastReq) :: Double
@@ -501,4 +519,4 @@ idleWatchdog ref activeRef timeoutSecs = go
                     then do
                         reportProgress Info $ "Idle for " ++ show timeoutSecs ++ "s, shutting down."
                         hardExit
-                    else go
+                    else go solves

@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Hspec
 
-import API.MCP (callTool, toolDefinitions)
+import API.MCP (callTool, mcpCountsAsActivity, toolDefinitions)
 import Config (ReadOnly (..), defaultConfig)
 import Database.Manager (initDatabaseManager)
 
@@ -114,3 +114,18 @@ spec = describe "MCP database load/unload tools" $ do
             resp <- call "get_characterization_coverage"
             isError resp `shouldBe` True
             resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    -- A server that shuts itself down when idle asks this question of every
+    -- MCP request. Answering "yes" too often keeps an unused server alive for
+    -- as long as an assistant stays connected, which is a bill with nobody
+    -- behind it; answering "no" too often kills a server mid-conversation.
+    describe "mcpCountsAsActivity" $ do
+        it "accepts a tool call" $
+            mcpCountsAsActivity "tools/call" `shouldBe` True
+
+        it "refuses the calls a client makes on its own" $
+            map mcpCountsAsActivity ["initialize", "notifications/initialized", "tools/list", "ping"]
+                `shouldBe` [False, False, False, False]
+
+        it "refuses an unknown method" $
+            mcpCountsAsActivity "no/such/method" `shouldBe` False
