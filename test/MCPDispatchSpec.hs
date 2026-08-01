@@ -8,17 +8,20 @@ tool at runtime with an "Unknown tool" reply. These tests pin both ends.
 module MCPDispatchSpec (spec) where
 
 import Control.Monad (forM_)
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), decodeStrict)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
+import qualified Data.Map as M
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import Test.Hspec
 
 import API.MCP (callTool, mcpCountsAsActivity, toolDefinitions)
-import Config (ClassificationEntry (..), ClassificationPreset (..), ReadOnly (..), defaultConfig)
-import Database.Manager (initDatabaseManager)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), defaultConfig)
+import Database.Manager (addDatabase, initDatabaseManager, loadDatabase)
+import Types (GeographyPolicy (..))
 
 -- | The tool definition advertised under a given MCP name.
 toolByName :: Text -> Maybe Value
@@ -58,6 +61,13 @@ resultText v = do
     Object c <- listToMaybe (toList arr)
     String t <- KM.lookup "text" c
     pure t
+
+-- | A top-level field of a tool reply's JSON payload.
+jsonField :: KM.Key -> Value -> Maybe Value
+jsonField key resp = do
+    t <- resultText resp
+    Object o <- decodeStrict (encodeUtf8 t)
+    KM.lookup key o
 
 -- | Whether a tool reply is flagged as an error.
 isError :: Value -> Bool
@@ -156,6 +166,49 @@ spec = describe "MCP database load/unload tools" $ do
                 resp <- callWithPreset name
                 isError resp `shouldBe` True
                 resultText resp `shouldSatisfy` maybe False ("transformed" `T.isInfixOf`)
+
+        -- The refusal above is enforced in dispatch, so it cannot tell a
+        -- handler that reads the preset from one that drops it. These pin the
+        -- application: the fixture carries no classification at all, so a
+        -- preset that resolves must narrow the answer to nothing — a handler
+        -- ignoring it answers with the unfiltered set instead.
+        describe "a preset that resolves is applied" $ do
+            let sampleConfig =
+                    DatabaseConfig
+                        { dcName = "sample"
+                        , dcDisplayName = "sample"
+                        , dcPath = "test-data/SAMPLE.min"
+                        , dcDescription = Nothing
+                        , dcLoad = False
+                        , dcDefault = False
+                        , dcDepends = []
+                        , dcLocationAliases = M.empty
+                        , dcFormat = Nothing
+                        , dcIsUploaded = False
+                        , dcDeletable = False
+                        , dcGeographyPolicy = GeoGlobal
+                        }
+                callOnSample name presetArgs = do
+                    manager <- initDatabaseManager defaultConfig True Nothing
+                    addDatabase manager sampleConfig
+                    loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
+                    callTool manager [configured] Nothing Nothing Null name $
+                        KM.fromList $
+                            [ ("database", String "sample")
+                            , ("process_id", String "aa000001-0000-0000-0000-000000000000")
+                            , ("scope", String "direct")
+                            ]
+                                ++ presetArgs
+                positiveNumber v = case v of
+                    Just (Number n) -> n > 0
+                    _ -> False
+
+            forM_ [("aggregate", "filteredCount"), ("get_supply_chain", "filteredActivities")] $
+                \(tool, field) -> it (T.unpack tool <> " narrows to nothing under the preset") $ do
+                    full <- callOnSample tool []
+                    jsonField field full `shouldSatisfy` positiveNumber
+                    narrowed <- callOnSample tool [("preset", String "raw")]
+                    jsonField field narrowed `shouldBe` Just (Number 0)
 
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for
