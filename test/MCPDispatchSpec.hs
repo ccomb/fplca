@@ -7,6 +7,7 @@ tool at runtime with an "Unknown tool" reply. These tests pin both ends.
 -}
 module MCPDispatchSpec (spec) where
 
+import Control.Monad (forM_)
 import Data.Aeson (Value (..))
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
@@ -16,7 +17,7 @@ import qualified Data.Text as T
 import Test.Hspec
 
 import API.MCP (callTool, mcpCountsAsActivity, toolDefinitions)
-import Config (ReadOnly (..), defaultConfig)
+import Config (ClassificationEntry (..), ClassificationPreset (..), ReadOnly (..), defaultConfig)
 import Database.Manager (initDatabaseManager)
 
 -- | The tool definition advertised under a given MCP name.
@@ -24,6 +25,17 @@ toolByName :: Text -> Maybe Value
 toolByName name =
     listToMaybe
         [t | t@(Object o) <- toolDefinitions (ReadOnly False), KM.lookup "name" o == Just (String name)]
+
+-- | Every advertised tool whose input schema declares a @preset@ parameter.
+takesPreset :: [Text]
+takesPreset =
+    [ name
+    | Object o <- toolDefinitions (ReadOnly False)
+    , Just (String name) <- [KM.lookup "name" o]
+    , Just (Object schema) <- [KM.lookup "inputSchema" o]
+    , Just (Object props) <- [KM.lookup "properties" schema]
+    , KM.member "preset" props
+    ]
 
 -- | The 'required' parameter names declared in a tool's input schema.
 requiredOf :: Value -> [Text]
@@ -114,6 +126,36 @@ spec = describe "MCP database load/unload tools" $ do
             resp <- call "get_characterization_coverage"
             isError resp `shouldBe` True
             resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    -- A preset narrows a search. A tool that advertises the parameter and then
+    -- ignores an unresolvable one answers with the whole database, which reads
+    -- like a result rather than like the mistake it is.
+    describe "tools taking a classification preset" $ do
+        let configured =
+                ClassificationPreset
+                    { cpName = "raw"
+                    , cpLabel = "Raw"
+                    , cpDescription = Nothing
+                    , cpFilters = [ClassificationEntry{ceSystem = "AGB", ceValue = "Agriculture", ceMode = "exact"}]
+                    }
+            callWithPreset name = do
+                manager <- initDatabaseManager defaultConfig True Nothing
+                callTool manager [configured] Nothing Nothing Null name $
+                    KM.fromList
+                        [ ("database", String "no-such-db")
+                        , ("process_id", String "no-such-pid")
+                        , ("scope", String "direct")
+                        , ("preset", String "transformed")
+                        ]
+
+        it "is a non-empty list, or this test proves nothing" $
+            takesPreset `shouldSatisfy` not . null
+
+        forM_ takesPreset $ \name ->
+            it (T.unpack name <> " refuses a preset the instance does not carry") $ do
+                resp <- callWithPreset name
+                isError resp `shouldBe` True
+                resultText resp `shouldSatisfy` maybe False ("transformed" `T.isInfixOf`)
 
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for

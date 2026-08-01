@@ -365,6 +365,10 @@ callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> 
 callTool _ _ mHosting _ rid name _
     | isReadOnly (hostingReadOnly mHosting) && mutatingTool name =
         return $ toolError rid readOnlyRefusal
+-- A preset the instance does not carry is refused here rather than in each
+-- handler, so no tool can answer as if the caller had asked for no filter.
+callTool _ presets _ _ rid _ args
+    | Left err <- presetFilters presets args = return $ toolError rid err
 callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "load_database" -> callLoadDatabase dbManager mHosting rid args
@@ -373,8 +377,8 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows" -> withDb dbManager rid args $ callSearchFlows rid args
     "get_activity" -> withDb dbManager rid args $ callGetActivity rid args
-    "get_supply_chain" -> callGetSupplyChain dbManager rid args
-    "aggregate" -> withDb dbManager rid args $ callAggregate dbManager rid args
+    "get_supply_chain" -> callGetSupplyChain dbManager presets rid args
+    "aggregate" -> withDb dbManager rid args $ callAggregate dbManager presets rid args
     "get_inventory" -> callGetInventory dbManager rid args
     "get_impacts" -> callGetImpacts dbManager mBaseUrl rid args
     "compute_sensitivity" -> callComputeSensitivity dbManager mBaseUrl rid args
@@ -724,10 +728,11 @@ callGetActivity rid args (db, _) = runTool rid $ do
         Nothing -> True
         Just want -> exchangeIsInput (ewuExchange ewu) == want
 
-callGetSupplyChain :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callGetSupplyChain dbManager rid args = runTool rid $ do
+callGetSupplyChain :: DatabaseManager -> [ClassificationPreset] -> Value -> KeyMap Value -> IO Value
+callGetSupplyChain dbManager presets rid args = runTool rid $ do
     (dbName, pid) <- except $ (,) <$> requireText "database" args <*> requireText "process_id" args
     ld <- requireDatabase dbManager dbName
+    classifications <- except (classificationFilters presets args)
     let db = ldDatabase ld
         solver = ldSharedSolver ld
         depLookup = DM.mkDepSolverLookup dbManager
@@ -738,7 +743,7 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = Nothing
-                        , Service.afcClassifications = explicitClassFilter args
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
@@ -766,8 +771,8 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
 {- | Generic SQL-group-by aggregation. One small primitive for "how much X is
 in Y" questions — replaces ad-hoc decomposition tools.
 -}
-callAggregate :: DatabaseManager -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callAggregate dbManager rid args (db, solver) =
+callAggregate :: DatabaseManager -> [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callAggregate dbManager presets rid args (db, solver) =
     let dbName = fromMaybe "" (textArg "database" args) -- already validated by withDb
      in case textArg "process_id" args of
             Nothing -> return $ toolError rid "Missing required parameter: process_id"
@@ -778,33 +783,35 @@ callAggregate dbManager rid args (db, solver) =
                     Right fn -> case filterExchangeTypeFromArg of
                         Left err -> return $ toolError rid err
                         Right filterExchangeType | Just msg <- Agg.exchangeTypeScopeError scope filterExchangeType -> return $ toolError rid msg
-                        Right filterExchangeType -> do
-                            let params =
-                                    Agg.AggregateParams
-                                        { Agg.apScope = scope
-                                        , Agg.apIsInput = boolArg "is_input" args
-                                        , Agg.apMaxDepth = intArg "max_depth" args
-                                        , Agg.apFilterName = textArg "filter_name" args
-                                        , Agg.apFilterNameNot =
-                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
-                                        , Agg.apFilterUnit = textArg "filter_unit" args
-                                        , Agg.apFilterClassifications =
-                                            mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
-                                        , Agg.apFilterTargetName = textArg "filter_target_name" args
-                                        , Agg.apFilterConsumer = textArg "filter_consumer" args
-                                        , Agg.apFilterConsumerNot =
-                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
-                                        , Agg.apFilterExchangeType = filterExchangeType
-                                        , Agg.apFilterIsReference = boolArg "filter_is_reference" args
-                                        , Agg.apGroupBy = textArg "group_by" args
-                                        , Agg.apAggregate = fn
-                                        }
-                            unitCfg <- DM.getMergedUnitConfig dbManager
-                            (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-                            result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
-                            case result of
-                                Left err -> return $ toolError rid (T.pack $ show err)
-                                Right agg -> return $ toolSuccessJson rid (toJSON agg)
+                        Right filterExchangeType -> case presetFilters presets args of
+                            Left err -> return $ toolError rid err
+                            Right fromPreset -> do
+                                let params =
+                                        Agg.AggregateParams
+                                            { Agg.apScope = scope
+                                            , Agg.apIsInput = boolArg "is_input" args
+                                            , Agg.apMaxDepth = intArg "max_depth" args
+                                            , Agg.apFilterName = textArg "filter_name" args
+                                            , Agg.apFilterNameNot =
+                                                maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
+                                            , Agg.apFilterUnit = textArg "filter_unit" args
+                                            , Agg.apFilterClassifications =
+                                                fromPreset ++ mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
+                                            , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                            , Agg.apFilterConsumer = textArg "filter_consumer" args
+                                            , Agg.apFilterConsumerNot =
+                                                maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
+                                            , Agg.apFilterExchangeType = filterExchangeType
+                                            , Agg.apFilterIsReference = boolArg "filter_is_reference" args
+                                            , Agg.apGroupBy = textArg "group_by" args
+                                            , Agg.apAggregate = fn
+                                            }
+                                unitCfg <- DM.getMergedUnitConfig dbManager
+                                (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+                                result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
+                                case result of
+                                    Left err -> return $ toolError rid (T.pack $ show err)
+                                    Right agg -> return $ toolSuccessJson rid (toJSON agg)
   where
     scopeFromArg = case textArg "scope" args of
         Just "direct" -> Right Agg.ScopeDirect
