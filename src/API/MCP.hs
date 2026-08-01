@@ -27,7 +27,7 @@ import System.Random (randomIO)
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), hostingReadOnly, readOnlyRefusal)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), expandClassificationPreset, hostingReadOnly, readOnlyRefusal)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -597,44 +597,36 @@ explicitClassFilter args = case (textArg "classification" args, textArg "classif
   where
     isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
 
+-- | The @preset@ argument expanded, as every tool advertising that parameter must.
+presetFilters :: [ClassificationPreset] -> KeyMap Value -> Either Text [(Text, Text, Bool)]
+presetFilters presets args = expandClassificationPreset presets (textArg "preset" args)
+
 {- | Preset filters (looked up by @preset@ name) followed by the explicit
 filter. Shared by the search and consumers handlers.
 -}
-classificationFilters :: [ClassificationPreset] -> KeyMap Value -> [(Text, Text, Bool)]
-classificationFilters presets args = presetFilters ++ explicitClassFilter args
-  where
-    presetFilters = case textArg "preset" args of
-        Just pn -> case L.find (\p -> cpName p == pn) presets of
-            Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
-            Nothing -> []
-        Nothing -> []
+classificationFilters :: [ClassificationPreset] -> KeyMap Value -> Either Text [(Text, Text, Bool)]
+classificationFilters presets args = (++ explicitClassFilter args) <$> presetFilters presets args
 
 callSearchActivities :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callSearchActivities presets rid args (db, _) = do
-    let name = textArg "name" args
-        geo = textArg "geo" args
-        product' = textArg "product" args
-        limit = intArg "limit" args
-        exact = fromMaybe False (boolArg "exact" args)
-        sf =
+callSearchActivities presets rid args (db, _) = runTool rid $ do
+    classifications <- except (classificationFilters presets args)
+    let sf =
             Service.SearchFilter
                 { Service.sfCore =
                     Service.ActivityFilterCore
-                        { Service.afcName = name
-                        , Service.afcLocation = geo
-                        , Service.afcProduct = product'
-                        , Service.afcClassifications = classificationFilters presets args
-                        , Service.afcLimit = limit <|> Just 20
+                        { Service.afcName = textArg "name" args
+                        , Service.afcLocation = textArg "geo" args
+                        , Service.afcProduct = textArg "product" args
+                        , Service.afcClassifications = classifications
+                        , Service.afcLimit = intArg "limit" args <|> Just 20
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
                         , Service.afcOrder = Nothing
                         }
-                , Service.sfExactMatch = exact
+                , Service.sfExactMatch = fromMaybe False (boolArg "exact" args)
                 }
-    result <- Service.searchActivities db sf
-    case result of
-        Left err -> return $ toolError rid (T.pack $ show err)
-        Right val -> return $ toolSuccessJson rid val
+    val <- liftIO (Service.searchActivities db sf) >>= liftShow
+    pure (toolSuccessJson rid val)
 
 callListClassifications :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callListClassifications rid args (db, _) =
@@ -856,6 +848,7 @@ callGetPathTo rid args (db, solver) = runTool rid $ do
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetConsumers presets rid args (db, _) = runTool rid $ do
     pid <- except (requireText "process_id" args)
+    classifications <- except (classificationFilters presets args)
     let dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
         cnf =
             Service.ConsumerFilter
@@ -864,7 +857,7 @@ callGetConsumers presets rid args (db, _) = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = textArg "product" args
-                        , Service.afcClassifications = classificationFilters presets args
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing

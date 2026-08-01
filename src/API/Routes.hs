@@ -394,18 +394,6 @@ Built in two steps:
 volcaOpenApi :: OpenApi
 volcaOpenApi = API.OpenApi.stampInfo (API.OpenApi.enrichWithResources (toOpenApi (Proxy :: Proxy LCAAPI)))
 
-{- | Expand a named classification preset from config into the
-(system, value, exact) triples used by the Service/Aggregate layers.
-An unknown preset name yields the empty list (same behavior as the
-previous inline implementations in searchActivitiesWithCount and
-getActivityConsumers).
--}
-expandPreset :: [Config.ClassificationPreset] -> Maybe Text -> [(Text, Text, Bool)]
-expandPreset _ Nothing = []
-expandPreset presets (Just pn) = case find (\p -> Config.cpName p == pn) presets of
-    Just p -> [(Config.ceSystem e, Config.ceValue e, Config.ceMode e == "exact") | e <- Config.cpFilters p]
-    Nothing -> []
-
 -- ============================================================================
 -- Hoisted helpers — previously in lcaServer's `where`. Lifted to top level so
 -- non-Servant callers (notably src/API/BatchImpacts.hs and any client of the
@@ -515,6 +503,10 @@ serviceErrorToServerError = \case
 
 throwServiceError :: Service.ServiceError -> AppM a
 throwServiceError = throwError . serviceErrorToServerError
+
+-- | Answer 400 with a message the caller can act on, rather than a body-less status.
+badRequest :: Text -> AppM a
+badRequest msg = throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
 
 -- | Load a method collection by name from the live DatabaseManager state.
 loadCollection :: Text -> AppM ([Method], [DamageCategory], [NormWeightSet], [ScoringSet])
@@ -1064,10 +1056,12 @@ mergeClassFilters ::
     [Text] ->
     [Text] ->
     [Text] ->
-    [(Text, Text, Bool)]
+    Either Text [(Text, Text, Bool)]
 mergeClassFilters presets presetParam systems values modes =
-    expandPreset presets presetParam
-        ++ zipWith3
+    (++ explicit) <$> Config.expandClassificationPreset presets presetParam
+  where
+    explicit =
+        zipWith3
             (\s v m -> (s, v, m == "exact"))
             systems
             values
@@ -1089,23 +1083,25 @@ buildSupplyChainFilter ::
     [Text] ->
     Maybe Text ->
     Maybe Text ->
-    Service.SupplyChainFilter
-buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam =
-    Service.SupplyChainFilter
-        { Service.scfCore =
-            Service.ActivityFilterCore
-                { Service.afcName = nameFilter
-                , Service.afcLocation = locationFilter
-                , Service.afcProduct = productFilter
-                , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
-                , Service.afcLimit = limitParam
-                , Service.afcOffset = offsetParam
-                , Service.afcSort = sortParam
-                , Service.afcOrder = orderParam
-                }
-        , Service.scfMaxDepth = maxDepthParam
-        , Service.scfMinQuantity = minQuantity
-        }
+    Either Text Service.SupplyChainFilter
+buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam = do
+    classifications <- mergeClassFilters presets presetParam classSystems classValues classModes
+    pure
+        Service.SupplyChainFilter
+            { Service.scfCore =
+                Service.ActivityFilterCore
+                    { Service.afcName = nameFilter
+                    , Service.afcLocation = locationFilter
+                    , Service.afcProduct = productFilter
+                    , Service.afcClassifications = classifications
+                    , Service.afcLimit = limitParam
+                    , Service.afcOffset = offsetParam
+                    , Service.afcSort = sortParam
+                    , Service.afcOrder = orderParam
+                    }
+            , Service.scfMaxDepth = maxDepthParam
+            , Service.scfMinQuantity = minQuantity
+            }
 
 buildFlowEntry :: Database -> MethodTables -> M.Map UUID (MethodCF, MatchStrategy) -> UUID -> FlowCFEntry
 buildFlowEntry db tables reverseIndex uuid =
@@ -1429,7 +1425,8 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
     presets <- asks aeClassificationPresets
     (db, sharedSolver) <- requireDatabaseByName dbName
     let includeEdges = fromMaybe False includeEdgesParam
-        scf =
+    scf <-
+        either badRequest pure $
             buildSupplyChainFilter
                 presets
                 nameFilter
@@ -1552,8 +1549,8 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
     case Agg.exchangeTypeScopeError scope exchangeType of
         Just msg -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 msg)}
         Nothing -> return ()
-    let presetFilters = expandPreset presets presetParam
-        explicitFilters = mapMaybe parseClassFilter fclassParams
+    presetFilters <- either badRequest pure (Config.expandClassificationPreset presets presetParam)
+    let explicitFilters = mapMaybe parseClassFilter fclassParams
         params =
             Agg.AggregateParams
                 { Agg.apScope = scope
@@ -1706,6 +1703,7 @@ getActivityConsumers ::
 getActivityConsumers dbName processIdText nameFilter locationFilter productFilter presetParam classSystems classValues classModes limitParam offsetParam maxDepthParam sortParam orderParam includeEdgesParam = do
     presets <- asks aeClassificationPresets
     (db, _) <- requireDatabaseByName dbName
+    classifications <- either badRequest pure (mergeClassFilters presets presetParam classSystems classValues classModes)
     let cnf =
             Service.ConsumerFilter
                 { Service.cnfCore =
@@ -1713,7 +1711,7 @@ getActivityConsumers dbName processIdText nameFilter locationFilter productFilte
                         { Service.afcName = nameFilter
                         , Service.afcLocation = locationFilter
                         , Service.afcProduct = productFilter
-                        , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = limitParam
                         , Service.afcOffset = offsetParam
                         , Service.afcSort = sortParam
@@ -2055,6 +2053,7 @@ searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> M
 searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
     presets <- asks aeClassificationPresets
     (db, _) <- requireDatabaseByName dbName
+    classifications <- either badRequest pure (mergeClassFilters presets presetParam classSystems classValues classModes)
     let exactMatch = fromMaybe False exactParam
         sf =
             Service.SearchFilter
@@ -2063,7 +2062,7 @@ searchActivitiesWithCount dbName nameParam geoParam productParam exactParam pres
                         { Service.afcName = nameParam
                         , Service.afcLocation = geoParam
                         , Service.afcProduct = productParam
-                        , Service.afcClassifications = mergeClassFilters presets presetParam classSystems classValues classModes
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = limitParam
                         , Service.afcOffset = offsetParam
                         , Service.afcSort = sortParam

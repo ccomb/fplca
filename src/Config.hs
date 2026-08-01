@@ -19,6 +19,7 @@ module Config (
     readOnlyRefusal,
     ClassificationPreset (..),
     ClassificationEntry (..),
+    expandClassificationPreset,
 
     -- * Loading
     loadConfig,
@@ -68,6 +69,27 @@ data ClassificationPreset = ClassificationPreset
     , cpFilters :: ![ClassificationEntry]
     }
     deriving (Show, Eq, Generic)
+
+{- | Expand a preset name into the (system, value, exact) triples every query
+surface filters with.
+
+A name no configured preset carries is an error, never an empty filter list: a
+preset narrows a query, so dropping it silently answers with the whole database
+where the caller asked for a slice of it.
+-}
+expandClassificationPreset :: [ClassificationPreset] -> Maybe Text -> Either Text [(Text, Text, Bool)]
+expandClassificationPreset _ Nothing = Right []
+expandClassificationPreset presets (Just name) =
+    case filter ((== name) . cpName) presets of
+        p : _ -> Right [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
+        [] -> Left (unknownPresetMessage presets name)
+
+-- | Why a preset name did not resolve, naming what this instance does carry.
+unknownPresetMessage :: [ClassificationPreset] -> Text -> Text
+unknownPresetMessage presets name =
+    "Unknown classification preset '" <> name <> "'. " <> case map cpName presets of
+        [] -> "This instance has no classification presets configured."
+        configured -> "Configured presets: " <> T.intercalate ", " configured
 
 -- | Main configuration type
 data Config = Config
