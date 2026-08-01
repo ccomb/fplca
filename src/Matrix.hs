@@ -187,6 +187,9 @@ readSolveCounter = readIORef solveCounter
 {- | Bracket a solve. The count moves when the work starts and again when it
 ends, so a solve begun moments before an idle deadline is not cut off in
 flight, and a long chain of solves keeps the deadline moving throughout.
+The count is silent between the two moves, so a single solve that alone
+outlasts the whole timeout is still cut off mid-flight — a ceiling that
+stands far above real work, since solves take seconds and timeouts minutes.
 -}
 countingSolve :: IO a -> IO a
 countingSolve act = bumpSolveCounter *> act <* bumpSolveCounter
