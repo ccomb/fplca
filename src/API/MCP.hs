@@ -27,7 +27,7 @@ import System.Random (randomIO)
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), hostingReadOnly, readOnlyRefusal)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), expandClassificationPreset, hostingReadOnly, readOnlyRefusal)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -365,6 +365,10 @@ callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> 
 callTool _ _ mHosting _ rid name _
     | isReadOnly (hostingReadOnly mHosting) && mutatingTool name =
         return $ toolError rid readOnlyRefusal
+-- A preset the instance does not carry is refused here rather than in each
+-- handler, so no tool can answer as if the caller had asked for no filter.
+callTool _ presets _ _ rid _ args
+    | Left err <- presetFilters presets args = return $ toolError rid err
 callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "load_database" -> callLoadDatabase dbManager mHosting rid args
@@ -373,8 +377,8 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows" -> withDb dbManager rid args $ callSearchFlows rid args
     "get_activity" -> withDb dbManager rid args $ callGetActivity rid args
-    "get_supply_chain" -> callGetSupplyChain dbManager rid args
-    "aggregate" -> withDb dbManager rid args $ callAggregate dbManager rid args
+    "get_supply_chain" -> callGetSupplyChain dbManager presets rid args
+    "aggregate" -> withDb dbManager rid args $ callAggregate dbManager presets rid args
     "get_inventory" -> callGetInventory dbManager rid args
     "get_impacts" -> callGetImpacts dbManager mBaseUrl rid args
     "compute_sensitivity" -> callComputeSensitivity dbManager mBaseUrl rid args
@@ -597,44 +601,36 @@ explicitClassFilter args = case (textArg "classification" args, textArg "classif
   where
     isExact = textArg "classification_match" args `elem` [Just "equals", Just "exact"]
 
+-- | The @preset@ argument expanded, as every tool advertising that parameter must.
+presetFilters :: [ClassificationPreset] -> KeyMap Value -> Either Text [(Text, Text, Bool)]
+presetFilters presets args = expandClassificationPreset presets (textArg "preset" args)
+
 {- | Preset filters (looked up by @preset@ name) followed by the explicit
 filter. Shared by the search and consumers handlers.
 -}
-classificationFilters :: [ClassificationPreset] -> KeyMap Value -> [(Text, Text, Bool)]
-classificationFilters presets args = presetFilters ++ explicitClassFilter args
-  where
-    presetFilters = case textArg "preset" args of
-        Just pn -> case L.find (\p -> cpName p == pn) presets of
-            Just p -> [(ceSystem e, ceValue e, ceMode e == "exact") | e <- cpFilters p]
-            Nothing -> []
-        Nothing -> []
+classificationFilters :: [ClassificationPreset] -> KeyMap Value -> Either Text [(Text, Text, Bool)]
+classificationFilters presets args = (++ explicitClassFilter args) <$> presetFilters presets args
 
 callSearchActivities :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callSearchActivities presets rid args (db, _) = do
-    let name = textArg "name" args
-        geo = textArg "geo" args
-        product' = textArg "product" args
-        limit = intArg "limit" args
-        exact = fromMaybe False (boolArg "exact" args)
-        sf =
+callSearchActivities presets rid args (db, _) = runTool rid $ do
+    classifications <- except (classificationFilters presets args)
+    let sf =
             Service.SearchFilter
                 { Service.sfCore =
                     Service.ActivityFilterCore
-                        { Service.afcName = name
-                        , Service.afcLocation = geo
-                        , Service.afcProduct = product'
-                        , Service.afcClassifications = classificationFilters presets args
-                        , Service.afcLimit = limit <|> Just 20
+                        { Service.afcName = textArg "name" args
+                        , Service.afcLocation = textArg "geo" args
+                        , Service.afcProduct = textArg "product" args
+                        , Service.afcClassifications = classifications
+                        , Service.afcLimit = intArg "limit" args <|> Just 20
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
                         , Service.afcOrder = Nothing
                         }
-                , Service.sfExactMatch = exact
+                , Service.sfExactMatch = fromMaybe False (boolArg "exact" args)
                 }
-    result <- Service.searchActivities db sf
-    case result of
-        Left err -> return $ toolError rid (T.pack $ show err)
-        Right val -> return $ toolSuccessJson rid val
+    val <- liftIO (Service.searchActivities db sf) >>= liftShow
+    pure (toolSuccessJson rid val)
 
 callListClassifications :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callListClassifications rid args (db, _) =
@@ -732,10 +728,11 @@ callGetActivity rid args (db, _) = runTool rid $ do
         Nothing -> True
         Just want -> exchangeIsInput (ewuExchange ewu) == want
 
-callGetSupplyChain :: DatabaseManager -> Value -> KeyMap Value -> IO Value
-callGetSupplyChain dbManager rid args = runTool rid $ do
+callGetSupplyChain :: DatabaseManager -> [ClassificationPreset] -> Value -> KeyMap Value -> IO Value
+callGetSupplyChain dbManager presets rid args = runTool rid $ do
     (dbName, pid) <- except $ (,) <$> requireText "database" args <*> requireText "process_id" args
     ld <- requireDatabase dbManager dbName
+    classifications <- except (classificationFilters presets args)
     let db = ldDatabase ld
         solver = ldSharedSolver ld
         depLookup = DM.mkDepSolverLookup dbManager
@@ -746,7 +743,7 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = Nothing
-                        , Service.afcClassifications = explicitClassFilter args
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing
@@ -774,8 +771,8 @@ callGetSupplyChain dbManager rid args = runTool rid $ do
 {- | Generic SQL-group-by aggregation. One small primitive for "how much X is
 in Y" questions — replaces ad-hoc decomposition tools.
 -}
-callAggregate :: DatabaseManager -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
-callAggregate dbManager rid args (db, solver) =
+callAggregate :: DatabaseManager -> [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callAggregate dbManager presets rid args (db, solver) =
     let dbName = fromMaybe "" (textArg "database" args) -- already validated by withDb
      in case textArg "process_id" args of
             Nothing -> return $ toolError rid "Missing required parameter: process_id"
@@ -786,33 +783,35 @@ callAggregate dbManager rid args (db, solver) =
                     Right fn -> case filterExchangeTypeFromArg of
                         Left err -> return $ toolError rid err
                         Right filterExchangeType | Just msg <- Agg.exchangeTypeScopeError scope filterExchangeType -> return $ toolError rid msg
-                        Right filterExchangeType -> do
-                            let params =
-                                    Agg.AggregateParams
-                                        { Agg.apScope = scope
-                                        , Agg.apIsInput = boolArg "is_input" args
-                                        , Agg.apMaxDepth = intArg "max_depth" args
-                                        , Agg.apFilterName = textArg "filter_name" args
-                                        , Agg.apFilterNameNot =
-                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
-                                        , Agg.apFilterUnit = textArg "filter_unit" args
-                                        , Agg.apFilterClassifications =
-                                            mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
-                                        , Agg.apFilterTargetName = textArg "filter_target_name" args
-                                        , Agg.apFilterConsumer = textArg "filter_consumer" args
-                                        , Agg.apFilterConsumerNot =
-                                            maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
-                                        , Agg.apFilterExchangeType = filterExchangeType
-                                        , Agg.apFilterIsReference = boolArg "filter_is_reference" args
-                                        , Agg.apGroupBy = textArg "group_by" args
-                                        , Agg.apAggregate = fn
-                                        }
-                            unitCfg <- DM.getMergedUnitConfig dbManager
-                            (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-                            result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
-                            case result of
-                                Left err -> return $ toolError rid (T.pack $ show err)
-                                Right agg -> return $ toolSuccessJson rid (toJSON agg)
+                        Right filterExchangeType -> case presetFilters presets args of
+                            Left err -> return $ toolError rid err
+                            Right fromPreset -> do
+                                let params =
+                                        Agg.AggregateParams
+                                            { Agg.apScope = scope
+                                            , Agg.apIsInput = boolArg "is_input" args
+                                            , Agg.apMaxDepth = intArg "max_depth" args
+                                            , Agg.apFilterName = textArg "filter_name" args
+                                            , Agg.apFilterNameNot =
+                                                maybe [] (map T.strip . T.splitOn ",") (textArg "filter_name_not" args)
+                                            , Agg.apFilterUnit = textArg "filter_unit" args
+                                            , Agg.apFilterClassifications =
+                                                fromPreset ++ mapMaybe parseClassFilter (textArrayArg "filter_classification" args)
+                                            , Agg.apFilterTargetName = textArg "filter_target_name" args
+                                            , Agg.apFilterConsumer = textArg "filter_consumer" args
+                                            , Agg.apFilterConsumerNot =
+                                                maybe [] (map T.strip . T.splitOn ",") (textArg "filter_consumer_not" args)
+                                            , Agg.apFilterExchangeType = filterExchangeType
+                                            , Agg.apFilterIsReference = boolArg "filter_is_reference" args
+                                            , Agg.apGroupBy = textArg "group_by" args
+                                            , Agg.apAggregate = fn
+                                            }
+                                unitCfg <- DM.getMergedUnitConfig dbManager
+                                (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
+                                result <- Agg.aggregate unitCfg mFlows mUnits db dbName solver (DM.mkDepSolverLookup dbManager) pid params
+                                case result of
+                                    Left err -> return $ toolError rid (T.pack $ show err)
+                                    Right agg -> return $ toolSuccessJson rid (toJSON agg)
   where
     scopeFromArg = case textArg "scope" args of
         Just "direct" -> Right Agg.ScopeDirect
@@ -856,6 +855,7 @@ callGetPathTo rid args (db, solver) = runTool rid $ do
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetConsumers presets rid args (db, _) = runTool rid $ do
     pid <- except (requireText "process_id" args)
+    classifications <- except (classificationFilters presets args)
     let dbName = fromMaybe "" (textArg "database" args) -- validated by withDb
         cnf =
             Service.ConsumerFilter
@@ -864,7 +864,7 @@ callGetConsumers presets rid args (db, _) = runTool rid $ do
                         { Service.afcName = textArg "name" args
                         , Service.afcLocation = textArg "location" args
                         , Service.afcProduct = textArg "product" args
-                        , Service.afcClassifications = classificationFilters presets args
+                        , Service.afcClassifications = classifications
                         , Service.afcLimit = intArg "limit" args
                         , Service.afcOffset = Nothing
                         , Service.afcSort = Nothing

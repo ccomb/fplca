@@ -71,6 +71,14 @@
   output is unchanged.
 
 ### Fixed
+- A classification preset that does not resolve is now refused instead of
+  quietly filtering nothing. Asking a server for its raw agricultural products
+  by a preset name it does not carry — a typo, or a config that never declared
+  it — used to answer with every activity in the database, which reads like a
+  result. The refusal names the presets the instance does carry. The MCP
+  `aggregate` and `get_supply_chain` tools had a second form of the same
+  problem: both advertise a `preset` parameter and neither ever read it, so
+  even a valid preset was dropped there.
 - "Land occupied", in the shipped Plain indicators method, no longer counts the
   sea. Its rule takes every `Occupation, …` flow, and that family holds the open
   ocean and the sea floor alongside fields and roads. Anything fed from the sea

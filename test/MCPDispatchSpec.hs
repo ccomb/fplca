@@ -7,23 +7,38 @@ tool at runtime with an "Unknown tool" reply. These tests pin both ends.
 -}
 module MCPDispatchSpec (spec) where
 
-import Data.Aeson (Value (..))
+import Control.Monad (forM_)
+import Data.Aeson (Value (..), decodeStrict)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
+import qualified Data.Map as M
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import Test.Hspec
 
 import API.MCP (callTool, mcpCountsAsActivity, toolDefinitions)
-import Config (ReadOnly (..), defaultConfig)
-import Database.Manager (initDatabaseManager)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), defaultConfig)
+import Database.Manager (addDatabase, initDatabaseManager, loadDatabase)
+import Types (GeographyPolicy (..))
 
 -- | The tool definition advertised under a given MCP name.
 toolByName :: Text -> Maybe Value
 toolByName name =
     listToMaybe
         [t | t@(Object o) <- toolDefinitions (ReadOnly False), KM.lookup "name" o == Just (String name)]
+
+-- | Every advertised tool whose input schema declares a @preset@ parameter.
+takesPreset :: [Text]
+takesPreset =
+    [ name
+    | Object o <- toolDefinitions (ReadOnly False)
+    , Just (String name) <- [KM.lookup "name" o]
+    , Just (Object schema) <- [KM.lookup "inputSchema" o]
+    , Just (Object props) <- [KM.lookup "properties" schema]
+    , KM.member "preset" props
+    ]
 
 -- | The 'required' parameter names declared in a tool's input schema.
 requiredOf :: Value -> [Text]
@@ -46,6 +61,13 @@ resultText v = do
     Object c <- listToMaybe (toList arr)
     String t <- KM.lookup "text" c
     pure t
+
+-- | A top-level field of a tool reply's JSON payload.
+jsonField :: KM.Key -> Value -> Maybe Value
+jsonField key resp = do
+    t <- resultText resp
+    Object o <- decodeStrict (encodeUtf8 t)
+    KM.lookup key o
 
 -- | Whether a tool reply is flagged as an error.
 isError :: Value -> Bool
@@ -114,6 +136,79 @@ spec = describe "MCP database load/unload tools" $ do
             resp <- call "get_characterization_coverage"
             isError resp `shouldBe` True
             resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    -- A preset narrows a search. A tool that advertises the parameter and then
+    -- ignores an unresolvable one answers with the whole database, which reads
+    -- like a result rather than like the mistake it is.
+    describe "tools taking a classification preset" $ do
+        let configured =
+                ClassificationPreset
+                    { cpName = "raw"
+                    , cpLabel = "Raw"
+                    , cpDescription = Nothing
+                    , cpFilters = [ClassificationEntry{ceSystem = "AGB", ceValue = "Agriculture", ceMode = "exact"}]
+                    }
+            callWithPreset name = do
+                manager <- initDatabaseManager defaultConfig True Nothing
+                callTool manager [configured] Nothing Nothing Null name $
+                    KM.fromList
+                        [ ("database", String "no-such-db")
+                        , ("process_id", String "no-such-pid")
+                        , ("scope", String "direct")
+                        , ("preset", String "transformed")
+                        ]
+
+        it "is a non-empty list, or this test proves nothing" $
+            takesPreset `shouldSatisfy` not . null
+
+        forM_ takesPreset $ \name ->
+            it (T.unpack name <> " refuses a preset the instance does not carry") $ do
+                resp <- callWithPreset name
+                isError resp `shouldBe` True
+                resultText resp `shouldSatisfy` maybe False ("transformed" `T.isInfixOf`)
+
+        -- The refusal above is enforced in dispatch, so it cannot tell a
+        -- handler that reads the preset from one that drops it. These pin the
+        -- application: the fixture carries no classification at all, so a
+        -- preset that resolves must narrow the answer to nothing — a handler
+        -- ignoring it answers with the unfiltered set instead.
+        describe "a preset that resolves is applied" $ do
+            let sampleConfig =
+                    DatabaseConfig
+                        { dcName = "sample"
+                        , dcDisplayName = "sample"
+                        , dcPath = "test-data/SAMPLE.min"
+                        , dcDescription = Nothing
+                        , dcLoad = False
+                        , dcDefault = False
+                        , dcDepends = []
+                        , dcLocationAliases = M.empty
+                        , dcFormat = Nothing
+                        , dcIsUploaded = False
+                        , dcDeletable = False
+                        , dcGeographyPolicy = GeoGlobal
+                        }
+                callOnSample name presetArgs = do
+                    manager <- initDatabaseManager defaultConfig True Nothing
+                    addDatabase manager sampleConfig
+                    loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
+                    callTool manager [configured] Nothing Nothing Null name $
+                        KM.fromList $
+                            [ ("database", String "sample")
+                            , ("process_id", String "aa000001-0000-0000-0000-000000000000")
+                            , ("scope", String "direct")
+                            ]
+                                ++ presetArgs
+                positiveNumber v = case v of
+                    Just (Number n) -> n > 0
+                    _ -> False
+
+            forM_ [("aggregate", "filteredCount"), ("get_supply_chain", "filteredActivities")] $
+                \(tool, field) -> it (T.unpack tool <> " narrows to nothing under the preset") $ do
+                    full <- callOnSample tool []
+                    jsonField field full `shouldSatisfy` positiveNumber
+                    narrowed <- callOnSample tool [("preset", String "raw")]
+                    jsonField field narrowed `shouldBe` Just (Number 0)
 
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for

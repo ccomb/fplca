@@ -4,6 +4,8 @@ module ConfigSpec (spec) where
 
 import Config (
     CFPatchOp (..),
+    ClassificationEntry (..),
+    ClassificationPreset (..),
     Config (..),
     MethodConfig (..),
     MethodPatch (..),
@@ -12,6 +14,7 @@ import Config (
     ScoringSetConfig (..),
     applyDataDir,
     defaultConfig,
+    expandClassificationPreset,
     loadConfigOrDefault,
     redirectIntoDataDir,
  )
@@ -34,6 +37,38 @@ mkRef p =
 
 spec :: Spec
 spec = do
+    describe "expandClassificationPreset" $ do
+        let raw =
+                ClassificationPreset
+                    { cpName = "raw"
+                    , cpLabel = "Raw"
+                    , cpDescription = Nothing
+                    , cpFilters =
+                        [ ClassificationEntry{ceSystem = "AGB", ceValue = "Agriculture", ceMode = "exact"}
+                        , ClassificationEntry{ceSystem = "AGB", ceValue = "Food", ceMode = "contains"}
+                        ]
+                    }
+        it "expands a configured preset into its filters" $
+            expandClassificationPreset [raw] (Just "raw")
+                `shouldBe` Right [("AGB", "Agriculture", True), ("AGB", "Food", False)]
+
+        it "filters nothing when no preset was asked for" $
+            expandClassificationPreset [raw] Nothing `shouldBe` Right []
+
+        -- An unknown name used to expand to no filters at all, which turned a
+        -- request for one slice of the database into a request for all of it.
+        it "refuses an unknown name instead of widening the query" $
+            case expandClassificationPreset [raw] (Just "transformed") of
+                Right filters -> expectationFailure ("expected a refusal, got " <> show filters)
+                Left err -> do
+                    err `shouldSatisfy` T.isInfixOf "transformed"
+                    err `shouldSatisfy` T.isInfixOf "raw"
+
+        it "says so when the instance carries no preset at all" $
+            case expandClassificationPreset [] (Just "raw") of
+                Right filters -> expectationFailure ("expected a refusal, got " <> show filters)
+                Left err -> err `shouldSatisfy` T.isInfixOf "no classification presets"
+
     describe "MethodConfig global-methods" $ do
         let decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
         it "parses the global-methods list" $
