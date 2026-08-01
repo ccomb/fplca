@@ -18,6 +18,23 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.9.1] - 2026-08-01
+
+### Added
+
+- `get_impacts_batch(..., exclude_long_term=True)` drops long-term emissions
+  before scoring — the switch `score_activities` already carried. The engine
+  route has always accepted it and only this wrapper had no way to say so, so
+  scoring a whole list and scoring one process could not be asked the same
+  question.
+
+### Changed
+
+- `Server.start(idle_timeout=…)` counts real use rather than traffic. Against
+  an engine >= v0.9.4, an API request or a matrix solve holds the server open,
+  while an MCP client that merely stays connected does not — an assistant left
+  running overnight no longer keeps the process alive on its own.
+
 ## [0.9.0] - 2026-07-31
 
 ### Changed — breaking
@@ -45,11 +62,6 @@ Then paste the rendered block at the top of this file and tighten wording.
 - `get_collection_coverage` reports how much of a database a whole method
   collection characterizes (typed `CollectionCoverage`), counting coverage
   the way scoring counts it.
-- `get_impacts_batch(..., exclude_long_term=True)` drops long-term emissions
-  before scoring — the switch `score_activities` already carried. The engine
-  route has always accepted it and only this wrapper had no way to say so, so
-  scoring a whole list and scoring one process could not be asked the same
-  question.
 - The client now understands wire revision 4 (engines >= v0.9.4, which
   advertise the quality-report routes); nothing changes against older
   engines.
