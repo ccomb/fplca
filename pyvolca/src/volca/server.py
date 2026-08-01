@@ -204,8 +204,9 @@ class Server:
         """Spawn the engine process if it is not already serving, and wait until ready.
 
         Args:
-            idle_timeout: Seconds without an HTTP request before the engine
-                shuts itself down. Default 5 min.
+            idle_timeout: Seconds without use before the engine shuts itself
+                down. Default 5 min. An API request or a matrix solve counts
+                as use; an MCP client merely staying connected does not.
             wait_timeout: How long to poll for the server to become healthy
                 before raising :class:`TimeoutError`.
 
