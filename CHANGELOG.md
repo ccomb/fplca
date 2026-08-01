@@ -1,8 +1,38 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.4] - 2026-08-01
 
 ### Added
+- A quality report says what is malformed in a database, a question no score
+  answers: an entry with two reference products, or coproducts allocated to
+  90%, still computes — it just computes something wrong in silence.
+  `GET /api/v1/db/{db}/quality-report` and the `get_quality_report` MCP tool
+  run five structural checks: exactly one reference exchange per entry,
+  coproduct percentages summing to 100 (±0.5 for source rounding), duplicate
+  activities, non-finite amounts and zero reference amounts, and absent
+  description, classification, location or unit. Each finding carries its
+  severity, the activity it sits on and a readable detail; `limit` caps the
+  list while `offenderCount` still covers all of it. A check with nothing to
+  judge reports `applicable: false` rather than a passing zero. The report is
+  a structural scan needing no matrices, so it answers on a staged database
+  as well as a loaded one — which is when it is most worth reading.
+- An instance can declare itself read-only. `read_only = true` in `[hosting]`
+  makes it answer every analysis request and refuse every state change:
+  loading and unloading, uploads, deletes, copies, relinks, dependency edits,
+  and `POST /api/v1/shutdown` and `/api/v1/idle-timeout/{n}`, which decide how
+  long the process lives. Refusals are `403` on REST and tool errors on MCP;
+  nothing is silently ignored. This is what makes one instance safe to put in
+  front of many unrelated callers, none of whom should be able to change the
+  working set or end the server for the others.
+- The `[hosting]` quotas now bound what a caller may keep. `max_uploads` caps
+  how many databases of their own a caller holds, and `max_loaded_uploads` how
+  many of those sit in memory at once; a copy spends the same budget as an
+  upload. Both count uploaded databases only — the databases the config
+  declares are what an uploaded inventory links against, so counting those
+  would forbid the very thing uploading is for. Negative means unlimited, and
+  where there is no `[hosting]` section at all (local runs, the CLI, the
+  desktop app) neither applies. A refusal names what clears the way, unloading
+  or deleting one, rather than stopping at a number.
 - A method can now write an exception to one of its own wildcard rules: a
   substance starting with `!` takes its flows back out of the patterns declared
   for the same impact category. Some open families hold members that do not
@@ -41,6 +71,112 @@
   danger, because normalization divides every other amount in the process
   by it.
 
+- A characterization-coverage report tells database maintainers which flow
+  names a method scores only through a name bridge. When a database names a
+  substance differently from the method that characterizes it — `Bromomethane`
+  versus `Methane, bromo-, Halon 1001`, say — VoLCA still scores the flow by
+  matching on a synonym or CAS number. A tool that matches factors by their
+  exact name, as many downstream consumers do, has no such bridge and scores
+  that flow as zero without warning. The report lists each bridged flow grouped
+  under the name the method itself uses, so the fix is a rename. It is available
+  as the `get_characterization_coverage` MCP tool and at
+  `GET /api/v1/db/{db}/characterization-coverage`, with one entry per loaded
+  method collection so two method versions can be compared side by side.
+- Method collections can be exported as an ILCD LCIA-method package (`ilcd`):
+  a zip of one method dataset per impact category plus the flow datasets they
+  reference (`lciamethods/` + `flows/`), which loads straight back. It carries
+  the most metadata of any of the method export formats — methodology,
+  description, per-factor direction, location and CAS all round-trip natively,
+  the way a real EF package does. What ILCD's method profile cannot hold — a
+  per-factor flow unit (it stores one reference unit per method), damage
+  categories, normalization/weighting sets and formula scoring sets — is
+  reported in export warnings, never dropped silently. Available through
+  `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
+  `volca method export NAME --format ilcd`, and pyvolca's
+  `export_method_collection(name, fmt="ilcd")`.
+- The quality report flags individual allocation percentages outside the
+  0-100% range, alongside the existing check that a block's percentages sum to
+  100. A single factor can be out of range — a negative share, or more than the
+  whole — while the block total still lands on 100.
+- The quality report validates flow CAS numbers by their check digit: a CAS
+  registry number confirms itself, so a corrupt one — which silently breaks
+  the name-to-CAS bridge that matches flows across databases — is flagged. The
+  zero-padded and canonical spellings both pass.
+- The quality report flags oxygen-demand and organic-carbon measures recorded
+  in a physically impossible order: within one entry BOD5 must not exceed COD,
+  nor dissolved organic carbon exceed total. A reversed pair is a measurement
+  or transcription error. Checked only where both members of a pair are
+  present.
+- The quality report checks that land transformation balances within each
+  activity: the areas transformed *to* a use must match the areas transformed
+  *from* another, since a parcel changed into one state was changed out of
+  another. A gap beyond one percent — a dropped or mistyped line — is flagged,
+  compared per unit so only comparable areas are summed.
+- A computed-checks report joins the structural quality report:
+  `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
+  MCP tool score every entry of a loaded database against a method collection
+  and report per-category score outliers (median/MAD on a log scale within
+  (category, reference-unit) groups — a mg-read-as-kg slip lands three orders
+  of magnitude out), entries whose every score is zero, and negative category
+  scores (info: avoided-production credits and waste treatment produce them
+  legitimately). Separate from the structural report on purpose — that one
+  stays identical on staged and loaded databases; this one needs the matrices
+  and a loaded method collection.
+- The quality report flags distinct activity names that merge under
+  SimaPro's 80-character name truncation — each colliding name gets its own
+  finding, so an export bound for SimaPro can be repaired before the names
+  collapse into one process there.
+- The quality report counts the exchanges that carry no pedigree scores, per
+  entry — only in databases that carry pedigree scores at all, so formats
+  that cannot publish them are not drowned in noise.
+- The quality report lists the entries whose reference product nothing in
+  the database consumes. Informational by nature: expected for a final
+  product, a dangling intermediate in a background database.
+- Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
+  of one `ImpactCategory` document per impact category, in the olca-schema
+  archive layout, that loads straight back. Flow UUIDs, per-factor
+  directions (`INPUT`/`OUTPUT`) and location codes are native to this
+  format, so regionalized collections round-trip without the name-suffix
+  projection the CSV formats use. What it cannot carry (methodology
+  labels, damage categories, normalization/weighting and scoring sets) is
+  reported in export warnings. The openLCA reader now also picks up the
+  document-level `category` field as the impact category's group label,
+  and method files load in a deterministic order on every machine.
+- Method collections can be exported as columnar CSV — one column per
+  impact category, one row per substance: the file you open in a
+  spreadsheet. `POST /api/v1/method-collections/{name}/export` with
+  `{"format": "csv"}`, `volca method export NAME --format csv`, or
+  pyvolca's `export_method_collection(name, fmt="csv")`. Anything the
+  format cannot carry (flow directions the compartment does not imply,
+  damage categories, normalization/weighting sets, formula scoring sets)
+  is reported in export warnings, never dropped silently.
+- The columnar CSV method format itself grew the columns real methods
+  need, read back by the parser and emitted by the writer: optional `cas`
+  and `unit` key columns (real methods mix kg, m3 and MJ flows inside one
+  category), and a `top/sub/qualifier` compartment path so subcompartment
+  distinctions survive — in EF 3.1, nine factors out of ten are
+  subcompartment-specific. Legacy files parse exactly as before, and
+  quoted fields now work in these files too.
+- Method collections can now be exported as SimaPro method CSV, the inverse
+  of the SimaPro method import: `POST /method-collections/{name}/export`,
+  `volca method export NAME --format simapro --out FILE`, and
+  `export_method_collection` in the Python client. The file carries the
+  collection's impact categories, damage categories and
+  normalization/weighting sets, so a method imported in one format (for
+  example an ILCD Environmental Footprint package) can be handed to a
+  SimaPro user. Regionalized factors are written as name-suffixed substances
+  (`Water, FR`) and land occupation/transformation factors under the `Raw`
+  compartment — the conventions SimaPro method files use themselves; whatever
+  the format cannot carry — a factor without a compartment, a factor whose
+  direction the compartment column cannot express, formula scoring sets — is
+  listed in the export warnings instead of being dropped silently.
+- A collection-coverage endpoint:
+  `GET /db/{db}/method-collection/{collection}/coverage` reports how many of
+  a database's emission and resource flows at least one method of a
+  collection characterizes, as a distinct count. No sum over the per-method
+  figures can recover it, because a collection's methods overlap on the same
+  flows. Exposed in pyvolca as `Client.get_collection_coverage`.
+
 ### Changed
 - A server started with `--idle-timeout` now follows real work, not traffic.
   A connected MCP assistant polls its server all day (`ping`, `tools/list`),
@@ -71,6 +207,14 @@
   output is unchanged.
 
 ### Fixed
+- Parametric coal flows no longer score zero energy. A flow carrying its
+  calorific value in its name — `Coal, 26.4 MJ per kg`, `Coal, brown, 8 MJ per
+  kg` — recovers an energy factor through its family, but coal splits into
+  hard and brown and the fallback rightly refuses to pick between the two, so
+  every parametric coal variant contributed nothing to fossil resource use
+  without saying so. Four registry rows now attach each variant to its own
+  family. The conversion still uses the calorific value written in the name,
+  so the rows change which factor is found, never the energy accounted for.
 - A classification preset that does not resolve is now refused instead of
   quietly filtering nothing. Asking a server for its raw agricultural products
   by a preset name it does not carry — a typo, or a config that never declared
@@ -223,113 +367,6 @@
   fallback (a factor covering a substance across many compartments counted as
   one flow), under-reporting a method's real reach several-fold on typical
   databases.
-
-### Added
-- A characterization-coverage report tells database maintainers which flow
-  names a method scores only through a name bridge. When a database names a
-  substance differently from the method that characterizes it — `Bromomethane`
-  versus `Methane, bromo-, Halon 1001`, say — VoLCA still scores the flow by
-  matching on a synonym or CAS number. A tool that matches factors by their
-  exact name, as many downstream consumers do, has no such bridge and scores
-  that flow as zero without warning. The report lists each bridged flow grouped
-  under the name the method itself uses, so the fix is a rename. It is available
-  as the `get_characterization_coverage` MCP tool and at
-  `GET /api/v1/db/{db}/characterization-coverage`, with one entry per loaded
-  method collection so two method versions can be compared side by side.
-- Method collections can be exported as an ILCD LCIA-method package (`ilcd`):
-  a zip of one method dataset per impact category plus the flow datasets they
-  reference (`lciamethods/` + `flows/`), which loads straight back. It carries
-  the most metadata of any of the method export formats — methodology,
-  description, per-factor direction, location and CAS all round-trip natively,
-  the way a real EF package does. What ILCD's method profile cannot hold — a
-  per-factor flow unit (it stores one reference unit per method), damage
-  categories, normalization/weighting sets and formula scoring sets — is
-  reported in export warnings, never dropped silently. Available through
-  `POST /api/v1/method-collections/{name}/export` with `{"format": "ilcd"}`,
-  `volca method export NAME --format ilcd`, and pyvolca's
-  `export_method_collection(name, fmt="ilcd")`.
-- The quality report flags individual allocation percentages outside the
-  0-100% range, alongside the existing check that a block's percentages sum to
-  100. A single factor can be out of range — a negative share, or more than the
-  whole — while the block total still lands on 100.
-- The quality report validates flow CAS numbers by their check digit: a CAS
-  registry number confirms itself, so a corrupt one — which silently breaks
-  the name-to-CAS bridge that matches flows across databases — is flagged. The
-  zero-padded and canonical spellings both pass.
-- The quality report flags oxygen-demand and organic-carbon measures recorded
-  in a physically impossible order: within one entry BOD5 must not exceed COD,
-  nor dissolved organic carbon exceed total. A reversed pair is a measurement
-  or transcription error. Checked only where both members of a pair are
-  present.
-- The quality report checks that land transformation balances within each
-  activity: the areas transformed *to* a use must match the areas transformed
-  *from* another, since a parcel changed into one state was changed out of
-  another. A gap beyond one percent — a dropped or mistyped line — is flagged,
-  compared per unit so only comparable areas are summed.
-- A computed-checks report joins the structural quality report:
-  `GET /db/{db}/computed-quality-report` and the `get_computed_quality_report`
-  MCP tool score every entry of a loaded database against a method collection
-  and report per-category score outliers (median/MAD on a log scale within
-  (category, reference-unit) groups — a mg-read-as-kg slip lands three orders
-  of magnitude out), entries whose every score is zero, and negative category
-  scores (info: avoided-production credits and waste treatment produce them
-  legitimately). Separate from the structural report on purpose — that one
-  stays identical on staged and loaded databases; this one needs the matrices
-  and a loaded method collection.
-- The quality report flags distinct activity names that merge under
-  SimaPro's 80-character name truncation — each colliding name gets its own
-  finding, so an export bound for SimaPro can be repaired before the names
-  collapse into one process there.
-- The quality report counts the exchanges that carry no pedigree scores, per
-  entry — only in databases that carry pedigree scores at all, so formats
-  that cannot publish them are not drowned in noise.
-- The quality report lists the entries whose reference product nothing in
-  the database consumes. Informational by nature: expected for a final
-  product, a dangling intermediate in a background database.
-- Method collections can be exported as openLCA JSON-LD (`openlca`): a zip
-  of one `ImpactCategory` document per impact category, in the olca-schema
-  archive layout, that loads straight back. Flow UUIDs, per-factor
-  directions (`INPUT`/`OUTPUT`) and location codes are native to this
-  format, so regionalized collections round-trip without the name-suffix
-  projection the CSV formats use. What it cannot carry (methodology
-  labels, damage categories, normalization/weighting and scoring sets) is
-  reported in export warnings. The openLCA reader now also picks up the
-  document-level `category` field as the impact category's group label,
-  and method files load in a deterministic order on every machine.
-- Method collections can be exported as columnar CSV — one column per
-  impact category, one row per substance: the file you open in a
-  spreadsheet. `POST /api/v1/method-collections/{name}/export` with
-  `{"format": "csv"}`, `volca method export NAME --format csv`, or
-  pyvolca's `export_method_collection(name, fmt="csv")`. Anything the
-  format cannot carry (flow directions the compartment does not imply,
-  damage categories, normalization/weighting sets, formula scoring sets)
-  is reported in export warnings, never dropped silently.
-- The columnar CSV method format itself grew the columns real methods
-  need, read back by the parser and emitted by the writer: optional `cas`
-  and `unit` key columns (real methods mix kg, m3 and MJ flows inside one
-  category), and a `top/sub/qualifier` compartment path so subcompartment
-  distinctions survive — in EF 3.1, nine factors out of ten are
-  subcompartment-specific. Legacy files parse exactly as before, and
-  quoted fields now work in these files too.
-- Method collections can now be exported as SimaPro method CSV, the inverse
-  of the SimaPro method import: `POST /method-collections/{name}/export`,
-  `volca method export NAME --format simapro --out FILE`, and
-  `export_method_collection` in the Python client. The file carries the
-  collection's impact categories, damage categories and
-  normalization/weighting sets, so a method imported in one format (for
-  example an ILCD Environmental Footprint package) can be handed to a
-  SimaPro user. Regionalized factors are written as name-suffixed substances
-  (`Water, FR`) and land occupation/transformation factors under the `Raw`
-  compartment — the conventions SimaPro method files use themselves; whatever
-  the format cannot carry — a factor without a compartment, a factor whose
-  direction the compartment column cannot express, formula scoring sets — is
-  listed in the export warnings instead of being dropped silently.
-- A collection-coverage endpoint:
-  `GET /db/{db}/method-collection/{collection}/coverage` reports how many of
-  a database's emission and resource flows at least one method of a
-  collection characterizes, as a distinct count. No sum over the per-method
-  figures can recover it, because a collection's methods overlap on the same
-  flows. Exposed in pyvolca as `Client.get_collection_coverage`.
 
 ## [0.9.3] - 2026-07-15
 
