@@ -5,7 +5,7 @@ Implements Streamable HTTP transport (MCP spec 2025-03-26).
 POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 -}
-module API.MCP (mcpApp, toolDefinitions, callTool, selectMethod) where
+module API.MCP (mcpApp, mcpCountsAsActivity, toolDefinitions, callTool, selectMethod) where
 
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
@@ -39,7 +39,7 @@ import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, loadQuotaRefus
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
@@ -116,8 +116,23 @@ newtype McpState = McpState
     { mcpSessionId :: Text
     }
 
-mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> Maybe HostingConfig -> IO Application
-mcpApp dbManager presets hasFrontend mHosting = do
+{- | Which MCP calls mean a human is there. @initialize@, @tools\/list@, @ping@
+and the notifications announce or maintain a client without asking anything of
+the engine: a connected assistant emits them on its own, all day, whether or
+not anyone is working. Only @tools\/call@ is someone asking a question.
+-}
+mcpCountsAsActivity :: Text -> Bool
+mcpCountsAsActivity = (== "tools/call")
+
+{- | Build the @\/mcp@ endpoint.
+
+@markActivity@ is called for every request that 'mcpCountsAsActivity' accepts.
+A server that shuts itself down when idle uses it to tell a working client from
+a merely connected one; a server with no such policy passes an action that does
+nothing.
+-}
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> Maybe HostingConfig -> IO () -> IO Application
+mcpApp dbManager presets hasFrontend mHosting markActivity = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState{mcpSessionId = sessionId}
@@ -153,6 +168,7 @@ mcpApp dbManager presets hasFrontend mHosting = do
                     Left err ->
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
+                        when (mcpCountsAsActivity (rpcMethod rpcReq)) markActivity
                         resp <- handleRpc dbManager presets mHosting mBaseUrl st rpcReq
                         case resp of
                             Nothing ->

@@ -42,6 +42,12 @@
   by it.
 
 ### Changed
+- A server started with `--idle-timeout` now follows real work, not traffic.
+  A connected MCP assistant polls its server all day (`ping`, `tools/list`),
+  and those calls used to hold the server open with nobody behind them; now
+  only an actual tool call counts. A matrix solve also counts as use in its
+  own right, so an analysis that outlasts the request that asked for it no
+  longer has the server exit underneath it.
 - An EcoSpold 1 dataset published as `process_<uuid>.xml` (or `<uuid>.xml`)
   now keeps that identifier as its activity UUID instead of getting one
   minted from its name and location. Two releases of such a database can be

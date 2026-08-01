@@ -19,6 +19,7 @@ import Matrix (
     buildDemandVectorFromIndex,
     clearCachedSolver,
     fromList,
+    readSolveCounter,
     solveSparseLinearSystem,
     solveSparseLinearSystemWithFactorization,
     solveSparseLinearSystemWithFactorizationMulti,
@@ -83,6 +84,23 @@ spec = do
                     (solveSparseLinearSystemWithFactorizationMulti fact multiBatch)
             actualSingles `shouldSatisfy` allCloseTo expectedSingles
             actualMulti `shouldSatisfy` allCloseTo expectedMulti
+
+    -- A server that shuts itself down when idle watches this number to know
+    -- that work is under way. If a solve path stopped moving it, an analysis
+    -- longer than the timeout would be killed halfway through.
+    describe "solve counter" $ do
+        it "moves on the cached path, the batch path and the fresh path" $ do
+            (_solver, fact, db) <- min3CachedSolver
+            let demand = buildDemandVectorFromIndex (dbActivityIndex db) 0
+            before <- readSolveCounter
+            _ <- solveSparseLinearSystemWithFactorization fact demand
+            afterSingle <- readSolveCounter
+            _ <- solveSparseLinearSystemWithFactorizationMulti fact [demand, demand]
+            afterMulti <- readSolveCounter
+            _ <- oracleSolve db demand
+            afterFresh <- readSolveCounter
+            [afterSingle > before, afterMulti > afterSingle, afterFresh > afterMulti]
+                `shouldBe` [True, True, True]
 
     describe "clean shutdown" $ do
         it "clearCachedSolver lets the next request fall back without deadlock" $ do
