@@ -43,6 +43,7 @@ library
                      , SharedSolver
                      , Database
                      , Database.Manager
+                     , Database.Author
                      , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking
@@ -319,6 +320,7 @@ test-suite lca-tests
                      , NumericEdgesSpec
                      , AggregateSpec
                      , CopySpec
+                     , AuthorSpec
                      , DeleteSelectionSpec
                      , ExportSpec
                      , ExportHandlerSpec
