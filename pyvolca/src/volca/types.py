@@ -880,10 +880,22 @@ class BioDirection(_StrEnum):
 
     ``RESOURCE`` — extraction from the environment (input).
     ``EMISSION`` — release to the environment (output).
+
+    Lookup is case-insensitive (``BioDirection("emission")`` works): the
+    engine reads the wire value that way, so the client should not be
+    stricter than the server it speaks for.
     """
 
     RESOURCE = "Resource"
     EMISSION = "Emission"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "BioDirection | None":
+        if isinstance(value, str):
+            for member in cls:
+                if member.value.lower() == value.lower():
+                    return member
+        return None
 
 
 def _direction_is_input(direction: BioDirection) -> bool:
@@ -1843,6 +1855,11 @@ class BioExchange:
             raise ValueError(
                 f"biosphere flow {self.name!r} needs a compartment "
                 "(air, water, soil, natural resource)"
+            )
+        if self.name is not None and self.unit is None:
+            raise ValueError(
+                f"biosphere flow {self.name!r} needs a unit "
+                "(it is half of a new flow's identity, so it cannot be defaulted)"
             )
 
     @classmethod

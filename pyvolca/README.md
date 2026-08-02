@@ -359,6 +359,10 @@ Direction of a biosphere exchange.
 ``RESOURCE`` — extraction from the environment (input).
 ``EMISSION`` — release to the environment (output).
 
+Lookup is case-insensitive (``BioDirection("emission")`` works): the
+engine reads the wire value that way, so the client should not be
+stricter than the server it speaks for.
+
 ### `Client`
 
 HTTP client for the VoLCA HTTP API.

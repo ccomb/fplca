@@ -439,3 +439,18 @@ class TestAuthoringInputTypes:
     def test_a_new_flow_needs_a_compartment(self):
         with pytest.raises(ValueError, match="needs a compartment"):
             BioExchange(direction=BioDirection.EMISSION, amount=1.0, name="Nitrous oxide")
+
+    def test_a_new_flow_needs_a_unit(self):
+        # The engine refuses this too: a named flow's unit is half its
+        # identity, so it cannot be defaulted.
+        with pytest.raises(ValueError, match="needs a unit"):
+            BioExchange(
+                direction=BioDirection.EMISSION, amount=1.0, name="Nitrous oxide", compartment="air"
+            )
+
+    def test_direction_is_read_the_way_the_engine_reads_it(self):
+        # The engine lowercases the wire value before matching, so the
+        # client accepts any casing but always sends the canonical one.
+        exchange = BioExchange.introducing("Nitrous oxide", "air", "emission", 0.5, "kg")
+        assert exchange.direction is BioDirection.EMISSION
+        assert exchange.to_wire()["direction"] == "Emission"
