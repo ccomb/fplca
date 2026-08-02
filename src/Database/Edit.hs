@@ -44,11 +44,8 @@ module Database.Edit (
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
-import Control.Exception (SomeException, finally, try)
-import Data.Bifunctor (first)
-import qualified Data.ByteString.Lazy as BL
+import Control.Exception (finally)
 import qualified Data.IntSet as IS
-import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as S
@@ -57,13 +54,8 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import System.Directory (
-    createDirectoryIfMissing,
-    doesDirectoryExist,
-    removePathForcibly,
-    renameDirectory,
- )
-import System.FilePath (makeRelative, splitDirectories, takeDirectory, (</>))
+import System.Directory (createDirectoryIfMissing, makeAbsolute)
+import System.FilePath ((</>))
 
 import Config (DatabaseConfig (..))
 import Database (applyStructuredFilters, findActivitiesByFields)
@@ -74,7 +66,13 @@ import Database.Author (
     validateAuthored,
  )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
-import Database.Export (serializeDatabaseFiles)
+import Database.Journal (
+    JournalOp (..),
+    appendEvent,
+    applyOp,
+    journalStamp,
+    writeAppliedStamp,
+ )
 import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseManager (..),
@@ -85,13 +83,7 @@ import Database.Manager (
     getMergedUnitConfig,
     relinkDatabase,
  )
-import Database.Rebuild (
-    deleteActivitiesWith,
-    insertActivities,
-    renderKey,
-    replaceActivities,
-    resolveProcess,
- )
+import Database.Rebuild (processKey, renderKey, resolveProcess)
 import Database.Upload (DatabaseFormat (..), slugify)
 import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
@@ -178,7 +170,43 @@ registerCopy manager slug src = do
         modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
         modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
     clearMethodMappingCacheForDb manager slug
-    pure $ Right ()
+    Right <$> recordCopy slug src
+
+{- | Give the copy a home: a directory of its own holding the @meta.toml@ that
+describes it and, once it is edited, its journal.
+
+It is written now rather than at the first edit, so a copy survives a restart
+from the moment it exists. The home holds no data: @dataPath@ points at the
+source's own files, which the copy reads and never writes, and @source@ names
+whose they are so a delete can refuse to take files a copy still needs. That
+is what makes a copy cost a directory rather than a second database.
+-}
+recordCopy :: Text -> LoadedDatabase -> IO ()
+recordCopy slug src = do
+    uploadsDir <- UploadedDB.getDatabaseUploadsDir
+    let home = uploadsDir </> T.unpack slug
+        config = ldConfig src
+    createDirectoryIfMissing True home
+    -- The source's path may be relative to the working directory, while the
+    -- copy's is read back relative to its own home.
+    sourcePath <- makeAbsolute (dcPath config)
+    UploadedDB.writeUploadMeta
+        home
+        UploadedDB.UploadMeta
+            { UploadedDB.umVersion = metaVersion
+            , UploadedDB.umDisplayName = slug
+            , UploadedDB.umDescription = dcDescription config
+            , UploadedDB.umFormat = fromMaybe UnknownFormat (dcFormat config)
+            , UploadedDB.umDataPath = sourcePath
+            , UploadedDB.umDepends = dbDependsOn (ldDatabase src)
+            , UploadedDB.umSource = Just (dcName config)
+            }
+
+{- | The @meta.toml@ shape this engine writes. Version 3 added @source@, which
+is what tells a copy from an upload.
+-}
+metaVersion :: Int
+metaVersion = 3
 
 {- | Rename a config for the copy: new internal name, derived display name, and
 forced deletable/uploaded so the copy can be removed again via the normal
@@ -253,23 +281,33 @@ writeActivities manager dbName verb authored =
         Just loaded
             | not (dcIsUploaded (ldConfig loaded)) -> pure (Left (NotWritable dbName))
             | otherwise -> do
-                deps <- loadedDependencies manager (ldDatabase loaded)
-                unitConfig <- getMergedUnitConfig manager
-                let ctx =
-                        AuthorContext
-                            { acDb = ldDatabase loaded
-                            , acDeps = deps
-                            , acUnitConfig = unitConfig
-                            }
+                ctx <- authorContext manager (ldDatabase loaded)
                 case validateAuthored ctx authored of
                     Left errs -> pure (Left (Malformed errs))
                     Right (resolved, warnings) ->
                         case presenceRefusal (ldDatabase loaded) verb resolved of
                             Just refusal -> pure (Left refusal)
-                            Nothing -> commit deps unitConfig resolved warnings
+                            Nothing -> either (pure . Left) (commit resolved warnings) (operation resolved)
   where
-    commit deps unitConfig resolved warnings = do
-        outcome <- mutateUploadedDatabase manager dbName (edit deps unitConfig)
+    {- The operation is what gets journalled and what gets applied - one
+    description, so the record and the result cannot disagree. Its identities
+    are the canonical ones minted here, which is also what a replay compares
+    against. -}
+    operation resolved = case (verb, zip authored (map (renderKey . riKey) resolved)) of
+        (CreateActivities, written) -> Right (Created authored (map snd written))
+        (ReplaceActivity _, [(activity, key)]) -> Right (Replaced key activity)
+        (ReplaceActivity target, _) ->
+            Left (Malformed ["a replace writes exactly one activity over " <> target])
+    -- Everything above judged a snapshot taken before the reservation;
+    -- 'mutateReserved' re-reads the database under it and validates the
+    -- operation again against what is actually there, so a batch overtaken by
+    -- a concurrent edit is refused rather than written with a supplier link
+    -- that no longer resolves. In that rare interleaving the refusal degrades
+    -- from a classified status to a 'WriteFailed' message, never to a dangling
+    -- link. Identity minting is pure, so the keys cannot differ between the
+    -- two runs.
+    commit resolved warnings op = do
+        outcome <- mutateUploadedDatabase manager dbName op
         pure $ case outcome of
             Left err -> Left (WriteFailed err)
             Right done ->
@@ -279,20 +317,6 @@ writeActivities manager dbName verb authored =
                         , wrPersisted = moPersisted done
                         , wrWarnings = warnings <> moWarnings done
                         }
-    -- Everything above judged a snapshot taken before the staging
-    -- reservation; 'mutateReserved' re-reads the database under it. The edit
-    -- therefore validates again against what is actually there, so a batch
-    -- overtaken by a concurrent edit is refused rather than written with a
-    -- supplier link that no longer resolves. In that rare interleaving the
-    -- refusal degrades from a classified status to a 'WriteFailed' message —
-    -- never to a dangling link. Identity minting is pure, so the keys cannot
-    -- differ between the two runs.
-    edit deps unitConfig db = do
-        let ctx = AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
-        (resolved, _) <- first (T.intercalate "\n") (validateAuthored ctx authored)
-        case verb of
-            CreateActivities -> insertActivities unitConfig resolved db
-            ReplaceActivity _ -> replaceActivities unitConfig resolved db
 
 {- | The two refusals only a verb can name: creating over a process that is
 already there, and rewriting one that is not. Checked before the mutation so
@@ -380,38 +404,41 @@ data MutationOutcome = MutationOutcome
     , moWarnings :: [Text]
     }
 
-{- | Apply a pure edit to a loaded database, then commit it to memory and — for
-a database that owns its files — to disk.
+{- | Apply an edit to a loaded database and record it where a later load will
+find it again.
 
-The sequence is prepare-then-commit, because everything that can fail must
-fail before anything is visible:
+The order is what makes an acknowledged edit durable:
 
   1. refuse while another loaded database depends on this one (a rebuild
      renumbers processes, and the dependent's cross-database links would
      resolve to the wrong rows or silently drop at solve time);
-  2. run the pure edit;
-  3. serialize the result and write it into a staging directory beside the
-     live one — nothing observable yet;
-  4. build the runtime indexes and a fresh solver for the edited value;
-  5. commit: swing the staging directory into place and swap the registry;
-  6. relink across dependencies and save the matrix cache, so an unload and
-     reload gives back what was just written rather than the pre-edit sources.
+  2. apply the operation to the loaded value, which is where every refusal
+     the author can act on comes from;
+  3. append it to the database's journal, the commit point: it is the last
+     step that can fail while nothing has been claimed yet;
+  4. install the result - fresh solver, registry swap, relink;
+  5. save the matrix cache, then stamp it with the journal it now holds.
 
-Steps 1-4 leave both memory and disk untouched on failure. Step 5 is two
-renames rather than one atomic operation; a crash between them leaves the
-previous sources beside the new ones under a @.old@ suffix rather than
-losing them.
+A crash before step 3 leaves nothing behind. A crash after it leaves an edit
+in the journal, which the next load replays: the same answer the caller was
+given. A crash between 4 and 5 leaves a cache that predates the journal, and
+the missing stamp is what makes the next load read the sources again rather
+than trust it.
+
+The database's own files are never rewritten. They are what their author
+uploaded, and only some formats could be written back without moving every
+process identity in them ("Database.Journal" says why).
 -}
 mutateUploadedDatabase ::
     DatabaseManager ->
     Text ->
-    (Database -> Either Text Database) ->
+    JournalOp ->
     IO (Either Text MutationOutcome)
-mutateUploadedDatabase manager dbName edit = do
-    -- Two concurrent edits of the same database would share one staging
-    -- directory and interleave the renames over the live sources. Reserve the
-    -- name (the same reservation copy and setup staging use) and refuse the
-    -- second edit rather than queue it: edits are interactive and rare.
+mutateUploadedDatabase manager dbName op = do
+    -- Two concurrent edits of the same database would each apply to the value
+    -- the other started from, and both would land in the journal. Reserve the
+    -- name (the same reservation copy and staging use) and refuse the second
+    -- rather than queue it: edits are interactive and rare.
     reserved <- atomically $ do
         staging <- readTVar (dmStagingDbs manager)
         if S.member dbName staging
@@ -421,28 +448,48 @@ mutateUploadedDatabase manager dbName edit = do
         then pure $ Left $ "An edit of " <> dbName <> " is already in progress. Retry when it finishes."
         else
             finally
-                (mutateReserved manager dbName edit)
+                (mutateReserved manager dbName op)
                 (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
 
 -- | The mutation proper. The caller holds the 'dmStagingDbs' reservation.
-mutateReserved ::
-    DatabaseManager ->
-    Text ->
-    (Database -> Either Text Database) ->
-    IO (Either Text MutationOutcome)
-mutateReserved manager dbName edit =
+mutateReserved :: DatabaseManager -> Text -> JournalOp -> IO (Either Text MutationOutcome)
+mutateReserved manager dbName op =
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
             loadedDbs <- readTVarIO (dmLoadedDbs manager)
-            case guardDependents dbName loadedDbs *> edit (ldDatabase loaded) of
+            ctx <- authorContext manager (ldDatabase loaded)
+            case guardDependents dbName loadedDbs *> applyOp ctx op of
                 Left err -> pure (Left err)
                 Right edited -> do
-                    prepared <- prepareSources dbName (ldConfig loaded) edited
-                    case prepared of
+                    home <- editHome (ldConfig loaded) dbName
+                    recorded <- traverse (`appendEvent` op) home
+                    case sequence recorded of
                         Left err -> pure (Left err)
-                        Right (staging, warnings) ->
-                            Right <$> commitMutation manager dbName loaded edited staging warnings
+                        Right _ -> Right <$> commitMutation manager dbName loaded edited home
+
+{- | Everything an edit is judged against: the database it applies to, the
+dependencies its suppliers may live in, and the units its amounts are stated
+in. The same context serves a live edit and a replay, which is what keeps the
+two from disagreeing about what is valid.
+-}
+authorContext :: DatabaseManager -> Database -> IO AuthorContext
+authorContext manager db = do
+    deps <- loadedDependencies manager db
+    unitConfig <- getMergedUnitConfig manager
+    pure AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
+
+{- | Where a database's journal lives, or 'Nothing' for one the engine only
+reads. Both an upload and a copy keep theirs in the upload directory named
+after them, beside the @meta.toml@ that describes them - for a copy, that
+directory is the only thing it owns.
+-}
+editHome :: DatabaseConfig -> Text -> IO (Maybe FilePath)
+editHome config dbName
+    | not (dcIsUploaded config) = pure Nothing
+    | otherwise = do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        pure (Just (uploadsDir </> T.unpack dbName))
 
 {- | Refuse an edit while another loaded database depends on this one. Shared
 with the delete path, which has the same reason: rebuilding renumbers every
@@ -467,118 +514,18 @@ guardDependents dbName loadedDbs = case dependents of
         , dbName `elem` dbDependsOn (ldDatabase ld)
         ]
 
-{- | Sources written and waiting to be swung into place, or 'Nothing' when the
-database has no files of its own to write.
--}
-data StagedSources = StagedSources
-    { ssDataDir :: FilePath
-    -- ^ where the live sources are, or will be
-    , ssStaging :: FilePath
-    -- ^ the fully-written replacement, still invisible
-    , ssHome :: Maybe (FilePath, DatabaseFormat)
-    {- ^ set when this write gives the database a home it did not have; the
-    upload root whose @meta.toml@ has to be written on commit
-    -}
-    }
-
-{- | Serialize the edited database and stage it beside its live sources.
-
-Three cases, in the order they are decided:
-
-  * a configured (TOML) database writes nothing — it is a background database
-    the engine reads and never owns, so its edits stay in memory;
-  * a database with its own upload directory is rewritten in its own format,
-    and refused when that format cannot record process identity
-    ('Database.Export.serializeDatabaseFiles' says which and why);
-  * a copy has no files at all — 'copyDatabase' shares the source's value
-    without duplicating its directory — so the first write gives it one. It
-    gets EcoSpold 2, the format that survives the round trip. The source's
-    own files are never touched: writing through the shared path would edit a
-    database nobody asked to edit.
--}
-prepareSources ::
-    Text ->
-    DatabaseConfig ->
-    Database ->
-    IO (Either Text (Maybe StagedSources, [Text]))
-prepareSources dbName config edited
-    | not (dcIsUploaded config) = pure (Right (Nothing, []))
-    | otherwise = do
-        uploadsDir <- UploadedDB.getDatabaseUploadsDir
-        let home = uploadsDir </> T.unpack dbName
-            -- Judged on path components, not on text: a textual prefix would
-            -- make a database named "agri" the owner of "agribalyse"'s files,
-            -- and its first save would rewrite them.
-            ownsItsFiles = splitDirectories home `isPrefixOf` splitDirectories (dcPath config)
-            dataDir = if ownsItsFiles then dcPath config else home </> "data"
-            format = if ownsItsFiles then fromMaybe UnknownFormat (dcFormat config) else EcoSpold2
-        case serializeDatabaseFiles format edited of
-            Left err -> pure (Left err)
-            Right (entries, warnings) -> do
-                written <- writeStaging (dataDir <> ".new") entries
-                pure $ case written of
-                    Left err -> Left err
-                    Right staging ->
-                        Right
-                            ( Just
-                                StagedSources
-                                    { ssDataDir = dataDir
-                                    , ssStaging = staging
-                                    , ssHome = if ownsItsFiles then Nothing else Just (home, format)
-                                    }
-                            , warnings
-                            )
-
-{- | Write every entry into a fresh staging directory, replacing any leftover
-from an interrupted write. Returns the directory on success; on failure the
-partial directory is removed, so a retry never inherits half of a previous
-attempt.
--}
-writeStaging :: FilePath -> [(FilePath, BL.ByteString)] -> IO (Either Text FilePath)
-writeStaging staging entries = do
-    attempt <- try $ do
-        removePathForcibly staging
-        createDirectoryIfMissing True staging
-        mapM_ writeEntry entries
-    case attempt of
-        Right () -> pure (Right staging)
-        Left err -> do
-            removePathForcibly staging
-            pure $ Left $ "could not write the database sources: " <> T.pack (show (err :: SomeException))
-  where
-    writeEntry (relPath, bytes) = do
-        let full = staging </> relPath
-        createDirectoryIfMissing True (takeDirectory full)
-        BL.writeFile full bytes
-
-{- | Swing the staged sources into place, keeping the previous ones until the
-new ones are live.
--}
-commitSources :: StagedSources -> IO ()
-commitSources staged = do
-    let live = ssDataDir staged
-        previous = live <> ".old"
-    hadSources <- doesDirectoryExist live
-    removePathForcibly previous
-    if hadSources
-        then renameDirectory live previous
-        else createDirectoryIfMissing True (takeDirectory live)
-    renameDirectory (ssStaging staged) live
-    removePathForcibly previous
-
-{- | Install the edited database: commit its sources, swap it into the
-registry behind a fresh solver, then relink and re-cache so a reload returns
-what was written.
+{- | Install the edited database: rebuilt runtime indexes, a fresh solver, the
+registry swap, and - for a database that has a journal - a matrix cache the
+next load can trust.
 -}
 commitMutation ::
     DatabaseManager ->
     Text ->
     LoadedDatabase ->
     Database ->
-    Maybe StagedSources ->
-    [Text] ->
+    Maybe FilePath ->
     IO MutationOutcome
-commitMutation manager dbName loaded edited staged warnings = do
+commitMutation manager dbName loaded edited home = do
     synonymDB <- getMergedSynonymDB manager
     let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
         techTriplesInt =
@@ -589,15 +536,13 @@ commitMutation manager dbName loaded edited staged warnings = do
     -- destroy it before installing the rebuilt one, as the delete path does.
     clearCachedSolver dbName
     solver <- createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount withRuntime))
-    mapM_ commitSources staged
-    config <- maybe (pure (ldConfig loaded)) (recordHome manager dbName (ldConfig loaded) edited) staged
-    let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver, ldConfig = config}
+    let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver}
         indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
     atomically $ do
         modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
         modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
     clearMethodMappingCacheForDb manager dbName
-    relinkWarnings <- case staged of
+    warnings <- case home of
         -- The transient path must not relink: 'relinkDatabase' saves the
         -- matrix cache when links change, which would half-persist an edit
         -- the caller is being told is memory-only. Say what that costs.
@@ -609,39 +554,19 @@ commitMutation manager dbName loaded edited staged warnings = do
                 | not (null (dbDependsOn edited))
                 , null (dbCrossDBLinks edited)
                 ]
-        Just source -> do
+        Just dir -> do
             -- Rebuilding cleared the cross-database links; rebuild them against
             -- the current dependency set before the cache records the result.
             relinked <- relinkDatabase manager dbName
             saved <- getDatabase manager dbName
-            mapM_ (Loader.saveCachedDatabaseWithMatrices dbName (ssDataDir source) . ldDatabase) saved
+            mapM_ (Loader.saveCachedDatabaseWithMatrices dbName (dcPath (ldConfig loaded)) . ldDatabase) saved
+            journalStamp dir >>= writeAppliedStamp dir
             pure (either (\err -> ["the edit is saved, but relinking failed: " <> err]) (const []) relinked)
     pure
         MutationOutcome
-            { moPersisted = isJust staged
-            , moWarnings = warnings <> relinkWarnings
+            { moPersisted = isJust home
+            , moWarnings = warnings
             }
-
-{- | Give a database that had no files of its own a @meta.toml@ describing the
-home it just acquired, and point its config at the new sources.
--}
-recordHome :: DatabaseManager -> Text -> DatabaseConfig -> Database -> StagedSources -> IO DatabaseConfig
-recordHome manager dbName config edited staged = case ssHome staged of
-    Nothing -> pure config
-    Just (home, format) -> do
-        UploadedDB.writeUploadMeta
-            home
-            UploadedDB.UploadMeta
-                { UploadedDB.umVersion = 1
-                , UploadedDB.umDisplayName = dcDisplayName config
-                , UploadedDB.umDescription = dcDescription config
-                , UploadedDB.umFormat = format
-                , UploadedDB.umDataPath = makeRelative home (ssDataDir staged)
-                , UploadedDB.umDepends = dbDependsOn edited
-                }
-        let config' = config{dcPath = ssDataDir staged, dcFormat = Just format}
-        atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert dbName config')
-        pure config'
 
 -- ---------------------------------------------------------------------------
 -- Selection resolver
@@ -780,11 +705,16 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
                     let toDelete =
                             resolveDeleteSelection
                                 DeleteSelection{dsFiltered = filtered, dsKeep = keepPids, dsExtra = extraPids}
-                    unitConfig <- getMergedUnitConfig manager
-                    outcome <- mutateUploadedDatabase manager dbName (deleteActivitiesWith unitConfig toDelete)
-                    pure $ flip fmap outcome $ \done ->
-                        DeleteOutcome
-                            { doRemoved = length toDelete
-                            , doPersisted = moPersisted done
-                            , doWarnings = moWarnings done
-                            }
+                    case traverse (fmap renderKey . processKey db) toDelete of
+                        Left err -> pure (Left err)
+                        -- A filter that matched nothing changes nothing: no
+                        -- rebuild, and no line in the journal saying an empty
+                        -- deletion happened.
+                        Right [] -> pure (Right (removed 0 (dcIsUploaded (ldConfig loaded)) []))
+                        Right targets -> do
+                            outcome <- mutateUploadedDatabase manager dbName (Deleted targets)
+                            pure $ flip fmap outcome $ \done ->
+                                removed (length targets) (moPersisted done) (moWarnings done)
+  where
+    removed count persisted warnings =
+        DeleteOutcome{doRemoved = count, doPersisted = persisted, doWarnings = warnings}

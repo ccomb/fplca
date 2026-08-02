@@ -18,6 +18,7 @@ baseMeta =
         , umFormat = EcoSpold2
         , umDataPath = "data"
         , umDepends = []
+        , umSource = Nothing
         }
 
 spec :: Spec
@@ -92,6 +93,7 @@ spec = do
                         , umFormat = EcoSpold2
                         , umDataPath = "data"
                         , umDepends = []
+                        , umSource = Nothing
                         }
 
         it "parses meta with description" $ do

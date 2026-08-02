@@ -58,7 +58,13 @@ module Database.Journal (
     appendEvent,
     readJournal,
 
+    -- * Keeping a cache honest about it
+    journalStamp,
+    readAppliedStamp,
+    writeAppliedStamp,
+
     -- * Applying it
+    applyOp,
     replayJournal,
 ) where
 
@@ -79,14 +85,17 @@ import Data.Aeson (
  )
 import Data.Aeson.Types (Pair, Parser, parseEither)
 import Data.Bifunctor (bimap, first)
+import Data.Bits (xor)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import qualified Data.UUID as UUID
+import Data.Word (Word64)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO (IOMode (AppendMode), withFile)
@@ -237,6 +246,69 @@ readLine :: BS.ByteString -> Either LineProblem JournalEvent
 readLine line = case eitherDecodeStrict line of
     Left err -> Left (Torn err)
     Right value -> first Unreadable (parseEither parseJSON value)
+
+-- ---------------------------------------------------------------------------
+-- Keeping a cache honest about the journal
+-- ---------------------------------------------------------------------------
+
+{- | What the journal currently says, in one line: its length and a hash of
+its bytes. Empty when there is no journal.
+
+The matrix cache holds the database /after/ its edits, which is what keeps a
+load from replaying them every time. That is only safe if the cache can say
+which journal it was built from: a crash between appending a line and saving
+the cache would otherwise leave a cache that silently predates an edit its
+author was told had happened. The stamp is written last, so a cache without a
+matching one is treated as stale and the sources are read again.
+-}
+journalStamp :: FilePath -> IO Text
+journalStamp home = do
+    let path = journalPath home
+    exists <- doesFileExist path
+    if not exists
+        then pure ""
+        else do
+            bytes <- BS.readFile path
+            pure $ T.pack (show (BS.length bytes)) <> ":" <> T.pack (show (fnv1a bytes))
+
+-- | The stamp the cache was last saved with, empty when there is none.
+readAppliedStamp :: FilePath -> IO Text
+readAppliedStamp home = do
+    let path = appliedPath home
+    exists <- doesFileExist path
+    if not exists
+        then pure ""
+        else either (const "") T.strip <$> readStamp path
+  where
+    readStamp path = try (TIO.readFile path) :: IO (Either SomeException Text)
+
+-- | Record that the cache now holds everything this journal describes.
+writeAppliedStamp :: FilePath -> Text -> IO ()
+writeAppliedStamp home stamp = do
+    written <- try (TIO.writeFile (appliedPath home) stamp)
+    case written of
+        Right () -> pure ()
+        Left (err :: SomeException) ->
+            -- Losing the stamp costs a re-read of the sources at the next
+            -- load, never an edit, so it is a warning and not a failure.
+            reportProgress Warning $
+                "Could not record which edits the cache of "
+                    <> home
+                    <> " holds ("
+                    <> show err
+                    <> "); the next load will read the sources again."
+
+appliedPath :: FilePath -> FilePath
+appliedPath home = home </> "journal.applied"
+
+{- | FNV-1a, for telling one journal from another. Not a security property:
+what it has to catch is a file that grew, shrank or was edited by hand since
+the cache was written.
+-}
+fnv1a :: BS.ByteString -> Word64
+fnv1a = BS.foldl' step 14695981039346656037
+  where
+    step hash byte = (hash `xor` fromIntegral (fromEnum byte)) * 1099511628211
 
 -- ---------------------------------------------------------------------------
 -- Applying it

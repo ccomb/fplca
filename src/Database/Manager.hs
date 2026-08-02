@@ -247,8 +247,10 @@ import qualified UnitConversion
 -- CrossDBLinkingStats is now in Types, re-exported from Database.Loader
 
 import API.Types (DepLoadResult (..))
+import Database.Author (AuthorContext (..))
 import Database.CrossLinking (IndexedDatabase (..), LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold)
 import qualified Database.CrossLinking as CrossLinking
+import qualified Database.Journal as Journal
 import Database.Upload (detectMethodFormat, detectedFormatLabel, findMethodDirectory, listDirectoryRecursive)
 import qualified Database.Upload as Upload
 import qualified Database.UploadedDatabase as UploadedDB
@@ -1763,19 +1765,31 @@ loadDatabaseSingleFromConfig manager dbName = do
                     synonymDB <- getMergedSynonymDB manager
                     warnReopenedBridges synonymDB
                     unitConfig <- getMergedUnitConfig manager
+                    -- A cache saved before the last edit was journalled would
+                    -- come back without it. Read the sources again in that
+                    -- case, so the journal below is replayed over them.
+                    journalAhead <- journalAheadOfCache dbConfig
                     eitherResult <-
                         try $
                             loadDatabaseFromConfigWithCrossDB
                                 dbConfig
                                 synonymDB
                                 unitConfig
-                                (dmNoCache manager)
+                                (dmNoCache manager || journalAhead)
                                 otherIndexes
                                 (locationHierarchyOf manager)
-                    case eitherResult of
-                        Left (ex :: SomeException) -> return $ Left $ "Exception loading database: " <> T.pack (show ex)
-                        Right (Left err) -> return $ Left err
-                        Right (Right (loaded, fromCache)) -> do
+                    replayResult <- case eitherResult of
+                        Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
+                        Right (Left err) -> pure (Left err)
+                        -- A cache hit already holds the edits (its stamp says
+                        -- so); a fresh parse holds only what the author
+                        -- uploaded, and the journal is the rest.
+                        Right (Right (loaded, fromCache))
+                            | fromCache -> pure (Right (loaded, fromCache, False))
+                            | otherwise -> fmap (\(l, replayed) -> (l, fromCache, replayed)) <$> replayEdits manager dbConfig loaded
+                    case replayResult of
+                        Left err -> return (Left err)
+                        Right (loaded, fromCache, replayed) -> do
                             let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
                             atomically $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
@@ -1799,7 +1813,9 @@ loadDatabaseSingleFromConfig manager dbName = do
                             -- against a previous dep set — possibly stale
                             -- versions of the same dep names — so a relink
                             -- is required to converge.
-                            when fromCache $ do
+                            -- A replay clears the cross-database links, exactly
+                            -- as an edit does, so it needs the same relink.
+                            when (fromCache || replayed) $ do
                                 result <- relinkDatabase manager dbName
                                 case result of
                                     Right _ -> return ()
@@ -1807,7 +1823,98 @@ loadDatabaseSingleFromConfig manager dbName = do
                                         reportProgress Warning $
                                             "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
                             relinkDependents manager dbName
+                            -- Cache what the journal produced, so the next load
+                            -- does not replay it, and stamp the cache with the
+                            -- journal it holds. The stamp goes last: a cache
+                            -- that is not stamped is read again from source.
+                            when replayed $ recordReplayedCache manager dbConfig
                             return $ Right loaded
+
+{- | Where a database keeps its edits, or 'Nothing' for one the engine only
+reads from its configuration and never writes.
+-}
+editHome :: DatabaseConfig -> IO (Maybe FilePath)
+editHome dbConfig
+    | not (dcIsUploaded dbConfig) = pure Nothing
+    | otherwise = do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        pure (Just (uploadsDir </> T.unpack (dcName dbConfig)))
+
+{- | Whether the journal has moved since the matrix cache was saved from it.
+
+The cache holds the database after its edits, which is what keeps every load
+from replaying them. It is only trustworthy while it can say which journal it
+was built from, so a cache whose stamp does not match the journal is not used
+at all: the sources are read again and the journal replayed over them.
+-}
+journalAheadOfCache :: DatabaseConfig -> IO Bool
+journalAheadOfCache dbConfig =
+    editHome dbConfig >>= \case
+        Nothing -> pure False
+        Just home -> do
+            current <- Journal.journalStamp home
+            applied <- Journal.readAppliedStamp home
+            pure (current /= applied)
+
+{- | Replay a database's edits over the sources just parsed, returning whether
+there were any.
+
+Everything the author was told had happened lives in the journal, so a failure
+here refuses the load rather than handing back a database that quietly
+disagrees with its own record. The dependencies are the ones the config pins,
+already loaded by 'loadDatabase', because a supplier an edit points at may
+live in one of them.
+-}
+replayEdits :: DatabaseManager -> DatabaseConfig -> LoadedDatabase -> IO (Either Text (LoadedDatabase, Bool))
+replayEdits manager dbConfig loaded =
+    editHome dbConfig >>= \case
+        Nothing -> pure (Right (loaded, False))
+        Just home ->
+            Journal.readJournal home >>= \case
+                Left err -> pure (Left (dcName dbConfig <> ": " <> err))
+                Right [] -> pure (Right (loaded, False))
+                Right events -> do
+                    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+                    unitConfig <- getMergedUnitConfig manager
+                    synonymDB <- getMergedSynonymDB manager
+                    let deps = [ldDatabase ld | name <- dcDepends dbConfig, Just ld <- [M.lookup name loadedDbs]]
+                        ctx =
+                            AuthorContext
+                                { acDb = ldDatabase loaded
+                                , acDeps = deps
+                                , acUnitConfig = unitConfig
+                                }
+                    reportProgress Info $
+                        "Replaying " <> show (length events) <> " recorded edit(s) of " <> T.unpack (dcName dbConfig)
+                    case Journal.replayJournal ctx events of
+                        Left err -> pure (Left (dcName dbConfig <> ": " <> err))
+                        Right edited -> do
+                            -- The rebuild resets the runtime indexes and moves
+                            -- every matrix row, so both are made again here.
+                            let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
+                                techTriplesInt =
+                                    [ (fromIntegral i, fromIntegral j, v)
+                                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
+                                    ]
+                            clearCachedSolver (dcName dbConfig)
+                            solver <-
+                                createSharedSolver
+                                    (dcName dbConfig)
+                                    techTriplesInt
+                                    (fromIntegral (dbActivityCount withRuntime))
+                            pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, True))
+
+{- | Save the replayed database to its matrix cache and stamp the cache with
+the journal it now holds, so the next load reads it instead of replaying.
+-}
+recordReplayedCache :: DatabaseManager -> DatabaseConfig -> IO ()
+recordReplayedCache manager dbConfig =
+    editHome dbConfig >>= \case
+        Nothing -> pure ()
+        Just home -> do
+            saved <- getDatabase manager (dcName dbConfig)
+            mapM_ (Loader.saveCachedDatabaseWithMatrices (dcName dbConfig) (dcPath dbConfig) . ldDatabase) saved
+            Journal.journalStamp home >>= Journal.writeAppliedStamp home
 
 -- | Result of a relink operation (unresolved counts before/after).
 data RelinkResult = RelinkResult
@@ -2330,39 +2437,52 @@ removeDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 removeDatabase manager dbName = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     availableDbs <- readTVarIO (dmAvailableDbs manager)
-
     case M.lookup dbName availableDbs of
         Nothing -> return $ Left $ "Database not found: " <> dbName
-        Just dbConfig -> do
+        Just dbConfig
             -- Honor the per-config deletable policy (defaults to dcIsUploaded).
-            if not (dcDeletable dbConfig)
-                then return $ Left "Cannot delete configured database. Edit volca.toml to remove it."
-                else
-                    if M.member dbName loadedDbs
-                        then return $ Left "Cannot delete loaded database. Close it first."
-                        else do
-                            -- Get the upload directory (uploads/<slug>/)
-                            uploadsDir <- UploadedDB.getDatabaseUploadsDir
-                            let uploadDir = uploadsDir </> T.unpack dbName
-                            pathExists <- doesDirectoryExist uploadDir
-                            if pathExists
-                                then do
-                                    -- Delete the database directory immediately
-                                    result <- tryIO $ removeDirectoryRecursive uploadDir
-                                    case result of
-                                        Left (e :: SomeException) ->
-                                            return $ Left $ "Failed to delete: " <> T.pack (show e)
-                                        Right () -> do
-                                            reportProgress Info $ "Deleted: " <> uploadDir
-                                            deleteCacheFile dbName (dcPath dbConfig)
-                                            removeFromMemory manager dbName
-                                else do
-                                    -- Directory already missing, just remove from memory
-                                    reportProgress Info $ "Directory already missing: " <> uploadDir
-                                    removeFromMemory manager dbName
+            | not (dcDeletable dbConfig) ->
+                return $ Left "Cannot delete configured database. Edit volca.toml to remove it."
+            | M.member dbName loadedDbs ->
+                return $ Left "Cannot delete loaded database. Close it first."
+            | otherwise -> do
+                -- A copy owns no data: it reads this database's files and keeps
+                -- only its own edits, so taking the files would leave it unable
+                -- to load at all.
+                copies <- copiesOf dbName
+                case copies of
+                    [] -> deleteUpload dbConfig
+                    names ->
+                        return $
+                            Left $
+                                "Cannot delete "
+                                    <> dbName
+                                    <> ": "
+                                    <> T.intercalate ", " names
+                                    <> " were copied from it and read its files. Delete them first."
   where
     tryIO :: IO a -> IO (Either SomeException a)
     tryIO = Control.Exception.try
+    -- The databases copied from this one, which still read its files.
+    copiesOf name = do
+        uploads <- UploadedDB.discoverUploadedDatabases
+        pure [slug | (slug, _, meta) <- uploads, UploadedDB.umSource meta == Just name]
+    deleteUpload dbConfig = do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        let uploadDir = uploadsDir </> T.unpack dbName
+        pathExists <- doesDirectoryExist uploadDir
+        if pathExists
+            then
+                tryIO (removeDirectoryRecursive uploadDir) >>= \case
+                    Left (e :: SomeException) -> return $ Left $ "Failed to delete: " <> T.pack (show e)
+                    Right () -> do
+                        reportProgress Info $ "Deleted: " <> uploadDir
+                        deleteCacheFile dbName (dcPath dbConfig)
+                        removeFromMemory manager dbName
+            else do
+                -- Directory already missing, just remove from memory
+                reportProgress Info $ "Directory already missing: " <> uploadDir
+                removeFromMemory manager dbName
     deleteCacheFile name sourcePath = do
         cacheFile <- Loader.generateMatrixCacheFilename name sourcePath
         let zstdFile = cacheFile ++ ".zst"

@@ -33,6 +33,7 @@ module Database.Rebuild (
 
     -- * Identity
     renderKey,
+    processKey,
     resolveProcess,
 ) where
 
@@ -113,15 +114,7 @@ Every id must be in range — an out-of-range id is a caller error, surfaced as
 during unlinking are @O(log n)@.
 -}
 resolveDeleteKeys :: Database -> [ProcessId] -> Either Text (S.Set (UUID, UUID))
-resolveDeleteKeys db = fmap S.fromList . traverse keyOf
-  where
-    table = dbProcessIdTable db
-    n = V.length table
-    keyOf pid
-        | i >= 0 && i < n = Right (table V.! i)
-        | otherwise = Left ("Delete: ProcessId out of range: " <> T.pack (show pid))
-      where
-        i = fromIntegral pid
+resolveDeleteKeys db = fmap S.fromList . traverse (processKey db)
 
 -- | The activity map keyed by @(activityUUID, productUUID)@, minus the deleted keys.
 surviving :: Database -> S.Set (UUID, UUID) -> M.Map (UUID, UUID) Activity
@@ -290,6 +283,15 @@ checkKeys intent existing keys = case intent of
 -- | @activityUUID_productUUID@, the identity a process is addressed by.
 renderKey :: (UUID, UUID) -> Text
 renderKey (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
+
+{- | The identity a 'ProcessId' currently stands for. Out of range is a caller
+error and says so, rather than resolving to whichever row is at that index
+after the next rebuild.
+-}
+processKey :: Database -> ProcessId -> Either Text (UUID, UUID)
+processKey db pid =
+    maybe (Left ("ProcessId out of range: " <> T.pack (show pid))) Right $
+        dbProcessIdTable db V.!? fromIntegral pid
 
 {- | Resolve a process-id string to its 'ProcessId'. Accepts the canonical
 @activityUUID_productUUID@ form and the bare-activity-UUID fallback (when the

@@ -364,6 +364,7 @@ executeDbUpload fmt manager args = do
                         , UploadedDB.umFormat = urFormat uploadResult
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                         , UploadedDB.umDepends = []
+                        , UploadedDB.umSource = Nothing
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 
@@ -431,6 +432,7 @@ executeMcUpload fmt manager args = do
                         , UploadedDB.umFormat = urFormat uploadResult
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                         , UploadedDB.umDepends = []
+                        , UploadedDB.umSource = Nothing
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 

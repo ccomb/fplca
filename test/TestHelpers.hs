@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module TestHelpers (
+    withScratchDataDir,
     loadSampleDatabase,
     loadSampleDatabaseWithPath,
     withinTolerance,
@@ -11,6 +12,7 @@ module TestHelpers (
     mkSolverFromDb,
 ) where
 
+import Control.Exception (bracket_)
 import Control.Monad (zipWithM_)
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
@@ -22,9 +24,20 @@ import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
 import Database.Loader (loadDatabase)
 import qualified SharedSolver as SS
+import System.Environment (setEnv, unsetEnv)
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Types
 import UnitConversion (defaultUnitConfig)
+
+{- | Run an example with the engine's data directory pointed at a scratch
+tree. Anything that writes there - an upload, a copy, an edit journal - then
+belongs to the example rather than to the working tree it was run from.
+-}
+withScratchDataDir :: IO () -> IO ()
+withScratchDataDir act =
+    withSystemTempDirectory "volca-scratch" $ \dir ->
+        bracket_ (setEnv "VOLCA_DATA_DIR" dir) (unsetEnv "VOLCA_DATA_DIR") act
 
 -- | Load a SAMPLE database for testing
 loadSampleDatabase :: String -> IO Database

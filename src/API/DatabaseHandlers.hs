@@ -890,6 +890,7 @@ uploadDatabaseHandler mName mDesc src = do
                             , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                             , UploadedDB.umDepends = []
+                            , UploadedDB.umSource = Nothing
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
@@ -1087,6 +1088,7 @@ uploadMethodHandler mName mDesc src =
                             , UploadedDB.umFormat = methodFormat
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
                             , UploadedDB.umDepends = []
+                            , UploadedDB.umSource = Nothing
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 

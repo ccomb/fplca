@@ -2,55 +2,60 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {- | Tests for making an edit outlive the process
-('Database.Edit.mutateUploadedDatabase' and
-'Database.Export.serializeDatabaseFiles').
+('Database.Edit.mutateUploadedDatabase' and "Database.Journal").
 
 Editing used to be transient by design: the sources and the matrix cache still
 held the pre-edit database, so an unload and reload deliberately undid the
 change. That is defensible for a database the engine reads from configuration
-and does not own, and wrong for one it does — a restart quietly resurrected
-every activity a user had removed.
+and does not own, and wrong for one it does.
 
-What follows pins the three decisions that make persistence honest: which
-formats may be written back (only those that record process identity), that a
-database with no files of its own is given a home rather than writing through
-to the database it was copied from, and that an edit which is not saved says
-so instead of looking like one that was.
+What replaced it is not a rewrite of the sources, which only a format that
+records process identity could survive. The sources are left exactly as their
+author uploaded them and the edits are recorded beside them, so what follows
+uses an EcoSpold 1 database on purpose: it is the format whose identities are
+derived from the position of a dataset in its file, and the one a rewrite
+would move.
 -}
 module PersistenceSpec (spec) where
 
-import Control.Concurrent.STM (atomically, modifyTVar')
+import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Exception (bracket_)
-import Data.List (sort)
+import Control.Monad (void)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Text (Text, isInfixOf)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.Environment (setEnv, unsetEnv)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Config (DatabaseConfig (..), defaultConfig)
 import Database (buildDatabaseWithMatrices)
 import Database.Edit (
+    DeleteOutcome (..),
     DeleteRequest (..),
     MutationOutcome (..),
+    copyDatabase,
     deleteActivitiesInDB,
     mutateUploadedDatabase,
  )
-import Database.Export (serializeDatabaseFiles)
+import Database.Journal (JournalOp (..), journalPath, readJournal)
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
+    addDatabase,
     initDatabaseManager,
     loadDatabase,
+    removeDatabase,
     unloadDatabase,
  )
-import Database.Rebuild (deleteActivitiesWith)
+import Database.Rebuild (renderKey)
 import Database.Upload (DatabaseFormat (..))
 import Database.UploadedDatabase (UploadMeta (..), readUploadMeta)
 import SharedSolver (SharedSolver, createSharedSolver)
@@ -68,152 +73,103 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
-    findProcessId,
  )
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
 spec = describe "persisting an edit" $ do
-    describe "serializeDatabaseFiles" $ do
-        it "writes one EcoSpold 2 dataset per process, named by its identity" $ do
-            db <- buildFixture
-            case serializeDatabaseFiles EcoSpold2 db of
-                Left err -> expectationFailure ("expected EcoSpold 2 to be writable: " <> show err)
-                Right (entries, warnings) -> do
-                    warnings `shouldBe` []
-                    -- The name is the identity: the parser reads the pair back
-                    -- off it, which is the whole reason this format may be
-                    -- written in place.
-                    sort (map fst entries)
-                        `shouldBe` [T.unpack (UUID.toText supplierActId <> "_" <> UUID.toText supplierProdId) <> ".spold"]
+    describe "an uploaded database" $ do
+        it "records the edit beside its sources, and leaves the sources alone" $
+            withEcoSpold1Database $ \manager home -> do
+                keys <- processKeysOf manager "bafu-like"
+                outcome <- deleteFirst manager "bafu-like" keys
+                doPersisted outcome `shouldBe` True
+                -- What the author uploaded is what is still there: the edit is
+                -- a line beside the files, not a rewrite of them.
+                listDirectory (home </> "data") >>= (`shouldSatisfy` ((== 2) . length))
+                journal <- readJournal home
+                fmap length journal `shouldBe` Right 1
 
-        it "refuses every format that would re-mint identity on read" $
-            -- Exporting to these stays available; writing a database back over
-            -- its own sources does not, because the rows that survive would
-            -- come back under different process ids after a restart, and every
-            -- reference anyone kept to them would point elsewhere.
-            mapM_
-                refusesIdentity
-                [(SimaProCSV, "SimaPro CSV"), (EcoSpold1, "EcoSpold 1"), (ILCDProcess, "ILCD"), (BrightwayExcel, "Brightway Excel")]
+        it "reloads to what was written, under the identities it was written with" $
+            -- The point of the whole path. EcoSpold 1 derives its identities
+            -- from dataset and exchange numbers, so a writer that renumbered
+            -- them would give the surviving activity a different process id
+            -- and every reference anyone kept would point elsewhere.
+            withEcoSpold1Database $ \manager _ -> do
+                keys <- processKeysOf manager "bafu-like"
+                length keys `shouldBe` 2
+                _ <- deleteFirst manager "bafu-like" keys
+                reloadOf manager "bafu-like" `shouldReturn` drop 1 keys
 
-        it "refuses the formats that have no writer at all" $ do
-            db <- buildFixture
-            fmap fst (serializeDatabaseFiles OpenLcaJsonLd db)
-                `shouldSatisfy` failsWith "not supported"
-            fmap fst (serializeDatabaseFiles UnknownFormat db)
-                `shouldSatisfy` failsWith "unknown format"
+        it "replays the journal when the cache cannot say that it holds it" $
+            -- A crash between recording an edit and saving the cache leaves a
+            -- cache that predates the journal. Only the stamp says otherwise,
+            -- so without it the sources are read again and the journal
+            -- replayed over them.
+            withEcoSpold1Database $ \manager home -> do
+                keys <- processKeysOf manager "bafu-like"
+                _ <- deleteFirst manager "bafu-like" keys
+                removeFile (home </> "journal.applied")
+                reloadOf manager "bafu-like" `shouldReturn` drop 1 keys
 
-    describe "mutateUploadedDatabase" $ do
-        it "rewrites the sources of a database that owns them" $
+        it "refuses to load at all when the journal names something it cannot apply" $
+            -- Half-applying it would hand back a database that silently
+            -- disagrees with its own record of what was done to it.
+            withEcoSpold1Database $ \manager home -> do
+                keys <- processKeysOf manager "bafu-like"
+                _ <- deleteFirst manager "bafu-like" keys
+                TIO.appendFile (journalPath home) (deleteLineFor (head' keys) <> "\n")
+                removeFile (home </> "journal.applied")
+                unloadDatabase manager "bafu-like" `shouldReturn` Right ()
+                reloaded <- loadDatabase manager "bafu-like"
+                void reloaded `shouldSatisfy` failsWith "Unknown process id"
+
+    describe "a copy" $ do
+        it "gets a home of its own at once, holding no data" $
+            -- A copy shares the source's value and reads the source's files;
+            -- what it owns is a directory with its own identity and, once it
+            -- is edited, its own journal.
+            withEcoSpold1Database $ \manager home -> do
+                copyDatabase manager "bafu-like" "bafu-mine" `shouldReturn` Right ()
+                let uploads = uploadsDirOf home
+                meta <- readUploadMeta (uploads </> "bafu-mine")
+                fmap umSource meta `shouldBe` Just (Just "bafu-like")
+                fmap umDataPath meta `shouldBe` Just (home </> "data")
+                listDirectory (uploads </> "bafu-mine") `shouldReturn` ["meta.toml"]
+
+        it "keeps the database it was copied from from being deleted" $
+            withEcoSpold1Database $ \manager home -> do
+                copyDatabase manager "bafu-like" "bafu-mine" `shouldReturn` Right ()
+                unloadDatabase manager "bafu-like" `shouldReturn` Right ()
+                let uploads = uploadsDirOf home
+                removed <- removeDatabase manager "bafu-like"
+                removed `shouldSatisfy` failsWith "copied from it"
+                listDirectory (uploads </> "bafu-like") >>= (`shouldSatisfy` elem "data")
+
+    describe "a database the engine only reads" $ do
+        it "says the edit is not saved, and is given no home" $
             withDataDir $ \dataRoot -> do
                 manager <- initDatabaseManager defaultConfig True Nothing
                 db <- buildTwoActivityFixture
-                let dataDir = dataRoot </> "uploads" </> "databases" </> "own-files" </> "data"
-                createDirectoryIfMissing True dataDir
-                install manager "own-files" db (uploadedConfig "own-files" dataDir)
-                r <- mutateUploadedDatabase manager "own-files" (dropSecond db)
+                install manager "configured" db (configuredConfig "configured")
+                r <- mutateUploadedDatabase manager "configured" dropSecond
                 case r of
                     Left err -> expectationFailure ("mutateUploadedDatabase: " <> show err)
                     Right outcome -> do
-                        moPersisted outcome `shouldBe` True
-                        -- One process left, in a file named after its own
-                        -- identity: the deletion reached the sources, not only
-                        -- the copy of the database held in memory.
-                        listDirectory dataDir
-                            `shouldReturn` [T.unpack (keyText (supplierActId, supplierProdId)) <> ".spold"]
-                        -- Nothing of the staging or the previous generation is left behind.
-                        doesDirectoryExist (dataDir <> ".new") `shouldReturn` False
-                        doesDirectoryExist (dataDir <> ".old") `shouldReturn` False
+                        moPersisted outcome `shouldBe` False
+                        -- A configured database owns its files through the
+                        -- config file, and the engine writes none of its own.
+                        listDirectory (dataRoot </> "uploads" </> "databases") `shouldReturn` []
 
-        it "gives a database with no files of its own a home instead of writing through" $
-            -- A copy shares the source's value without duplicating its
-            -- directory; writing through the shared path would edit a database
-            -- nobody asked to edit.
-            withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True Nothing
-                db <- buildTwoActivityFixture
-                let elsewhere = dataRoot </> "somebody-elses" </> "data"
-                createDirectoryIfMissing True elsewhere
-                writeFile (elsewhere </> "untouched.txt") "the source of the copy"
-                install manager "the-copy" db{dbDependsOn = ["background"]} (uploadedConfig "the-copy" elsewhere)
-                r <- mutateUploadedDatabase manager "the-copy" (dropSecond db)
-                case r of
-                    Left err -> expectationFailure ("mutateUploadedDatabase: " <> show err)
-                    Right outcome -> do
-                        moPersisted outcome `shouldBe` True
-                        let home = dataRoot </> "uploads" </> "databases" </> "the-copy"
-                        meta <- readUploadMeta home
-                        fmap umFormat meta `shouldBe` Just EcoSpold2
-                        fmap umDataPath meta `shouldBe` Just "data"
-                        -- The dependency pin is written down, not left to the
-                        -- binary cache that a restart may not read.
-                        fmap umDepends meta `shouldBe` Just ["background"]
-                        listDirectory (home </> "data") >>= (`shouldSatisfy` ((== 1) . length))
-                        doesFileExist (elsewhere </> "untouched.txt") `shouldReturn` True
-                        listDirectory elsewhere `shouldReturn` ["untouched.txt"]
-
-        it "does not take a sibling's files for its own when its name is a prefix of theirs" $
-            -- Ownership is judged on path components: a database named "agri"
-            -- pointing at "agribalyse"'s data directory (a copy keeps its
-            -- source's path) must be given a home of its own, not rewrite the
-            -- sibling whose name it happens to prefix.
-            withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True Nothing
-                db <- buildTwoActivityFixture
-                let siblingDir = dataRoot </> "uploads" </> "databases" </> "agribalyse" </> "data"
-                createDirectoryIfMissing True siblingDir
-                writeFile (siblingDir </> "untouched.spold") "the sibling's dataset"
-                install manager "agri" db (uploadedConfig "agri" siblingDir)
-                r <- mutateUploadedDatabase manager "agri" (dropSecond db)
-                case r of
-                    Left err -> expectationFailure ("mutateUploadedDatabase: " <> show err)
-                    Right outcome -> do
-                        moPersisted outcome `shouldBe` True
-                        listDirectory siblingDir `shouldReturn` ["untouched.spold"]
-                        meta <- readUploadMeta (dataRoot </> "uploads" </> "databases" </> "agri")
-                        fmap umDataPath meta `shouldBe` Just "data"
-
-        it "reloads to what was written, not to the pre-edit sources" $
-            -- The point of the whole path: unloading and loading again returns
-            -- the edited database, where it used to resurrect the original.
-            withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True Nothing
-                db <- buildTwoActivityFixture
-                let dataDir = dataRoot </> "uploads" </> "databases" </> "reload-me" </> "data"
-                createDirectoryIfMissing True dataDir
-                install manager "reload-me" db (uploadedConfig "reload-me" dataDir)
-                r <- mutateUploadedDatabase manager "reload-me" (dropSecond db)
-                either (expectationFailure . ("mutateUploadedDatabase: " <>) . show) (const (pure ())) r
-                unloadDatabase manager "reload-me" `shouldReturn` Right ()
-                reloaded <- loadDatabase manager "reload-me"
-                case reloaded of
-                    Left err -> expectationFailure ("loadDatabase: " <> show err)
-                    Right (loaded, _) -> dbActivityCount (ldDatabase loaded) `shouldBe` 1
-
+    describe "refusals that protect the value" $ do
         it "refuses a second edit while one is in progress" $
             withDataDir $ \_ -> do
                 manager <- initDatabaseManager defaultConfig True Nothing
                 db <- buildTwoActivityFixture
                 install manager "busy" db (configuredConfig "busy")
                 atomically $ modifyTVar' (dmStagingDbs manager) (Set.insert "busy")
-                r <- mutateUploadedDatabase manager "busy" (dropSecond db)
-                case r of
-                    Left err -> err `shouldSatisfy` isInfixOf "already in progress"
-                    Right _ -> expectationFailure "expected the second edit to be refused"
-
-        it "says an edit is not saved when the database is one the engine only reads" $
-            withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True Nothing
-                db <- buildTwoActivityFixture
-                install manager "configured" db (configuredConfig "configured")
-                r <- mutateUploadedDatabase manager "configured" (dropSecond db)
-                case r of
-                    Left err -> expectationFailure ("mutateUploadedDatabase: " <> show err)
-                    Right outcome -> do
-                        moPersisted outcome `shouldBe` False
-                        -- No home was made for it: a configured database owns its
-                        -- files through the config file, and the engine writes none.
-                        listDirectory (dataRoot </> "uploads" </> "databases") `shouldReturn` []
+                r <- mutateUploadedDatabase manager "busy" dropSecond
+                void r `shouldSatisfy` failsWith "already in progress"
 
         it "refuses while another loaded database depends on this one" $
             withDataDir $ \_ -> do
@@ -221,23 +177,8 @@ spec = describe "persisting an edit" $ do
                 db <- buildTwoActivityFixture
                 install manager "background" db (configuredConfig "background")
                 install manager "foreground" db{dbDependsOn = ["background"]} (configuredConfig "foreground")
-                r <- mutateUploadedDatabase manager "background" (dropSecond db)
-                case r of
-                    Left err -> err `shouldSatisfy` isInfixOf "still required by"
-                    Right _ -> expectationFailure "expected the edit to be refused while a dependent is loaded"
-
-    describe "deleteActivitiesInDB" $
-        it "refuses to write a deletion back in a format that cannot record identity" $
-            withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True Nothing
-                db <- buildTwoActivityFixture
-                let dataDir = dataRoot </> "uploads" </> "databases" </> "simapro-db" </> "data"
-                createDirectoryIfMissing True dataDir
-                install manager "simapro-db" db (uploadedConfig "simapro-db" dataDir){dcFormat = Just SimaProCSV}
-                r <- deleteActivitiesInDB manager "simapro-db" (deleteIds [keyText (supplierActId, supplierProdId)])
-                case r of
-                    Left err -> err `shouldSatisfy` isInfixOf "does not record process identifiers"
-                    Right _ -> expectationFailure "expected the deletion to be refused rather than silently unsaved"
+                r <- mutateUploadedDatabase manager "background" dropSecond
+                void r `shouldSatisfy` failsWith "still required by"
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -245,15 +186,6 @@ spec = describe "persisting an edit" $ do
 
 failsWith :: Text -> Either Text a -> Bool
 failsWith needle = either (isInfixOf needle) (const False)
-
-refusesIdentity :: (DatabaseFormat, Text) -> Expectation
-refusesIdentity (fmt, label) = do
-    db <- buildFixture
-    case serializeDatabaseFiles fmt db of
-        Right _ -> expectationFailure (T.unpack label <> " should be refused for writing in place")
-        Left err -> do
-            err `shouldSatisfy` isInfixOf label
-            err `shouldSatisfy` isInfixOf "does not record process identifiers"
 
 {- | Point the engine's data directory at a scratch tree for the duration of
 one example, so nothing is written next to the sources.
@@ -263,17 +195,87 @@ withDataDir act =
     withSystemTempDirectory "volca-persist" $ \dir ->
         bracket_ (setEnv "VOLCA_DATA_DIR" dir) (unsetEnv "VOLCA_DATA_DIR") (act dir)
 
-keyText :: (UUID, UUID) -> Text
-keyText (a, p) = UUID.toText a <> "_" <> UUID.toText p
+-- | The uploads directory a database's home sits in.
+uploadsDirOf :: FilePath -> FilePath
+uploadsDirOf = takeDirectory
+
+{- | An uploaded EcoSpold 1 database of two datasets, loaded and ready to
+edit. Each dataset is a file named after the identifier it carries, the layout
+a published EcoSpold 1 collection uses.
+-}
+withEcoSpold1Database :: (DatabaseManager -> FilePath -> IO ()) -> IO ()
+withEcoSpold1Database act =
+    withDataDir $ \dataRoot -> do
+        let home = dataRoot </> "uploads" </> "databases" </> "bafu-like"
+            dataDir = home </> "data"
+        createDirectoryIfMissing True dataDir
+        TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 101)) <> ".xml") (dataset 1 "electricity production, wind")
+        TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 102)) <> ".xml") (dataset 2 "electricity production, solar")
+        manager <- initDatabaseManager defaultConfig False Nothing
+        addDatabase manager (uploadedConfig "bafu-like" dataDir)
+        loaded <- loadDatabase manager "bafu-like"
+        case loaded of
+            Left err -> expectationFailure ("loading the fixture: " <> show err)
+            Right _ -> act manager home
+
+-- | One EcoSpold 1 dataset: a reference product and one emission.
+dataset :: Int -> Text -> Text
+dataset number name =
+    T.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"" <> T.pack (show number) <> "\" generator=\"Test\" timestamp=\"2026-01-01T00:00:00\">"
+        , "    <metaInformation><processInformation>"
+        , "      <referenceFunction name=\"" <> name <> "\" category=\"Energy\" subCategory=\"Electricity\" unit=\"kWh\" />"
+        , "      <geography location=\"DE\" />"
+        , "    </processInformation></metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"1\" name=\"" <> name <> ", output\" category=\"Energy\" subCategory=\"Electricity\" unit=\"kWh\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"2\" name=\"Carbon dioxide, fossil\" category=\"air\" subCategory=\"low population density\" unit=\"kg\" meanValue=\"0.01\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
+-- | The process ids a loaded database currently holds, in table order.
+processKeysOf :: DatabaseManager -> Text -> IO [Text]
+processKeysOf manager dbName = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    pure $ case M.lookup dbName loadedDbs of
+        Nothing -> []
+        Just loaded -> map renderKey (V.toList (dbProcessIdTable (ldDatabase loaded)))
+
+-- | Delete the first process, through the request path a client uses.
+deleteFirst :: DatabaseManager -> Text -> [Text] -> IO DeleteOutcome
+deleteFirst manager dbName keys = do
+    r <- deleteActivitiesInDB manager dbName (deleteIds [head' keys])
+    either (fail . T.unpack) pure r
+
+-- | Unload, load again, and say which processes came back.
+reloadOf :: DatabaseManager -> Text -> IO [Text]
+reloadOf manager dbName = do
+    unloadDatabase manager dbName >>= either (fail . T.unpack) pure
+    loadDatabase manager dbName >>= either (fail . T.unpack) (const (pure ()))
+    processKeysOf manager dbName
+
+deleteLineFor :: Text -> Text
+deleteLineFor target =
+    "{\"v\":1,\"at\":\"2026-08-03T00:00:00Z\",\"op\":\"delete\",\"targets\":[\"" <> target <> "\"]}"
+
+head' :: [Text] -> Text
+head' (x : _) = x
+head' [] = "the fixture has no processes"
 
 {- | Remove the second activity of the two-activity fixture: any edit will do
 here, and a deletion is the one every database supports, so these examples pin
 the mutation path itself rather than what happened to be edited.
 -}
-dropSecond :: Database -> Database -> Either Text Database
-dropSecond fixture db = case findProcessId fixture otherActId supplierProdId of
-    Nothing -> Left "fixture: the activity to delete is not in it"
-    Just pid -> deleteActivitiesWith defaultUnitConfig [pid] db
+dropSecond :: JournalOp
+dropSecond = Deleted [renderKey (otherActId, supplierProdId)]
 
 deleteIds :: [Text] -> DeleteRequest
 deleteIds ids =
@@ -319,17 +321,15 @@ baseConfig name =
         }
 
 uploadedConfig :: Text -> FilePath -> DatabaseConfig
-uploadedConfig name dataDir = (baseConfig name){dcPath = dataDir, dcIsUploaded = True}
+uploadedConfig name dataDir =
+    (baseConfig name){dcPath = dataDir, dcIsUploaded = True, dcFormat = Just EcoSpold1}
 
 configuredConfig :: Text -> DatabaseConfig
 configuredConfig = baseConfig
 
 -- ---------------------------------------------------------------------------
--- Fixture
+-- In-memory fixture, for the refusals that never reach a file
 -- ---------------------------------------------------------------------------
-
-buildFixture :: IO Database
-buildFixture = buildFrom (M.singleton (supplierActId, supplierProdId) (milkActivity "milk production"))
 
 buildTwoActivityFixture :: IO Database
 buildTwoActivityFixture =

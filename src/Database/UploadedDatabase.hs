@@ -55,6 +55,13 @@ data UploadMeta = UploadMeta
     to lose it silently. A file written before this field existed reads back
     with no dependencies, which is what it meant.
     -}
+    , umSource :: !(Maybe Text)
+    {- ^ The database this one is a copy of, when it is one. A copy has no
+    files: 'umDataPath' points at the source's, and this says whose they are,
+    which is what lets a delete refuse to take the files a copy still reads.
+    A file written before this field existed is not a copy, which is what it
+    meant.
+    -}
     }
     deriving (Show, Eq, Generic)
 
@@ -146,6 +153,7 @@ parseMetaToml content = do
             , umFormat = format
             , umDataPath = dataPath
             , umDepends = maybe [] parseStringList (getValue "depends")
+            , umSource = unquote <$> getValue "source"
             }
 
 {- | Read a TOML inline array of strings, @["a", "b"]@. Entries that are not
@@ -189,6 +197,7 @@ formatMetaToml UploadMeta{..} =
                , "dataPath = " <> quote (T.pack umDataPath)
                , "depends = [" <> T.intercalate ", " (map quote umDepends) <> "]"
                ]
+            ++ maybe [] (\s -> ["source = " <> quote s]) umSource
   where
     quote t = "\"" <> escapeToml t <> "\""
 
