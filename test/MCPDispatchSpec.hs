@@ -9,7 +9,7 @@ module MCPDispatchSpec (spec) where
 
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), decodeStrict)
-import Data.Aeson.Key (fromString)
+import Data.Aeson.Key (fromText)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
 import qualified Data.Map as M
@@ -259,5 +259,5 @@ instructionsOf v = case field "result" v >>= field "instructions" of
     _ -> Nothing
 
 field :: Text -> Value -> Maybe Value
-field k (Object o) = KM.lookup (fromString (T.unpack k)) o
+field k (Object o) = KM.lookup (fromText k) o
 field _ _ = Nothing
