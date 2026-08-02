@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module CLI.Client (
     RemoteConfig (..),
@@ -11,8 +12,8 @@ module CLI.Client (
 
 import CLI.Types
 import Config (Config (..), ServerConfig (..))
-import Control.Exception (IOException, try)
-import Data.Aeson (Value (..), decode, encode, object, (.:), (.=))
+import Control.Exception (IOException, SomeException, try)
+import Data.Aeson (Value (..), decode, eitherDecode, encode, object, (.:), (.=))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
@@ -124,6 +125,18 @@ executeRemoteCommand mgr rc globalOpts cmd = do
                         >>= output fmt jp
         Database (DbExport args) ->
             executeRemoteExport mgr rc fmt jp args
+        Database (DbCreateActivities args) ->
+            -- The file is the request body; the server owns validation, so the
+            -- client forwards it rather than judging it twice.
+            postJsonFile mgr rc fmt jp ("/api/v1/db/" ++ T.unpack (dwaDb args) ++ "/activities") (dwaFile args)
+        Database (DbReplaceActivity args) ->
+            putJsonFile
+                mgr
+                rc
+                fmt
+                jp
+                ("/api/v1/db/" ++ T.unpack (drpDb args) ++ "/activity/" ++ T.unpack (drpProcessId args))
+                (drpFile args)
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->
@@ -519,6 +532,29 @@ apiPost mgr rc path body = apiRequest mgr rc "POST" path (Just body)
 
 apiDelete :: Manager -> RemoteConfig -> String -> IO (Either String Value)
 apiDelete mgr rc path = apiRequest mgr rc "DELETE" path Nothing
+
+apiPut :: Manager -> RemoteConfig -> String -> Value -> IO (Either String Value)
+apiPut mgr rc path body = apiRequest mgr rc "PUT" path (Just body)
+
+{- | Send a JSON file as the request body. The activities a user writes live in
+a file, not on the command line, and the server owns what is valid — so the
+client forwards the document rather than judging it twice. A file that is not
+JSON at all is caught here, where the path can be named.
+-}
+postJsonFile :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -> FilePath -> IO ()
+postJsonFile mgr rc fmt jp path = sendJsonFile (apiPost mgr rc path) fmt jp
+
+putJsonFile :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -> FilePath -> IO ()
+putJsonFile mgr rc fmt jp path = sendJsonFile (apiPut mgr rc path) fmt jp
+
+sendJsonFile :: (Value -> IO (Either String Value)) -> OutputFormat -> Maybe Text -> FilePath -> IO ()
+sendJsonFile send fmt jp file = do
+    raw <- try (BL.readFile file)
+    case raw of
+        Left (e :: SomeException) -> output fmt jp (Left (file ++ ": " ++ show e))
+        Right bytes -> case eitherDecode bytes of
+            Left err -> output fmt jp (Left (file ++ ": " ++ err))
+            Right body -> send body >>= output fmt jp
 
 {- | POST a JSON body and return the raw response (bytes + headers), for
 octet-stream endpoints like database export. Shares the error formatting of

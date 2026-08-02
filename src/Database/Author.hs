@@ -247,7 +247,7 @@ duplicateKeys keys = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(k, 1)
 
 validateOne :: AuthorContext -> AuthoredActivity -> Either [Text] (ResolvedInsert, [Text])
 validateOne ctx a =
-    case (productChecks, partitionEithers (zipWith resolveExchange [1 :: Int ..] (aaExchanges a)), mProductUnit) of
+    case (productChecks, partitionEithers (map resolveExchange (aaExchanges a)), mProductUnit) of
         ([], ([], resolved), Just (unitRef, unitLabel)) ->
             let key = (authoredActivityUUID (aaName a) (aaLocation a), authoredProductUUID (aaProductName a) unitLabel)
                 productExchange =
@@ -285,8 +285,7 @@ validateOne ctx a =
         (perActivityErrs, (exchangeErrs, _), _) -> Left (map here (perActivityErrs <> concat exchangeErrs))
   where
     here msg = aaName a <> " {" <> aaLocation a <> "}: " <> msg
-    resolveExchange i ex = mapLeft (map (numbered i)) (resolveOne ctx ex)
-    numbered i msg = "exchange " <> T.pack (show i) <> ": " <> msg
+    resolveExchange ex = mapLeft (map ((describeExchange ex <> ": ") <>)) (resolveOne ctx ex)
     mProductUnit = lookupUnit ctx (aaProductUnit a)
     productChecks =
         concat
@@ -319,6 +318,17 @@ buildActivity a unitLabel exchangeList =
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
         }
+
+{- | How a complaint names the line it is about. What an author can act on is
+which supplier or which flow, not a position in a list — an API caller may not
+even have sent the exchanges as one list.
+-}
+describeExchange :: AuthoredExchange -> Text
+describeExchange ex = case ex of
+    AuthoredTechInput{atiProvider = provider} -> "input from \"" <> provider <> "\""
+    AuthoredWasteOutput{awProvider = provider} -> "waste output to \"" <> provider <> "\""
+    AuthoredBio{abFlow = ExistingFlow flowId} -> "biosphere flow " <> UUID.toText flowId
+    AuthoredBio{abFlow = NewBioFlow name _ _} -> "biosphere flow \"" <> name <> "\""
 
 {- | An amount that can carry information: finite, and not zero. A zero
 exchange is not a measurement of nothing, it is a line that should not have

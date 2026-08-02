@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- Activities can be written into a database you uploaded or copied, instead of
+  only deleted from it. `POST /api/v1/db/{db}/activities` adds them,
+  `PUT /api/v1/db/{db}/activity/{process-id}` rewrites one, and
+  `volca database create-activities` / `replace-activity` do the same from the
+  command line reading the same JSON document. You never supply a process id:
+  it is derived from the activity name, location, product name and product
+  unit, so writing the same description twice corrects one activity rather than
+  making two. Writing is strict where importing is tolerant - a supplier that
+  does not resolve, an amount that is not a finite number, a unit that cannot
+  reach the supplier's are all refused, and a batch comes back with every
+  complaint at once rather than one per round trip. A database the engine reads
+  from its configuration is refused outright: it is background data the whole
+  installation shares. This is wire revision 5.
 - A server can say what it is called. `name` in `[server]` is repeated in the
   MCP handshake, both in `serverInfo` and in the first line of the
   instructions an assistant reads. Someone connecting several VoLCA servers

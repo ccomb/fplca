@@ -46,6 +46,11 @@ module Database.Edit (
     replaceActivities,
     MutationOutcome (..),
     mutateUploadedDatabase,
+    WriteVerb (..),
+    WriteRefusal (..),
+    WriteReport (..),
+    writeActivities,
+    refusalMessage,
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
@@ -76,7 +81,12 @@ import Database (
     buildProductIndex,
     findActivitiesByFields,
  )
-import Database.Author (ResolvedInsert (..))
+import Database.Author (
+    AuthorContext (..),
+    AuthoredActivity,
+    ResolvedInsert (..),
+    validateAuthored,
+ )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
 import Database.Export (serializeDatabaseFiles)
 import qualified Database.Loader as Loader
@@ -367,7 +377,7 @@ author is re-describing something the database already holds and wants
 'replaceActivities' instead.
 -}
 insertActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-insertActivities = writeActivities Insert
+insertActivities = applyResolved Insert
 
 {- | Rewrite activities the database already holds, keeping their identity.
 
@@ -376,7 +386,7 @@ vocabulary, exactly as deletion does: a flow no activity uses any more is
 inert, and dropping it would break a relink that still resolves through it.
 -}
 replaceActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-replaceActivities = writeActivities Replace
+replaceActivities = applyResolved Replace
 
 {- | Shared write path. The vocabulary the batch brings (its product flows and
 any new biosphere flows) lands in the same step as the activities that
@@ -388,8 +398,8 @@ rebuild resets cross-database links ('rebuildFromActivities'), so treating "no
 activities to write" as a no-op is what keeps a caller's empty request from
 silently unlinking the database.
 -}
-writeActivities :: WriteIntent -> UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-writeActivities intent unitConfig inserts db
+applyResolved :: WriteIntent -> UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
+applyResolved intent unitConfig inserts db
     | null inserts = Right db
     | otherwise = do
         let existing = surviving db S.empty
@@ -420,7 +430,153 @@ checkKeys intent existing keys = case intent of
                 <> " "
                 <> what
                 <> " in this database"
-    renderKey (a, p) = UUID.toText a <> "_" <> UUID.toText p
+
+-- ---------------------------------------------------------------------------
+-- Writing authored activities
+-- ---------------------------------------------------------------------------
+
+{- | Which way a batch is meant to land: added to the collection, or written
+over the one process the caller names.
+-}
+data WriteVerb = CreateActivities | ReplaceActivity Text
+
+{- | Why a write did not happen, in the terms its caller has to answer in.
+
+Each constructor exists because a different response is owed: an HTTP client
+needs 404 apart from 409 apart from 400, and someone at a terminal needs to be
+told which of "there is no such database", "that one is not yours to write"
+and "your file has four problems" happened. A single error string would force
+both to guess by reading it.
+-}
+data WriteRefusal
+    = NotLoaded Text
+    | NotWritable Text
+    | Malformed [Text]
+    | AlreadyPresent [Text]
+    | NotPresent [Text]
+    | WriteFailed Text
+
+-- | What a write produced.
+data WriteReport = WriteReport
+    { wrWritten :: [Text]
+    , wrPersisted :: Bool
+    , wrWarnings :: [Text]
+    }
+
+{- | Validate a batch of authored activities against a loaded database and, if
+nothing is wrong with it, write it.
+
+This is the whole of authoring above the primitives, shared by the HTTP
+endpoints and the command line so the two cannot drift on what is allowed.
+Refusals are classified rather than stringly-typed, because the two callers
+owe their users different answers to the same refusal.
+
+A database the engine reads from its configuration is refused: that is
+background data the whole installation shares, and a copy or an upload is
+where authoring belongs.
+-}
+writeActivities ::
+    DatabaseManager ->
+    Text ->
+    WriteVerb ->
+    [AuthoredActivity] ->
+    IO (Either WriteRefusal WriteReport)
+writeActivities manager dbName verb authored =
+    getDatabase manager dbName >>= \case
+        Nothing -> pure (Left (NotLoaded dbName))
+        Just loaded
+            | not (dcIsUploaded (ldConfig loaded)) -> pure (Left (NotWritable dbName))
+            | otherwise -> do
+                deps <- loadedDependencies manager (ldDatabase loaded)
+                unitConfig <- getMergedUnitConfig manager
+                let ctx =
+                        AuthorContext
+                            { acDb = ldDatabase loaded
+                            , acDeps = deps
+                            , acUnitConfig = unitConfig
+                            }
+                case validateAuthored ctx authored of
+                    Left errs -> pure (Left (Malformed errs))
+                    Right (resolved, warnings) ->
+                        case presenceRefusal (ldDatabase loaded) verb resolved of
+                            Just refusal -> pure (Left refusal)
+                            Nothing -> commit unitConfig resolved warnings
+  where
+    commit unitConfig resolved warnings = do
+        outcome <- mutateUploadedDatabase manager dbName (edit unitConfig resolved)
+        pure $ case outcome of
+            Left err -> Left (WriteFailed err)
+            Right done ->
+                Right
+                    WriteReport
+                        { wrWritten = map (renderKey . riKey) resolved
+                        , wrPersisted = moPersisted done
+                        , wrWarnings = warnings <> moWarnings done
+                        }
+    edit unitConfig resolved = case verb of
+        CreateActivities -> insertActivities unitConfig resolved
+        ReplaceActivity _ -> replaceActivities unitConfig resolved
+
+{- | The two refusals only a verb can name: creating over a process that is
+already there, and rewriting one that is not. Checked before the mutation so
+the caller learns which happened rather than reading it out of a message.
+
+'ReplaceActivity' also checks that the body describes the process the caller
+addressed. Identity is minted from the name, location, product and unit, so a
+body that mints elsewhere would silently become a second row.
+-}
+presenceRefusal :: Database -> WriteVerb -> [ResolvedInsert] -> Maybe WriteRefusal
+presenceRefusal db verb resolved = case verb of
+    CreateActivities -> case filter present keys of
+        [] -> Nothing
+        clashes -> Just (AlreadyPresent (map renderKey clashes))
+    -- The mismatch is checked before presence on purpose: a body that mints
+    -- elsewhere describes a process the database may well not have, and
+    -- answering "no such activity" would send the author looking for the wrong
+    -- mistake.
+    ReplaceActivity target -> case filter ((/= target) . renderKey) keys of
+        elsewhere@(_ : _) ->
+            Just . Malformed $
+                [ "This activity's identity is "
+                    <> renderKey wrong
+                    <> ", not "
+                    <> target
+                    <> ". Identity comes from the name, location, product and unit, so\
+                       \ writing this body here would address a different activity."
+                | wrong <- elsewhere
+                ]
+        [] -> case filter (not . present) keys of
+            [] -> Nothing
+            absent -> Just (NotPresent (map renderKey absent))
+  where
+    keys = map riKey resolved
+    present key = M.member key (dbProcessIdLookup db)
+
+-- | The loaded databases a database draws suppliers from.
+loadedDependencies :: DatabaseManager -> Database -> IO [Database]
+loadedDependencies manager db = do
+    loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    pure [ldDatabase ld | name <- dbDependsOn db, Just ld <- [M.lookup name loadedDbs]]
+
+-- | @activityUUID_productUUID@, the identity a process is addressed by.
+renderKey :: (UUID, UUID) -> Text
+renderKey (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
+
+{- | Plain-language rendering, for callers with nowhere to put a status code.
+An HTTP caller maps the constructors to codes instead.
+-}
+refusalMessage :: WriteRefusal -> Text
+refusalMessage = \case
+    NotLoaded name -> "Database not loaded: " <> name
+    NotWritable name ->
+        name
+            <> " is a database this engine reads from its configuration, so it is shared\
+               \ background data rather than yours to write. Copy it, or upload a database\
+               \ of your own, and author there."
+    Malformed errs -> T.intercalate "\n" errs
+    AlreadyPresent keys -> "Already in this database: " <> T.intercalate ", " keys
+    NotPresent keys -> "Not in this database: " <> T.intercalate ", " keys
+    WriteFailed err -> err
 
 -- ---------------------------------------------------------------------------
 -- Persisting an edit

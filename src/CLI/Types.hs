@@ -79,6 +79,10 @@ data DatabaseAction
       DbRelinkMapping DbRelinkArgs
     | -- | Export a loaded database to a file: @db@, @--format fmt@, @--out file@.
       DbExport DbExportArgs
+    | -- | Write new activities read from a JSON file: @db@, @--from file@.
+      DbCreateActivities DbWriteArgs
+    | -- | Rewrite one activity: @db@, @--process-id pid@, @--from file@.
+      DbReplaceActivity DbReplaceArgs
     deriving (Eq, Show, Generic)
 
 -- | Arguments for @database export@.
@@ -89,6 +93,32 @@ data DbExportArgs = DbExportArgs
     -- ^ Target format keyword (@--format@): simapro|ecospold1|ecospold2|ilcd|brightway
     , deaOut :: FilePath
     -- ^ Output file path (@--out@)
+    }
+    deriving (Eq, Show, Generic)
+
+{- | Arguments for @database create-activities@: the database to write to and
+a JSON file shaped like the HTTP request body (@{"activities": [...]}@), so
+the same document works over either transport.
+-}
+data DbWriteArgs = DbWriteArgs
+    { dwaDb :: Text
+    -- ^ Database to write to (@--db@)
+    , dwaFile :: FilePath
+    -- ^ JSON file holding the activities (@--from@)
+    }
+    deriving (Eq, Show, Generic)
+
+{- | Arguments for @database replace-activity@: as 'DbWriteArgs', plus the
+process id being rewritten. The file holds one activity object rather than a
+batch.
+-}
+data DbReplaceArgs = DbReplaceArgs
+    { drpDb :: Text
+    -- ^ Database holding the activity (@--db@)
+    , drpProcessId :: Text
+    -- ^ Identity of the activity to rewrite (@--process-id@)
+    , drpFile :: FilePath
+    -- ^ JSON file holding the activity (@--from@)
     }
     deriving (Eq, Show, Generic)
 

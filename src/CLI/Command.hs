@@ -1,12 +1,16 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module CLI.Command where
 
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivity)
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbReplaceArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
+import Control.Exception (SomeException, try)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
+import qualified Data.Aeson as A
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
@@ -17,7 +21,16 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (DeleteOutcome (..), DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
+import Database.Edit (
+    DeleteOutcome (..),
+    DeleteRequest (..),
+    WriteReport (..),
+    WriteVerb (..),
+    copyDatabase,
+    deleteActivitiesInDB,
+    refusalMessage,
+    writeActivities,
+ )
 import Database.Export (exportDatabase, exportMethodCollection, parseExportFormat, parseMethodExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
@@ -110,6 +123,10 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbRelinkMapping outputFormat manager args
         Database (DbExport args) ->
             executeDbExport outputFormat manager args
+        Database (DbCreateActivities args) ->
+            executeDbCreateActivities outputFormat manager args
+        Database (DbReplaceActivity args) ->
+            executeDbReplaceActivity outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -495,6 +512,60 @@ executeDbDeleteActivities fmt manager args = do
                     , "transient" .= not (doPersisted outcome)
                     , "warnings" .= doWarnings outcome
                     ]
+
+{- | Write new activities into a database, read from a JSON file.
+
+The file is the same document the HTTP endpoint accepts
+(@{"activities": [...]}@), and the refusals are the same ones — the command
+line and the server share the whole of authoring above the primitives, so
+neither can allow what the other forbids.
+-}
+executeDbCreateActivities :: OutputFormat -> DatabaseManager -> DbWriteArgs -> IO ()
+executeDbCreateActivities fmt manager args = do
+    request <- readJsonFile (dwaFile args)
+    case request of
+        Left err -> reportError err >> exitFailure
+        Right req -> runWrite fmt manager (dwaDb args) CreateActivities (awrActivities req)
+
+-- | Rewrite one activity, addressed by the process id it already has.
+executeDbReplaceActivity :: OutputFormat -> DatabaseManager -> DbReplaceArgs -> IO ()
+executeDbReplaceActivity fmt manager args = do
+    activity <- readJsonFile (drpFile args)
+    case activity of
+        Left err -> reportError err >> exitFailure
+        Right body -> runWrite fmt manager (drpDb args) (ReplaceActivity (drpProcessId args)) [body]
+
+{- | Shared tail of both write commands: translate, write, and report. A
+refusal is printed and exits non-zero, so a script can tell a rejected batch
+from a written one without parsing the output.
+-}
+runWrite :: OutputFormat -> DatabaseManager -> Text -> WriteVerb -> [ActivityInput] -> IO ()
+runWrite fmt manager target verb inputs =
+    case traverse toAuthoredActivity inputs of
+        Left err -> reportError (T.unpack err) >> exitFailure
+        Right authored -> do
+            outcome <- writeActivities manager target verb authored
+            case outcome of
+                Left refusal -> do
+                    reportError (T.unpack (refusalMessage refusal))
+                    exitFailure
+                Right report -> do
+                    mapM_ (reportProgress Warning . T.unpack) (wrWarnings report)
+                    outputResult fmt $
+                        object
+                            [ "database" .= target
+                            , "written" .= wrWritten report
+                            , "transient" .= not (wrPersisted report)
+                            , "warnings" .= wrWarnings report
+                            ]
+
+-- | Read and decode a JSON file, naming the file in any complaint about it.
+readJsonFile :: (A.FromJSON a) => FilePath -> IO (Either String a)
+readJsonFile path = do
+    bytes <- try (BL.readFile path)
+    pure $ case bytes of
+        Left (e :: SomeException) -> Left (path <> ": " <> show e)
+        Right raw -> either (\err -> Left (path <> ": " <> err)) Right (A.eitherDecode raw)
 
 {- | Execute database load: bring a configured database (and its declared
 dependencies) into memory. Any failed dependency is surfaced in the output.
