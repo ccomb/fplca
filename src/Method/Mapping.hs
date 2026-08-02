@@ -61,6 +61,11 @@ module Method.Mapping (
     processContributionsFromTables,
     lookupCFForFlow,
     characterizedFlowIds,
+    cascadeTrail,
+    lookupCascadeEntry,
+    RungId (..),
+    RungOutcome (..),
+    VetoReason (..),
     convertForCharacterization,
     expandSynonymMappings,
     directionExcludedCFs,
@@ -104,7 +109,7 @@ import Data.List (find, nub, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -2022,136 +2027,224 @@ converges on the same canonical form — a compartments.csv rule like
 against ILCD-style bare media without requiring an explicit (medium, sub)
 pair for every combination.
 -}
-lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe CF
-lookupCascadeCF tables flowDB fid =
-    M.lookup fid (mtUuidCF tables)
-        <|> (M.lookup fid flowDB >>= byNameOrCas)
+
+-- | One rung of the read-time cascade, in the order 'cascadeTrail' tries them.
+data RungId
+    = RungUuid
+    | RungUnitVariant
+    | RungExactName
+    | RungLongTermDefault
+    | RungMediumDefault
+    | RungCasBridge
+    | RungSubBlind
+    | RungRegionBase
+    | RungEnergyResource
+    | RungOreGradeBase
+    deriving (Eq, Show, Enum, Bounded)
+
+{- | Why a wildcard rung refused a flow's subcompartment — the two tiers of
+'wildcardReachesSub'.
+-}
+data VetoReason = ForeignMediumVeto | LongTermUSEtoxVeto
+    deriving (Eq, Show)
+
+-- | One rung's verdict about one flow.
+data RungOutcome
+    = RungHit !CF
+    | -- | The rung's table holds nothing for this flow.
+      RungMiss
+    | {- | The rung's precondition on the flow itself fails (not a long-term
+      emission, no CAS, no region or density suffix, not an ore-grade
+      resource, no unit-suffixed rows in the method): nothing is looked up.
+      -}
+      RungNotApplicable
+    | {- | A wildcard rung the flow's subcompartment refuses. The second field
+      is deliberately lazy: the score path matches the constructor only, so
+      a vetoed rung costs no lookup — "was there an entry behind the veto"
+      is paid only when an explanation forces it.
+      -}
+      RungVetoed !VetoReason (Maybe CF)
+    | {- | Several candidates disagree and the rung refuses to pick one by Map
+      order (energy-family disagreement) — the "never guess" rule.
+      -}
+      RungAmbiguous
+    deriving (Eq, Show)
+
+{- | Every rung's verdict for one flow, in cascade order. Lazy in each
+outcome: 'lookupCascadeEntry' forces outcomes only until the first hit — the
+same work as the previous '<|>' chain — while an explanation may force the
+whole trail.
+
+Rung order, and why: a unit-suffixed flow first tries the method row declared
+in its own unit ('mtUnitVariantCF') — the collapsed-name tables below crown
+one winner per base name, which for a sibling unit variant is dimensionally
+wrong and zeroes on conversion; a right-unit, sub-blind factor beats a
+right-sub, wrong-unit one. Then the exact (name, medium, sub) entry. A
+long-term (delayed) emission then tries the method's long-term default
+('mtLongTermFallbackCF') so it inherits the long-term factor, not the
+immediate-emission one. UUID/name misses then fall back to the flow's own
+CAS + medium, so every flow sharing a CAS in a compartment is characterized,
+not just the one a CF resolved to at build time. The parametric rungs
+(region-stripped base name, energy family, ore grade) come last: they only
+fire when every direct lookup misses.
+-}
+cascadeTrail :: MethodTables -> BioFlowDB -> UUID -> [(RungId, RungOutcome)]
+cascadeTrail tables flowDB fid =
+    (RungUuid, plain (M.lookup fid (mtUuidCF tables)))
+        : maybe [] namedRungs (M.lookup fid flowDB)
   where
-    byNameOrCas flow =
-        let name = SR.NormName (normalizeName (bfName flow))
-            (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
-            -- 'mtUnitVariantCF' is empty for every method whose factor lines
-            -- carry no unit suffix — the common case — and 'M.lookup' is strict
-            -- in its key, so an unguarded lookup would make every flow pay a
-            -- second full name normalization on the warmup-hot path for a table
-            -- that cannot answer.
-            unitVariantCF
-                | M.null (mtUnitVariantCF tables) = Nothing
-                | otherwise =
-                    M.lookup
+    plain = maybe RungMiss RungHit
+
+    namedRungs flow =
+        [ (RungUnitVariant, unitVariantOutcome)
+        , (RungExactName, plain (M.lookup (name, baseMed, normSub) (mtExactCF tables)))
+        , (RungLongTermDefault, longTermOutcome)
+        , (RungMediumDefault, gated (M.lookup (name, baseMed) (mtFallbackCF tables)))
+        , (RungCasBridge, casOutcome)
+        , (RungSubBlind, gated (M.lookup (name, baseMed) (mtSubBlindCF tables)))
+        , (RungRegionBase, regionOutcome)
+        , (RungEnergyResource, energyOutcome)
+        , (RungOreGradeBase, oreGradeOutcome)
+        ]
+      where
+        name = SR.NormName (normalizeName (bfName flow))
+        (baseMed, normSub) = flowMediumSub (mtCompartmentMap tables) flow
+
+        -- The medium-level / CAS / sub-blind fallbacks all stand for a
+        -- surface, immediate emission, so gate a resolved one by the flow's
+        -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
+        -- at all, but only from a method that names sea water somewhere and so
+        -- meant to leave this one out; a LONG-TERM groundwater emission drops a
+        -- surface-freshwater-fate USEtox CF (CTUe/CTUh) — the method's
+        -- explicit "groundwater, long-term" zero must win, never the CAS
+        -- bridge. An immediate groundwater emission keeps the fallback
+        -- (SimaPro semantics: an implicit sub inherits the unspecified CF),
+        -- as do nutrient/other freshwater CFs (phosphate migrates to
+        -- surface water, so the method characterizes it). An explicit
+        -- exact-sub CF and the method's own long-term default are never
+        -- gated.
+        reachable = wildcardReachesSub (mtCFFamily tables) (mtSeaWaterCFs tables) normSub
+        veto
+            | mtSeaWaterCFs tables == MethodDeclaresSeaWater && isForeignMediumSub normSub = ForeignMediumVeto
+            | otherwise = LongTermUSEtoxVeto
+        gated r
+            | reachable = plain r
+            | otherwise = RungVetoed veto r
+
+        -- 'mtUnitVariantCF' is empty for every method whose factor lines
+        -- carry no unit suffix — the common case — and 'M.lookup' is strict
+        -- in its key, so an unguarded lookup would make every flow pay a
+        -- second full name normalization on the warmup-hot path for a table
+        -- that cannot answer.
+        unitVariantOutcome
+            | M.null (mtUnitVariantCF tables) = RungNotApplicable
+            | otherwise =
+                gated
+                    ( M.lookup
                         (SR.NormName (normalizeNameKeepUnit (bfName flow)), baseMed)
                         (mtUnitVariantCF tables)
-            -- The medium-level / CAS / sub-blind fallbacks all stand for a
-            -- surface, immediate emission, so gate a resolved one by the flow's
-            -- subcompartment: a foreign medium (sea/ocean) gets no freshwater CF
-            -- at all; a LONG-TERM groundwater emission drops a
-            -- surface-freshwater-fate USEtox CF (CTUe/CTUh) — the method's
-            -- explicit "groundwater, long-term" zero must win, never the CAS
-            -- bridge. An immediate groundwater emission keeps the fallback
-            -- (SimaPro semantics: an implicit sub inherits the unspecified CF),
-            -- as do nutrient/other freshwater CFs (phosphate migrates to
-            -- surface water, so the method characterizes it). An explicit
-            -- exact-sub CF and the method's own long-term default are never
-            -- gated.
-            gate mcf
-                | wildcardReachesSub (mtCFFamily tables) (mtSeaWaterCFs tables) normSub = mcf
-                | otherwise = Nothing
-         in -- UUID/name miss → fall back to the flow's own CAS + medium, so
-            -- every flow sharing a CAS in a compartment is characterized, not
-            -- just the one a CF resolved to at build time. A long-term (delayed)
-            -- emission first tries the method's long-term default
-            -- ('mtLongTermFallbackCF') so it inherits the long-term factor, not
-            -- the immediate-emission one; if the method has none it falls through.
-            -- A unit-suffixed flow first tries the method row declared in its
-            -- own unit ('mtUnitVariantCF') — the collapsed-name tables below
-            -- crown one winner per base name, which for a sibling unit variant
-            -- is dimensionally wrong and zeroes on conversion. Gated like the
-            -- other sub-blind rungs, but ranked ahead of the sub-exact table on
-            -- purpose: that table is keyed by the collapsed name, so it is
-            -- exactly where the wrong-unit winner sits. A right-unit,
-            -- sub-blind factor beats a right-sub, wrong-unit one — the latter
-            -- scores 0, the former scores.
-            gate unitVariantCF
-                <|> M.lookup (name, baseMed, normSub) (mtExactCF tables)
-                <|> (if isLongTermSub normSub then M.lookup (name, baseMed) (mtLongTermFallbackCF tables) else Nothing)
-                <|> gate (M.lookup (name, baseMed) (mtFallbackCF tables))
-                <|> gate (bfCAS flow >>= \cas -> M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
-                <|> gate (M.lookup (name, baseMed) (mtSubBlindCF tables))
-                <|> gate (regionBaseFallback flow baseMed normSub)
-                <|> energyResourceFallback flow baseMed normSub
-                <|> resourceBaseNameFallback flow baseMed normSub
+                    )
 
-    -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
-    -- doesn't tag falls back to the base substance's CF: an unregionalized CF
-    -- for "Ammonia" applies to the emission wherever it occurs. Only fires
-    -- after every direct lookup misses, and only when the suffix is a real
-    -- region code (extractLocationSuffix leaves "Methane, fossil" untouched).
-    --
-    -- The borrowed CF keeps the base substance's *unit*, which may differ in
-    -- dimension from the flow's. 'lookupEnergyDensity' therefore strips the
-    -- suffix with this same 'extractLocationSuffix' before looking a density
-    -- up: whatever name lends the factor must also lend the density, or the
-    -- flow holds a factor it cannot be converted to and scores 0.
-    regionBaseFallback flow baseMed normSub =
-        case extractLocationSuffix (bfName flow) of
-            (base, Just _) ->
-                let bname = SR.NormName (normalizeName base)
-                 in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
-                        <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
-            _ -> Nothing
+        longTermOutcome
+            | isLongTermSub normSub = plain (M.lookup (name, baseMed) (mtLongTermFallbackCF tables))
+            | otherwise = RungNotApplicable
 
-    -- An energy-resource flow whose name encodes its density ("Coal, 18 MJ per
-    -- kg") borrows the CF of its resource family (coal/oil/gas/uranium…) — the
-    -- generic per-MJ resource CF. The density itself is applied downstream by
-    -- 'convertAndMultiply', which name-parses the same suffix, so here we only
-    -- return the base CF. The resource family is resolved through the known
-    -- energy resources ('mtEnergyDensities'), so an unknown resource never
-    -- borrows a CF. Last in the cascade: only fires when all else misses.
-    energyResourceFallback flow baseMed normSub =
-        case parseEnergyDensitySuffix (bfName flow) of
-            Nothing -> Nothing
+        casOutcome = case bfCAS flow of
+            Nothing -> RungNotApplicable
+            Just cas -> gated (M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
+
+        -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
+        -- doesn't tag falls back to the base substance's CF: an unregionalized CF
+        -- for "Ammonia" applies to the emission wherever it occurs. Only fires
+        -- after every direct lookup misses, and only when the suffix is a real
+        -- region code (extractLocationSuffix leaves "Methane, fossil" untouched).
+        --
+        -- The borrowed CF keeps the base substance's *unit*, which may differ in
+        -- dimension from the flow's. 'lookupEnergyDensity' therefore strips the
+        -- suffix with this same 'extractLocationSuffix' before looking a density
+        -- up: whatever name lends the factor must also lend the density, or the
+        -- flow holds a factor it cannot be converted to and scores 0.
+        --
+        -- When vetoed, the suffix parse and the lookup both stay behind the
+        -- lazy field.
+        regionOutcome
+            | not reachable = RungVetoed veto regionLookup
+            | otherwise = case extractLocationSuffix (bfName flow) of
+                (base, Just _) -> plain (regionLookupAt base)
+                (_, Nothing) -> RungNotApplicable
+        regionLookup = case extractLocationSuffix (bfName flow) of
+            (base, Just _) -> regionLookupAt base
+            (_, Nothing) -> Nothing
+        regionLookupAt base =
+            let bname = SR.NormName (normalizeName base)
+             in M.lookup (bname, baseMed, normSub) (mtExactCF tables)
+                    <|> M.lookup (bname, baseMed) (mtFallbackCF tables)
+
+        -- An energy-resource flow whose name encodes its density ("Coal, 18 MJ per
+        -- kg") borrows the CF of its resource family (coal/oil/gas/uranium…) — the
+        -- generic per-MJ resource CF. The density itself is applied downstream by
+        -- 'convertAndMultiply', which name-parses the same suffix, so here we only
+        -- return the base CF. The resource family is resolved through the known
+        -- energy resources ('mtEnergyDensities'), so an unknown resource never
+        -- borrows a CF.
+        --
+        -- Borrow only when the family's resolving CFs agree (the generic
+        -- per-MJ factor). If "Coal, hard" and "Coal, brown" disagree the
+        -- family CF is ambiguous ('RungAmbiguous'), so drop rather than pick
+        -- one arbitrarily by Map order — same "never guess" rule as
+        -- 'agreedValue'.
+        energyOutcome = case parseEnergyDensitySuffix (bfName flow) of
+            Nothing -> RungNotApplicable
             Just (base, _) ->
                 let fam = firstWord (normalizeName base)
                     candidates =
                         [ cf
                         | rname <- M.keys (mtEnergyDensities tables)
                         , firstWord rname == fam
-                        , Just cf <- [resourceCF (SR.NormName rname) baseMed normSub]
+                        , Just cf <- [resourceCF (SR.NormName rname)]
                         ]
-                 in -- Borrow only when the family's resolving CFs agree (the generic
-                    -- per-MJ factor). If "Coal, hard" and "Coal, brown" disagree the
-                    -- family CF is ambiguous, so drop rather than pick one arbitrarily
-                    -- by Map order — same "never guess" rule as 'agreedValue'.
-                    case nub candidates of
-                        [cf] -> Just cf
-                        _ -> Nothing
+                 in case nub candidates of
+                        [] -> RungMiss
+                        [cf] -> RungHit cf
+                        _ -> RungAmbiguous
 
-    resourceCF rname baseMed normSub =
-        M.lookup (rname, baseMed, normSub) (mtExactCF tables)
-            <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
+        resourceCF rname =
+            M.lookup (rname, baseMed, normSub) (mtExactCF tables)
+                <|> M.lookup (rname, baseMed) (mtFallbackCF tables)
 
-    -- An ecoinvent metal-ore resource flow ("Copper, 0.99% in sulfide, Cu 0.36%
-    -- …, in ground", "Gold, Au 7.1E-4%, in ore") carries no CAS and matches no CF
-    -- of its own, but its reference amount is the mass of the base element, so it
-    -- takes that element's resource CF. Without this the whole ore-grade family
-    -- scores zero and mineral/metal depletion silently under-counts (copper- and
-    -- gold-intensive products by 100×+). Resource medium only; base = the element
-    -- before the first comma; the "%" requirement pins the fallback to
-    -- grade-bearing variants — every ore-grade name encodes its grade as a
-    -- percentage — so an ordinary comma-qualified resource ("Water, salt,
-    -- ocean", "Coal, 18 MJ per kg") never borrows the base CF, and in
-    -- particular an ambiguity 'energyResourceFallback' refused to resolve
-    -- stays unresolved. Self-scoping and last in the cascade: 'resourceCF'
-    -- returns Nothing when the base element has no CF in the method.
-    resourceBaseNameFallback flow baseMed@(Medium med) normSub
-        | med == "resource"
-        , "%" `T.isInfixOf` bfName flow
-        , (base, rest) <- T.breakOn "," (bfName flow)
-        , not (T.null rest) =
-            resourceCF (SR.NormName (normalizeName base)) baseMed normSub
-        | otherwise = Nothing
+        -- An ecoinvent metal-ore resource flow ("Copper, 0.99% in sulfide, Cu 0.36%
+        -- …, in ground", "Gold, Au 7.1E-4%, in ore") carries no CAS and matches no CF
+        -- of its own, but its reference amount is the mass of the base element, so it
+        -- takes that element's resource CF. Without this the whole ore-grade family
+        -- scores zero and mineral/metal depletion silently under-counts (copper- and
+        -- gold-intensive products by 100×+). Resource medium only; base = the element
+        -- before the first comma; the "%" requirement pins the fallback to
+        -- grade-bearing variants — every ore-grade name encodes its grade as a
+        -- percentage — so an ordinary comma-qualified resource ("Water, salt,
+        -- ocean", "Coal, 18 MJ per kg") never borrows the base CF, and in
+        -- particular an ambiguity the energy-family rung refused to resolve
+        -- stays unresolved. Self-scoping and last in the cascade: 'resourceCF'
+        -- returns Nothing when the base element has no CF in the method.
+        oreGradeOutcome
+            | Medium med <- baseMed
+            , med == "resource"
+            , "%" `T.isInfixOf` bfName flow
+            , (base, rest) <- T.breakOn "," (bfName flow)
+            , not (T.null rest) =
+                plain (resourceCF (SR.NormName (normalizeName base)))
+            | otherwise = RungNotApplicable
 
-    firstWord = T.takeWhile (/= ' ') . T.strip
+        firstWord = T.takeWhile (/= ' ') . T.strip
+
+{- | The first rung that answers, and with what — the score path's view of
+'cascadeTrail'.
+-}
+lookupCascadeEntry :: MethodTables -> BioFlowDB -> UUID -> Maybe (RungId, CF)
+lookupCascadeEntry tables flowDB fid =
+    listToMaybe [(rid, cf) | (rid, RungHit cf) <- cascadeTrail tables flowDB fid]
+
+lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe CF
+lookupCascadeCF tables flowDB fid = snd <$> lookupCascadeEntry tables flowDB fid
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
