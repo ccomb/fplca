@@ -37,7 +37,6 @@ import Database.Edit (
     DeleteOutcome (..),
     DeleteRequest (..),
     DeleteSelection (..),
-    deleteActivities,
     deleteActivitiesInDB,
     resolveDeleteSelection,
  )
@@ -46,6 +45,7 @@ import Database.Manager (
     LoadedDatabase (..),
     initDatabaseManager,
  )
+import Database.Rebuild (deleteActivities)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Types (
     Activity (..),

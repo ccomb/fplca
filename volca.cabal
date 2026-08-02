@@ -44,6 +44,7 @@ library
                      , Database
                      , Database.Manager
                      , Database.Author
+                     , Database.Rebuild
                      , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking

@@ -40,7 +40,6 @@ import Database.Edit (
     DeleteRequest (..),
     MutationOutcome (..),
     deleteActivitiesInDB,
-    deleteActivitiesWith,
     mutateUploadedDatabase,
  )
 import Database.Export (serializeDatabaseFiles)
@@ -51,6 +50,7 @@ import Database.Manager (
     loadDatabase,
     unloadDatabase,
  )
+import Database.Rebuild (deleteActivitiesWith)
 import Database.Upload (DatabaseFormat (..))
 import Database.UploadedDatabase (UploadMeta (..), readUploadMeta)
 import SharedSolver (SharedSolver, createSharedSolver)
