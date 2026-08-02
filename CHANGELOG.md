@@ -36,6 +36,20 @@
   delete response now says so with two new fields, `transient` and `warnings`.
 
 ### Fixed
+- An emission to the sea is now characterized by an impact category that writes
+  no sea-water factor of its own. A method file spells out a subcompartment only
+  when its factor differs from the medium-level ("unspecified") one, so a
+  category with nothing different to say about the sea writes nothing at all —
+  and the engine was reading that silence as a refusal. Marine eutrophication is
+  that case in EF 3.1: it writes no subcompartment line anywhere, because the
+  JRC original gives it one and the same factor for fresh water, unspecified
+  water and sea water (`nitrogen, total`: 1.0 in all three). Withholding its
+  medium-level factor scored a nitrogen discharge to the sea as nothing, and a
+  farmed salmon, which discharges most of its nitrogen straight into the sea,
+  was scoring a fifth of its marine eutrophication. Categories that do
+  distinguish the sea are untouched: they write the line, and the line wins.
+  Which side a method lands on is now reported when it loads, so a category
+  whose sea factors were lost on import can be told from one that never had any.
 - A SimaPro amount cell the engine cannot read is now zero and warned about,
   instead of the number the cell happens to begin with. The reader used to stop
   at the first character that is not part of a number and keep what it had, so

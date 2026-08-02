@@ -454,22 +454,55 @@ spec = do
 
         it "does not let a wildcard CF reach a sea/ocean flow (foreign medium)" $ do
             -- A freshwater CF must not characterize a sea-water release via the
-            -- regionalized wildcard: EF ships a distinct, uncharacterized
-            -- sea-water flow, so water-to-ocean stays uncharacterized here.
+            -- regionalized wildcard. The method says so itself: EF writes a
+            -- sea-water factor of its own, and that line — not the freshwater
+            -- one — is what a release to the sea gets. Ranking colliding CFs
+            -- keeps the larger value, so without the gate the 7.0 would beat
+            -- the method's own sea line.
             let fid = mkUuid 130
                 uidKg = mkUuid 200
                 flowOcean =
                     (mkFlow fid "water" uidKg)
                         { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
                         }
-                cfUnspecified =
-                    (mkCF fid 7.0)
+                cfAt sub value =
+                    (mkCF fid value)
                         { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" sub "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
+                declaring =
+                    buildMethodTables
+                        OtherCFFamily
+                        M.empty
+                        M.empty
+                        [ (cfAt "(unspecified)" 7.0, Just (flowOcean, ByName))
+                        , (cfAt "ocean" 0.0, Just (flowOcean, ByName))
+                        ]
+            M.lookup (fid, Location "DE") (mtRegionalizedCF declaring)
+                `shouldBe` Just (CF 0.0 (CFUnit "kg"))
+
+        it "lets a wildcard CF reach a sea/ocean flow when the method never names the sea" $ do
+            -- The same shape from a method with no sea-water line anywhere. Its
+            -- medium-level factor is the only thing it wrote, and refusing it
+            -- would score the release as zero on an authority the method never
+            -- gave. EF 3.1 has one such category, marine eutrophication, whose
+            -- receiving medium is the sea.
+            let fid = mkUuid 132
+                uidKg = mkUuid 200
+                flowOcean =
+                    (mkFlow fid "nitrogen, total" uidKg)
+                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
+                        }
+                cfUnspecified =
+                    (mkCF fid 1.0)
+                        { mcfFlowName = "nitrogen, total"
                         , mcfCompartment = Just (Compartment "water" "(unspecified)" "")
                         , mcfConsumerLocation = Just "DE"
                         }
-                tables = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
-            M.lookup (fid, Location "DE") (mtRegionalizedCF tables) `shouldBe` Nothing
+                silent = buildMethodTables OtherCFFamily M.empty M.empty [(cfUnspecified, Just (flowOcean, ByName))]
+            M.lookup (fid, Location "DE") (mtRegionalizedCF silent)
+                `shouldBe` Just (CF 1.0 (CFUnit "kg"))
 
         it "does not let a wildcard CF reach a long-term groundwater flow for a USEtox method" $ do
             -- The USEtox gate is scoped to LONG-TERM groundwater: EF methods

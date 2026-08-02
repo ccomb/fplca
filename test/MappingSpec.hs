@@ -456,6 +456,79 @@ spec = do
             -- insertion order must not matter
             score (reverse mappings) `shouldBe` 2.0 * 34.5
 
+    describe "sea-water gate on wildcard fallbacks" $ do
+        -- The same emission to the sea, under two methods that differ in one
+        -- thing: whether they write a sea-water factor of their own. A method
+        -- that does has an opinion about the sea and the engine defers to it,
+        -- keeping the medium-level factor away so the explicit line scores. A
+        -- method that never mentions the sea has given nothing to defer to, and
+        -- refusing its medium-level factor would score the emission as zero on
+        -- an authority the method never gave.
+        --
+        -- EF 3.1 has both kinds. Freshwater ecotoxicity writes an explicit
+        -- near-zero for the sea, so a chromium discharge there must not take
+        -- the freshwater factor. Marine eutrophication writes no subcompartment
+        -- line at all, because the JRC original gives it the same factor for
+        -- fresh water, unspecified water and sea water alike: there was nothing
+        -- different to write, and the medium-level factor is the answer.
+        let uns = mkCFComp "Nitrogen, total" "water" "(unspecified)" 1.0
+            sea = mkCFComp "Nitrogen, total" "water" "ocean" 0.0
+            scoreWith cfs sub = do
+                fid <- nextRandom
+                let flow = mkFlow fid "Nitrogen, total" "water" (Just sub)
+                    tables =
+                        buildMethodTables
+                            OtherCFFamily
+                            M.empty
+                            M.empty
+                            [(cf, Just (flow, ByName)) | cf <- cfs]
+                    flowDB = M.singleton fid flow
+                pure
+                    ( loScore
+                        (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB (M.singleton fid 1.0) tables)
+                    )
+
+        it "keeps the medium-level factor away from the sea when the method names it" $
+            scoreWith [uns, sea] "ocean" `shouldReturn` 0.0
+
+        it "lets the medium-level factor reach the sea when the method never names it" $
+            scoreWith [uns] "ocean" `shouldReturn` 1.0
+
+        it "leaves every other subcompartment alone, either way" $ do
+            scoreWith [uns, sea] "river" `shouldReturn` 1.0
+            scoreWith [uns] "river" `shouldReturn` 1.0
+            scoreWith [uns, sea] "(unspecified)" `shouldReturn` 1.0
+            scoreWith [uns] "(unspecified)" `shouldReturn` 1.0
+
+        it "still prefers the sea line itself over the medium-level one" $
+            -- Naming the sea with a \*larger* factor proves the explicit line is
+            -- what scores, not merely that the wildcard was blocked: a gate that
+            -- only blocked would leave this uncharacterized, at 0.
+            scoreWith [uns, mkCFComp "Nitrogen, total" "water" "ocean" 5.0] "ocean" `shouldReturn` 5.0
+
+        it "recognizes the sea through the spelling compartments.csv translates" $ do
+            -- 'isForeignMediumSub' names the canonical subcompartment only, so
+            -- the source spellings are compartments.csv's job. This is the test
+            -- that fails if that translation is dropped: both the method's line
+            -- and the flow say "sea water", and the gate must still see the sea.
+            cmap <-
+                either
+                    (fail . ("compartments.csv: " <>))
+                    pure
+                    (buildCompartmentMapFromCSV "source_medium,source_sub,source_qualifier,target_medium,target_sub,target_qualifier\nwater,sea water,,water,ocean,\n")
+            fid <- nextRandom
+            let flow = mkFlow fid "Nitrogen, total" "water" (Just "sea water")
+                score cfs =
+                    loScore $
+                        computeLCIAScoreFromTables
+                            defaultUnitConfig
+                            M.empty
+                            (M.singleton fid flow)
+                            (M.singleton fid 1.0)
+                            (buildMethodTables OtherCFFamily cmap M.empty [(cf, Just (flow, ByName)) | cf <- cfs])
+            score [uns, mkCFComp "Nitrogen, total" "water" "sea water" 0.0] `shouldBe` 0.0
+            score [uns] `shouldBe` 1.0
+
     describe "groundwater gate on wildcard fallbacks (read path)" $ do
         -- EF SimaPro exports leave immediate groundwater implicit (only
         -- "groundwater, long-term" carries an explicit zero), so SimaPro
