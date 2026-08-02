@@ -32,7 +32,7 @@ Then paste the rendered block at the top of this file and tighten wording.
 - The PyPI listing carries keywords (`lca`, `life-cycle-assessment`,
   `life-cycle-inventory`, `lcia`, `environmental-data`) and the classifiers
   that place it: research audience, OS independent, and the Python versions it
-  is tested against. Searching PyPI for "life cycle assessment" found nothing
+  supports. Searching PyPI for "life cycle assessment" found nothing
   before this.
 
 ## [0.9.1] - 2026-08-01
