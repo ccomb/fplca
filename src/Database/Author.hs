@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 {- |
 Module      : Database.Author
@@ -462,17 +461,17 @@ resolveBio ctx flowRef direction amount mUnit comment
                         <> UUID.toText flowId
                         <> " in this database or its dependencies"
                     ]
-            Just (flow, ownerUnits) ->
+            Just (flow, ownerUnits, local) ->
                 let flowUnit = unitNameOf ownerUnits (bfUnitId flow)
                  in case mUnit of
                         Just stated | normalizeUnit stated /= normalizeUnit flowUnit -> Left [mismatch flow stated flowUnit]
-                        _ -> emit flowId (bfUnitId flow) Nothing []
+                        _ -> emitKnown flowId flow flowUnit local
         NewBioFlow name comp unit -> case lookupUnit ctx unit of
             Nothing -> Left ["unknown unit \"" <> unit <> "\" for flow \"" <> name <> "\""]
             Just (unitRef, unitLabel) ->
                 let flowId = authoredBioFlowUUID name comp unitLabel
                  in case findBioFlow ctx flowId of
-                        Just (flow, _) -> emit flowId (bfUnitId flow) Nothing []
+                        Just (flow, ownerUnits, local) -> emitKnown flowId flow (unitNameOf ownerUnits (bfUnitId flow)) local
                         Nothing ->
                             emit
                                 flowId
@@ -483,6 +482,22 @@ resolveBio ctx flowRef direction amount mUnit comment
                                     <> "\" is new to this database; no characterization factor matches it by identity yet"
                                 ]
   where
+    -- A flow found in a dependency is copied into the edited database with
+    -- its unit remapped: characterization resolves flows through the edited
+    -- database's own vocabulary ('dbBioFlows'), so an exchange must never
+    -- reference a flow only a dependency declares.
+    emitKnown flowId flow flowUnit local
+        | local = emit flowId (bfUnitId flow) Nothing []
+        | otherwise = case lookupUnit ctx flowUnit of
+            Nothing ->
+                Left
+                    [ "biosphere flow \""
+                        <> bfName flow
+                        <> "\" from a dependency is stated in \""
+                        <> flowUnit
+                        <> "\", a unit this database does not have"
+                    ]
+            Just (unitRef, _) -> emit flowId unitRef (Just flow{bfUnitId = unitRef}) []
     emit flowId unitRef mNew warnings =
         Right
             ( ResolvedExchange
@@ -579,13 +594,16 @@ refUnitOf db act keep = case filter keep (exchanges act) of
     (ex : _) -> getUnitNameForExchange (dbUnits db) ex
     [] -> ""
 
-findBioFlow :: AuthorContext -> UUID -> Maybe (BiosphereFlow, UnitDB)
+{- | Find a biosphere flow, with the unit table that can name its unit and
+whether it lives in the edited database itself.
+-}
+findBioFlow :: AuthorContext -> UUID -> Maybe (BiosphereFlow, UnitDB, Bool)
 findBioFlow ctx flowId =
-    case mapMaybe look (acDb ctx : acDeps ctx) of
+    case mapMaybe look (zip (True : repeat False) (acDb ctx : acDeps ctx)) of
         [] -> Nothing
         (found : _) -> Just found
   where
-    look db = (,dbUnits db) <$> M.lookup flowId (dbBioFlows db)
+    look (local, db) = (\flow -> (flow, dbUnits db, local)) <$> M.lookup flowId (dbBioFlows db)
 
 {- | Resolve a unit the author names to the identifier an exchange carries,
 plus the canonical name of that unit. Names and symbols both resolve, so

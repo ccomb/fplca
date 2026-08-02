@@ -189,6 +189,20 @@ spec = do
                         warnings `shouldSatisfy` any (isInfixOf "no characterization factor matches it")
                     Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
 
+            it "copies a dependency's biosphere flow into the edited database" $ do
+                -- Characterization resolves flows through the edited database's
+                -- own vocabulary; a flow left only in the dependency would
+                -- score zero in silence.
+                bare <- buildBareFixture
+                dep <- buildFixture
+                let ctx = AuthorContext{acDb = bare, acDeps = [dep], acUnitConfig = defaultUnitConfig}
+                case validateAuthored ctx [baseActivity{aaExchanges = [bioOf (ExistingFlow co2Id) 1 Nothing]}] of
+                    Left errs -> expectationFailure ("expected acceptance, got " <> show errs)
+                    Right ([r], _) -> do
+                        map bfName (riNewBioFlows r) `shouldBe` ["Carbon dioxide"]
+                        map bfUnitId (riNewBioFlows r) `shouldBe` [kgUnitId]
+                    Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
+
             it "reuses a biosphere flow the database already declares" $ do
                 -- Same three coordinates the flow was minted on: re-declaring it is
                 -- not a second flow.
@@ -377,6 +391,23 @@ buildFixtureAt actId prodId = do
                 ]
             )
             (M.singleton co2Id co2Flow)
+            M.empty
+            unitTable
+    either (fail . show) pure r
+
+{- | A database that declares no biosphere flow at all — bio vocabulary can
+only come from a dependency.
+-}
+buildBareFixture :: IO Database
+buildBareFixture = do
+    let act = supplierActivityAt supplierActId supplierProdId
+        noBio = act{exchanges = filter isTechnosphereExchange (exchanges act)}
+    r <-
+        buildDatabaseWithMatrices
+            defaultUnitConfig
+            (M.singleton (supplierActId, supplierProdId) noBio)
+            (M.singleton supplierProdId (milkFlowAt supplierProdId))
+            M.empty
             M.empty
             unitTable
     either (fail . show) pure r
