@@ -2176,13 +2176,16 @@ not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
     ('MethodDeclaresSeaWater'); see 'SeaWaterCFs' for why a method that never
     mentions the sea must not have a zero invented for it.
 
-Names are the post-'normalizeCompartment' lower-cased subcompartment.
+Names are the post-'normalizeCompartment' lower-cased subcompartment, so each
+tier names the canonical spelling only: the source spellings a database or a
+method file may use ("sea water", "Emissions to sea water") are translated by
+compartments.csv before they reach here, and a new one is added there.
 -}
 isDetachedSub :: Subcompartment -> Bool
 isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
 
 isForeignMediumSub :: Subcompartment -> Bool
-isForeignMediumSub (Subcompartment s) = s `elem` ["ocean", "sea water", "sea"]
+isForeignMediumSub (Subcompartment s) = s == "ocean"
 
 {- | Whether a medium-level (wildcard / fallback) CF may reach the given
 subcompartment — both tiers above, combined. Shared by the read-path

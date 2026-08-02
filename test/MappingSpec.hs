@@ -467,9 +467,10 @@ spec = do
         --
         -- EF 3.1 has both kinds. Freshwater ecotoxicity writes an explicit
         -- near-zero for the sea, so a chromium discharge there must not take
-        -- the freshwater factor. Marine eutrophication writes 305 water
-        -- factors and not one for the sea — and its receiving medium IS the
-        -- sea, so a nitrogen discharge must take the one factor it wrote.
+        -- the freshwater factor. Marine eutrophication writes no subcompartment
+        -- line at all, because the JRC original gives it the same factor for
+        -- fresh water, unspecified water and sea water alike: there was nothing
+        -- different to write, and the medium-level factor is the answer.
         let uns = mkCFComp "Nitrogen, total" "water" "(unspecified)" 1.0
             sea = mkCFComp "Nitrogen, total" "water" "ocean" 0.0
             scoreWith cfs sub = do
@@ -500,12 +501,33 @@ spec = do
             scoreWith [uns] "(unspecified)" `shouldReturn` 1.0
 
         it "still prefers the sea line itself over the medium-level one" $
-            -- Ranking colliding CFs keeps the larger value, not the more
-            -- specific compartment, so the gate is what stands between a
-            -- sea emission and a freshwater factor. Naming the sea with a
-            -- \*larger* factor proves the explicit line is read, not merely
-            -- that the wildcard was blocked.
+            -- Naming the sea with a \*larger* factor proves the explicit line is
+            -- what scores, not merely that the wildcard was blocked: a gate that
+            -- only blocked would leave this uncharacterized, at 0.
             scoreWith [uns, mkCFComp "Nitrogen, total" "water" "ocean" 5.0] "ocean" `shouldReturn` 5.0
+
+        it "recognizes the sea through the spelling compartments.csv translates" $ do
+            -- 'isForeignMediumSub' names the canonical subcompartment only, so
+            -- the source spellings are compartments.csv's job. This is the test
+            -- that fails if that translation is dropped: both the method's line
+            -- and the flow say "sea water", and the gate must still see the sea.
+            cmap <-
+                either
+                    (fail . ("compartments.csv: " <>))
+                    pure
+                    (buildCompartmentMapFromCSV "source_medium,source_sub,source_qualifier,target_medium,target_sub,target_qualifier\nwater,sea water,,water,ocean,\n")
+            fid <- nextRandom
+            let flow = mkFlow fid "Nitrogen, total" "water" (Just "sea water")
+                score cfs =
+                    loScore $
+                        computeLCIAScoreFromTables
+                            defaultUnitConfig
+                            M.empty
+                            (M.singleton fid flow)
+                            (M.singleton fid 1.0)
+                            (buildMethodTables OtherCFFamily cmap M.empty [(cf, Just (flow, ByName)) | cf <- cfs])
+            score [uns, mkCFComp "Nitrogen, total" "water" "sea water" 0.0] `shouldBe` 0.0
+            score [uns] `shouldBe` 1.0
 
     describe "groundwater gate on wildcard fallbacks (read path)" $ do
         -- EF SimaPro exports leave immediate groundwater implicit (only
