@@ -106,8 +106,8 @@ round exactly as the same literal does on its own.
 -}
 pNumber :: Parser Double
 pNumber = lexeme $ do
-    token <- pNumberToken
-    maybe (fail ("not a number: " <> T.unpack token)) pure (readAmount token)
+    literal <- pNumberToken
+    maybe (fail ("not a number: " <> T.unpack literal)) pure (readAmount literal)
 
 {- | Digits with an optional point and an optional exponent. The sign belongs to
 'pUnary', so it is not part of the token.
