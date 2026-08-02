@@ -6,6 +6,8 @@ module Config (
     -- * Types
     Config (..),
     ServerConfig (..),
+    ServerName (..),
+    unServerName,
     DatabaseConfig (..),
     MethodConfig (..),
     ScoringSetConfig (..),
@@ -145,11 +147,21 @@ lifetime middleware cannot drift into three different explanations.
 readOnlyRefusal :: Text
 readOnlyRefusal = "This instance is read-only: it answers queries but changes nothing."
 
+{- | How this instance introduces itself. A client may hold several VoLCA
+servers at once; the name is what tells them apart.
+-}
+newtype ServerName = ServerName Text
+    deriving (Show, Eq, Generic)
+
+unServerName :: ServerName -> Text
+unServerName (ServerName n) = n
+
 -- | Server configuration
 data ServerConfig = ServerConfig
     { scPort :: !Int
     , scHost :: !Text
     , scPassword :: !(Maybe Text) -- Optional password for HTTP Basic Auth
+    , scName :: !(Maybe ServerName)
     }
     deriving (Show, Eq, Generic)
 
@@ -283,6 +295,7 @@ defaultServerConfig =
         { scPort = 8080
         , scHost = "127.0.0.1"
         , scPassword = Nothing
+        , scName = Nothing
         }
 
 -- | Default config (empty databases)
@@ -326,6 +339,7 @@ instance DecodeTOML ServerConfig where
         scPort <- fromMaybe 8080 <$> getFieldOpt "port"
         scHost <- fromMaybe "127.0.0.1" <$> getFieldOpt "host"
         scPassword <- getFieldOpt "password"
+        scName <- fmap ServerName <$> getFieldOpt "name"
         pure ServerConfig{..}
 
 instance DecodeTOML DatabaseConfig where

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- A server can say what it is called. `name` in `[server]` is repeated in the
+  MCP handshake, both in `serverInfo` and in the first line of the
+  instructions an assistant reads. Someone connecting several VoLCA servers
+  at once, one per set of loaded databases, can now tell which one answered
+  instead of guessing from the data.
+
+### Fixed
+- The MCP handshake announced version `0.6.0` whatever the build was; it now
+  reports the running version.
+
 ## [0.9.4] - 2026-08-01
 
 ### Added

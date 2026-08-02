@@ -9,6 +9,7 @@ module MCPDispatchSpec (spec) where
 
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), decodeStrict)
+import Data.Aeson.Key (fromString)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
 import qualified Data.Map as M
@@ -18,8 +19,8 @@ import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Test.Hspec
 
-import API.MCP (callTool, mcpCountsAsActivity, toolDefinitions)
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), defaultConfig)
+import API.MCP (RpcRequest (..), callTool, handleInitialize, mcpCountsAsActivity, toolDefinitions)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), ServerName (..), defaultConfig)
 import Database.Manager (addDatabase, initDatabaseManager, loadDatabase)
 import Types (GeographyPolicy (..))
 
@@ -224,3 +225,39 @@ spec = describe "MCP database load/unload tools" $ do
 
         it "refuses an unknown method" $
             mcpCountsAsActivity "no/such/method" `shouldBe` False
+
+    -- A client may hold several VoLCA servers at once, one per instance. The
+    -- name is the only thing that tells them apart, and it has to reach the
+    -- assistant, not just the client's server list.
+    describe "handleInitialize" $ do
+        it "introduces itself by its configured name" $ do
+            resp <- handleInitialize (Just (ServerName "@ccomb/private")) initRequest
+            serverInfoName resp `shouldBe` Just (String "@ccomb/private")
+
+        it "puts the name where an assistant reads it" $ do
+            resp <- handleInitialize (Just (ServerName "@ccomb/private")) initRequest
+            fmap (T.isInfixOf "@ccomb/private") (instructionsOf resp) `shouldBe` Just True
+
+        it "falls back to the plain engine name when unconfigured" $ do
+            resp <- handleInitialize Nothing initRequest
+            serverInfoName resp `shouldBe` Just (String "volca")
+
+        it "says nothing about an instance it cannot name" $ do
+            resp <- handleInitialize Nothing initRequest
+            fmap (T.isInfixOf "instance named") (instructionsOf resp) `shouldBe` Just False
+
+initRequest :: RpcRequest
+initRequest = RpcRequest{rpcId = Just (Number 1), rpcMethod = "initialize", rpcParams = Nothing}
+
+-- | Dig @result.serverInfo.name@ out of a JSON-RPC reply.
+serverInfoName :: Value -> Maybe Value
+serverInfoName v = field "result" v >>= field "serverInfo" >>= field "name"
+
+instructionsOf :: Value -> Maybe Text
+instructionsOf v = case field "result" v >>= field "instructions" of
+    Just (String t) -> Just t
+    _ -> Nothing
+
+field :: Text -> Value -> Maybe Value
+field k (Object o) = KM.lookup (fromString (T.unpack k)) o
+field _ _ = Nothing

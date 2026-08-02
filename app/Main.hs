@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), hostingReadOnly, loadConfigOrDefault, readOnlyRefusal)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), ServerName, hostingReadOnly, loadConfigOrDefault, readOnlyRefusal)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -261,6 +261,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             password
             (cfgHosting config)
             (cfgClassificationPresets config)
+            (scName (cfgServer config))
             (getCurrentTime >>= writeIORef lastRequestRef)
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
@@ -377,15 +378,15 @@ logRequest req = do
     hFlush stdout
 
 -- | Create a Wai application with DatabaseManager.
-createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> IO () -> IO Application
-createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets markActivity = do
+createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> Maybe ServerName -> IO () -> IO Application
+createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets serverName markActivity = do
     -- The MCP @web_url@ deep links point at Elm SPA routes served from
     -- 'staticDir'. When the SPA is not bundled (backend-only image), those
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
-    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig markActivity
+    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig serverName markActivity
     let env =
             AppEnv
                 { aeDbManager = dbManager

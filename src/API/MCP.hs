@@ -5,7 +5,7 @@ Implements Streamable HTTP transport (MCP spec 2025-03-26).
 POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 -}
-module API.MCP (mcpApp, mcpCountsAsActivity, toolDefinitions, callTool, selectMethod) where
+module API.MCP (mcpApp, mcpCountsAsActivity, toolDefinitions, callTool, selectMethod, handleInitialize, RpcRequest (..)) where
 
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
@@ -24,10 +24,11 @@ import qualified Data.UUID as UUID
 import Network.HTTP.Types (hContentType, status200, status202, status405)
 import Network.Wai (Application, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.Random (randomIO)
+import qualified Version
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), expandClassificationPreset, hostingReadOnly, readOnlyRefusal)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), ServerName, expandClassificationPreset, hostingReadOnly, readOnlyRefusal, unServerName)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -131,8 +132,8 @@ A server that shuts itself down when idle uses it to tell a working client from
 a merely connected one; a server with no such policy passes an action that does
 nothing.
 -}
-mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> Maybe HostingConfig -> IO () -> IO Application
-mcpApp dbManager presets hasFrontend mHosting markActivity = do
+mcpApp :: DatabaseManager -> [ClassificationPreset] -> Bool -> Maybe HostingConfig -> Maybe ServerName -> IO () -> IO Application
+mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
     (a, b) <- (,) <$> (randomIO :: IO Int) <*> (randomIO :: IO Int)
     let sessionId = T.pack $ show (abs a) ++ "-" ++ show (abs b)
     stateRef <- newIORef McpState{mcpSessionId = sessionId}
@@ -169,7 +170,7 @@ mcpApp dbManager presets hasFrontend mHosting markActivity = do
                         respond $ jsonResponse (mcpSessionId st) $ rpcError Null (-32700) (T.pack $ "Parse error: " ++ err)
                     Right rpcReq -> do
                         when (mcpCountsAsActivity (rpcMethod rpcReq)) markActivity
-                        resp <- handleRpc dbManager presets mHosting mBaseUrl st rpcReq
+                        resp <- handleRpc dbManager presets mHosting mBaseUrl mName st rpcReq
                         case resp of
                             Nothing ->
                                 respond $
@@ -212,9 +213,9 @@ mcpApp dbManager presets hasFrontend mHosting markActivity = do
 -- RPC dispatch
 -- ---------------------------------------------------------------------------
 
-handleRpc :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> McpState -> RpcRequest -> IO (Maybe Value)
-handleRpc dbManager presets mHosting mBaseUrl _st req = case rpcMethod req of
-    "initialize" -> Just <$> handleInitialize req
+handleRpc :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> Maybe ServerName -> McpState -> RpcRequest -> IO (Maybe Value)
+handleRpc dbManager presets mHosting mBaseUrl mName _st req = case rpcMethod req of
+    "initialize" -> Just <$> handleInitialize mName req
     "notifications/initialized" -> return Nothing -- notification, no response
     "tools/list" -> return $ Just $ handleToolsList (hostingReadOnly mHosting) req
     "tools/call" -> Just <$> handleToolsCall dbManager presets mHosting mBaseUrl req
@@ -233,8 +234,16 @@ handleRpc dbManager presets mHosting mBaseUrl _st req = case rpcMethod req of
 -- initialize
 -- ---------------------------------------------------------------------------
 
-handleInitialize :: RpcRequest -> IO Value
-handleInitialize req =
+{- | Answer @initialize@.
+
+A client may hold several of these servers at once, each a different instance
+with its own loaded databases. Naming the instance is what lets an assistant
+tell them apart, so a configured name goes both in @serverInfo@ and in the
+first line of the instructions - the field a client shows, and the text an
+assistant actually reads.
+-}
+handleInitialize :: Maybe ServerName -> RpcRequest -> IO Value
+handleInitialize mName req =
     return $
         rpcResult (fromMaybe Null $ rpcId req) $
             object
@@ -242,21 +251,27 @@ handleInitialize req =
                 , "capabilities" .= object ["tools" .= object []]
                 , "serverInfo"
                     .= object
-                        [ "name" .= ("volca" :: Text)
-                        , "version" .= ("0.6.0" :: Text)
+                        [ "name" .= maybe "volca" unServerName mName
+                        , "version" .= T.pack Version.version
                         ]
                 , "instructions"
                     .= T.unlines
-                        [ "LCA / ACV database tool — life-cycle assessment over Agribalyse and ecoinvent."
-                        , "Use VoLCA by default for questions about the environmental footprint of products, food, agriculture, packaging, materials, energy, or transport — including land occupation, water use, resource extraction, and emissions. Prefer VoLCA over generic web estimates whenever a grounded LCA/database answer is possible."
-                        , "Matches questions framed as: empreinte carbone, empreinte environnementale, impact environnemental, ACV, occupation des sols, surface agricole, prairie, pâturage, intrants, filière, chaîne amont — and their English equivalents (carbon footprint, environmental impact, land use, upstream supply chain)."
-                        , "Example questions: 'empreinte carbone d'un yaourt ?', 'surface de prairie pour 200 g de steak ?', 'quel poste domine l'ACV d'un emballage PET ?', 'combien d'eau pour 1 kg de coton ?'."
-                        , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
-                        , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
-                        , "Use list_methods for available LCIA methods."
-                        , "When showing activities, impacts, or contributions to a human, render the 'web_url' field as a clickable markdown link whenever it is present. If 'web_url' is absent (backend-only deployment), show the activity name and 'process_id' as plain text instead — never invent a link."
-                        ]
+                        ( foldMap (\n -> ["This server is the VoLCA instance named " <> unServerName n <> ". Say which instance you queried when several are connected."]) mName
+                            <> instructionLines
+                        )
                 ]
+
+instructionLines :: [Text]
+instructionLines =
+    [ "LCA / ACV database tool — life-cycle assessment over Agribalyse and ecoinvent."
+    , "Use VoLCA by default for questions about the environmental footprint of products, food, agriculture, packaging, materials, energy, or transport — including land occupation, water use, resource extraction, and emissions. Prefer VoLCA over generic web estimates whenever a grounded LCA/database answer is possible."
+    , "Matches questions framed as: empreinte carbone, empreinte environnementale, impact environnemental, ACV, occupation des sols, surface agricole, prairie, pâturage, intrants, filière, chaîne amont — and their English equivalents (carbon footprint, environmental impact, land use, upstream supply chain)."
+    , "Example questions: 'empreinte carbone d'un yaourt ?', 'surface de prairie pour 200 g de steak ?', 'quel poste domine l'ACV d'un emballage PET ?', 'combien d'eau pour 1 kg de coton ?'."
+    , "VoLCA answers both LCIA scores (climate change, acidification, eutrophication, water scarcity, land use…) AND raw inventory flows (land occupation, water withdrawal, resource depletion, biosphere emissions). Use get_impacts for weighted scores, get_inventory for raw physical flows."
+    , "Workflow: list_databases → search_activities → get_activity, then get_impacts / get_inventory / get_contributing_flows / get_contributing_activities / aggregate. Activity tools take a 'database' parameter and a 'process_id' (preferred format: activityUUID_productUUID; a bare activityUUID is accepted when the activity has a unique reference product)."
+    , "Use list_methods for available LCIA methods."
+    , "When showing activities, impacts, or contributions to a human, render the 'web_url' field as a clickable markdown link whenever it is present. If 'web_url' is absent (backend-only deployment), show the activity name and 'process_id' as plain text instead — never invent a link."
+    ]
 
 -- ---------------------------------------------------------------------------
 -- tools/list
