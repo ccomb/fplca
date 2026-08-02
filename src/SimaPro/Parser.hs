@@ -423,7 +423,7 @@ is not part of one used to turn @0,45+0,247+,067@ into 0.45 — a number of the
 right order of magnitude, wrong by a third, indistinguishable from a real one
 downstream. An amount cell that is not a literal is an expression, and
 'resolveAmount' evaluates it; one that is neither is surfaced by
-'unreadableAmounts' rather than approximated here.
+'fallbackAmounts' rather than approximated here.
 -}
 parseAmount :: Char -> BS.ByteString -> Double
 parseAmount decimalSep bs
