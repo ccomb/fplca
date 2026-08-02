@@ -165,6 +165,7 @@ import Method.Mapping (
     MethodTables,
     ProxyTargets (..),
     RegionalActivityWeights (..),
+    SeaWaterCFs (..),
     buildMethodIndex,
     buildMethodSetTables,
     buildMethodTables,
@@ -177,8 +178,11 @@ import Method.Mapping (
     fillRegionalActivityWeights,
     isExclusionCF,
     mapMethodToFlows,
+    mtExactCF,
+    mtFallbackCF,
     mtRegionalActivityWeights,
     mtRegionalizedCF,
+    mtSeaWaterCFs,
     projectRegionalResourceFlows,
     zeroedMatchedCFs,
  )
@@ -186,6 +190,7 @@ import Method.Types (
     CompartmentMap,
     EnergyDensityMap,
     Location (..),
+    Medium (..),
     Method (..),
     MethodCF (..),
     MethodCollection (..),
@@ -723,6 +728,29 @@ buildMethodTablesFor manager dbName collection db hier method = do
                         <> "(after walking parent regions and universal broadcast). "
                         <> "Samples: "
                         <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- rawMissingPairs raw'])
+    -- Which side of the sea-water gate this method landed on, said out loud.
+    -- A method with no sea-water factor of its own has its medium-level factor
+    -- applied to sea emissions, and that is only right when the method had
+    -- nothing different to say there. When its sea lines were instead lost on
+    -- import, the same silence overstates every sea emission it covers — and
+    -- the two cases are indistinguishable from the outside. Report the regime
+    -- so a method author can tell them apart; only for a method that writes
+    -- water factors at all, since the others have no stake in it.
+    let waterCFs =
+            length [() | (_, Medium "water", _) <- M.keys (mtExactCF raw0)]
+                + length [() | (_, Medium "water") <- M.keys (mtFallbackCF raw0)]
+    case mtSeaWaterCFs raw0 of
+        MethodDeclaresSeaWater -> pure ()
+        MethodSilentOnSeaWater ->
+            when (waterCFs > 0) $
+                reportProgress Warning $
+                    "[LCIA "
+                        <> T.unpack (methodName method)
+                        <> "] no sea-water factor among "
+                        <> show waterCFs
+                        <> " water factor(s): the medium-level factor will be applied to sea "
+                        <> "emissions. Right when the method draws no distinction there, wrong "
+                        <> "when its sea lines were lost on import."
     -- A CF that matched (broadcast or regionalized) but cannot be
     -- unit-converted scores an (intentional) 0 — refusing wrong-dimension data
     -- is right, hiding the refusal is not: unreported, it reads exactly like an

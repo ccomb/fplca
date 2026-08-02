@@ -48,6 +48,8 @@
   farmed salmon, which discharges most of its nitrogen straight into the sea,
   was scoring a fifth of its marine eutrophication. Categories that do
   distinguish the sea are untouched: they write the line, and the line wins.
+  Which side a method lands on is now reported when it loads, so a category
+  whose sea factors were lost on import can be told from one that never had any.
 - A SimaPro amount cell the engine cannot read is now zero and warned about,
   instead of the number the cell happens to begin with. The reader used to stop
   at the first character that is not part of a number and keep what it had, so
