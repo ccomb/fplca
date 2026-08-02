@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 {- |
 Module      : Database.Author
@@ -608,7 +609,7 @@ findBioFlow ctx flowId =
         [] -> Nothing
         (found : _) -> Just found
   where
-    look (local, db) = (\flow -> (flow, dbUnits db, local)) <$> M.lookup flowId (dbBioFlows db)
+    look (local, db) = (,dbUnits db,local) <$> M.lookup flowId (dbBioFlows db)
 
 {- | Resolve a unit the author names to the identifier an exchange carries,
 plus the canonical name of that unit. Names and symbols both resolve, so
