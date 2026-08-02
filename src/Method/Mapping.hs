@@ -60,12 +60,15 @@ module Method.Mapping (
     inventoryContributions,
     processContributionsFromTables,
     lookupCFForFlow,
+    lookupEntryForFlow,
     characterizedFlowIds,
     cascadeTrail,
     lookupCascadeEntry,
     RungId (..),
     RungOutcome (..),
     VetoReason (..),
+    TableEntry (..),
+    BuildProvenance (..),
     convertForCharacterization,
     expandSynonymMappings,
     directionExcludedCFs,
@@ -105,7 +108,7 @@ import Control.Exception (evaluate)
 import Control.Monad.ST (runST)
 import Data.Aeson (ToJSON)
 import Data.Either (lefts, rights)
-import Data.List (find, nub, partition, sortOn)
+import Data.List (find, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
@@ -606,14 +609,41 @@ data CF = CF
     }
     deriving (Eq, Show)
 
+{- | How a method line got attached to a lookup-table key at build time.
+'bpSource' shares the already-cached 'MethodCF' — a pointer, not a copy —
+so keeping provenance in the tables costs a few words per entry.
+-}
+data BuildProvenance = BuildProvenance
+    { bpStrategy :: !MatchStrategy
+    {- ^ 'ByUUID' \/ 'ByName' \/ 'BySynonym' \/ 'ByCAS' \/ 'ByProxy' when a
+    build-side resolution attached the line to a database flow; 'NoMatch'
+    when the entry is keyed under the method's own flow name because no
+    database flow resolved at build time (the read-time cascade can still
+    serve it to a flow arriving at that key).
+    -}
+    , bpSource :: !MethodCF
+    -- ^ The method line that authored the entry.
+    }
+    deriving (Eq, Show)
+
+{- | A CF as served by the read-time lookup tables, together with its build
+provenance. Scoring only ever reads 'teCF'; the provenance exists for
+explanation surfaces and for the match-strategy the API reports.
+-}
+data TableEntry = TableEntry
+    { teCF :: !CF
+    , teProvenance :: !BuildProvenance
+    }
+    deriving (Eq, Show)
+
 {- | Precomputed CF lookup tables for one (database, method) pair.
 Building these from raw mappings is O(n log n) over thousands of CFs, so they
 should be computed once per method and reused across inventories.
 -}
 data MethodTables = MethodTables
-    { mtUuidCF :: !(M.Map UUID CF)
+    { mtUuidCF :: !(M.Map UUID TableEntry)
     -- ^ UUID-matched CFs: exact flow id → CF
-    , mtUnitVariantCF :: !(M.Map (SR.NormName, Medium) CF)
+    , mtUnitVariantCF :: !(M.Map (SR.NormName, Medium) TableEntry)
     {- ^ (unit-suffix-preserving normalized name, medium) → CF, holding only
     rows whose name carries a SimaPro unit suffix (@"Gas, natural\/m3"@).
     'normalizeName' strips that suffix, so a method's own per-unit rows
@@ -625,11 +655,11 @@ data MethodTables = MethodTables
     declared in its own unit. Consulted before the collapsed-name tables;
     same-key rows that disagree are dropped ('agreedValue' — never guess).
     -}
-    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) CF)
+    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) TableEntry)
     -- ^ (normalized name, medium, subcompartment) → CF
-    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) CF)
+    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) TableEntry)
     -- ^ (normalized name, medium) → CF for entries with unspecified subcompartment
-    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) CF)
+    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) TableEntry)
     {- ^ (normalized name, medium) → CF for entries with the long-term
     UNSPECIFIED subcompartment ("unspecified (long-term)"). A long-term flow at an
     uncovered specific subcompartment ("groundwater, long-term") inherits this —
@@ -637,7 +667,7 @@ data MethodTables = MethodTables
     immediate-emission 'mtFallbackCF', so JRC scores delayed emissions with the
     method's own long-term factor rather than the immediate one.
     -}
-    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) CF)
+    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) TableEntry)
     {- ^ (normalized name, medium) → CF, but only where the substance's
     factor is the SAME across every subcompartment — i.e. the subcompartment
     genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
@@ -645,7 +675,7 @@ data MethodTables = MethodTables
     unspecified fallback still resolve, without guessing for a substance whose
     factor DOES vary by sub (water by source), which is omitted as ambiguous.
     -}
-    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) CF)
+    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) TableEntry)
     {- ^ (CAS, normalized medium) → CF, from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
     single database flow at build time, so when many flows share one CAS in a
@@ -1168,8 +1198,8 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- keeps the last row). Regionalized UUID-matched rows reach
             -- 'mtRegionalizedCF' keyed by flow UUID + location.
             M.fromList
-                [ (bfId flow, cfOf cf)
-                | (cf, Just (flow, ByUUID)) <- mappings
+                [ (bfId flow, entryOf cf mflow)
+                | (cf, mflow@(Just (flow, ByUUID))) <- mappings
                 , Nothing <- [mcfConsumerLocation cf]
                 ]
         , mtUnitVariantCF =
@@ -1185,8 +1215,8 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((SR.NormName rawName, Medium normMed), [cfOf cf])
-                    | (cf, _) <- mappings
+                    [ ((SR.NormName rawName, Medium normMed), [entryOf cf mflow])
+                    | (cf, mflow) <- mappings
                     , let rawName = normalizeNameKeepUnit (mcfFlowName cf)
                     , rawName /= normalizeName (mcfFlowName cf)
                     , Nothing <- [mcfConsumerLocation cf]
@@ -1201,10 +1231,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
           -- an arbitrary location's value (e.g. a region whose factor is 0
           -- silently erases the global credit).
           mtExactCF =
-            stripStrategy $
+            dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1224,10 +1254,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- that DOES carry a "(long-term)" CF keeps it in 'mtExactCF', which
             -- is consulted before this fallback, so long-term emissions still
             -- resolve to their explicit (often zero) factor.
-            stripStrategy $
+            dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1242,10 +1272,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- pick up THIS, not the immediate-emission default, so a delayed
             -- emission gets the method's own long-term factor (e.g. EF's explicit
             -- zero) rather than the full immediate CF.
-            stripStrategy $
+            dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (cfOf cf, matchStrategy mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1261,7 +1291,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [cfOf cf])
+                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [entryOf cf mflow])
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
@@ -1308,9 +1338,9 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- out. Same never-guess rule as 'agreedValue'.
             (`M.withoutKeys` casDiscriminated) . M.map snd $
                 M.fromListWith
-                    preferUnspecifiedCas
-                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, cfOf cf))
-                    | (cf, Just (_, ByCAS)) <- mappings
+                    (preferUnspecifiedBy teCF)
+                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, entryOf cf mflow))
+                    | (cf, mflow@(Just (_, ByCAS))) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
                     , Nothing <- [mcfConsumerLocation cf]
@@ -1334,7 +1364,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- activity's location instead of the flow's own projected value.
             (`M.withoutKeys` casDiscriminated) . M.map (M.map snd) $
                 M.fromListWith
-                    (M.unionWith preferUnspecifiedCas)
+                    (M.unionWith (preferUnspecifiedBy id))
                     [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
@@ -1370,12 +1400,18 @@ buildMethodTables methodFamily cmap energyDensities mappings =
   where
     cfOf cf = CF (mcfValue cf) (CFUnit (mcfUnit cf))
 
-    stripStrategy = M.map (\(c, _, _) -> c)
+    entryOf cf mflow = TableEntry (cfOf cf) (BuildProvenance (matchStrategy mflow) cf)
+
+    -- The Bool rode along only for 'preferBetter''s raw-name rank.
+    dropRank = M.map fst
 
     -- All subcompartments of a (name, medium) agree on the CF ⇒ the sub is
-    -- irrelevant; return that common value. Disagreement ⇒ Nothing (ambiguous).
-    agreedValue vus = case nub vus of
-        [vu] -> Just vu
+    -- irrelevant; keep that common value. Disagreement ⇒ Nothing (ambiguous).
+    -- Agreement is judged on the CF alone; the surviving entry's provenance
+    -- is the first row's — the values are equal, which method line authored
+    -- the survivor is presentation detail.
+    agreedValue vus = case vus of
+        v : rest | all ((== teCF v) . teCF) rest -> Just v
         _ -> Nothing
 
     -- (CAS, medium) keys the CAS bridge must not serve: two rows agreeing on
@@ -1428,9 +1464,9 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     casSubRank s
         | isUnspecifiedSub s = 0 :: Int
         | otherwise = 1
-    preferUnspecifiedCas a@(ra, CF va _) b@(rb, CF vb _)
+    preferUnspecifiedBy val a@(ra, ea) b@(rb, eb)
         | ra /= rb = if ra < rb then a else b
-        | abs va >= abs vb = a
+        | abs (cfValue (val ea)) >= abs (cfValue (val eb)) = a
         | otherwise = b
 
     -- Counted from the method's own factor lines: does it name the sea
@@ -1509,12 +1545,15 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     -- verbatim carries the unit the flow is actually declared in; the other
     -- variant is dimensionally incompatible and would silently convert to 0.
     -- Only then the historical higher-value tie-break.
-    preferBetter a@(CF v1 _, s1, r1) b@(CF v2 _, s2, r2)
-        | strategyPriority s1 < strategyPriority s2 = a
-        | strategyPriority s1 > strategyPriority s2 = b
+    preferBetter a@(ea, r1) b@(eb, r2)
+        | p1 < p2 = a
+        | p1 > p2 = b
         | r1 /= r2 = if r1 then a else b
-        | v1 >= v2 = a
+        | cfValue (teCF ea) >= cfValue (teCF eb) = a
         | otherwise = b
+      where
+        p1 = strategyPriority (bpStrategy (teProvenance ea))
+        p2 = strategyPriority (bpStrategy (teProvenance eb))
 
     rawNameMatches cf mflow = case mflow of
         Just (flow, _) -> T.toLower (T.strip (mcfFlowName cf)) == T.toLower (T.strip (bfName flow))
@@ -2050,7 +2089,7 @@ data VetoReason = ForeignMediumVeto | LongTermUSEtoxVeto
 
 -- | One rung's verdict about one flow.
 data RungOutcome
-    = RungHit !CF
+    = RungHit !TableEntry
     | -- | The rung's table holds nothing for this flow.
       RungMiss
     | {- | The rung's precondition on the flow itself fails (not a long-term
@@ -2063,7 +2102,7 @@ data RungOutcome
       a vetoed rung costs no lookup — "was there an entry behind the veto"
       is paid only when an explanation forces it.
       -}
-      RungVetoed !VetoReason (Maybe CF)
+      RungVetoed !VetoReason (Maybe TableEntry)
     | {- | Several candidates disagree and the rung refuses to pick one by Map
       order (energy-family disagreement) — the "never guess" rule.
       -}
@@ -2203,10 +2242,11 @@ cascadeTrail tables flowDB fid =
                         , firstWord rname == fam
                         , Just cf <- [resourceCF (SR.NormName rname)]
                         ]
-                 in case nub candidates of
+                 in case candidates of
                         [] -> RungMiss
-                        [cf] -> RungHit cf
-                        _ -> RungAmbiguous
+                        e : rest
+                            | all ((== teCF e) . teCF) rest -> RungHit e
+                            | otherwise -> RungAmbiguous
 
         resourceCF rname =
             M.lookup (rname, baseMed, normSub) (mtExactCF tables)
@@ -2239,12 +2279,12 @@ cascadeTrail tables flowDB fid =
 {- | The first rung that answers, and with what — the score path's view of
 'cascadeTrail'.
 -}
-lookupCascadeEntry :: MethodTables -> BioFlowDB -> UUID -> Maybe (RungId, CF)
+lookupCascadeEntry :: MethodTables -> BioFlowDB -> UUID -> Maybe (RungId, TableEntry)
 lookupCascadeEntry tables flowDB fid =
-    listToMaybe [(rid, cf) | (rid, RungHit cf) <- cascadeTrail tables flowDB fid]
+    listToMaybe [(rid, e) | (rid, RungHit e) <- cascadeTrail tables flowDB fid]
 
 lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe CF
-lookupCascadeCF tables flowDB fid = snd <$> lookupCascadeEntry tables flowDB fid
+lookupCascadeCF tables flowDB fid = teCF . snd <$> lookupCascadeEntry tables flowDB fid
 
 -- | Normalize medium names between method CFs and database flows.
 normalizeMedium :: Text -> Text
@@ -2863,8 +2903,14 @@ bridge — and 'findUncharacterized' never flags a flow the score path
 characterizes. Cold path; the singleton allocation is irrelevant here.
 -}
 lookupCFForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe CF
-lookupCFForFlow tables fid mFlow =
-    lookupCascadeCF tables (maybe M.empty (M.singleton fid) mFlow) fid
+lookupCFForFlow tables fid mFlow = teCF . snd <$> lookupEntryForFlow tables fid mFlow
+
+{- | 'lookupCFForFlow' with the served entry and the rung that answered —
+for surfaces that report how a flow is covered, not just by how much.
+-}
+lookupEntryForFlow :: MethodTables -> UUID -> Maybe BiosphereFlow -> Maybe (RungId, TableEntry)
+lookupEntryForFlow tables fid mFlow =
+    lookupCascadeEntry tables (maybe M.empty (M.singleton fid) mFlow) fid
 
 {- | The database flows a method's tables characterize, each probed with
 'lookupCFForFlow' — the read-side lookup scoring uses — so a flow reached

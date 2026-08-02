@@ -471,7 +471,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- The global row stands; the location row lives in the regional
             -- table instead of clobbering the flow's universal value.
-            M.lookup (bfId river) (mtUuidCF tables) `shouldBe` Just (CF 5 (CFUnit "m3"))
+            fmap teCF (M.lookup (bfId river) (mtUuidCF tables)) `shouldBe` Just (CF 5 (CFUnit "m3"))
             M.lookup (bfId river, Location "IN") (mtRegionalizedCF tables) `shouldBe` Just (CF 100 (CFUnit "m3"))
 
         it "vetoes the CAS bridge when name-regionalized rows disagree with the default (parser path)" $ do
@@ -536,7 +536,7 @@ spec = describe "Water-use sign: CAS-shared resource flows must be characterized
             mappings <- mapMethodFlows acrCtx acrMethod
             let tables = buildMethodTables OtherCFFamily M.empty M.empty mappings
             -- indoor air is 100x; the bridge must not broadcast it.
-            M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables) `shouldBe` Just (CF 1 (CFUnit "kg"))
+            fmap teCF (M.lookup (CASNumber acrCAS, Medium "air") (mtCasCF tables)) `shouldBe` Just (CF 1 (CFUnit "kg"))
 
         it "reaches the flow with the unspecified factor, not the indoor max" $ do
             mappings <- mapMethodFlows acrCtx acrMethod
