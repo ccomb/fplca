@@ -94,18 +94,23 @@ two are different datasets and must stay different rows.
 authoredNamespace :: UUID
 authoredNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "volca:authored")
 
-mintAuthored :: Text -> UUID
-mintAuthored = UUID5.generateNamed authoredNamespace . BS.unpack . TE.encodeUtf8
+{- | Fields are joined with NUL before hashing: an author may write any
+printable character in a name, so a printable separator would let two
+different descriptions mint one key ("wheat @farm" in "FR" versus "wheat"
+in "farm@FR").
+-}
+mintAuthored :: [Text] -> UUID
+mintAuthored = UUID5.generateNamed authoredNamespace . BS.unpack . TE.encodeUtf8 . T.intercalate "\0"
 
 -- | Activity half of the process key: what the activity does, and where.
 authoredActivityUUID :: Text -> Text -> UUID
-authoredActivityUUID name location = mintAuthored ("activity:" <> name <> "@" <> location)
+authoredActivityUUID name location = mintAuthored ["activity", name, location]
 
 {- | Product half of the process key. Keyed on unit as well as name — see the
 module header on why @milk@ in @kg@ and @milk@ in @l@ are two flows.
 -}
 authoredProductUUID :: Text -> Text -> UUID
-authoredProductUUID productName unit = mintAuthored ("product:" <> productName <> ":" <> unit)
+authoredProductUUID productName unit = mintAuthored ["product", productName, unit]
 
 {- | Identity of a biosphere flow an author introduces. Same three coordinates
 the SimaPro parser mints on (name, compartment, unit), so re-declaring the
@@ -113,10 +118,7 @@ same flow in a second activity reuses the first one instead of forking it.
 -}
 authoredBioFlowUUID :: Text -> Compartment -> Text -> UUID
 authoredBioFlowUUID name comp unit =
-    mintAuthored ("flow:" <> name <> ":" <> compartmentKey comp <> ":" <> unit)
-
-compartmentKey :: Compartment -> Text
-compartmentKey comp = compartmentName comp <> "/" <> fromMaybe "" (compartmentSub comp)
+    mintAuthored ["flow", name, compartmentName comp, fromMaybe "" (compartmentSub comp), unit]
 
 -- ---------------------------------------------------------------------------
 -- What an author writes
