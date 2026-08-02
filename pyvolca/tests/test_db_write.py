@@ -15,6 +15,7 @@ import urllib.parse
 import pytest
 
 from volca.client import Client, VoLCAError
+from volca.types import ActivityInput, BioDirection, BioExchange, TechInput
 
 
 def _ok(session, json_body: dict) -> None:
@@ -319,3 +320,137 @@ class TestNoDefaultDb:
     def test_export_without_db_raises(self):
         with pytest.raises(VoLCAError, match="No database specified"):
             self._client().export_database("simapro")
+
+
+# ---------------------------------------------------------------------------
+# authoring activities
+# ---------------------------------------------------------------------------
+
+
+def _cheese(**overrides) -> ActivityInput:
+    fields = {
+        "name": "cheese, at dairy",
+        "location": "FR",
+        "product_name": "cheese",
+        "product_amount": 1.0,
+        "product_unit": "kg",
+        "inputs": [TechInput(provider="act_prod", amount=8.0)],
+    }
+    fields.update(overrides)
+    return ActivityInput(**fields)
+
+
+class TestCreateActivities:
+    def test_body_and_url_shape(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=5)
+        _ok(session, {"written": ["a_b"], "transient": False, "warnings": []})
+        result = client.create_activities([_cheese()])
+        assert result["written"] == ["a_b"]
+        url = session.post.call_args[0][0]
+        assert url.endswith("/api/v1/db/testdb/activities")
+        body = session.post.call_args[1]["json"]
+        [activity] = body["activities"]
+        # The wire speaks camelCase; the client speaks snake_case.
+        assert activity["productName"] == "cheese"
+        assert activity["productUnit"] == "kg"
+        assert activity["inputs"] == [{"provider": "act_prod", "amount": 8.0}]
+        # Identity is the engine's to mint, so nothing here names one.
+        assert "processId" not in activity and "id" not in activity
+
+    def test_accepts_a_single_activity_as_well_as_a_batch(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=5)
+        _ok(session, {"written": ["a_b"], "transient": False, "warnings": []})
+        client.create_activities(_cheese())
+        assert len(session.post.call_args[1]["json"]["activities"]) == 1
+
+    def test_omits_optional_fields_rather_than_sending_nulls(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=5)
+        _ok(session, {"written": ["a_b"], "transient": False, "warnings": []})
+        client.create_activities([_cheese()])
+        [activity] = session.post.call_args[1]["json"]["activities"]
+        assert "unit" not in activity["inputs"][0]
+        assert "comment" not in activity["inputs"][0]
+
+    def test_biosphere_line_carries_its_compartment(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=5)
+        _ok(session, {"written": ["a_b"], "transient": False, "warnings": ["new flow"]})
+        activity = _cheese(
+            biosphere=[
+                BioExchange.introducing("Nitrous oxide", "air", "Emission", 0.5, "kg"),
+                BioExchange.existing("11111111-2222-3333-4444-555555555555", "Emission", 1.2),
+            ]
+        )
+        client.create_activities([activity])
+        [sent] = session.post.call_args[1]["json"]["activities"]
+        introduced, existing = sent["biosphere"]
+        assert introduced["name"] == "Nitrous oxide"
+        assert introduced["compartment"] == "air"
+        assert "flow" not in introduced
+        assert existing["flow"] == "11111111-2222-3333-4444-555555555555"
+        assert "name" not in existing
+
+    def test_never_sent_to_an_engine_that_has_no_such_route(self, mocked_client):
+        # An absent route answers 404, which reads exactly like a misspelled
+        # database name; refuse before sending rather than let the caller guess.
+        client, session = mocked_client
+        _version_ok(session, wire=4)
+        with pytest.raises(VoLCAError, match="wire revision >= 5"):
+            client.create_activities([_cheese()])
+        session.post.assert_not_called()
+
+
+class TestReplaceActivity:
+    def test_puts_to_the_addressed_process(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=5)
+        from tests.conftest import _make_response
+
+        session.put.return_value = _make_response(
+            {"written": ["a_b"], "transient": False, "warnings": []}
+        )
+        client.replace_activity("a_b", _cheese(product_amount=2.0))
+        url = session.put.call_args[0][0]
+        assert url.endswith("/api/v1/db/testdb/activity/a_b")
+        assert session.put.call_args[1]["json"]["productAmount"] == 2.0
+
+    def test_never_sent_to_an_engine_that_has_no_such_route(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=4)
+        with pytest.raises(VoLCAError, match="wire revision >= 5"):
+            client.replace_activity("a_b", _cheese())
+        session.put.assert_not_called()
+
+
+class TestAuthoringInputTypes:
+    def test_a_biosphere_line_must_name_its_flow_exactly_one_way(self):
+        # Caught here rather than after a round trip: the engine refuses the
+        # same two shapes, but the caller finds out sooner.
+        with pytest.raises(ValueError, match="not both and not neither"):
+            BioExchange(direction=BioDirection.EMISSION, amount=1.0)
+        with pytest.raises(ValueError, match="not both and not neither"):
+            BioExchange(
+                direction=BioDirection.EMISSION, amount=1.0, flow="f", name="n", compartment="air"
+            )
+
+    def test_a_new_flow_needs_a_compartment(self):
+        with pytest.raises(ValueError, match="needs a compartment"):
+            BioExchange(direction=BioDirection.EMISSION, amount=1.0, name="Nitrous oxide")
+
+    def test_a_new_flow_needs_a_unit(self):
+        # The engine refuses this too: a named flow's unit is half its
+        # identity, so it cannot be defaulted.
+        with pytest.raises(ValueError, match="needs a unit"):
+            BioExchange(
+                direction=BioDirection.EMISSION, amount=1.0, name="Nitrous oxide", compartment="air"
+            )
+
+    def test_direction_is_read_the_way_the_engine_reads_it(self):
+        # The engine lowercases the wire value before matching, so the
+        # client accepts any casing but always sends the canonical one.
+        exchange = BioExchange.introducing("Nitrous oxide", "air", "emission", 0.5, "kg")
+        assert exchange.direction is BioDirection.EMISSION
+        assert exchange.to_wire()["direction"] == "Emission"

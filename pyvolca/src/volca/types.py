@@ -880,10 +880,22 @@ class BioDirection(_StrEnum):
 
     ``RESOURCE`` — extraction from the environment (input).
     ``EMISSION`` — release to the environment (output).
+
+    Lookup is case-insensitive (``BioDirection("emission")`` works): the
+    engine reads the wire value that way, so the client should not be
+    stricter than the server it speaks for.
     """
 
     RESOURCE = "Resource"
     EMISSION = "Emission"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "BioDirection | None":
+        if isinstance(value, str):
+            for member in cls:
+                if member.value.lower() == value.lower():
+                    return member
+        return None
 
 
 def _direction_is_input(direction: BioDirection) -> bool:
@@ -1771,3 +1783,208 @@ class CollectionCoverage(FromJson):
     db_name: str
     total_flows: int
     characterized_flows: int
+
+
+# ---------------------------------------------------------------------------
+# Authoring: what you send when you write an activity
+# ---------------------------------------------------------------------------
+#
+# These are the only input types in this module — everything above describes a
+# response. They mirror what the engine accepts and validate what it can check
+# locally, so an obviously malformed line fails before a round trip rather than
+# after one.
+
+
+@dataclass(frozen=True)
+class TechInput:
+    """One product an activity consumes, named by the process that supplies it.
+
+    ``provider`` is a ``process_id`` (``activityUUID_productUUID``, or a bare
+    activity UUID when that activity has a single product) — the same address
+    every read endpoint hands out. The flow follows from the supplier, so it is
+    never stated separately. ``unit`` defaults to the supplier's own reference
+    unit; another one is fine as long as it converts.
+    """
+
+    provider: str
+    amount: float
+    unit: str | None = None
+    comment: str | None = None
+
+    def to_wire(self) -> dict:
+        return _drop_none(
+            {
+                "provider": self.provider,
+                "amount": self.amount,
+                "unit": self.unit,
+                "comment": self.comment,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class BioExchange:
+    """One resource taken from the environment, or one emission released into it.
+
+    Name the flow one way or the other, never both: ``flow`` addresses one the
+    database already has, and ``name`` + ``compartment`` introduce a new one.
+    Use the two constructors rather than the fields —
+    :meth:`existing` and :meth:`introducing` — which is why passing both or
+    neither raises here instead of at the server.
+
+    A biosphere amount is never converted, so an exchange on an existing flow
+    must be stated in that flow's own unit.
+    """
+
+    direction: BioDirection
+    amount: float
+    flow: str | None = None
+    name: str | None = None
+    compartment: str | None = None
+    sub_compartment: str | None = None
+    unit: str | None = None
+    comment: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.flow is None) == (self.name is None):
+            raise ValueError(
+                "a biosphere exchange names either an existing flow (flow=...) "
+                "or a new one (name=..., compartment=...), not both and not neither"
+            )
+        if self.name is not None and self.compartment is None:
+            raise ValueError(
+                f"biosphere flow {self.name!r} needs a compartment "
+                "(air, water, soil, natural resource)"
+            )
+        if self.name is not None and self.unit is None:
+            raise ValueError(
+                f"biosphere flow {self.name!r} needs a unit "
+                "(it is half of a new flow's identity, so it cannot be defaulted)"
+            )
+
+    @classmethod
+    def existing(
+        cls,
+        flow: str,
+        direction: BioDirection | str,
+        amount: float,
+        *,
+        unit: str | None = None,
+        comment: str | None = None,
+    ) -> "BioExchange":
+        """An exchange on a flow the database already declares, by its identifier."""
+        return cls(
+            direction=BioDirection(direction),
+            amount=amount,
+            flow=flow,
+            unit=unit,
+            comment=comment,
+        )
+
+    @classmethod
+    def introducing(
+        cls,
+        name: str,
+        compartment: str,
+        direction: BioDirection | str,
+        amount: float,
+        unit: str,
+        *,
+        sub_compartment: str | None = None,
+        comment: str | None = None,
+    ) -> "BioExchange":
+        """An exchange on a flow this activity brings into the database.
+
+        No characterization factor matches a brand-new flow by identity, so the
+        engine returns a warning alongside the write rather than refusing it.
+        """
+        return cls(
+            direction=BioDirection(direction),
+            amount=amount,
+            name=name,
+            compartment=compartment,
+            sub_compartment=sub_compartment,
+            unit=unit,
+            comment=comment,
+        )
+
+    def to_wire(self) -> dict:
+        return _drop_none(
+            {
+                "flow": self.flow,
+                "name": self.name,
+                "compartment": self.compartment,
+                "subCompartment": self.sub_compartment,
+                "direction": self.direction.value,
+                "amount": self.amount,
+                "unit": self.unit,
+                "comment": self.comment,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class WasteOutput:
+    """One residue an activity hands to a treatment process.
+
+    ``provider`` names that treatment process, exactly as a :class:`TechInput`
+    names its producer.
+    """
+
+    provider: str
+    amount: float
+    unit: str | None = None
+    comment: str | None = None
+
+    def to_wire(self) -> dict:
+        return _drop_none(
+            {
+                "provider": self.provider,
+                "amount": self.amount,
+                "unit": self.unit,
+                "comment": self.comment,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ActivityInput:
+    """An activity as you write it — the body of :meth:`Client.create_activities`.
+
+    The inventory is three lists rather than one, so a field that means
+    something on a supplier link cannot be sent on an emission.
+
+    You do not choose the ``process_id``. The engine mints it from the name,
+    location, product name and product unit, which is what makes writing the
+    same activity twice a correction of one row rather than two rows. One
+    reference product per activity: coproducts and allocation are not supported
+    yet, and this type does not pretend they are.
+    """
+
+    name: str
+    location: str
+    product_name: str
+    product_amount: float
+    product_unit: str
+    description: list[str] = field(default_factory=list)
+    inputs: list[TechInput] = field(default_factory=list)
+    biosphere: list[BioExchange] = field(default_factory=list)
+    waste_outputs: list[WasteOutput] = field(default_factory=list)
+
+    def to_wire(self) -> dict:
+        return {
+            "name": self.name,
+            "location": self.location,
+            "description": list(self.description),
+            "productName": self.product_name,
+            "productAmount": self.product_amount,
+            "productUnit": self.product_unit,
+            "inputs": [i.to_wire() for i in self.inputs],
+            "biosphere": [b.to_wire() for b in self.biosphere],
+            "wasteOutputs": [w.to_wire() for w in self.waste_outputs],
+        }
+
+
+def _drop_none(d: dict) -> dict:
+    """Omit absent optional fields rather than sending explicit nulls."""
+    return {k: v for k, v in d.items() if v is not None}

@@ -28,7 +28,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.1** speaks wire formats **2 to 4** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.1** speaks wire formats **2 to 5** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 
@@ -359,6 +359,10 @@ Direction of a biosphere exchange.
 ``RESOURCE`` — extraction from the environment (input).
 ``EMISSION`` — release to the environment (output).
 
+Lookup is case-insensitive (``BioDirection("emission")`` works): the
+engine reads the wire value that way, so the client should not be
+stricter than the server it speaks for.
+
 ### `Client`
 
 HTTP client for the VoLCA HTTP API.
@@ -450,6 +454,33 @@ Copy a loaded database in memory under a new name.
 Returns the engine's ``ActivateResponse`` dict
 (``{"success", "message", "database"?}``). Raises VoLCAError if the
 engine reports ``success=false``.
+
+##### `Client.create_activities(activities: list[ActivityInput] | ActivityInput, db_name: str | None = None) -> dict`
+
+Write new activities into a database that can hold them.
+
+Each activity's ``process_id`` is minted by the engine from its name,
+location, product name and product unit — you do not choose it — and
+comes back in ``written``. Writing the same activity twice is therefore
+a conflict, not a second row; use :meth:`replace_activity` to correct
+one that is already there.
+
+Only a database of your own accepts writes: one you uploaded, or a
+copy. A database the engine reads from its configuration is background
+data the whole installation shares, and is refused.
+
+A batch is judged as a whole. If anything is wrong the engine reports
+every complaint at once and writes nothing, so a ten-line inventory is
+fixed in one round trip.
+
+Returns ``{"written": [process_id], "transient": bool, "warnings": [...]}``.
+``transient`` is true when the edit lives in memory only; ``warnings``
+carries what the engine wants you to know but would not refuse over
+(a brand-new biosphere flow no method characterizes yet, for one).
+
+Needs an engine speaking wire revision 5 (the routes do not exist
+before it, and an absent route is a 404 that reads exactly like a
+misspelled database name).
 
 ##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, ids: list[str] | None = None, db_name: str | None = None) -> dict`
 
@@ -864,6 +895,18 @@ Remove ``dep_name`` from the target database's dependencies.
 
 Returns the updated ``DatabaseSetupInfo`` dict.
 
+##### `Client.replace_activity(process_id: str, activity: ActivityInput, db_name: str | None = None) -> dict`
+
+Rewrite one activity the database already holds, keeping its identity.
+
+``process_id`` must be the identity ``activity`` mints to — that is,
+the name, location, product name and product unit must be the ones the
+row already has. Change any of those and you are describing a different
+activity, which the engine refuses rather than writing to a second row;
+create that one and delete the old one instead.
+
+Returns the same shape as :meth:`create_activities`.
+
 ##### `Client.resolve_activities(names: Iterable[str], *, by: Literal['name', 'product'] = 'name', geo: str | None = None, exact: bool = True, limit: int = 5, workers: int = 8) -> dict[str, list[Activity]]`
 
 Resolve a batch of names to their matching activities, concurrently.
@@ -1234,6 +1277,31 @@ Result of ``compare_activities``.
 | `left_only` | `list[ActivityDiffRow]` | list() |
 | `right_only` | `list[ActivityDiffRow]` | list() |
 
+### `ActivityInput`
+
+An activity as you write it — the body of :meth:`Client.create_activities`.
+
+The inventory is three lists rather than one, so a field that means
+something on a supplier link cannot be sent on an emission.
+
+You do not choose the ``process_id``. The engine mints it from the name,
+location, product name and product unit, which is what makes writing the
+same activity twice a correction of one row rather than two rows. One
+reference product per activity: coproducts and allocation are not supported
+yet, and this type does not pretend they are.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `name` | `str` | — |
+| `location` | `str` | — |
+| `product_name` | `str` | — |
+| `product_amount` | `float` | — |
+| `product_unit` | `str` | — |
+| `description` | `list[str]` | list() |
+| `inputs` | `list[TechInput]` | list() |
+| `biosphere` | `list[BioExchange]` | list() |
+| `waste_outputs` | `list[WasteOutput]` | list() |
+
 ### `ActivityDiffRow`
 
 One matched or unmatched flow in an activity comparison.
@@ -1293,6 +1361,30 @@ inspect, not a failure.
 | `results` | `list[ScoredActivity]` | — |
 | `not_found` | `list[str]` | — |
 | `invalid` | `list[str]` | — |
+
+### `BioExchange`
+
+One resource taken from the environment, or one emission released into it.
+
+Name the flow one way or the other, never both: ``flow`` addresses one the
+database already has, and ``name`` + ``compartment`` introduce a new one.
+Use the two constructors rather than the fields —
+:meth:`existing` and :meth:`introducing` — which is why passing both or
+neither raises here instead of at the server.
+
+A biosphere amount is never converted, so an exchange on an existing flow
+must be stated in that flow's own unit.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `direction` | `BioDirection` | — |
+| `amount` | `float` | — |
+| `flow` | `str \| None` | None |
+| `name` | `str \| None` | None |
+| `compartment` | `str \| None` | None |
+| `sub_compartment` | `str \| None` | None |
+| `unit` | `str \| None` | None |
+| `comment` | `str \| None` | None |
 
 ### `BiosphereExchange`
 
@@ -2032,6 +2124,23 @@ the database the entry lives in (they differ across linked databases).
 | `upstream_count` | `int` | — |
 | `classifications` | `dict[str, str]` | dict() |
 
+### `TechInput`
+
+One product an activity consumes, named by the process that supplies it.
+
+``provider`` is a ``process_id`` (``activityUUID_productUUID``, or a bare
+activity UUID when that activity has a single product) — the same address
+every read endpoint hands out. The flow follows from the supplier, so it is
+never stated separately. ``unit`` defaults to the supplier's own reference
+unit; another one is fine as long as it converts.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `provider` | `str` | — |
+| `amount` | `float` | — |
+| `unit` | `str \| None` | None |
+| `comment` | `str \| None` | None |
+
 ### `TechnosphereExchange`
 
 An exchange with another activity. Carries no compartment — the
@@ -2106,6 +2215,20 @@ Always False — waste flows never define an activity's functional unit.
 
 Treatment activities have a ``ReferenceInput`` instead, exposed
 via :class:`TechnosphereExchange`.
+
+### `WasteOutput`
+
+One residue an activity hands to a treatment process.
+
+``provider`` names that treatment process, exactly as a :class:`TechInput`
+names its producer.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `provider` | `str` | — |
+| `amount` | `float` | — |
+| `unit` | `str \| None` | None |
+| `comment` | `str \| None` | None |
 
 ## Functions
 

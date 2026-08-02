@@ -51,6 +51,7 @@ import requests
 from .types import (
     Activity,
     ActivityDetail,
+    ActivityInput,
     AggregateOp,
     AggregateResult,
     AggregateScope,
@@ -867,6 +868,71 @@ class Client:
             )
         )
         return self._require_success(payload, "delete_activities")
+
+    def create_activities(
+        self,
+        activities: "list[ActivityInput] | ActivityInput",
+        db_name: str | None = None,
+    ) -> dict:
+        """Write new activities into a database that can hold them.
+
+        Each activity's ``process_id`` is minted by the engine from its name,
+        location, product name and product unit — you do not choose it — and
+        comes back in ``written``. Writing the same activity twice is therefore
+        a conflict, not a second row; use :meth:`replace_activity` to correct
+        one that is already there.
+
+        Only a database of your own accepts writes: one you uploaded, or a
+        copy. A database the engine reads from its configuration is background
+        data the whole installation shares, and is refused.
+
+        A batch is judged as a whole. If anything is wrong the engine reports
+        every complaint at once and writes nothing, so a ten-line inventory is
+        fixed in one round trip.
+
+        Returns ``{"written": [process_id], "transient": bool, "warnings": [...]}``.
+        ``transient`` is true when the edit lives in memory only; ``warnings``
+        carries what the engine wants you to know but would not refuse over
+        (a brand-new biosphere flow no method characterizes yet, for one).
+
+        Needs an engine speaking wire revision 5 (the routes do not exist
+        before it, and an absent route is a 404 that reads exactly like a
+        misspelled database name).
+        """
+        batch = [activities] if isinstance(activities, ActivityInput) else list(activities)
+        self._require_wire(5, "create_activities", engine_hint="0.9.5")
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/activities",
+                json={"activities": [a.to_wire() for a in batch]},
+            )
+        )
+
+    def replace_activity(
+        self,
+        process_id: str,
+        activity: "ActivityInput",
+        db_name: str | None = None,
+    ) -> dict:
+        """Rewrite one activity the database already holds, keeping its identity.
+
+        ``process_id`` must be the identity ``activity`` mints to — that is,
+        the name, location, product name and product unit must be the ones the
+        row already has. Change any of those and you are describing a different
+        activity, which the engine refuses rather than writing to a second row;
+        create that one and delete the old one instead.
+
+        Returns the same shape as :meth:`create_activities`.
+        """
+        self._require_wire(5, "replace_activity", engine_hint="0.9.5")
+        target = self._db(db_name)
+        return self._json(
+            self._session.put(
+                f"{self.base_url}/api/v1/db/{target}/activity/{process_id}",
+                json=activity.to_wire(),
+            )
+        )
 
     def relink(
         self, dep_db: str, mapping_csv: str, db_name: str | None = None
