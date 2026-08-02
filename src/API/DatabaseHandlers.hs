@@ -99,10 +99,6 @@ import qualified Database.ComputedQuality as CQ
 
 import API.Types (
     ActivateResponse (..),
-    ExplainCFResult (..),
-    ExplainedFlowAPI (..),
-    ExplainedMatchAPI (..),
-    ExplainedStepAPI (..),
     ActivityInput (..),
     ActivityWriteRequest (..),
     ActivityWriteResponse (..),
@@ -117,6 +113,10 @@ import API.Types (
     DeleteClassFilter (..),
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
+    ExplainCFResult (..),
+    ExplainedFlowAPI (..),
+    ExplainedMatchAPI (..),
+    ExplainedStepAPI (..),
     ExportRequest (..),
     GapConsumerAPI (..),
     GapEntryAPI (..),
@@ -223,9 +223,9 @@ import Method.Types (Method (..), MethodCF (..))
 import Types (
     BiosphereFlow (..),
     Database (..),
+    GeographyPolicy (..),
     bfCompartmentName,
     bfCompartmentSub,
-    GeographyPolicy (..),
     blockerReasonDetail,
     getUnitNameForBioFlow,
     unresolvedCount,

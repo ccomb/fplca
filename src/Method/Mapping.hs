@@ -452,7 +452,6 @@ exclusionWarning flows cf
   where
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
--- | Convert strategy text back to MatchStrategy
 -- | Wire name for a match strategy, the inverse of 'strategyFromText'.
 strategyToText :: MatchStrategy -> Text
 strategyToText ByUUID = "uuid"
@@ -463,6 +462,7 @@ strategyToText ByFuzzy = "fuzzy"
 strategyToText ByProxy = "proxy"
 strategyToText NoMatch = "none"
 
+-- | Convert strategy text back to MatchStrategy
 strategyFromText :: Text -> MatchStrategy
 strategyFromText t = case T.toLower t of
     "uuid" -> ByUUID

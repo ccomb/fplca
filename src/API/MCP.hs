@@ -37,13 +37,13 @@ import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
 import API.DatabaseHandlers (coverageReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
-import qualified Method.Explain as Explain
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
+import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
@@ -992,8 +992,9 @@ data ImpactsResult = ImpactsResult
     { irOutcome :: !LCIAOutcome
     , irMappingStats :: !MappingStats
     , irTables :: !Mapping.MethodTables
-    -- ^ The method's tables, for annotating each contributing flow with how
-    -- its factor was found. Shared with the manager's cache, not a copy.
+    {- ^ The method's tables, for annotating each contributing flow with how
+    its factor was found. Shared with the manager's cache, not a copy.
+    -}
     , irContribs :: ![(BiosphereFlow, Double, Double)]
     -- ^ Sorted descending by absolute contribution.
     , irUnknownUuids :: ![UUID.UUID]
