@@ -7,10 +7,10 @@
 
 module API.Routes where
 
-import API.DatabaseHandlers (simpleAction)
+import API.DatabaseHandlers (explainCFToAPI, simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -44,7 +44,7 @@ import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
 import Matrix (Inventory, Vector)
-import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MatchStrategy (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupEntryForFlow, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, strategyToText, longTermModeFromExclude, lookupEntryForFlow, sumRegionalizedLCIAScoreCrossDB)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -114,6 +114,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "flow-mapping" :> Get '[JSON] FlowCFMapping
                 :<|> "db" :> Capture "dbName" Text :> "method-collection" :> Capture "collection" Text :> "coverage" :> Get '[JSON] CollectionCoverage
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "characterization" :> QueryParam "flow" Text :> QueryParam "limit" Int :> Get '[JSON] CharacterizationResult
+                :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "explain-cf" :> Capture "flowId" Text :> Get '[JSON] ExplainCFResult
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
@@ -1128,15 +1129,6 @@ buildFlowEntry db tables uuid =
             , fceMatchStrategy = strategyToText . bpStrategy <$> provenance
             }
 
-strategyToText :: MatchStrategy -> Text
-strategyToText ByUUID = "uuid"
-strategyToText ByCAS = "cas"
-strategyToText ByName = "name"
-strategyToText BySynonym = "synonym"
-strategyToText ByFuzzy = "fuzzy"
-strategyToText ByProxy = "proxy"
-strategyToText NoMatch = "none"
-
 matchesQuery :: Maybe Text -> Text -> Text -> Bool
 matchesQuery Nothing _ _ = True
 matchesQuery (Just q) cfName dbFlowName =
@@ -1229,7 +1221,9 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 5: writing activities, and the @transient@ / @warnings@ fields the
+(revision 6: the explain-cf route, and the @match_kind@ field flow
+contributions gained alongside it; revision 5: writing activities, and the
+@transient@ / @warnings@ fields the
 delete response gained alongside it; revision 4: the quality-report,
 computed-quality-report and characterization-coverage routes; revision 3: the
 delete @ids@ selection, which an older engine would ignore and fall back to
@@ -1237,7 +1231,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 5
+currentWireVersion = 6
 
 getVersion :: AppM Value
 getVersion =
@@ -1961,6 +1955,27 @@ getCollectionCoverage dbName collectionName = do
             , ccvCharacterizedFlows = S.size (S.unions (map (`characterizedFlowIds` dbBioFlows db) tablesList))
             }
 
+{- | Why one flow scores with the factor it does.
+
+The cascade is pure, so this replays it for the one flow asked about rather
+than reading anything scoring had to carry. The response is assembled by
+'explainCFToAPI', which the MCP tool serves too, so the two surfaces cannot
+tell different stories about the same flow.
+-}
+explainCFHandler :: Text -> Text -> Text -> AppM ExplainCFResult
+explainCFHandler dbName methodIdText flowIdText = do
+    dbManager <- asks aeDbManager
+    (db, _) <- requireDatabaseByName dbName
+    (collectionName, method) <- loadMethodByUUID methodIdText
+    fid <- case UUID.fromText (T.strip flowIdText) of
+        Nothing -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 ("Malformed flow id: " <> flowIdText))}
+        Just u -> pure u
+    explained <- liftIO $ DM.explainFlowFactor dbManager dbName collectionName db method fid
+    case explained of
+        Left err -> throwError err404{errBody = BSL.fromStrict (T.encodeUtf8 err)}
+        Right (flow, explanation) ->
+            pure (explainCFToAPI db method flow explanation)
+
 getCharacterization :: Text -> Text -> Maybe Text -> Maybe Int -> AppM CharacterizationResult
 getCharacterization dbName methodIdText flowFilter limitParam = do
     dbManager <- asks aeDbManager
@@ -2123,6 +2138,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> getFlowCFMapping
             :<|> getCollectionCoverage
             :<|> getCharacterization
+            :<|> explainCFHandler
             :<|> searchFlows
             :<|> searchActivitiesWithCount
             :<|> getClassifications

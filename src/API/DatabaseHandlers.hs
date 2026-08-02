@@ -24,6 +24,7 @@ module API.DatabaseHandlers (
     computedQualityReportToAPI,
     coverageReportHandler,
     coverageReportToAPI,
+    explainCFToAPI,
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
@@ -98,6 +99,10 @@ import qualified Database.ComputedQuality as CQ
 
 import API.Types (
     ActivateResponse (..),
+    ExplainCFResult (..),
+    ExplainedFlowAPI (..),
+    ExplainedMatchAPI (..),
+    ExplainedStepAPI (..),
     ActivityInput (..),
     ActivityWriteRequest (..),
     ActivityWriteResponse (..),
@@ -212,11 +217,17 @@ import Database.Upload (
  )
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified Method.Coverage as Coverage
-import Method.Mapping (MatchStrategy (..))
+import qualified Method.Explain as Explain
+import Method.Mapping (BuildProvenance (..), CF (..), CFUnit (..), MatchStrategy (..), strategyToText)
+import Method.Types (Method (..), MethodCF (..))
 import Types (
+    BiosphereFlow (..),
     Database (..),
+    bfCompartmentName,
+    bfCompartmentSub,
     GeographyPolicy (..),
     blockerReasonDetail,
+    getUnitNameForBioFlow,
     unresolvedCount,
  )
 
@@ -1268,3 +1279,61 @@ downloadRefDataHandler kind name = do
                     content <- liftIO $ BSL.readFile csvPath
                     let disposition = "attachment; filename=\"" <> name <> ".csv\""
                     return $ addHeader disposition (BinaryContent content)
+
+{- | Project an explanation onto the wire. One encoder for both surfaces: the
+sentences come from the engine, the structured fields carry the same decision
+in a form a client can compare or link on.
+-}
+explainCFToAPI :: Database -> Method -> BiosphereFlow -> Explain.CFExplanation -> ExplainCFResult
+explainCFToAPI db method flow explanation =
+    ExplainCFResult
+        { ecrMethod = methodName method
+        , ecrMethodUnit = methodUnit method
+        , ecrFlow =
+            ExplainedFlowAPI
+                { eflId = UUID.toText (bfId flow)
+                , eflName = bfName flow
+                , eflUnit = getUnitNameForBioFlow (dbUnits db) flow
+                , eflCategory = bfCompartmentName flow
+                , eflCompartment = bfCompartmentSub flow
+                , eflCas = bfCAS flow
+                }
+        , ecrOutcome = Explain.outcomeName resolution
+        , ecrExplanation = Explain.renderResolution resolution
+        , ecrMatch = matchAPI resolution
+        , ecrStepsTried = map stepAPI (Explain.ceTrail explanation)
+        , ecrRegionalFactorCount = Explain.ceRegionalCFCount explanation
+        }
+  where
+    resolution = Explain.ceResolution explanation
+
+    matchAPI = \case
+        Explain.Uncharacterized -> Nothing
+        Explain.Characterized m bridge -> Just (baseMatch m){emaUnitConversion = Just (Explain.bridgeName bridge)}
+        Explain.ConversionRefused m reason -> Just (baseMatch m){emaRefusal = Just (Explain.refusalName reason)}
+
+    baseMatch m =
+        let CF value (CFUnit unit) = Explain.cmCF m
+            provenance = Explain.cmProvenance m
+         in ExplainedMatchAPI
+                { emaRung = Explain.rungName (Explain.cmRung m)
+                , emaCfValue = value
+                , emaCfUnit = unit
+                , emaMethodFlowName = mcfFlowName (bpSource provenance)
+                , emaMethodCas = mcfCAS (bpSource provenance)
+                , emaMatchStrategy = strategyToText (bpStrategy provenance)
+                , emaUnitConversion = Nothing
+                , emaRefusal = Nothing
+                }
+
+    stepAPI step =
+        ExplainedStepAPI
+            { estRung = Explain.rungName (Explain.stRung step)
+            , estResult = Explain.stepName (Explain.stResult step)
+            , estVeto = case Explain.stResult step of
+                Explain.StepVetoed reason _ -> Just (Explain.vetoName reason)
+                Explain.StepHit -> Nothing
+                Explain.StepMiss -> Nothing
+                Explain.StepNotApplicable -> Nothing
+                Explain.StepAmbiguous -> Nothing
+            }

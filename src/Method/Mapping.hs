@@ -95,6 +95,7 @@ module Method.Mapping (
     -- * Matching strategies
     MatchStrategy (..),
     strategyFromText,
+    strategyToText,
     findFlowByUUID,
     findFlowByName,
     findFlowByNameComp,
@@ -452,6 +453,16 @@ exclusionWarning flows cf
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
 -- | Convert strategy text back to MatchStrategy
+-- | Wire name for a match strategy, the inverse of 'strategyFromText'.
+strategyToText :: MatchStrategy -> Text
+strategyToText ByUUID = "uuid"
+strategyToText ByCAS = "cas"
+strategyToText ByName = "name"
+strategyToText BySynonym = "synonym"
+strategyToText ByFuzzy = "fuzzy"
+strategyToText ByProxy = "proxy"
+strategyToText NoMatch = "none"
+
 strategyFromText :: Text -> MatchStrategy
 strategyFromText t = case T.toLower t of
     "uuid" -> ByUUID

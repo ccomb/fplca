@@ -42,6 +42,9 @@ module Method.Explain (
     rungName,
     outcomeName,
     vetoName,
+    stepName,
+    bridgeName,
+    refusalName,
 ) where
 
 import qualified Data.Map.Strict as M
@@ -202,6 +205,30 @@ outcomeName Uncharacterized = "no_factor"
 vetoName :: VetoReason -> Text
 vetoName ForeignMediumVeto = "different_receiving_medium"
 vetoName LongTermUSEtoxVeto = "long_term_groundwater"
+
+-- | Stable name for what one rung made of the flow.
+stepName :: StepResult -> Text
+stepName StepHit = "hit"
+stepName StepMiss = "miss"
+stepName StepNotApplicable = "not_applicable"
+stepName (StepVetoed _ _) = "vetoed"
+stepName StepAmbiguous = "ambiguous"
+
+{- | Stable name for how the amount reached the factor's basis. The numbers
+behind it live in the sentences; this is what a client groups or filters on.
+-}
+bridgeName :: UnitBridge -> Text
+bridgeName UnitsIdentical = "same_unit"
+bridgeName (UnitUnknown _) = "unknown_unit"
+bridgeName (UnitConverted _ _) = "unit_converted"
+bridgeName (NormalizedToBase _) = "normalized_to_base_unit"
+bridgeName (EnergyBridged _ _) = "energy_content"
+
+-- | Stable name for why the amount could not reach the factor's basis.
+refusalName :: RefusalReason -> Text
+refusalName (DimensionalMismatch _ _) = "different_dimensions"
+refusalName (NoCanonicalBase _) = "no_base_unit"
+refusalName (EnergyBridgeRefused _) = "energy_bridge_failed"
 
 --------------------------------------------------------------------------------
 -- Sentences

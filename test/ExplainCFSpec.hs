@@ -17,6 +17,7 @@ import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
+import qualified API.Resources as R
 import Method.Explain
 import Method.Mapping (
     BuildProvenance (..),
@@ -103,6 +104,10 @@ tablesFor densities mappings flows =
 flowDBOf :: [BiosphereFlow] -> M.Map UUID BiosphereFlow
 flowDBOf flows = M.fromList [(bfId f, f) | f <- flows]
 
+-- | Any match will do where only the outcome's name is under test.
+sampleMatch :: CFMatch
+sampleMatch = CFMatch RungExactName (CF 1 (CFUnit "kg")) (BuildProvenance ByName (cfLine "Methane, fossil" "" "kg" 1))
+
 resultsFor :: CFExplanation -> [(RungId, StepResult)]
 resultsFor e = [(stRung s, stResult s) | s <- ceTrail e]
 
@@ -155,10 +160,30 @@ spec = do
             length sentences `shouldBe` length [minBound .. maxBound :: RungId]
             any (any T.null) sentences `shouldBe` False
 
-    describe "rung names (what a client reads)" $
+    describe "rung names (what a client reads)" $ do
         it "gives every rung a distinct name" $ do
             let names = map rungName [minBound .. maxBound]
             length names `shouldBe` length (foldr (\n acc -> if n `elem` acc then acc else n : acc) [] names)
+
+        -- A client, human or agent, reads these names with only the tool
+        -- description to go on. An exhaustive match forces a new rung to have a
+        -- sentence; nothing forces it to be documented, so this does.
+        it "documents every rung name in the tool description" $ do
+            let told = R.description R.ExplainCF
+                undocumented = [n | n <- map rungName [minBound .. maxBound], not (n `T.isInfixOf` told)]
+            undocumented `shouldBe` []
+
+        it "documents every outcome in the tool description" $ do
+            let told = R.description R.ExplainCF
+                outcomes =
+                    map
+                        outcomeName
+                        [ Characterized sampleMatch UnitsIdentical
+                        , ConversionRefused sampleMatch (NoCanonicalBase "kg")
+                        , Uncharacterized
+                        ]
+                undocumented = [o | o <- outcomes, not (o `T.isInfixOf` told)]
+            undocumented `shouldBe` []
 
     describe "explainFlowCF (replaying the cascade)" $ do
         it "reports the rung that answered and stops there" $ do

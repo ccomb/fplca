@@ -36,7 +36,7 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
+import API.DatabaseHandlers (coverageReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -400,6 +400,7 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_methods" -> callListMethods dbManager rid
     "get_flow_mapping" -> callGetFlowMapping dbManager rid args
     "get_characterization" -> callGetCharacterization dbManager rid args
+    "explain_cf" -> callExplainCF dbManager mBaseUrl rid args
     "get_contributing_flows" -> callGetContributingFlows dbManager mBaseUrl rid args
     "get_contributing_activities" -> callGetContributingActivities dbManager mBaseUrl rid args
     "list_geographies" -> callListGeographies dbManager rid args
@@ -1515,6 +1516,25 @@ buildUnmatchedDbFlows dbManager dbName collection db method args maxN =
                                             idx
                                             opts
                                 pure (map encodeUncharacterized uncharacterized)
+
+{- | Why one flow scores with the factor it does.
+
+Serves exactly what the REST route serves, through the same projection, so the
+web page and an agent cannot describe the same flow differently. The
+'explanation' field is the part meant to be read out; the rest is for a caller
+that wants to compare or link.
+-}
+callExplainCF :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callExplainCF dbManager mBaseUrl rid args = runTool rid $ do
+    (dbName, methodIdText, mCol) <- except $ (,,) <$> requireText "database" args <*> requireText "method_id" args <*> optionalText "collection" args
+    flowIdText <- except (requireText "flow_id" args)
+    ld <- requireDatabase dbManager dbName
+    (collection, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
+    fid <- except $ maybe (Left ("Malformed flow id: " <> flowIdText)) Right (UUID.fromText (T.strip flowIdText))
+    let db = ldDatabase ld
+    (flow, explanation) <- ExceptT (DM.explainFlowFactor dbManager dbName collection db method fid)
+    let deepLink = (<> "/db/" <> dbName <> "/method/" <> methodIdText <> "/flow-mapping") <$> mBaseUrl
+    pure $ toolSuccessJson rid (addWebUrlMaybe deepLink (toJSON (explainCFToAPI db method flow explanation)))
 
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetCharacterization dbManager rid args = runTool rid $ do
