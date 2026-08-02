@@ -134,6 +134,17 @@ spec = describe "writing activities over HTTP" $ do
                     errHTTPCode err `shouldBe` 400
                     bodyOf err `shouldSatisfy` isInfixOf "reads from its configuration"
 
+    it "refuses an empty batch instead of rewriting the database for nothing" $
+        -- Committing re-serializes the whole database and rebuilds its
+        -- solver; an empty batch would pay all of that to write nothing.
+        withWritableDb $ \env -> do
+            res <- create env "authored" []
+            case res of
+                Right _ -> expectationFailure "expected the empty batch to be refused"
+                Left err -> do
+                    errHTTPCode err `shouldBe` 400
+                    bodyOf err `shouldSatisfy` isInfixOf "nothing to write"
+
     it "answers 404 for a database that is not loaded" $
         withWritableDb $ \env -> do
             res <- create env "no-such-db" [cheese]

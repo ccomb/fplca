@@ -481,6 +481,10 @@ writeActivities ::
     WriteVerb ->
     [AuthoredActivity] ->
     IO (Either WriteRefusal WriteReport)
+writeActivities _ _ _ [] =
+    -- Committing re-serializes the whole database and rebuilds its solver;
+    -- an empty batch would pay all of that to write nothing.
+    pure (Left (Malformed ["The batch is empty: there is nothing to write."]))
 writeActivities manager dbName verb authored =
     getDatabase manager dbName >>= \case
         Nothing -> pure (Left (NotLoaded dbName))
