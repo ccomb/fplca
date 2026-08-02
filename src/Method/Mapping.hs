@@ -29,6 +29,7 @@ module Method.Mapping (
     CFUnit (..),
     CFFamily (..),
     cfFamily,
+    SeaWaterCFs (..),
     MethodTables (..),
     MethodIndex (..),
     LCIAOutcome (..),
@@ -667,6 +668,12 @@ data MethodTables = MethodTables
     {- ^ The CF family the method's result unit implies (see 'cfFamily'). The
     subcompartment gates key off this — a USEtox toxicity method
     ('USEtoxFamily') doesn't characterize groundwater, a nutrient method does.
+    -}
+    , mtSeaWaterCFs :: !SeaWaterCFs
+    {- ^ Whether this method writes any sea-water factor of its own
+    (see 'SeaWaterCFs'). The sea half of the medium-level gate keys off it, so
+    the engine defers to a method that distinguishes the sea and does not
+    invent a zero for one that never mentions it.
     -}
     , mtCompartmentMap :: !CompartmentMap
     {- ^ Compartment-normalization rules (e.g. @"Emissions to air" → "air"@).
@@ -1339,6 +1346,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 , Just loc <- [mcfConsumerLocation cf]
                 ]
         , mtCFFamily = methodFamily
+        , mtSeaWaterCFs = seaWaterCFs
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
@@ -1410,6 +1418,19 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         | abs va >= abs vb = a
         | otherwise = b
 
+    -- Counted from the method's own factor lines: does it name the sea
+    -- anywhere? Both sides go through 'cmap', like every other subcompartment
+    -- comparison here, so a compartments.csv rule that rewrites a spelling
+    -- cannot make the count disagree with the gate that reads it.
+    seaWaterCFs
+        | any namesTheSea mappings = MethodDeclaresSeaWater
+        | otherwise = MethodSilentOnSeaWater
+    namesTheSea (cf, _) = case mcfCompartment cf of
+        Nothing -> False
+        Just comp ->
+            let Compartment _ sub _ = normalizeCompartment cmap comp
+             in isForeignMediumSub (Subcompartment (T.toLower (T.strip sub)))
+
     -- A CF whose subcomp names no specific subcompartment ('isUnspecifiedSub')
     -- is a wildcard. A CF with a specific subcomp must match the flow's subcomp
     -- exactly — otherwise an explicit-zero niche-subcomp CF would clobber the
@@ -1444,7 +1465,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 -- never borrows a freshwater CF, and long-term groundwater
                 -- borrows no surface USEtox CF. An explicit same-sub CF still
                 -- matches.
-                (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily (Subcompartment flowSubN))
+                (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily seaWaterCFs (Subcompartment flowSubN))
                     || cfSubN == flowSubN
 
     -- Rank colliding CFs for one name key: better match strategy first, then a
@@ -2004,7 +2025,7 @@ lookupCascadeCF tables flowDB fid =
             -- exact-sub CF and the method's own long-term default are never
             -- gated.
             gate mcf
-                | wildcardReachesSub (mtCFFamily tables) normSub = mcf
+                | wildcardReachesSub (mtCFFamily tables) (mtSeaWaterCFs tables) normSub = mcf
                 | otherwise = Nothing
          in -- UUID/name miss → fall back to the flow's own CAS + medium, so
             -- every flow sharing a CAS in a compartment is characterized, not
@@ -2150,8 +2171,10 @@ not silently reach it. Two tiers, gated differently in 'lookupCascadeCF':
     freshwater and stays characterized.
   * 'isForeignMediumSub' — the sea/ocean, a different receiving medium
     altogether: a freshwater CF does not apply at all (water released to the sea
-    is not freshwater depletion; EF ships a distinct, uncharacterized sea-water
-    flow).
+    is not freshwater depletion), and the method says so itself with an explicit
+    sea-water line. This tier applies only to a method that writes such lines
+    ('MethodDeclaresSeaWater'); see 'SeaWaterCFs' for why a method that never
+    mentions the sea must not have a zero invented for it.
 
 Names are the post-'normalizeCompartment' lower-cased subcompartment.
 -}
@@ -2166,9 +2189,9 @@ subcompartment — both tiers above, combined. Shared by the read-path
 'lookupCascadeCF' gate and the build-time regionalized wildcard match so the
 two scoring paths apply the same rule and can't drift.
 -}
-wildcardReachesSub :: CFFamily -> Subcompartment -> Bool
-wildcardReachesSub family sub =
-    not (isForeignMediumSub sub)
+wildcardReachesSub :: CFFamily -> SeaWaterCFs -> Subcompartment -> Bool
+wildcardReachesSub family seaWater sub =
+    not (seaWater == MethodDeclaresSeaWater && isForeignMediumSub sub)
         && not (isDetachedSub sub && isLongTermSub sub && family == USEtoxFamily)
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified

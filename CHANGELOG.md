@@ -36,6 +36,18 @@
   delete response now says so with two new fields, `transient` and `warnings`.
 
 ### Fixed
+- An emission to the sea is now characterized by impact categories that never
+  mention the sea. The engine kept a category's medium-level ("unspecified")
+  factor away from a sea emission, which is right for a freshwater category —
+  and those say so themselves, writing an explicit sea-water factor of their
+  own, usually a near-zero. EF 3.1 has one category that writes none: marine
+  eutrophication, whose receiving medium *is* the sea. Its 305 water factors
+  were all withheld from sea emissions, so a nitrogen discharge to the sea
+  counted for nothing there. A farmed salmon, which discharges most of its
+  nitrogen straight into the sea, was scoring a fifth of its marine
+  eutrophication. The rule now follows the method: a category that names the
+  sea is deferred to, a category that never does has its medium-level factor
+  applied.
 - A SimaPro amount cell the engine cannot read is now zero and warned about,
   instead of the number the cell happens to begin with. The reader used to stop
   at the first character that is not part of a number and keep what it had, so

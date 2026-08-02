@@ -139,10 +139,30 @@ spec = describe "per-unit method rows (unit-suffixed homonyms)" $ do
         -- Sub-blind like its siblings, so it takes the same gate: an ocean
         -- emission is a foreign medium and must not borrow the freshwater
         -- factor, unit-matched or not.
+        --
+        -- The gate applies because this method names the sea somewhere — one
+        -- row, for another substance, is enough. Deliberate: a method that
+        -- distinguishes the sea at all is trusted to have meant its silence on
+        -- the substances it left out, and the engine does not extrapolate for
+        -- it.
         let oceanic =
                 buildMethodTables
                     OtherCFFamily
                     M.empty
                     M.empty
-                    [(mkCF 1 "Water/m3" "m3" 42.95, Nothing)]
+                    [ (mkCF 1 "Water/m3" "m3" 42.95, Nothing)
+                    , (inSub "ocean" (mkCF 2 "Water, salt" "m3" 0.0), Nothing)
+                    ]
         lookupFor oceanic (mkFlowAt 6 "Water/m3" (Just "ocean")) `shouldBe` Nothing
+
+    it "reaches the sea when the method never names it" $ do
+        -- The same row, from a method with no sea-water row anywhere. Its
+        -- medium-level factor is all it has to say, and withholding it would
+        -- score the emission as zero on an authority the method never gave.
+        let silent =
+                buildMethodTables
+                    OtherCFFamily
+                    M.empty
+                    M.empty
+                    [(mkCF 1 "Water/m3" "m3" 42.95, Nothing)]
+        lookupFor silent (mkFlowAt 6 "Water/m3" (Just "ocean")) `shouldBe` Just 42.95

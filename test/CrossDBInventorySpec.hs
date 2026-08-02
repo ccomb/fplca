@@ -182,6 +182,7 @@ spec = do
                     , mtRegionalCasCF = M.empty
                     , mtRegionalizedCF = M.empty
                     , mtCFFamily = OtherCFFamily
+                    , mtSeaWaterCFs = Mapping.MethodSilentOnSeaWater
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
                     , mtBroadcast = M.empty

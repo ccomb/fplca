@@ -19,6 +19,7 @@ module Method.Types (
     Subcompartment (..),
     CFFamily (..),
     cfFamily,
+    SeaWaterCFs (..),
 
     -- * Method Collection (with normalization/weighting)
     MethodCollection (..),
@@ -375,6 +376,28 @@ cfFamily :: Text -> CFFamily
 cfFamily u
     | T.toLower (T.strip u) `elem` map T.pack ["ctue", "ctuh"] = USEtoxFamily
     | otherwise = OtherCFFamily
+
+{- | Whether an impact category says anything of its own about emissions to the
+sea, read off its own factor lines.
+
+A category that writes even one sea-water factor has an opinion about the sea,
+and the engine defers to it entirely: its medium-level ("unspecified") factor is
+kept away from a sea emission so that the explicit line scores — in freshwater
+ecotoxicity that line is an explicit near-zero, and a freshwater factor reaching
+the sea instead would overstate the emission by twenty orders of magnitude.
+
+A category that never mentions the sea has given nothing to defer to. Keeping
+its medium-level factor away from a sea emission scores that emission as zero on
+the category's authority, which the category never gave. EF 3.1 has exactly one
+such category, marine eutrophication, whose receiving medium /is/ the sea.
+
+The distinction belongs to the method, not to the engine: it is counted from the
+factor lines of whatever method is loaded.
+-}
+data SeaWaterCFs = MethodDeclaresSeaWater | MethodSilentOnSeaWater
+    deriving (Eq, Show, Generic)
+
+instance NFData SeaWaterCFs
 
 {- | Physical content of a flow per native unit — a calorific value (MJ per kg
 of coal) or a mass density (m³ per kg of water) — used to characterize a CF
