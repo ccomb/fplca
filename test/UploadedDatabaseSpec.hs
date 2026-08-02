@@ -118,6 +118,18 @@ spec = do
             let meta = baseMeta{umDescription = Just "A nice database"}
             parseMetaToml (formatMetaToml meta) `shouldBe` Just meta
 
+        it "round-trips a path whose separators are backslashes" $ do
+            -- A copy records the absolute path of the files it reads, and on
+            -- Windows every separator in it is a backslash. The writer doubles
+            -- them as TOML requires, so a reader that took the value verbatim
+            -- handed back a path that resolves to nothing.
+            let meta = baseMeta{umDataPath = "C:\\volca\\uploads\\bafu\\data", umSource = Just "bafu"}
+            parseMetaToml (formatMetaToml meta) `shouldBe` Just meta
+
+        it "round-trips a description holding a quote" $ do
+            let meta = baseMeta{umDescription = Just "the \"good\" one"}
+            parseMetaToml (formatMetaToml meta) `shouldBe` Just meta
+
         it "round-trips all database formats" $
             mapM_
                 ( \fmt -> do

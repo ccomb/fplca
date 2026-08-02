@@ -137,7 +137,7 @@ parseMetaToml content = do
             , let v = T.strip $ T.drop 1 rest
             ]
         getValue key = lookup key kvPairs
-        unquote = T.dropAround (== '"')
+        unquote = unescapeToml . T.dropAround (== '"')
 
     version <- getValue "version" >>= readMaybe . T.unpack
     displayName <- unquote <$> getValue "displayName"
@@ -155,6 +155,22 @@ parseMetaToml content = do
             , umDepends = maybe [] parseStringList (getValue "depends")
             , umSource = unquote <$> getValue "source"
             }
+
+{- | Undo the escaping 'formatMetaToml' writes, so a value survives the round
+trip it is written for.
+
+A Windows path is why this is not academic: its separators are backslashes,
+which the writer doubles as TOML requires, and a reader that took the value
+verbatim handed back a path with every separator twice over.
+-}
+unescapeToml :: Text -> Text
+unescapeToml = T.pack . unescape . T.unpack
+  where
+    unescape ('\\' : '"' : rest) = '"' : unescape rest
+    unescape ('\\' : '\\' : rest) = '\\' : unescape rest
+    unescape ('\\' : 'n' : rest) = '\n' : unescape rest
+    unescape (c : rest) = c : unescape rest
+    unescape [] = []
 
 {- | Read a TOML inline array of strings, @["a", "b"]@. Entries that are not
 quoted strings are skipped rather than failing the whole file: the key is
