@@ -45,6 +45,7 @@ library
                      , Database.Manager
                      , Database.Author
                      , Database.Rebuild
+                     , Database.Journal
                      , Database.Edit
                      , Database.Loader
                      , Database.CrossLinking
@@ -324,6 +325,7 @@ test-suite lca-tests
                      , AggregateSpec
                      , CopySpec
                      , AuthorSpec
+                     , JournalSpec
                      , ActivityWriteHandlerSpec
                      , PersistenceSpec
                      , DeleteSelectionSpec

@@ -90,6 +90,7 @@ import Database.Rebuild (
     insertActivities,
     renderKey,
     replaceActivities,
+    resolveProcess,
  )
 import Database.Upload (DatabaseFormat (..), slugify)
 import qualified Database.UploadedDatabase as UploadedDB
@@ -101,7 +102,6 @@ import Types (
     Database (..),
     ProcessId,
     SparseTriple (..),
-    findProcessId,
     findProcessIdByActivityUUID,
     initializeRuntimeFields,
     parseUUIDPair,
@@ -712,20 +712,6 @@ filteredProcessIds db nameP geoP prodP classFilters exactMatch =
 -- Effectful entry point (registry swap)
 -- ---------------------------------------------------------------------------
 
-{- | Resolve a process-id string to its 'ProcessId'. Accepts the canonical
-@activityUUID_productUUID@ form and the bare-activity-UUID fallback (when the
-activity has a unique reference product), mirroring
-'Service.resolveActivityAndProcessId'. The UI and CLI carry these textual ids,
-so keep/extra adjustments are expressed in the same currency as the rows the
-user sees — not the volatile integer matrix index. Unresolvable ids fail loudly
-rather than being silently dropped.
--}
-resolvePid :: Database -> Text -> Either Text ProcessId
-resolvePid db queryText =
-    maybe (Left ("Unknown process id: " <> queryText)) Right $ case parseUUIDPair queryText of
-        Just (a, p) -> findProcessId db a p
-        Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
-
 {- | One delete-by-selection request against a loaded database. Two exclusive
 selection modes: the filter fields select the whole matching set (@drIds =
 Nothing@), or @drIds@ names the set exactly — every filter field must then be
@@ -786,9 +772,9 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
                 selectionE = case mIds of
                     Just ids
                         | hasFilter -> Left "ids cannot be combined with name/location/product/classification/exact filters"
-                        | otherwise -> traverse (resolvePid db) ids
+                        | otherwise -> traverse (resolveProcess db) ids
                     Nothing -> Right (filteredProcessIds db nameP geoP prodP classFilters exactMatch)
-            case (,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE of
+            case (,,) <$> traverse (resolveProcess db) keep <*> traverse (resolveProcess db) extra <*> selectionE of
                 Left err -> pure $ Left err
                 Right (keepPids, extraPids, filtered) -> do
                     let toDelete =

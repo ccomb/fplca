@@ -33,6 +33,7 @@ module Database.Rebuild (
 
     -- * Identity
     renderKey,
+    resolveProcess,
 ) where
 
 import qualified Data.Map.Strict as M
@@ -60,6 +61,9 @@ import Types (
     ProcessId,
     TechnosphereFlow (..),
     UUID,
+    findProcessId,
+    findProcessIdByActivityUUID,
+    parseUUIDPair,
  )
 import UnitConversion (UnitConfig, defaultUnitConfig)
 
@@ -286,3 +290,17 @@ checkKeys intent existing keys = case intent of
 -- | @activityUUID_productUUID@, the identity a process is addressed by.
 renderKey :: (UUID, UUID) -> Text
 renderKey (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
+
+{- | Resolve a process-id string to its 'ProcessId'. Accepts the canonical
+@activityUUID_productUUID@ form and the bare-activity-UUID fallback (when the
+activity has a unique reference product), mirroring
+'Service.resolveActivityAndProcessId'. The UI, the CLI and the journal all
+carry these textual ids, because a 'ProcessId' is a matrix index that
+renumbers on every edit. Unresolvable ids fail loudly rather than being
+silently dropped.
+-}
+resolveProcess :: Database -> Text -> Either Text ProcessId
+resolveProcess db queryText =
+    maybe (Left ("Unknown process id: " <> queryText)) Right $ case parseUUIDPair queryText of
+        Just (a, p) -> findProcessId db a p
+        Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
