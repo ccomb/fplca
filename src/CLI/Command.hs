@@ -1,16 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module CLI.Command where
 
 import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivities)
+import CLI.Client (readJsonFile)
 import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbReplaceArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
-import Control.Exception (SomeException, try)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
-import qualified Data.Aeson as A
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
@@ -558,14 +556,6 @@ runWrite fmt manager target verb inputs =
                             , "transient" .= not (wrPersisted report)
                             , "warnings" .= wrWarnings report
                             ]
-
--- | Read and decode a JSON file, naming the file in any complaint about it.
-readJsonFile :: (A.FromJSON a) => FilePath -> IO (Either String a)
-readJsonFile path = do
-    bytes <- try (BL.readFile path)
-    pure $ case bytes of
-        Left (e :: SomeException) -> Left (path <> ": " <> show e)
-        Right raw -> either (\err -> Left (path <> ": " <> err)) Right (A.eitherDecode raw)
 
 {- | Execute database load: bring a configured database (and its declared
 dependencies) into memory. Any failed dependency is surfaced in the output.

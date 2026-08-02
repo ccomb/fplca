@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -8,12 +9,13 @@ module CLI.Client (
     apiGet,
     apiPost,
     deleteSelectionBody,
+    readJsonFile,
 ) where
 
 import CLI.Types
 import Config (Config (..), ServerConfig (..))
-import Control.Exception (IOException, SomeException, try)
-import Data.Aeson (Value (..), decode, eitherDecode, encode, object, (.:), (.=))
+import Control.Exception (IOException, try)
+import Data.Aeson (FromJSON, Value (..), decode, eitherDecode, encode, object, (.:), (.=))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
@@ -548,13 +550,20 @@ putJsonFile :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -
 putJsonFile mgr rc fmt jp path = sendJsonFile (apiPut mgr rc path) fmt jp
 
 sendJsonFile :: (Value -> IO (Either String Value)) -> OutputFormat -> Maybe Text -> FilePath -> IO ()
-sendJsonFile send fmt jp file = do
-    raw <- try (BL.readFile file)
-    case raw of
-        Left (e :: SomeException) -> output fmt jp (Left (file ++ ": " ++ show e))
-        Right bytes -> case eitherDecode bytes of
-            Left err -> output fmt jp (Left (file ++ ": " ++ err))
-            Right body -> send body >>= output fmt jp
+sendJsonFile send fmt jp file =
+    readJsonFile file >>= \case
+        Left err -> output fmt jp (Left err)
+        Right body -> send body >>= output fmt jp
+
+{- | Read and decode a JSON file, naming the file in any complaint about it.
+Shared by the remote and local write commands, which read the same document.
+-}
+readJsonFile :: (FromJSON a) => FilePath -> IO (Either String a)
+readJsonFile path = do
+    bytes <- try (BL.readFile path)
+    pure $ case bytes of
+        Left (e :: IOException) -> Left (path <> ": " <> show e)
+        Right raw -> either (\err -> Left (path <> ": " <> err)) Right (eitherDecode raw)
 
 {- | POST a JSON body and return the raw response (bytes + headers), for
 octet-stream endpoints like database export. Shares the error formatting of
