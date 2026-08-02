@@ -111,6 +111,18 @@ spec = describe "writing activities over HTTP" $ do
                 Left err -> expectationFailure ("expected the rewrite to land: " <> showErr err)
                 Right written -> awpWritten written `shouldBe` [keyOf cheese]
 
+    it "accepts the bare activity UUID as the PUT address, like every read does" $
+        -- A process is addressed by the canonical pair or by the bare
+        -- activity UUID when it is unambiguous; the handle a caller got from
+        -- a read must work on the rewrite too.
+        withWritableDb $ \env -> do
+            _ <- create env "authored" [cheese]
+            let bare = UUID.toText (authoredActivityUUID (aiName cheese) (aiLocation cheese))
+            res <- replace env "authored" bare cheese{aiProductAmount = 2}
+            case res of
+                Left err -> expectationFailure ("expected the rewrite to land: " <> showErr err)
+                Right written -> awpWritten written `shouldBe` [keyOf cheese]
+
     it "refuses a body whose identity is not the one the path addresses" $
         -- Identity comes from the name, location, product and unit, so a body
         -- that would land elsewhere must not be written to a second row.

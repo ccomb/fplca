@@ -550,7 +550,7 @@ presenceRefusal db verb resolved = case verb of
     -- elsewhere describes a process the database may well not have, and
     -- answering "no such activity" would send the author looking for the wrong
     -- mistake.
-    ReplaceActivity target -> case filter ((/= target) . renderKey) keys of
+    ReplaceActivity target -> case filter ((/= canonicalTarget db target) . renderKey) keys of
         elsewhere@(_ : _) ->
             Just . Malformed $
                 [ "This activity's identity is "
@@ -567,6 +567,20 @@ presenceRefusal db verb resolved = case verb of
   where
     keys = map riKey resolved
     present key = M.member key (dbProcessIdLookup db)
+
+{- | The PUT target in the currency 'renderKey' speaks. A process is addressed
+by the canonical @activityUUID_productUUID@ pair, or by the bare activity UUID
+the read endpoints also accept, so the handle a caller got from a read works
+here too. A target that resolves to nothing is kept as sent: the presence
+check owns that refusal.
+-}
+canonicalTarget :: Database -> Text -> Text
+canonicalTarget db target = case parseUUIDPair target of
+    Just pair -> renderKey pair
+    Nothing -> fromMaybe target $ do
+        actUUID <- UUID.fromText target
+        pid <- findProcessIdByActivityUUID db actUUID
+        renderKey <$> dbProcessIdTable db V.!? fromIntegral pid
 
 -- | The loaded databases a database draws suppliers from.
 loadedDependencies :: DatabaseManager -> Database -> IO [Database]
