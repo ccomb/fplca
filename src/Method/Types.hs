@@ -47,10 +47,6 @@ module Method.Types (
 
     -- * Region-suffixed flow names
     extractLocationSuffix,
-
-    -- * Flow Mapping
-    FlowMapping (..),
-    MatchType (..),
 ) where
 
 import Control.Applicative ((<|>))
@@ -545,38 +541,3 @@ extractLocationSuffix name =
                 rest = T.unpack (T.tail t)
              in isAsciiUpper firstC
                     && all (\c -> isAsciiUpper c || isAsciiLower c || c == '-') rest
-
--- | How a method flow was matched to a database flow
-data MatchType
-    = -- | Same UUID
-      ExactUUID
-    | -- | Via CAS number
-      CASMatch
-    | -- | Same normalized name
-      ExactName
-    | -- | Via synonym group ID
-      SynonymMatch !Int
-    | -- | Fuzzy similarity score (0-1)
-      FuzzyMatch !Double
-    | -- | No match found
-      Unmatched
-    deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
-
-{- | Mapping between a method flow and a database flow
-
-Used to track how method CFs are linked to the actual flows
-in the database being analyzed.
--}
-data FlowMapping = FlowMapping
-    { fmMethodFlowRef :: !UUID
-    -- ^ Flow UUID from method file
-    , fmMethodFlowName :: !Text
-    -- ^ Flow name in method
-    , fmDbFlowId :: !(Maybe UUID)
-    -- ^ Matched database flow (if found)
-    , fmMatchType :: !MatchType
-    -- ^ How the match was determined
-    , fmConfidence :: !Double
-    -- ^ Match confidence (0.0-1.0)
-    }
-    deriving (Eq, Show, Generic, NFData, ToJSON, FromJSON)
