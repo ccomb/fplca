@@ -14,10 +14,13 @@ import SimaPro.Parser (
     BioExchangeRow (..),
     Located (..),
     NameReading (..),
+    ProcessBlock (..),
     ProductRow (..),
     TechExchangeRow (..),
     defaultConfig,
+    emptyProcessBlock,
     extractLocation,
+    fallbackAmounts,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -395,6 +398,49 @@ parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     hClose handle
     parseSimaProCSV defaultUnitConfig path
 
+{- | The shape Agribalyse writes a pesticide emission mix in: the amount is
+summed in place, and one term drops its integer part (@,067@).
+
+The three shares are a partition of one kilogram, so a truncated first term
+does not merely shrink one row — it makes the block stop summing to its own
+reference, which is what the assertions below check.
+-}
+summedAmountTestCSV :: BS.ByteString
+summedAmountTestCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: ,}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Fungicide emission mix"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Fungicide emissions {GLO} U;kg;1;100;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "Cyclic N-compound emission {GLO} U;kg;0,45+0,247+,067;Undefined;;;;;;"
+        , "Sulfur emission {GLO} U;kg;0,161;Undefined;;;;;;"
+        , "Benzimidazole-compound emission {GLO} U;kg;0,075;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseSummedAmountCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseSummedAmountCSV = withSystemTempFile "summed-amount-test.csv" $ \path handle -> do
+    BS.hPut handle summedAmountTestCSV
+    hClose handle
+    parseSimaProCSV defaultUnitConfig path
+
 -- Helper: get all tech input amounts
 techInputAmounts :: Activity -> [Double]
 techInputAmounts act =
@@ -468,6 +514,29 @@ spec = do
 
         it "rejects unknown variables" $ do
             evaluate M.empty "xyz" `shouldSatisfy` isLeft
+
+        -- Regression: SimaPro exports drop the integer part of a decimal, and
+        -- Agribalyse sums a pesticide mix in place — "0,45+0,247+,067". The
+        -- last term made the whole expression unparseable, and the amount
+        -- silently became its leading number: 0.45 where the file says 0.764.
+        it "evaluates decimals written without their integer part" $ do
+            evaluate M.empty ".067" `shouldBe` Right 0.067
+            evaluate M.empty "0.45+0.247+.067" `shouldBe` Right (0.45 + 0.247 + 0.067)
+            evaluate M.empty ".5*2" `shouldBe` Right 1.0
+            evaluate M.empty "-.5" `shouldBe` Right (-0.5)
+            evaluate M.empty "(.25+.75)*4" `shouldBe` Right 4.0
+            evaluate M.empty ".5e1" `shouldBe` Right 5.0
+
+        it "still rejects a point that is not part of a number" $ do
+            evaluate M.empty "." `shouldSatisfy` isLeft
+            evaluate M.empty "1+." `shouldSatisfy` isLeft
+            evaluate M.empty ".+1" `shouldSatisfy` isLeft
+
+        it "reads a literal in an expression exactly as it reads it alone" $ do
+            -- Not 'read'/'L.float' rounding: both paths go through readAmount,
+            -- so a literal keeps its value when an operator is put next to it.
+            evaluate M.empty "0.0000010897906999999999"
+                `shouldBe` evaluate M.empty "0.0000010897906999999999*1"
 
         -- Regression: Agribalyse Emmental defines the dry-matter param as "Dmper"
         -- but references "DMper" in the allocation formula. SimaPro treats parameter
@@ -641,6 +710,40 @@ spec = do
             length bioExchanges `shouldBe` 1
             -- CO2 = 0.5 * allocButter/100 ≈ 0.5 * 0.25285 ≈ 0.1264
             bioAmount (head bioExchanges) `shouldSatisfy` (\x -> abs (x - 0.1264) < 0.01)
+
+    -- The conversion falls back to a lenient numeric parse when an amount is
+    -- neither a number nor an evaluable expression; 'fallbackAmounts' is the
+    -- pure list of those replacements, reported as warnings on import.
+    describe "fallbackAmounts" $ do
+        let mixRow raw =
+                TechExchangeRow
+                    { terName = "Mix input"
+                    , terUnit = "kg"
+                    , terAmount = 0.45
+                    , terAmountRaw = raw
+                    , terUncertainty = ""
+                    , terComment = ""
+                    }
+            block raw = emptyProcessBlock{pbName = "Fungicide mix", pbMaterials = [mixRow raw]}
+        it "lists an amount it cannot resolve, with the value used instead" $
+            fallbackAmounts mempty (block "0.45+bogus")
+                `shouldBe` [("Fungicide mix", "0.45+bogus", 0.45)]
+        it "stays silent for numbers, expressions, and resolvable parameters" $ do
+            fallbackAmounts mempty (block "0.45") `shouldBe` []
+            fallbackAmounts mempty (block "0.45+0.247+.067") `shouldBe` []
+            fallbackAmounts mempty ((block "dose*2"){pbInputParams = [("dose", "0.5")]}) `shouldBe` []
+
+    describe "SimaPro amounts summed in place" $ do
+        it "sums every term of the expression, integer part or not" $ do
+            (activities, _, _, _, _) <- parseSummedAmountCSV
+            let mix = head activities
+            techInputAmounts mix `shouldMatchList` [0.45 + 0.247 + 0.067, 0.161, 0.075]
+
+        it "keeps the mix a partition of its own reference product" $ do
+            (activities, _, _, _, _) <- parseSummedAmountCSV
+            let mix = head activities
+            refProductAmount mix `shouldBe` Just 1.0
+            sum (techInputAmounts mix) `shouldSatisfy` (\x -> abs (x - 1.0) < 1e-9)
 
     describe "SimaPro database-level parameters" $ do
         it "resolves database input params in exchange amounts" $ do

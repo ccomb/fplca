@@ -23,6 +23,16 @@
   delete response now says so with two new fields, `transient` and `warnings`.
 
 ### Fixed
+- A SimaPro amount written as a sum is now added up. An exporter may state a
+  quantity in place, `0,45+0,247+,067`, and drop the integer part of a term.
+  The reader wanted a digit before every decimal point, so one such term made
+  the whole expression unreadable and the amount silently became the number it
+  began with: 0.45 where the file says 0.764. In Agribalyse 3.2 this fell on
+  the pesticide emission mixes — the shares of a mix stopped adding up to the
+  kilogram they divide, and the freshwater ecotoxicity of the cereal crops
+  built on them came out about 10% low. And when an amount really cannot be
+  read, the import now says so: a warning names the process, the text it could
+  not read, and the value used in its place.
 - The MCP handshake announced version `0.6.0` whatever the build was; it now
   reports the running version.
 - The dependency chosen for an uploaded database is now written into its
