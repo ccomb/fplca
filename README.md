@@ -107,6 +107,7 @@ A TOML config file enables multi-database setups, method collections, and refere
 port = 8080
 host = "127.0.0.1"
 password = "mysecret"          # optional — omit to disable auth
+name = "lab-archive"           # optional — how this server introduces itself over MCP
 
 [[databases]]
 name = "agribalyse-3.2"
