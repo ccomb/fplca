@@ -1270,10 +1270,18 @@ persistUploadDepends manager dbName deps = do
                 let uploadRoot = uploadsDir </> T.unpack dbName
                 mMeta <- UploadedDB.readUploadMeta uploadRoot
                 case mMeta of
-                    Nothing -> pure ()
+                    Nothing ->
+                        -- Losing the pin silently is the very bug this exists
+                        -- to fix, so a missing meta.toml at least says so.
+                        reportProgress Warning $
+                            "No meta.toml under "
+                                <> uploadRoot
+                                <> "; the dependency pin of "
+                                <> T.unpack dbName
+                                <> " lives in memory only and is lost at restart"
                     Just meta -> UploadedDB.writeUploadMeta uploadRoot meta{UploadedDB.umDepends = deps}
                 atomically $
-                    modifyTVar' (dmAvailableDbs manager) (M.insert dbName dbConfig{dcDepends = deps})
+                    modifyTVar' (dmAvailableDbs manager) (M.adjust (\c -> c{dcDepends = deps}) dbName)
 
 {- | Discover uploaded methods from uploads/methods/ directory
 Reads meta.toml from each subdirectory and converts to MethodConfig

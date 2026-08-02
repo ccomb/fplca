@@ -151,7 +151,9 @@ parseMetaToml content = do
 {- | Read a TOML inline array of strings, @["a", "b"]@. Entries that are not
 quoted strings are skipped rather than failing the whole file: the key is
 additive metadata, and a malformed dependency list must not make an otherwise
-good database undiscoverable.
+good database undiscoverable. The writer's escapes (@\"@, @\\@) are not
+decoded, which is fine for database names: they are slugs and cannot contain
+either character.
 -}
 parseStringList :: Text -> [Text]
 parseStringList raw =
