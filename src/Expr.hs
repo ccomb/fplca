@@ -10,7 +10,9 @@ module Expr (
     collectIdentifiers,
 ) where
 
-import Control.Monad (void)
+import Amount (readAmount)
+import Control.Monad (void, when)
+import Data.Char (isDigit)
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes)
@@ -91,8 +93,40 @@ pPrimary env =
         , pVariable env
         ]
 
+{- | A numeric literal, tokenized here and read by 'readAmount'.
+
+The integer part is optional. SimaPro exports drop it: Agribalyse writes the
+cereal fungicide mix as @0,45+0,247+,067@, whose last term normalizes to
+@.067@. Megaparsec's 'L.float' requires a digit before the point, so one such
+term used to fail the /whole/ expression, and the caller then fell back to
+reading the leading number — 0.45 where the file says 0.764.
+
+Handing the token to 'readAmount' also makes a literal inside an expression
+round exactly as the same literal does on its own.
+-}
 pNumber :: Parser Double
-pNumber = lexeme $ try L.float <|> (fromIntegral <$> (L.decimal :: Parser Integer))
+pNumber = lexeme $ do
+    token <- pNumberToken
+    maybe (fail ("not a number: " <> T.unpack token)) pure (readAmount token)
+
+{- | Digits with an optional point and an optional exponent. The sign belongs to
+'pUnary', so it is not part of the token.
+-}
+pNumberToken :: Parser Text
+pNumberToken = try $ do
+    whole <- takeWhileP (Just "digit") isDigit
+    fractional <- option "" (T.cons <$> char '.' <*> takeWhileP (Just "digit") isDigit)
+    -- Digits somewhere: a lone "." is not a number, and neither is the empty
+    -- string, which would otherwise match every identifier and every operator.
+    when (T.null whole && T.length fractional < 2) (fail "expected a number")
+    exponent' <- option "" (try pExponent)
+    pure (whole <> fractional <> exponent')
+  where
+    pExponent = do
+        marker <- oneOf ("eE" :: String)
+        sign <- option "" (T.singleton <$> oneOf ("+-" :: String))
+        digits <- takeWhile1P (Just "digit") isDigit
+        pure (T.cons marker (sign <> digits))
 
 -- | Look up a variable in the pre-lowercased env. Case-insensitive by construction.
 pVariable :: M.Map Text Double -> Parser Double
