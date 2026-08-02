@@ -127,7 +127,7 @@ import API.Types (
     SynonymGroupsResponse (..),
     UploadChunk (..),
     UploadResponse (..),
-    toAuthoredActivity,
+    toAuthoredActivities,
  )
 import App.Env (AppEnv (..), AppM)
 import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusal)
@@ -569,7 +569,7 @@ runWrite :: Text -> WriteVerb -> [ActivityInput] -> AppM ActivityWriteResponse
 runWrite dbName verb inputs = do
     guardMutation
     dbManager <- asks aeDbManager
-    authored <- either (writeErr err400) pure (traverse toAuthoredActivity inputs)
+    authored <- either (writeErr err400 . T.intercalate "\n") pure (toAuthoredActivities inputs)
     outcome <- liftIO (writeActivities dbManager dbName verb authored)
     case outcome of
         Left refusal -> writeErr (statusFor refusal) (refusalMessage refusal)

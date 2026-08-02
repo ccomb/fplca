@@ -15,9 +15,9 @@ import Data.Aeson
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import Data.Either (partitionEithers)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), binarySchema, declareSchemaRef, enum_, format, nullable, properties, required, type_)
 import qualified Data.OpenApi.Lens as OA
 import Data.Proxy (Proxy (..))
@@ -1658,26 +1658,37 @@ instance ToSchema UploadChunk where
 -- Wire → authoring input
 -- ---------------------------------------------------------------------------
 
-{- | Translate one request activity into the authoring input. Shared by the
+{- | Translate the request activities into authoring inputs. Shared by the
 HTTP endpoints and the command line, which read the same JSON document.
 
-The only thing that can fail here is a biosphere line that names its flow in
-two ways at once or in none: everything else is a value the validator judges.
+What can fail here is only shape — a biosphere line that names its flow in
+two ways at once or in none, a direction that is neither of the two, a flow
+introduced without the unit that is part of its identity; every value is the
+validator's to judge. Complaints accumulate across the whole batch and name
+the activity they belong to, exactly as the validator's do, so a batch is
+fixed in one round trip whichever layer refused it.
 -}
-toAuthoredActivity :: ActivityInput -> Either Text AuthoredActivity
-toAuthoredActivity ai = do
-    bio <- traverse toBio (aiBiosphere ai)
-    pure
-        AuthoredActivity
-            { aaName = aiName ai
-            , aaLocation = aiLocation ai
-            , aaDescription = aiDescription ai
-            , aaProductName = aiProductName ai
-            , aaProductAmount = aiProductAmount ai
-            , aaProductUnit = aiProductUnit ai
-            , aaExchanges = map toTechInput (aiInputs ai) <> bio <> map toWasteOutput (aiWasteOutputs ai)
-            }
+toAuthoredActivities :: [ActivityInput] -> Either [Text] [AuthoredActivity]
+toAuthoredActivities inputs = case partitionEithers (map toAuthoredActivity inputs) of
+    ([], authored) -> Right authored
+    (errs, _) -> Left (concat errs)
+
+toAuthoredActivity :: ActivityInput -> Either [Text] AuthoredActivity
+toAuthoredActivity ai = case partitionEithers (map toBio (aiBiosphere ai)) of
+    (errs@(_ : _), _) -> Left (map here (concat errs))
+    ([], bio) ->
+        Right
+            AuthoredActivity
+                { aaName = aiName ai
+                , aaLocation = aiLocation ai
+                , aaDescription = aiDescription ai
+                , aaProductName = aiProductName ai
+                , aaProductAmount = aiProductAmount ai
+                , aaProductUnit = aiProductUnit ai
+                , aaExchanges = map toTechInput (aiInputs ai) <> bio <> map toWasteOutput (aiWasteOutputs ai)
+                }
   where
+    here msg = aiName ai <> " {" <> aiLocation ai <> "}: " <> msg
     toTechInput ti =
         AuthoredTechInput
             { atiProvider = tiProvider ti
@@ -1692,17 +1703,19 @@ toAuthoredActivity ai = do
             , awUnit = woUnit wo
             , awComment = woComment wo
             }
-    toBio be = do
-        flow <- bioFlowRef be
-        direction <- bioDirection (beDirection be)
-        pure
-            AuthoredBio
-                { abFlow = flow
-                , abDirection = direction
-                , abAmount = beAmount be
-                , abUnit = beUnit be
-                , abComment = beComment be
-                }
+    -- One bad line can be bad both ways at once; both complaints travel.
+    toBio be = case (bioFlowRef be, bioDirection (beDirection be)) of
+        (Right flow, Right direction) ->
+            Right
+                AuthoredBio
+                    { abFlow = flow
+                    , abDirection = direction
+                    , abAmount = beAmount be
+                    , abUnit = beUnit be
+                    , abComment = beComment be
+                    }
+        (flow, direction) -> Left (leftList flow <> leftList direction)
+    leftList = either pure (const [])
 
 {- | A biosphere line names an existing flow by identifier, or introduces one
 by name and compartment. Both at once is ambiguous and neither says nothing,
@@ -1714,14 +1727,17 @@ bioFlowRef be = case (beFlow be, beName be) of
     (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name and compartment"
     (Just flowId, Nothing) ->
         maybe (Left ("not a flow identifier: " <> flowId)) (Right . ExistingFlow) (UUID.fromText flowId)
-    (Nothing, Just name) -> case beCompartment be of
-        Nothing -> Left ("biosphere flow \"" <> name <> "\" needs a compartment (air, water, soil, natural resource)")
-        Just medium ->
+    (Nothing, Just name) -> case (beCompartment be, beUnit be) of
+        (Nothing, _) -> Left ("biosphere flow \"" <> name <> "\" needs a compartment (air, water, soil, natural resource)")
+        -- The unit is half of a named flow's identity (see
+        -- 'Database.Author.authoredBioFlowUUID'), so it cannot be defaulted.
+        (_, Nothing) -> Left ("biosphere flow \"" <> name <> "\" needs a unit")
+        (Just medium, Just unit) ->
             Right $
                 NewBioFlow
                     name
                     Compartment{compartmentName = medium, compartmentSub = beSubCompartment be}
-                    (fromMaybe "" (beUnit be))
+                    unit
 
 bioDirection :: Text -> Either Text BioDirection
 bioDirection raw = case T.toLower (T.strip raw) of

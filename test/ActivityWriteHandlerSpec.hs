@@ -149,6 +149,36 @@ spec = describe "writing activities over HTTP" $ do
             neither <- create env "authored" [bio Nothing Nothing]
             void neither `shouldSatisfy` refusedWith "needs either a flow identifier"
 
+    it "reports every shape defect of a batch at once, each naming its activity" $
+        -- Shape complaints accumulate like the validator's do: a batch with a
+        -- bad direction in one activity and a doubly-named flow in another is
+        -- fixed in one round trip, and each line says where to look.
+        withWritableDb $ \env -> do
+            let badDirection =
+                    cheese
+                        { aiName = "yogurt, at dairy"
+                        , aiBiosphere = [emission{beName = Just "Carbon dioxide", beDirection = "released"}]
+                        }
+                doublyNamed =
+                    cheese
+                        { aiName = "butter, at dairy"
+                        , aiBiosphere = [emission{beFlow = Just (UUID.toText co2Id), beName = Just "Carbon dioxide"}]
+                        }
+            res <- create env "authored" [badDirection, doublyNamed]
+            case res of
+                Right _ -> expectationFailure "expected the batch to be refused"
+                Left err -> do
+                    errHTTPCode err `shouldBe` 400
+                    bodyOf err `shouldSatisfy` isInfixOf "yogurt, at dairy {FR}: unknown biosphere direction"
+                    bodyOf err `shouldSatisfy` isInfixOf "butter, at dairy {FR}: "
+
+    it "refuses a named biosphere flow that comes without its unit" $
+        -- The unit is half of a named flow's identity, so it cannot be
+        -- defaulted; the complaint says so instead of "unknown unit \"\"".
+        withWritableDb $ \env -> do
+            res <- create env "authored" [cheese{aiBiosphere = [emission{beName = Just "Dust", beUnit = Nothing}]}]
+            void res `shouldSatisfy` refusedWith "\"Dust\" needs a unit"
+
 -- ---------------------------------------------------------------------------
 -- Driving the handlers
 -- ---------------------------------------------------------------------------

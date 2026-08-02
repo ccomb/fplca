@@ -4,7 +4,7 @@
 
 module CLI.Command where
 
-import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivity)
+import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivities)
 import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbReplaceArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
@@ -541,8 +541,8 @@ from a written one without parsing the output.
 -}
 runWrite :: OutputFormat -> DatabaseManager -> Text -> WriteVerb -> [ActivityInput] -> IO ()
 runWrite fmt manager target verb inputs =
-    case traverse toAuthoredActivity inputs of
-        Left err -> reportError (T.unpack err) >> exitFailure
+    case toAuthoredActivities inputs of
+        Left errs -> reportError (T.unpack (T.intercalate "\n" errs)) >> exitFailure
         Right authored -> do
             outcome <- writeActivities manager target verb authored
             case outcome of
