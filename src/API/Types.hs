@@ -482,6 +482,7 @@ data FlowContributionEntry = FlowContributionEntry
     , fcoCategory :: Text -- e.g. "air/urban air"
     , fcoCompartment :: Maybe Text -- Sub-compartment (e.g. "urban air")
     , fcoCfValue :: Double -- Raw characterization factor value
+    , fcoMatchKind :: Maybe Text -- How the factor was found ("exact_name", "cas_number", …); absent for a flow the method's tables never walked
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowContributionEntry)

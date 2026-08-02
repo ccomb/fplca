@@ -37,6 +37,9 @@ module Method.Explain (
     StepTried (..),
     StepResult (..),
 
+    -- * Batch annotation
+    flowMatchKind,
+
     -- * Rendering
     renderResolution,
     rungName,
@@ -58,6 +61,7 @@ import Method.Mapping (
     CF (..),
     CFUnit (..),
     ConversionOutcome (..),
+    FlowCFTag (..),
     DensityDirection (..),
     MatchStrategy (..),
     MethodTables (..),
@@ -175,6 +179,18 @@ explainFlowCF unitCfg unitDB tables fid flow =
              in case flowToCFOutcome unitCfg unitDB (mtEnergyDensities tables) (Just flow) (cfUnit cf) 1.0 of
                     Converted _ bridge -> Characterized match bridge
                     Unconvertible reason -> ConversionRefused match reason
+
+{- | How a flow's factor was found, read from the resolution recorded when the
+broadcast vector was filled rather than replayed. This is the cheap answer, for
+annotating a whole table of contributing flows at once; 'explainFlowCF' is the
+full one, for the flow somebody clicked.
+
+'Nothing' means the tables hold no recorded resolution for this flow: it was
+never walked, which a cross-DB flow arriving from a dependency has not been.
+That is an absent answer, not a negative one.
+-}
+flowMatchKind :: MethodTables -> UUID -> Maybe Text
+flowMatchKind tables fid = rungName . ftRung <$> M.lookup fid (mtResolution tables)
 
 --------------------------------------------------------------------------------
 -- Wire names

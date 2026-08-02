@@ -8,6 +8,7 @@
 module API.Routes where
 
 import API.DatabaseHandlers (explainCFToAPI, simpleAction)
+import qualified Method.Explain as Explain
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
 import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
@@ -689,6 +690,7 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
                     , fcoCategory = bfCompartmentName f
                     , fcoCompartment = bfCompartmentSub f
                     , fcoCfValue = cfVal
+                    , fcoMatchKind = Explain.flowMatchKind tables (bfId f)
                     }
                 | (f, cfVal, c) <- topContribs
                 ]
@@ -791,6 +793,7 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
                             , fcoCategory = bfCompartmentName f
                             , fcoCompartment = bfCompartmentSub f
                             , fcoCfValue = cfVal
+                            , fcoMatchKind = Explain.flowMatchKind tables (bfId f)
                             }
                         | (f, cfVal, c) <- top
                         ]
@@ -1765,6 +1768,7 @@ getContributingFlows dbName processIdText collectionName methodIdText limitParam
                     , fcoCategory = bfCompartmentName f
                     , fcoCompartment = bfCompartmentSub f
                     , fcoCfValue = cfVal
+                    , fcoMatchKind = Explain.flowMatchKind tables (bfId f)
                     }
                 | (f, cfVal, c) <- take lim contribs
                 ]

@@ -37,6 +37,7 @@ import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
 import API.DatabaseHandlers (coverageReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
+import qualified Method.Explain as Explain
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
@@ -990,6 +991,9 @@ to drift from this one.
 data ImpactsResult = ImpactsResult
     { irOutcome :: !LCIAOutcome
     , irMappingStats :: !MappingStats
+    , irTables :: !Mapping.MethodTables
+    -- ^ The method's tables, for annotating each contributing flow with how
+    -- its factor was found. Shared with the manager's cache, not a copy.
     , irContribs :: ![(BiosphereFlow, Double, Double)]
     -- ^ Sorted descending by absolute contribution.
     , irUnknownUuids :: ![UUID.UUID]
@@ -1067,6 +1071,7 @@ runImpactsRequest dbManager args req = do
         ImpactsResult
             { irOutcome = outcome
             , irMappingStats = stats
+            , irTables = tables
             , irContribs = contribs
             , irUnknownUuids = unknownUuids
             , irRefProductName = prodName
@@ -1140,6 +1145,7 @@ callGetImpacts dbManager mBaseUrl rid args =
                                     , "category" .= bfCompartmentName f
                                     , "compartment" .= bfCompartmentSub f
                                     , "cf_value" .= cfVal
+                                    , "match_kind" .= Explain.flowMatchKind (irTables ir) (bfId f)
                                     , "flow_unit" .= getUnitNameForBioFlow mUnits f
                                     ]
                                | (f, cfVal, c) <- topFlows
@@ -1833,6 +1839,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
                                 , "category" .= bfCompartmentName f
                                 , "compartment" .= bfCompartmentSub f
                                 , "cf_value" .= cfVal
+                                , "match_kind" .= Explain.flowMatchKind tables (bfId f)
                                 ]
                            | (f, cfVal, c) <- top
                            ]
