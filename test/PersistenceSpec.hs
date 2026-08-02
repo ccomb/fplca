@@ -23,6 +23,7 @@ import Control.Concurrent.STM (atomically, modifyTVar')
 import Control.Exception (bracket_)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as Set
 import Data.Text (Text, isInfixOf)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -47,6 +48,8 @@ import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
     initDatabaseManager,
+    loadDatabase,
+    unloadDatabase,
  )
 import Database.Upload (DatabaseFormat (..))
 import Database.UploadedDatabase (UploadMeta (..), readUploadMeta)
@@ -148,6 +151,55 @@ spec = describe "persisting an edit" $ do
                         listDirectory (home </> "data") >>= (`shouldSatisfy` ((== 1) . length))
                         doesFileExist (elsewhere </> "untouched.txt") `shouldReturn` True
                         listDirectory elsewhere `shouldReturn` ["untouched.txt"]
+
+        it "does not take a sibling's files for its own when its name is a prefix of theirs" $
+            -- Ownership is judged on path components: a database named "agri"
+            -- pointing at "agribalyse"'s data directory (a copy keeps its
+            -- source's path) must be given a home of its own, not rewrite the
+            -- sibling whose name it happens to prefix.
+            withDataDir $ \dataRoot -> do
+                manager <- initDatabaseManager defaultConfig True Nothing
+                db <- buildTwoActivityFixture
+                let siblingDir = dataRoot </> "uploads" </> "databases" </> "agribalyse" </> "data"
+                createDirectoryIfMissing True siblingDir
+                writeFile (siblingDir </> "untouched.spold") "the sibling's dataset"
+                install manager "agri" db (uploadedConfig "agri" siblingDir)
+                r <- mutateUploadedDatabase manager "agri" (dropSecond db)
+                case r of
+                    Left err -> expectationFailure ("mutateUploadedDatabase: " <> show err)
+                    Right outcome -> do
+                        moPersisted outcome `shouldBe` True
+                        listDirectory siblingDir `shouldReturn` ["untouched.spold"]
+                        meta <- readUploadMeta (dataRoot </> "uploads" </> "databases" </> "agri")
+                        fmap umDataPath meta `shouldBe` Just "data"
+
+        it "reloads to what was written, not to the pre-edit sources" $
+            -- The point of the whole path: unloading and loading again returns
+            -- the edited database, where it used to resurrect the original.
+            withDataDir $ \dataRoot -> do
+                manager <- initDatabaseManager defaultConfig True Nothing
+                db <- buildTwoActivityFixture
+                let dataDir = dataRoot </> "uploads" </> "databases" </> "reload-me" </> "data"
+                createDirectoryIfMissing True dataDir
+                install manager "reload-me" db (uploadedConfig "reload-me" dataDir)
+                r <- mutateUploadedDatabase manager "reload-me" (dropSecond db)
+                either (expectationFailure . ("mutateUploadedDatabase: " <>) . show) (const (pure ())) r
+                unloadDatabase manager "reload-me" `shouldReturn` Right ()
+                reloaded <- loadDatabase manager "reload-me"
+                case reloaded of
+                    Left err -> expectationFailure ("loadDatabase: " <> show err)
+                    Right (loaded, _) -> dbActivityCount (ldDatabase loaded) `shouldBe` 1
+
+        it "refuses a second edit while one is in progress" $
+            withDataDir $ \_ -> do
+                manager <- initDatabaseManager defaultConfig True Nothing
+                db <- buildTwoActivityFixture
+                install manager "busy" db (configuredConfig "busy")
+                atomically $ modifyTVar' (dmStagingDbs manager) (Set.insert "busy")
+                r <- mutateUploadedDatabase manager "busy" (dropSecond db)
+                case r of
+                    Left err -> err `shouldSatisfy` isInfixOf "already in progress"
+                    Right _ -> expectationFailure "expected the second edit to be refused"
 
         it "says an edit is not saved when the database is one the engine only reads" $
             withDataDir $ \dataRoot -> do

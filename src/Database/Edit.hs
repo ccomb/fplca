@@ -67,7 +67,7 @@ import System.Directory (
     removePathForcibly,
     renameDirectory,
  )
-import System.FilePath (makeRelative, takeDirectory, (</>))
+import System.FilePath (makeRelative, splitDirectories, takeDirectory, (</>))
 
 import Config (DatabaseConfig (..))
 import Database (
@@ -433,8 +433,7 @@ lives in memory only and is gone at the next unload, and the caller has to be
 able to say so rather than let the user assume otherwise.
 -}
 data MutationOutcome = MutationOutcome
-    { moDatabase :: Database
-    , moPersisted :: Bool
+    { moPersisted :: Bool
     , moWarnings :: [Text]
     }
 
@@ -465,7 +464,30 @@ mutateUploadedDatabase ::
     Text ->
     (Database -> Either Text Database) ->
     IO (Either Text MutationOutcome)
-mutateUploadedDatabase manager dbName edit =
+mutateUploadedDatabase manager dbName edit = do
+    -- Two concurrent edits of the same database would share one staging
+    -- directory and interleave the renames over the live sources. Reserve the
+    -- name (the same reservation copy and setup staging use) and refuse the
+    -- second edit rather than queue it: edits are interactive and rare.
+    reserved <- atomically $ do
+        staging <- readTVar (dmStagingDbs manager)
+        if S.member dbName staging
+            then pure False
+            else True <$ modifyTVar' (dmStagingDbs manager) (S.insert dbName)
+    if not reserved
+        then pure $ Left $ "An edit of " <> dbName <> " is already in progress. Retry when it finishes."
+        else
+            finally
+                (mutateReserved manager dbName edit)
+                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
+
+-- | The mutation proper. The caller holds the 'dmStagingDbs' reservation.
+mutateReserved ::
+    DatabaseManager ->
+    Text ->
+    (Database -> Either Text Database) ->
+    IO (Either Text MutationOutcome)
+mutateReserved manager dbName edit =
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
@@ -541,7 +563,10 @@ prepareSources dbName config edited
     | otherwise = do
         uploadsDir <- UploadedDB.getDatabaseUploadsDir
         let home = uploadsDir </> T.unpack dbName
-            ownsItsFiles = home `isPrefixOf` dcPath config
+            -- Judged on path components, not on text: a textual prefix would
+            -- make a database named "agri" the owner of "agribalyse"'s files,
+            -- and its first save would rewrite them.
+            ownsItsFiles = splitDirectories home `isPrefixOf` splitDirectories (dcPath config)
             dataDir = if ownsItsFiles then dcPath config else home </> "data"
             format = if ownsItsFiles then fromMaybe UnknownFormat (dcFormat config) else EcoSpold2
         case serializeDatabaseFiles format edited of
@@ -630,7 +655,17 @@ commitMutation manager dbName loaded edited staged warnings = do
         modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
     clearMethodMappingCacheForDb manager dbName
     relinkWarnings <- case staged of
-        Nothing -> pure []
+        -- The transient path must not relink: 'relinkDatabase' saves the
+        -- matrix cache when links change, which would half-persist an edit
+        -- the caller is being told is memory-only. Say what that costs.
+        Nothing ->
+            pure
+                [ "the edit cleared the links to "
+                    <> T.intercalate ", " (dbDependsOn edited)
+                    <> "; they return at the next load, and cross-database totals undercount until then"
+                | not (null (dbDependsOn edited))
+                , null (dbCrossDBLinks edited)
+                ]
         Just source -> do
             -- Rebuilding cleared the cross-database links; rebuild them against
             -- the current dependency set before the cache records the result.
@@ -640,8 +675,7 @@ commitMutation manager dbName loaded edited staged warnings = do
             pure (either (\err -> ["the edit is saved, but relinking failed: " <> err]) (const []) relinked)
     pure
         MutationOutcome
-            { moDatabase = withRuntime
-            , moPersisted = isJust staged
+            { moPersisted = isJust staged
             , moWarnings = warnings <> relinkWarnings
             }
 
