@@ -36,6 +36,13 @@
   delete response now says so with two new fields, `transient` and `warnings`.
 
 ### Fixed
+- A SimaPro amount cell the engine cannot read is now zero and warned about,
+  instead of the number the cell happens to begin with. The reader used to stop
+  at the first character that is not part of a number and keep what it had, so
+  `1,5 kg` became 1.5 and `124902,34825322*1/Qp` — an expression whose parameter
+  went missing — became a hundred and twenty-five thousand. An amount that is
+  wrong by orders of magnitude and looks ordinary is the hardest kind to find;
+  the import now names the cell it could not read and the value it used.
 - A SimaPro amount written as a sum is now added up. An exporter may state a
   quantity in place, `0,45+0,247+,067`, and drop the integer part of a term.
   The reader wanted a digit before every decimal point, so one such term made

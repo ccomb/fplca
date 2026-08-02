@@ -715,19 +715,16 @@ spec = do
     -- neither a number nor an evaluable expression; 'fallbackAmounts' is the
     -- pure list of those replacements, reported as warnings on import.
     describe "fallbackAmounts" $ do
-        let mixRow raw =
-                TechExchangeRow
-                    { terName = "Mix input"
-                    , terUnit = "kg"
-                    , terAmount = 0.45
-                    , terAmountRaw = raw
-                    , terUncertainty = ""
-                    , terComment = ""
-                    }
+        -- The row goes through the real row parser rather than a literal
+        -- record, so the value reported here is the one an import would use
+        -- and cannot drift from it.
+        let mixRow raw = case parseTechRow defaultConfig ("Mix input;kg;" <> raw <> ";Undefined;;;;;;") of
+                Just r -> r
+                Nothing -> error ("mixRow: unparseable row for " <> show raw)
             block raw = emptyProcessBlock{pbName = "Fungicide mix", pbMaterials = [mixRow raw]}
         it "lists an amount it cannot resolve, with the value used instead" $
             fallbackAmounts mempty (block "0.45+bogus")
-                `shouldBe` [("Fungicide mix", "0.45+bogus", 0.45)]
+                `shouldBe` [("Fungicide mix", "0.45+bogus", 0.0)]
         it "stays silent for numbers, expressions, and resolvable parameters" $ do
             fallbackAmounts mempty (block "0.45") `shouldBe` []
             fallbackAmounts mempty (block "0.45+0.247+.067") `shouldBe` []
@@ -799,6 +796,21 @@ spec = do
 
         it "returns 0.0 for non-numeric" $
             parseAmount '.' "abc" `shouldBe` 0.0
+
+        it "parses scientific notation" $ do
+            parseAmount '.' "1e-5" `shouldBe` 1e-5
+            parseAmount ',' "2,5E3" `shouldBe` 2500.0
+
+        -- The whole cell has to be the number. Reading it up to the first
+        -- character that is not part of one turned "0,45+0,247+,067" into
+        -- 0.45 — right order of magnitude, a third short, and nothing
+        -- downstream could tell it from a real amount. An expression is
+        -- 'resolveAmount''s business, and a cell that is neither is reported.
+        it "refuses a cell that is more than a number" $ do
+            parseAmount ',' "0,45+0,247+,067" `shouldBe` 0.0
+            parseAmount '.' "1.5*Qp" `shouldBe` 0.0
+            parseAmount ',' "1,5 kg" `shouldBe` 0.0
+            parseAmount '.' "12 (estimated)" `shouldBe` 0.0
 
     describe "parseProductRow" $ do
         it "parses 7-field product row" $

@@ -415,19 +415,24 @@ decodeBS :: BS.ByteString -> Text
 decodeBS = TE.decodeUtf8With TEE.lenientDecode
 {-# INLINE decodeBS #-}
 
--- | Parse amount with configurable decimal separator (ByteString)
+{- | Read a plain decimal cell, with the file's decimal separator. 0 when the
+cell holds anything else.
+
+The whole cell has to be the number. Reading it up to the first character that
+is not part of one used to turn @0,45+0,247+,067@ into 0.45 — a number of the
+right order of magnitude, wrong by a third, indistinguishable from a real one
+downstream. An amount cell that is not a literal is an expression, and
+'resolveAmount' evaluates it; one that is neither is surfaced by
+'fallbackAmounts' rather than approximated here.
+-}
 parseAmount :: Char -> BS.ByteString -> Double
 parseAmount decimalSep bs
     | BS.null bs = 0.0
-    | otherwise =
-        let normalized =
-                if decimalSep == ','
-                    then BS8.map (\c -> if c == ',' then '.' else c) bs
-                    else bs
-         in case reads (BS8.unpack normalized) of
-                [(val, "")] -> val
-                [(val, _)] -> val -- Allow trailing characters
-                _ -> 0.0
+    | otherwise = fromMaybe 0.0 (readAmount (decodeBS normalized))
+  where
+    normalized
+        | decimalSep == ',' = BS8.map (\c -> if c == ',' then '.' else c) bs
+        | otherwise = bs
 
 -- | Split a CSV line by delimiter, respecting RFC 4180 quoted fields.
 splitCSV :: Char -> BS.ByteString -> [BS.ByteString]
