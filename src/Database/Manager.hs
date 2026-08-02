@@ -767,7 +767,7 @@ buildMethodTablesFor manager dbName collection db hier method = do
                 <> show (length zeroed)
                 <> " flow(s) matched a CF that cannot be converted from the flow's unit "
                 <> "(no unit-conversion path); their contributions score 0. Samples: "
-                <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u) | (f, CF _ (CFUnit u)) <- zeroed])
+                <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u, show reason) | (f, CF _ (CFUnit u), reason) <- zeroed])
     pure tables
 
 {- | Run @build@ at most once per @key@ across concurrent callers. The first

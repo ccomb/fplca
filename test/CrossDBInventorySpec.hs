@@ -199,6 +199,7 @@ spec = do
                     , mtSeaWaterCFs = Mapping.MethodSilentOnSeaWater
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
+                    , mtResolution = M.empty
                     , mtBroadcast = M.empty
                     , mtRegionalActivityWeights = Nothing
                     }

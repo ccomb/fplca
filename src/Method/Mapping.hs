@@ -70,6 +70,15 @@ module Method.Mapping (
     TableEntry (..),
     BuildProvenance (..),
     convertForCharacterization,
+    characterizationOutcome,
+    energyAwareOutcome,
+    flowToCFOutcome,
+    convertedQuantity,
+    ConversionOutcome (..),
+    FlowCFTag (..),
+    UnitBridge (..),
+    DensityDirection (..),
+    RefusalReason (..),
     expandSynonymMappings,
     directionExcludedCFs,
     projectRegionalResourceFlows,
@@ -724,6 +733,14 @@ data MethodTables = MethodTables
     flow quantity is bridged into the target unit before the CF multiply.
     Flows with no entry behave exactly as before — a cross-dimensional CF
     still yields a zero effective CF. Empty map = feature inactive.
+    -}
+    , mtResolution :: !(M.Map UUID FlowCFTag)
+    {- ^ How each broadcast-covered flow got its factor: the rung that served
+    it, and the refusal if the flow→CF conversion could not be made. Filled in
+    the same pass as 'mtBroadcast', which collapses a factor to one 'Double'
+    and so cannot distinguish "no CF" from "CF refused on units" from "the
+    method's own zero" — this map is what keeps those three apart. Absent key
+    = the cascade found no CF at all.
     -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
@@ -1394,6 +1411,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         , mtSeaWaterCFs = seaWaterCFs
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
+        , mtResolution = M.empty -- filled alongside 'mtBroadcast'
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
@@ -1571,6 +1589,79 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         Just (flow, ByProxy) -> bfName flow
         _ -> mcfFlowName cf
 
+{- | How a flow quantity reached the basis its CF value is denominated in.
+The score only needs the converted number; this says which route produced it,
+so a surface can explain a factor instead of restating it.
+-}
+data UnitBridge
+    = -- | Flow and CF share a unit, or one of the two declares none.
+      UnitsIdentical
+    | {- | The flow's unit is not in the unit configuration, so the quantity
+      passes through unconverted — there is no base to normalize it to.
+      -}
+      UnitUnknown !Text
+    | -- | Ordinary same-dimension conversion, flow unit → CF unit.
+      UnitConverted !Text !Text
+    | {- | The CF unit is a result expression (@"kg CO2 eq"@), so the factor is
+      defined per the flow's canonical base unit and the quantity is scaled
+      to that base.
+      -}
+      NormalizedToBase !Text
+    | {- | Flow and CF sit on either side of a physical density, which bridges
+      the two dimensions (see 'energyAwareConversion').
+      -}
+      EnergyBridged !EnergyDensity !DensityDirection
+    deriving (Eq, Show)
+
+-- | Which way a density was read: @qNative × E@ or @qTarget ÷ E@.
+data DensityDirection = DensityForward | DensityInverse
+    deriving (Eq, Show)
+
+{- | Why a flow quantity could not be brought to its CF's basis. Refusing is
+right — wrong-dimension data must not score — but the refusal is a fact worth
+reporting, not a bare zero.
+-}
+data RefusalReason
+    = {- | Flow unit and CF unit measure different dimensions, and no density
+      bridges them.
+      -}
+      DimensionalMismatch !Text !Text
+    | {- | The flow's dimension declares no canonical base unit, so a CF in a
+      result expression has no basis to normalize to (a unit-config defect).
+      -}
+      NoCanonicalBase !Text
+    | -- | A density applies but one leg of the bridge would not convert.
+      EnergyBridgeRefused !EnergyDensity
+    deriving (Eq, Show)
+
+{- | What the read cascade decided for one flow, recorded when the broadcast
+vector is filled so no surface has to re-derive it in bulk.
+-}
+data FlowCFTag = FlowCFTag
+    { ftRung :: !RungId
+    -- ^ The cascade rung that served this flow's factor.
+    , ftRefusal :: !(Maybe RefusalReason)
+    {- ^ Set when the factor exists but could not be converted onto the flow's
+    basis, so the flow scores 0 while looking characterized.
+    -}
+    }
+    deriving (Eq, Show)
+
+-- | A flow quantity on its CF's basis, or the reason it could not get there.
+data ConversionOutcome
+    = Converted !Double !UnitBridge
+    | Unconvertible !RefusalReason
+    deriving (Eq, Show)
+
+{- | The number scoring uses. A refusal contributes @0@ — the deliberate
+"never score wrong-dimension data" rule — and the reason it was refused stays
+in the 'ConversionOutcome' for the surfaces that report it.
+-}
+convertedQuantity :: ConversionOutcome -> Double
+convertedQuantity (Converted q _) = q
+convertedQuantity (Unconvertible _) = 0
+{-# INLINE convertedQuantity #-}
+
 {- | Convert the inventory @qty@ (in @flowUnit@) to the basis the CF value
 expects, for characterization.
 
@@ -1592,11 +1683,24 @@ expects, for characterization.
   * The flow unit itself is unknown → @qty@ unchanged (no base to normalize to).
 -}
 convertForCharacterization :: UnitConfig -> Text -> CFUnit -> Double -> Double
-convertForCharacterization cfg flowUnit (CFUnit cfu) qty
-    | flowUnit == cfu || T.null cfu || T.null flowUnit = qty
-    | not (isKnownUnit cfg flowUnit) = qty
-    | isKnownUnit cfg cfu = fromMaybe 0 (convertUnit cfg flowUnit cfu qty)
-    | otherwise = maybe 0 snd (normalizeToCanonical cfg flowUnit qty)
+convertForCharacterization cfg flowUnit cfu = convertedQuantity . characterizationOutcome cfg flowUnit cfu
+{-# INLINE convertForCharacterization #-}
+
+-- | 'convertForCharacterization', saying how it converted or why it refused.
+characterizationOutcome :: UnitConfig -> Text -> CFUnit -> Double -> ConversionOutcome
+characterizationOutcome cfg flowUnit (CFUnit cfu) qty
+    | flowUnit == cfu || T.null cfu || T.null flowUnit = Converted qty UnitsIdentical
+    | not (isKnownUnit cfg flowUnit) = Converted qty (UnitUnknown flowUnit)
+    | isKnownUnit cfg cfu =
+        maybe
+            (Unconvertible (DimensionalMismatch flowUnit cfu))
+            (`Converted` UnitConverted flowUnit cfu)
+            (convertUnit cfg flowUnit cfu qty)
+    | otherwise =
+        maybe
+            (Unconvertible (NoCanonicalBase flowUnit))
+            (\(base, q) -> Converted q (NormalizedToBase base))
+            (normalizeToCanonical cfg flowUnit qty)
 
 {- | Pre-compute the broadcast CF Map: each flow UUID covered by the method maps
 to its effective CF (CF value × flow-unit→CF-unit conversion). Collapses the
@@ -1604,53 +1708,65 @@ UUID/exact/fallback cascade into a single Map and absorbs the unit conversion
 so the scoring hot path becomes pure multiply-accumulate.
 
 Walks every flow in @flowDB@ once. Flows with no CF match are not inserted
-(sparse Map). Conversions route through 'convertForCharacterization', so
+(sparse Map). Conversions route through 'flowToCFOutcome', so
 dimensionally-incompatible flow/CF unit pairs land an effective CF of @0@
 (matching the per-flow scoring path) rather than silently keeping the
 unconverted quantity and contaminating the score.
+
+The same walk fills 'mtResolution', so the rung that served each flow and any
+conversion refusal survive the collapse into one 'Double' — at no extra pass,
+because both answers come from the one cascade lookup this already does.
 -}
 fillBroadcastVector :: UnitConfig -> UnitDB -> BioFlowDB -> MethodTables -> MethodTables
 fillBroadcastVector unitConfig unitDB flowDB tables =
-    tables{mtBroadcast = M.mapMaybeWithKey buildEntry flowDB}
+    tables
+        { mtBroadcast = M.map fst resolved
+        , mtResolution = M.map snd resolved
+        }
   where
-    buildEntry fid flow = case lookupCascadeCF tables flowDB fid of
-        Nothing -> Nothing
-        Just cf -> Just (convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0)
+    resolved = M.mapMaybeWithKey buildEntry flowDB
+    buildEntry fid flow = do
+        (rung, entry) <- lookupCascadeEntry tables flowDB fid
+        let CF cfVal cfu = teCF entry
+            outcome = flowToCFOutcome unitConfig unitDB (mtEnergyDensities tables) (Just flow) cfu 1.0
+        pure (convertedQuantity outcome * cfVal, FlowCFTag rung (refusalOf outcome))
+    refusalOf (Converted _ _) = Nothing
+    refusalOf (Unconvertible reason) = Just reason
 
-{- | Matched CFs whose effective factor collapses to @0@ although the factor
-itself is nonzero: the flow-to-CF unit conversion was refused (dimensional
-mismatch, missing canonical base, or a failed energy bridge — the @0@ arms of
-'convertForCharacterization' and 'energyAwareConversion'). The refusal itself
-is right — wrong-dimension data must not score — but left unreported it is
-indistinguishable from an uncharacterized flow, and the method silently
-undercounts. Callers surface these once per (db, method) at build time.
+{- | Matched CFs the flow's own unit cannot be converted to, although the
+factor itself is nonzero: a dimensional mismatch, a missing canonical base, or
+a failed energy bridge. The refusal itself is right — wrong-dimension data
+must not score — but left unreported it is indistinguishable from an
+uncharacterized flow, and the method silently undercounts. Callers surface
+these once per (db, method) at build time, with the reason.
 
-Covers both read paths: the broadcast vector (re-running the cascade only for
-its zero-valued entries, so a healthy method pays nothing) and the
+Covers both read paths: the broadcast vector (read straight off
+'mtResolution', which recorded each refusal as it happened) and the
 regionalized CF table (one representative CF per flow — whether a conversion
 is refused depends on the units, not on the per-location value). The
 name-blind regional CAS bridge is not scanned: it has no fixed flow to
 convert against until scoring. One entry per flow.
 -}
-zeroedMatchedCFs :: UnitConfig -> UnitDB -> BioFlowDB -> MethodTables -> [(BiosphereFlow, CF)]
+zeroedMatchedCFs :: UnitConfig -> UnitDB -> BioFlowDB -> MethodTables -> [(BiosphereFlow, CF, RefusalReason)]
 zeroedMatchedCFs unitConfig unitDB flowDB tables =
     M.elems (M.union broadcastZeroed regionalZeroed)
   where
     broadcastZeroed =
         M.fromList
-            [ (fid, (flow, cf))
-            | (fid, eff) <- M.toList (mtBroadcast tables)
-            , eff == 0
+            [ (fid, (flow, teCF entry, reason))
+            | (fid, tag) <- M.toList (mtResolution tables)
+            , Just reason <- [ftRefusal tag]
             , Just flow <- [M.lookup fid flowDB]
-            , Just cf <- [lookupCascadeCF tables flowDB fid]
-            , cfValue cf /= 0
+            , Just (_, entry) <- [lookupCascadeEntry tables flowDB fid]
+            , cfValue (teCF entry) /= 0
             ]
     regionalZeroed =
         M.fromList
-            [ (fid, (flow, cf))
+            [ (fid, (flow, cf, reason))
             | (fid, cf) <- M.toList regionalRep
             , Just flow <- [M.lookup fid flowDB]
-            , convertAndMultiply unitConfig unitDB (mtEnergyDensities tables) (Just flow) cf 1.0 == 0
+            , Unconvertible reason <-
+                [flowToCFOutcome unitConfig unitDB (mtEnergyDensities tables) (Just flow) (cfUnit cf) 1.0]
             ]
     regionalRep =
         M.fromList
@@ -2454,36 +2570,39 @@ Both require the flow's own unit to be dimensionally unreachable from the CF's
 bridge's — and both require a positive density: a zero would divide, and a
 negative one would silently flip the sign of a score.
 
-Any leg failing to convert yields @0@, and so does a non-positive density: we
-refuse a wrong-basis or wrong-dimension factor rather than silently using the
-raw value, and 'zeroedMatchedCFs' reports the refusal. Every other case
-(matching dimensions, no density) defers to 'convertForCharacterization', so
-flows without a density are unchanged.
+Any leg failing to convert is an 'EnergyBridgeRefused', and so is a
+non-positive density: we refuse a wrong-basis or wrong-dimension factor rather
+than silently using the raw value, and the refusal travels in the outcome
+instead of collapsing to a bare zero. Every other case (matching dimensions,
+no density) defers to 'characterizationOutcome', so flows without a density
+are unchanged.
 -}
-energyAwareConversion :: UnitConfig -> Text -> CFUnit -> Maybe EnergyDensity -> Double -> Double
-energyAwareConversion cfg flowUnit cfu@(CFUnit rawCfUnit) mDensity qty =
+energyAwareOutcome :: UnitConfig -> Text -> CFUnit -> Maybe EnergyDensity -> Double -> ConversionOutcome
+energyAwareOutcome cfg flowUnit cfu@(CFUnit rawCfUnit) mDensity qty =
     case mDensity of
         -- Generalizing the guard from "energy" to "same dimension as one leg of
         -- the density" lets one mechanism serve the fossil energy CF (kg → MJ
         -- via calorific value), the water-scarcity CF (kg → m³ via density) and
         -- their mirrors, which is every case where a per-physical-quantity CF
         -- meets an inventory flow of another dimension.
-        Just (EnergyDensity ev targetUnit nativeUnit)
+        Just density@(EnergyDensity ev targetUnit nativeUnit)
             | crossDimension
             , ev > 0
             , unitsCompatible cfg rawCfUnit targetUnit ->
-                fromMaybe 0 $ do
+                bridged density DensityForward $ do
                     qtyNative <- toUnit nativeUnit
                     factor <- convertUnit cfg targetUnit rawCfUnit ev
                     pure (qtyNative * factor)
             | crossDimension
             , ev > 0
             , unitsCompatible cfg rawCfUnit nativeUnit ->
-                fromMaybe 0 $ do
+                bridged density DensityInverse $ do
                     qtyTarget <- toUnit targetUnit
                     convertUnit cfg nativeUnit rawCfUnit (qtyTarget / ev)
-        _ -> convertForCharacterization cfg flowUnit cfu qty
+        _ -> characterizationOutcome cfg flowUnit cfu qty
   where
+    bridged density dir =
+        maybe (Unconvertible (EnergyBridgeRefused density)) (`Converted` EnergyBridged density dir)
     -- Both arms need the flow's unit to be unreachable from the CF's: a
     -- same-dimension pair belongs to the ordinary conversion, and a CF unit the
     -- config does not know (a result expression like "kg CO2 eq") is compatible
@@ -2518,13 +2637,29 @@ convertAndMultiply ::
     Double ->
     Double
 convertAndMultiply unitConfig unitDB energyDensities mflow (CF cfVal cfu) qty =
+    convertedQuantity (flowToCFOutcome unitConfig unitDB energyDensities mflow cfu qty) * cfVal
+{-# INLINE convertAndMultiply #-}
+
+{- | The conversion 'convertAndMultiply' applies before the CF multiply, kept
+whole: which bridge carried the flow quantity onto the CF's basis, or why none
+could. Same inputs, same decision — the multiply is all 'convertAndMultiply'
+adds.
+-}
+flowToCFOutcome ::
+    UnitConfig ->
+    UnitDB ->
+    EnergyDensityMap ->
+    Maybe BiosphereFlow ->
+    CFUnit ->
+    Double ->
+    ConversionOutcome
+flowToCFOutcome unitConfig unitDB energyDensities mflow cfu qty =
     let flowUnit = maybe "" unitName (mflow >>= \f -> M.lookup (bfUnitId f) unitDB)
         -- 'lookupEnergyDensity' walks the same names the CF lookup walks —
         -- including the region-stripped one, so a flow lent the base substance's
         -- factor is lent its density too.
         mDensity = mflow >>= \f -> lookupEnergyDensity energyDensities (bfName f)
-        converted = energyAwareConversion unitConfig flowUnit cfu mDensity qty
-     in converted * cfVal
+     in energyAwareOutcome unitConfig flowUnit cfu mDensity qty
 
 {- | Per-flow contributions over an 'Inventory', keyed by flow UUID (possibly
 cross-DB-merged). Walks the inventory directly (not the mappings) so any

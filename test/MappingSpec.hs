@@ -786,7 +786,7 @@ spec = do
                     filled =
                         fillBroadcastVector cfg unitDB flowDB $
                             buildMethodTables OtherCFFamily M.empty densities [(cf, Just (flow, ByUUID))]
-                pure (fid, map (bfId . fst) (zeroedMatchedCFs cfg unitDB flowDB filled))
+                pure (fid, [bfId f | (f, _, _) <- zeroedMatchedCFs cfg unitDB flowDB filled])
             fillFor = fillWith M.empty
 
         it "flags a kg-denominated CF matched by an m3 flow" $ do
