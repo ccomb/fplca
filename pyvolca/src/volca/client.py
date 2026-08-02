@@ -11,8 +11,8 @@ handle path substitution, query-string assembly, and JSON decoding.
 This removes ~250 lines of hand-written query-param plumbing and
 decouples pyvolca's PyPI release cadence from engine endpoint changes:
 when the engine renames a query parameter, pyvolca picks it up on the
-next spec fetch with no code change. See ``docs/guides/pyvolca.md`` for
-the user-facing view.
+next spec fetch with no code change. See ``README.md`` for the
+user-facing view.
 
 Kwarg name translation
 ----------------------
