@@ -321,6 +321,7 @@ test-suite lca-tests
                      , AggregateSpec
                      , CopySpec
                      , AuthorSpec
+                     , PersistenceSpec
                      , DeleteSelectionSpec
                      , ExportSpec
                      , ExportHandlerSpec

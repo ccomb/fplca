@@ -14,6 +14,7 @@ has no writer and 'UnknownFormat' is not a real target, so both fail loudly
 -}
 module Database.Export (
     serializeDatabase,
+    serializeDatabaseFiles,
     exportDatabase,
     MethodExportFormat (..),
     parseMethodExportFormat,
@@ -72,6 +73,42 @@ serializeDatabase fmt db = case fmt of
   where
     sdb = toSimpleDatabase db
     noWarn = fmap (,[])
+
+{- | The @(relative path, bytes)@ a database becomes as a directory tree,
+rather than the single stream 'serializeDatabase' hands to a download.
+
+This is the shape persistence needs: rewriting an upload's own source files in
+place, so that unloading and reloading the database gives back what was
+written. That demands more of a format than exporting does — it must record
+process identity, not re-derive it.
+
+'EcoSpold2' does: each dataset is a file named @{activityUUID}_{productUUID}.spold@
+and the parser reads the pair straight off the name, so every process id
+survives the round trip. The other writers re-mint identity from names and
+locations on read, which is stable for rows that came from a file but moves
+the identity of rows an author just created — silently, and only after a
+restart. They are refused here rather than allowed to lose that quietly;
+'serializeDatabase' still exports to all of them, because an export is a copy
+that leaves the original in place.
+-}
+serializeDatabaseFiles :: DatabaseFormat -> Database -> Either Text ([(FilePath, BL.ByteString)], [Text])
+serializeDatabaseFiles fmt db = case fmt of
+    EcoSpold2 -> (\entries -> (map (fmap encodeLazy) entries, [])) <$> ES2.writeEcoSpold2 ES2.noVolatileMeta sdb
+    SimaProCSV -> remints "SimaPro CSV"
+    EcoSpold1 -> remints "EcoSpold 1"
+    ILCDProcess -> remints "ILCD"
+    BrightwayExcel -> remints "Brightway Excel"
+    OpenLcaJsonLd -> Left "openLCA JSON-LD export is not supported"
+    UnknownFormat -> Left "cannot write to an unknown format"
+  where
+    sdb = toSimpleDatabase db
+    encodeLazy = BL.fromStrict . TE.encodeUtf8
+    remints name =
+        Left $
+            name
+                <> " does not record process identifiers, so saving would give the edited\
+                   \ activities different identities the next time the database is read.\
+                   \ Export this database to EcoSpold 2 and upload that to make edits durable."
 
 {- | Export targets for a method collection — a space of its own, not
 'DatabaseFormat': most database formats carry no method writer, and method

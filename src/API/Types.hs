@@ -978,6 +978,13 @@ data DeleteSelectionResponse = DeleteSelectionResponse
     { dsrSuccess :: Bool
     , dsrMessage :: Text
     , dsrDeleted :: Int
+    , dsrTransient :: Bool
+    {- ^ True when the deletion lives in memory only, because the database is
+    one the engine reads from configuration rather than owns. Reloading it
+    brings the removed activities back, and a caller has to be able to say
+    so rather than let the user assume the change stuck.
+    -}
+    , dsrWarnings :: [Text]
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeleteSelectionResponse)

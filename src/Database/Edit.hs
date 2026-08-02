@@ -40,22 +40,34 @@ module Database.Edit (
     resolveDeleteSelection,
     DeleteSelection (..),
     DeleteRequest (..),
+    DeleteOutcome (..),
     deleteActivitiesInDB,
     insertActivities,
     replaceActivities,
+    MutationOutcome (..),
+    mutateUploadedDatabase,
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
-import Control.Exception (finally)
+import Control.Exception (SomeException, finally, try)
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.IntSet as IS
+import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
+import System.Directory (
+    createDirectoryIfMissing,
+    doesDirectoryExist,
+    removePathForcibly,
+    renameDirectory,
+ )
+import System.FilePath (makeRelative, takeDirectory, (</>))
 
 import Config (DatabaseConfig (..))
 import Database (
@@ -66,6 +78,8 @@ import Database (
  )
 import Database.Author (ResolvedInsert (..))
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
+import Database.Export (serializeDatabaseFiles)
+import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
@@ -73,6 +87,7 @@ import Database.Manager (
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
+    relinkDatabase,
  )
 import Database.MatrixBuild (
     InterningTables (..),
@@ -82,7 +97,8 @@ import Database.MatrixBuild (
     buildTechTriples,
     collectBioFlowOrder,
  )
-import Database.Upload (slugify)
+import Database.Upload (DatabaseFormat (..), slugify)
+import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
 import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
@@ -407,6 +423,250 @@ checkKeys intent existing keys = case intent of
     renderKey (a, p) = UUID.toText a <> "_" <> UUID.toText p
 
 -- ---------------------------------------------------------------------------
+-- Persisting an edit
+-- ---------------------------------------------------------------------------
+
+{- | What a mutation did.
+
+'moPersisted' is the honest half: an edit to a configured (TOML) database
+lives in memory only and is gone at the next unload, and the caller has to be
+able to say so rather than let the user assume otherwise.
+-}
+data MutationOutcome = MutationOutcome
+    { moDatabase :: Database
+    , moPersisted :: Bool
+    , moWarnings :: [Text]
+    }
+
+{- | Apply a pure edit to a loaded database, then commit it to memory and — for
+a database that owns its files — to disk.
+
+The sequence is prepare-then-commit, because everything that can fail must
+fail before anything is visible:
+
+  1. refuse while another loaded database depends on this one (a rebuild
+     renumbers processes, and the dependent's cross-database links would
+     resolve to the wrong rows or silently drop at solve time);
+  2. run the pure edit;
+  3. serialize the result and write it into a staging directory beside the
+     live one — nothing observable yet;
+  4. build the runtime indexes and a fresh solver for the edited value;
+  5. commit: swing the staging directory into place and swap the registry;
+  6. relink across dependencies and save the matrix cache, so an unload and
+     reload gives back what was just written rather than the pre-edit sources.
+
+Steps 1-4 leave both memory and disk untouched on failure. Step 5 is two
+renames rather than one atomic operation; a crash between them leaves the
+previous sources beside the new ones under a @.old@ suffix rather than
+losing them.
+-}
+mutateUploadedDatabase ::
+    DatabaseManager ->
+    Text ->
+    (Database -> Either Text Database) ->
+    IO (Either Text MutationOutcome)
+mutateUploadedDatabase manager dbName edit =
+    getDatabase manager dbName >>= \case
+        Nothing -> pure $ Left $ "Database not loaded: " <> dbName
+        Just loaded -> do
+            loadedDbs <- readTVarIO (dmLoadedDbs manager)
+            case guardDependents dbName loadedDbs *> edit (ldDatabase loaded) of
+                Left err -> pure (Left err)
+                Right edited -> do
+                    prepared <- prepareSources dbName (ldConfig loaded) edited
+                    case prepared of
+                        Left err -> pure (Left err)
+                        Right (staging, warnings) ->
+                            Right <$> commitMutation manager dbName loaded edited staging warnings
+
+{- | Refuse an edit while another loaded database depends on this one. Shared
+with the delete path, which has the same reason: rebuilding renumbers every
+process, and a dependent's cross-database links would then resolve elsewhere
+or drop silently at solve time.
+-}
+guardDependents :: Text -> M.Map Text LoadedDatabase -> Either Text ()
+guardDependents dbName loadedDbs = case dependents of
+    [] -> Right ()
+    names ->
+        Left $
+            "Cannot edit "
+                <> dbName
+                <> ": still required by "
+                <> T.intercalate ", " names
+                <> ". Unload dependents first."
+  where
+    dependents =
+        [ name
+        | (name, ld) <- M.toList loadedDbs
+        , name /= dbName
+        , dbName `elem` dbDependsOn (ldDatabase ld)
+        ]
+
+{- | Sources written and waiting to be swung into place, or 'Nothing' when the
+database has no files of its own to write.
+-}
+data StagedSources = StagedSources
+    { ssDataDir :: FilePath
+    -- ^ where the live sources are, or will be
+    , ssStaging :: FilePath
+    -- ^ the fully-written replacement, still invisible
+    , ssHome :: Maybe (FilePath, DatabaseFormat)
+    {- ^ set when this write gives the database a home it did not have; the
+    upload root whose @meta.toml@ has to be written on commit
+    -}
+    }
+
+{- | Serialize the edited database and stage it beside its live sources.
+
+Three cases, in the order they are decided:
+
+  * a configured (TOML) database writes nothing — it is a background database
+    the engine reads and never owns, so its edits stay in memory;
+  * a database with its own upload directory is rewritten in its own format,
+    and refused when that format cannot record process identity
+    ('Database.Export.serializeDatabaseFiles' says which and why);
+  * a copy has no files at all — 'copyDatabase' shares the source's value
+    without duplicating its directory — so the first write gives it one. It
+    gets EcoSpold 2, the format that survives the round trip. The source's
+    own files are never touched: writing through the shared path would edit a
+    database nobody asked to edit.
+-}
+prepareSources ::
+    Text ->
+    DatabaseConfig ->
+    Database ->
+    IO (Either Text (Maybe StagedSources, [Text]))
+prepareSources dbName config edited
+    | not (dcIsUploaded config) = pure (Right (Nothing, []))
+    | otherwise = do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        let home = uploadsDir </> T.unpack dbName
+            ownsItsFiles = home `isPrefixOf` dcPath config
+            dataDir = if ownsItsFiles then dcPath config else home </> "data"
+            format = if ownsItsFiles then fromMaybe UnknownFormat (dcFormat config) else EcoSpold2
+        case serializeDatabaseFiles format edited of
+            Left err -> pure (Left err)
+            Right (entries, warnings) -> do
+                written <- writeStaging (dataDir <> ".new") entries
+                pure $ case written of
+                    Left err -> Left err
+                    Right staging ->
+                        Right
+                            ( Just
+                                StagedSources
+                                    { ssDataDir = dataDir
+                                    , ssStaging = staging
+                                    , ssHome = if ownsItsFiles then Nothing else Just (home, format)
+                                    }
+                            , warnings
+                            )
+
+{- | Write every entry into a fresh staging directory, replacing any leftover
+from an interrupted write. Returns the directory on success; on failure the
+partial directory is removed, so a retry never inherits half of a previous
+attempt.
+-}
+writeStaging :: FilePath -> [(FilePath, BL.ByteString)] -> IO (Either Text FilePath)
+writeStaging staging entries = do
+    attempt <- try $ do
+        removePathForcibly staging
+        createDirectoryIfMissing True staging
+        mapM_ writeEntry entries
+    case attempt of
+        Right () -> pure (Right staging)
+        Left err -> do
+            removePathForcibly staging
+            pure $ Left $ "could not write the database sources: " <> T.pack (show (err :: SomeException))
+  where
+    writeEntry (relPath, bytes) = do
+        let full = staging </> relPath
+        createDirectoryIfMissing True (takeDirectory full)
+        BL.writeFile full bytes
+
+{- | Swing the staged sources into place, keeping the previous ones until the
+new ones are live.
+-}
+commitSources :: StagedSources -> IO ()
+commitSources staged = do
+    let live = ssDataDir staged
+        previous = live <> ".old"
+    hadSources <- doesDirectoryExist live
+    removePathForcibly previous
+    if hadSources
+        then renameDirectory live previous
+        else createDirectoryIfMissing True (takeDirectory live)
+    renameDirectory (ssStaging staged) live
+    removePathForcibly previous
+
+{- | Install the edited database: commit its sources, swap it into the
+registry behind a fresh solver, then relink and re-cache so a reload returns
+what was written.
+-}
+commitMutation ::
+    DatabaseManager ->
+    Text ->
+    LoadedDatabase ->
+    Database ->
+    Maybe StagedSources ->
+    [Text] ->
+    IO MutationOutcome
+commitMutation manager dbName loaded edited staged warnings = do
+    synonymDB <- getMergedSynonymDB manager
+    let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
+        techTriplesInt =
+            [ (fromIntegral i, fromIntegral j, v)
+            | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
+            ]
+    -- The solver cached under this name has the pre-edit dimensions; drain and
+    -- destroy it before installing the rebuilt one, as the delete path does.
+    clearCachedSolver dbName
+    solver <- createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount withRuntime))
+    mapM_ commitSources staged
+    config <- maybe (pure (ldConfig loaded)) (recordHome manager dbName (ldConfig loaded) edited) staged
+    let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver, ldConfig = config}
+        indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
+    atomically $ do
+        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
+        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+    clearMethodMappingCacheForDb manager dbName
+    relinkWarnings <- case staged of
+        Nothing -> pure []
+        Just source -> do
+            -- Rebuilding cleared the cross-database links; rebuild them against
+            -- the current dependency set before the cache records the result.
+            relinked <- relinkDatabase manager dbName
+            saved <- getDatabase manager dbName
+            mapM_ (Loader.saveCachedDatabaseWithMatrices dbName (ssDataDir source) . ldDatabase) saved
+            pure (either (\err -> ["the edit is saved, but relinking failed: " <> err]) (const []) relinked)
+    pure
+        MutationOutcome
+            { moDatabase = withRuntime
+            , moPersisted = isJust staged
+            , moWarnings = warnings <> relinkWarnings
+            }
+
+{- | Give a database that had no files of its own a @meta.toml@ describing the
+home it just acquired, and point its config at the new sources.
+-}
+recordHome :: DatabaseManager -> Text -> DatabaseConfig -> Database -> StagedSources -> IO DatabaseConfig
+recordHome manager dbName config edited staged = case ssHome staged of
+    Nothing -> pure config
+    Just (home, format) -> do
+        UploadedDB.writeUploadMeta
+            home
+            UploadedDB.UploadMeta
+                { UploadedDB.umVersion = 1
+                , UploadedDB.umDisplayName = dcDisplayName config
+                , UploadedDB.umDescription = dcDescription config
+                , UploadedDB.umFormat = format
+                , UploadedDB.umDataPath = makeRelative home (ssDataDir staged)
+                , UploadedDB.umDepends = dbDependsOn edited
+                }
+        let config' = config{dcPath = ssDataDir staged, dcFormat = Just format}
+        atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert dbName config')
+        pure config'
+
+-- ---------------------------------------------------------------------------
 -- Selection resolver
 -- ---------------------------------------------------------------------------
 
@@ -506,47 +766,40 @@ data DeleteRequest = DeleteRequest
     , drIds :: Maybe [Text]
     }
 
+{- | What a delete-by-selection request did: how many activities went, and
+whether the database it edited keeps the change past an unload.
+-}
+data DeleteOutcome = DeleteOutcome
+    { doRemoved :: Int
+    , doPersisted :: Bool
+    , doWarnings :: [Text]
+    }
+
 {- | Delete a selection from a loaded database, in place under the same name.
 
 Resolves the selection ('drIds' verbatim, else the filter's full matching
 set), resolves the explicit keep/extra process-id strings, applies the
-adjustments, deletes + rebuilds with the manager's merged unit config,
-re-attaches runtime indexes with the merged synonym DB, swaps a fresh solver
-in, and updates the loaded / indexed registry maps. Returns the number of
-activities removed. Fails (Left) when the database is not loaded, an
-ids/keep/extra id is unknown, 'drIds' is combined with filter fields, or the
-rebuild reports an inconsistency.
+adjustments, then hands the deletion to 'mutateUploadedDatabase', which
+rebuilds, rewrites the sources of a database that owns them, and swaps the
+result in. Fails (Left) when the database is not loaded, an ids/keep/extra id
+is unknown, 'drIds' is combined with filter fields, the format cannot record
+what the edit produced, or the rebuild reports an inconsistency.
+
+A deletion from a database with its own files now outlives the process: the
+old behaviour left the sources and the matrix cache holding the pre-delete
+set, so a restart quietly resurrected every removed activity. A configured
+(TOML) database still edits in memory only, and 'doPersisted' says so.
 -}
 deleteActivitiesInDB ::
     DatabaseManager ->
     Text -> -- database name
     DeleteRequest ->
-    IO (Either Text Int)
+    IO (Either Text DeleteOutcome)
 deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = geoP, drProduct = prodP, drClassifications = classFilters, drExactName = exactMatch, drKeep = keep, drExtra = extra, drIds = mIds} =
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
-            -- Deleting activities renumbers/removes them, which would leave any loaded
-            -- database that depends on this one holding cross-DB links that no longer
-            -- resolve — and those silently drop at solve time, undercounting the
-            -- dependent. Refuse while dependents are loaded (mirrors 'unloadDatabase').
-            loadedDbs <- readTVarIO (dmLoadedDbs manager)
             let db = ldDatabase loaded
-                dependents =
-                    [ name
-                    | (name, ld) <- M.toList loadedDbs
-                    , name /= dbName
-                    , dbName `elem` dbDependsOn (ldDatabase ld)
-                    ]
-                guardDeps
-                    | null dependents = Right ()
-                    | otherwise =
-                        Left $
-                            "Cannot delete from "
-                                <> dbName
-                                <> ": still required by "
-                                <> T.intercalate ", " dependents
-                                <> ". Unload dependents first."
                 -- The two selection modes are exclusive: ids name the set
                 -- verbatim, filters compute it. A request carrying both is
                 -- ambiguous, so it is refused rather than guessed at — exact
@@ -558,44 +811,17 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
                         | hasFilter -> Left "ids cannot be combined with name/location/product/classification/exact filters"
                         | otherwise -> traverse (resolvePid db) ids
                     Nothing -> Right (filteredProcessIds db nameP geoP prodP classFilters exactMatch)
-            case guardDeps *> ((,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE) of
+            case (,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE of
                 Left err -> pure $ Left err
                 Right (keepPids, extraPids, filtered) -> do
                     let toDelete =
                             resolveDeleteSelection
                                 DeleteSelection{dsFiltered = filtered, dsKeep = keepPids, dsExtra = extraPids}
                     unitConfig <- getMergedUnitConfig manager
-                    case deleteActivitiesWith unitConfig toDelete db of
-                        Left err -> pure $ Left err
-                        Right rebuilt -> do
-                            synonymDB <- getMergedSynonymDB manager
-                            let withRuntime = BM25.addBM25Index (initializeRuntimeFields rebuilt synonymDB)
-                                techTriplesInt =
-                                    [ (fromIntegral i, fromIntegral j, v)
-                                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
-                                    ]
-                            -- The MUMPS solver cached under this name is now stale (old
-                            -- dimensions/factorization); drain + destroy it as unload/remove do,
-                            -- before installing the rebuilt one — otherwise the first post-delete
-                            -- solve overwrites the map entry and leaks a worker thread + native
-                            -- instance.
-                            clearCachedSolver dbName
-                            solver <-
-                                createSharedSolver
-                                    dbName
-                                    techTriplesInt
-                                    (fromIntegral (dbActivityCount withRuntime))
-                            let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver}
-                                indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
-                            atomically $ do
-                                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
-                                modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
-                            clearMethodMappingCacheForDb manager dbName
-                            -- Edits are transient by design. The on-disk matrix cache
-                            -- and the source still hold the pre-delete set, so an
-                            -- unload/reload deliberately restores the original
-                            -- database; persisting an edited database is a separate,
-                            -- explicit step (exporting it to a new file). We therefore
-                            -- leave the cache in place rather than forcing the next
-                            -- load to rebuild from source.
-                            pure $ Right (length toDelete)
+                    outcome <- mutateUploadedDatabase manager dbName (deleteActivitiesWith unitConfig toDelete)
+                    pure $ flip fmap outcome $ \done ->
+                        DeleteOutcome
+                            { doRemoved = length toDelete
+                            , doPersisted = moPersisted done
+                            , doWarnings = moWarnings done
+                            }
