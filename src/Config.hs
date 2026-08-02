@@ -7,7 +7,6 @@ module Config (
     Config (..),
     ServerConfig (..),
     ServerName (..),
-    unServerName,
     DatabaseConfig (..),
     MethodConfig (..),
     ScoringSetConfig (..),
@@ -150,11 +149,8 @@ readOnlyRefusal = "This instance is read-only: it answers queries but changes no
 {- | How this instance introduces itself. A client may hold several VoLCA
 servers at once; the name is what tells them apart.
 -}
-newtype ServerName = ServerName Text
+newtype ServerName = ServerName {unServerName :: Text}
     deriving (Show, Eq, Generic)
-
-unServerName :: ServerName -> Text
-unServerName (ServerName n) = n
 
 -- | Server configuration
 data ServerConfig = ServerConfig
