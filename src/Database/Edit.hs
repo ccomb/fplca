@@ -55,6 +55,7 @@ module Database.Edit (
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (SomeException, finally, try)
+import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.IntSet as IS
 import Data.List (isPrefixOf)
@@ -504,10 +505,10 @@ writeActivities manager dbName verb authored =
                     Right (resolved, warnings) ->
                         case presenceRefusal (ldDatabase loaded) verb resolved of
                             Just refusal -> pure (Left refusal)
-                            Nothing -> commit unitConfig resolved warnings
+                            Nothing -> commit deps unitConfig resolved warnings
   where
-    commit unitConfig resolved warnings = do
-        outcome <- mutateUploadedDatabase manager dbName (edit unitConfig resolved)
+    commit deps unitConfig resolved warnings = do
+        outcome <- mutateUploadedDatabase manager dbName (edit deps unitConfig)
         pure $ case outcome of
             Left err -> Left (WriteFailed err)
             Right done ->
@@ -517,9 +518,20 @@ writeActivities manager dbName verb authored =
                         , wrPersisted = moPersisted done
                         , wrWarnings = warnings <> moWarnings done
                         }
-    edit unitConfig resolved = case verb of
-        CreateActivities -> insertActivities unitConfig resolved
-        ReplaceActivity _ -> replaceActivities unitConfig resolved
+    -- Everything above judged a snapshot taken before the staging
+    -- reservation; 'mutateReserved' re-reads the database under it. The edit
+    -- therefore validates again against what is actually there, so a batch
+    -- overtaken by a concurrent edit is refused rather than written with a
+    -- supplier link that no longer resolves. In that rare interleaving the
+    -- refusal degrades from a classified status to a 'WriteFailed' message —
+    -- never to a dangling link. Identity minting is pure, so the keys cannot
+    -- differ between the two runs.
+    edit deps unitConfig db = do
+        let ctx = AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
+        (resolved, _) <- first (T.intercalate "\n") (validateAuthored ctx authored)
+        case verb of
+            CreateActivities -> insertActivities unitConfig resolved db
+            ReplaceActivity _ -> replaceActivities unitConfig resolved db
 
 {- | The two refusals only a verb can name: creating over a process that is
 already there, and rewriting one that is not. Checked before the mutation so
