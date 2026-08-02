@@ -110,6 +110,14 @@ spec = do
                     "biosphere amounts are not converted"
                     (baseActivity{aaExchanges = [bioOf (ExistingFlow co2Id) 1 (Just "m")]})
 
+            it "reports a bad product unit and a bad exchange together" $
+                case validateAuthored (contextOf fixtureDb) [baseActivity{aaProductUnit = "furlong", aaExchanges = [techInput "nope" 1 Nothing]}] of
+                    Right _ -> expectationFailure "expected both defects to be refused"
+                    Left errs -> do
+                        length errs `shouldBe` 2
+                        errs `shouldSatisfy` any (isInfixOf "unknown unit \"furlong\"")
+                        errs `shouldSatisfy` any (isInfixOf "unknown provider")
+
             it "reports every defect of a batch at once, each naming its activity" $ do
                 let bad =
                         baseActivity

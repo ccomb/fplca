@@ -246,53 +246,54 @@ duplicateKeys keys = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(k, 1)
 
 validateOne :: AuthorContext -> AuthoredActivity -> Either [Text] (ResolvedInsert, [Text])
 validateOne ctx a =
-    case (productChecks, partitionEithers (zipWith resolveExchange [1 :: Int ..] (aaExchanges a))) of
-        ([], ([], resolved)) ->
-            case lookupUnit ctx (aaProductUnit a) of
-                Nothing -> Left [here ("unknown unit \"" <> aaProductUnit a <> "\" for the product")]
-                Just (unitRef, unitLabel) ->
-                    let key = (authoredActivityUUID (aaName a) (aaLocation a), authoredProductUUID (aaProductName a) unitLabel)
-                        productExchange =
-                            TechnosphereExchange
-                                { techFlowId = snd key
-                                , techAmount = aaProductAmount a
-                                , techUnitId = unitRef
-                                , techRole = ReferenceProduct
-                                , techActivityLinkId = UUID.nil
-                                , techProcessLinkId = Nothing
-                                , techLocation = ""
-                                , techComment = Nothing
-                                , techPedigree = Nothing
-                                }
-                        productFlow =
-                            TechnosphereFlow
-                                { tfId = snd key
-                                , tfName = aaProductName a
-                                , tfUnitId = unitRef
-                                , tfSynonyms = M.empty
-                                , tfCAS = Nothing
-                                , tfSubstanceId = Nothing
-                                }
-                     in Right
-                            ( ResolvedInsert
-                                { riKey = key
-                                , riActivity = buildActivity a unitLabel (productExchange : map reExchange resolved)
-                                , riNewTechFlows = [productFlow | not (M.member (snd key) (dbTechFlows (acDb ctx)))]
-                                , riNewBioFlows = mapMaybe reNewBioFlow resolved
-                                }
-                            , map here (concatMap reWarnings resolved)
-                            )
-        (perActivityErrs, (exchangeErrs, _)) -> Left (map here (perActivityErrs <> concat exchangeErrs))
+    case (productChecks, partitionEithers (zipWith resolveExchange [1 :: Int ..] (aaExchanges a)), mProductUnit) of
+        ([], ([], resolved), Just (unitRef, unitLabel)) ->
+            let key = (authoredActivityUUID (aaName a) (aaLocation a), authoredProductUUID (aaProductName a) unitLabel)
+                productExchange =
+                    TechnosphereExchange
+                        { techFlowId = snd key
+                        , techAmount = aaProductAmount a
+                        , techUnitId = unitRef
+                        , techRole = ReferenceProduct
+                        , techActivityLinkId = UUID.nil
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
+                productFlow =
+                    TechnosphereFlow
+                        { tfId = snd key
+                        , tfName = aaProductName a
+                        , tfUnitId = unitRef
+                        , tfSynonyms = M.empty
+                        , tfCAS = Nothing
+                        , tfSubstanceId = Nothing
+                        }
+             in Right
+                    ( ResolvedInsert
+                        { riKey = key
+                        , riActivity = buildActivity a unitLabel (productExchange : map reExchange resolved)
+                        , riNewTechFlows = [productFlow | not (M.member (snd key) (dbTechFlows (acDb ctx)))]
+                        , riNewBioFlows = mapMaybe reNewBioFlow resolved
+                        }
+                    , map here (concatMap reWarnings resolved)
+                    )
+        (perActivityErrs, (exchangeErrs, _), _) -> Left (map here (perActivityErrs <> concat exchangeErrs))
   where
     here msg = aaName a <> " {" <> aaLocation a <> "}: " <> msg
     resolveExchange i ex = mapLeft (map (numbered i)) (resolveOne ctx ex)
     numbered i msg = "exchange " <> T.pack (show i) <> ": " <> msg
+    mProductUnit = lookupUnit ctx (aaProductUnit a)
     productChecks =
         concat
             [ ["the activity name is empty" | T.null (T.strip (aaName a))]
             , ["the product name is empty" | T.null (T.strip (aaProductName a))]
             , [ "the product amount is " <> T.pack (show (aaProductAmount a)) <> "; it must be a finite non-zero number"
               | not (isUsableAmount (aaProductAmount a))
+              ]
+            , [ "unknown unit \"" <> aaProductUnit a <> "\" for the product"
+              | Nothing <- [mProductUnit]
               ]
             ]
 
