@@ -10,6 +10,7 @@ rather than quietly losing an edit.
 -}
 module JournalSpec (spec) where
 
+import Control.Monad (void)
 import Data.Aeson (Value, decodeStrict, encode, toJSON)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BL
@@ -146,7 +147,7 @@ event = JournalEvent "2026-08-03T09:12:41Z"
 
 -- | Replay, keeping only what a failed assertion can print.
 replayOutcome :: AuthorContext -> [JournalEvent] -> Either Text ()
-replayOutcome ctx = fmap (const ()) . replayJournal ctx
+replayOutcome ctx = void . replayJournal ctx
 
 failsWith :: Text -> Either Text a -> Bool
 failsWith needle = either (isInfixOf needle) (const False)

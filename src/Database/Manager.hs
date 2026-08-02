@@ -46,6 +46,7 @@ module Database.Manager (
     RelinkResult (..),
     addDatabase,
     removeDatabase,
+    editHome,
 
     -- * Method Operations
     listMethodCollections,
@@ -1832,6 +1833,10 @@ loadDatabaseSingleFromConfig manager dbName = do
 
 {- | Where a database keeps its edits, or 'Nothing' for one the engine only
 reads from its configuration and never writes.
+
+An upload and a copy both keep theirs in the upload directory named after
+them, beside the @meta.toml@ that describes them. For a copy that directory is
+the only thing it owns, since its data is the source's.
 -}
 editHome :: DatabaseConfig -> IO (Maybe FilePath)
 editHome dbConfig

@@ -78,6 +78,7 @@ import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
     clearMethodMappingCacheForDb,
+    editHome,
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
@@ -462,7 +463,7 @@ mutateReserved manager dbName op =
             case guardDependents dbName loadedDbs *> applyOp ctx op of
                 Left err -> pure (Left err)
                 Right edited -> do
-                    home <- editHome (ldConfig loaded) dbName
+                    home <- editHome (ldConfig loaded)
                     recorded <- traverse (`appendEvent` op) home
                     case sequence recorded of
                         Left err -> pure (Left err)
@@ -478,18 +479,6 @@ authorContext manager db = do
     deps <- loadedDependencies manager db
     unitConfig <- getMergedUnitConfig manager
     pure AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
-
-{- | Where a database's journal lives, or 'Nothing' for one the engine only
-reads. Both an upload and a copy keep theirs in the upload directory named
-after them, beside the @meta.toml@ that describes them - for a copy, that
-directory is the only thing it owns.
--}
-editHome :: DatabaseConfig -> Text -> IO (Maybe FilePath)
-editHome config dbName
-    | not (dcIsUploaded config) = pure Nothing
-    | otherwise = do
-        uploadsDir <- UploadedDB.getDatabaseUploadsDir
-        pure (Just (uploadsDir </> T.unpack dbName))
 
 {- | Refuse an edit while another loaded database depends on this one. Shared
 with the delete path, which has the same reason: rebuilding renumbers every
