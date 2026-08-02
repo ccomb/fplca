@@ -18,6 +18,23 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [Unreleased]
+
+### Fixed
+
+- The Documentation link on the PyPI page pointed at a page that does not
+  exist and answered 404. It now points at <https://volca.run/docs/python/>,
+  where the guide has been all along. The same dead address was in the
+  package's own module docstring, so `help(volca)` sent people there too.
+
+### Added
+
+- The PyPI listing carries keywords (`lca`, `life-cycle-assessment`,
+  `life-cycle-inventory`, `lcia`, `environmental-data`) and the classifiers
+  that place it: research audience, OS independent, and the Python versions it
+  supports. Searching PyPI for "life cycle assessment" found nothing
+  before this.
+
 ## [0.9.1] - 2026-08-01
 
 ### Added

@@ -1,6 +1,6 @@
 """VoLCA Python client — Life Cycle Assessment engine.
 
-See https://volca.run/docs/guides/pyvolca/ for the full guide.
+See https://volca.run/docs/python/ for the full guide.
 """
 
 from ._download import DownloadError, Installed, download

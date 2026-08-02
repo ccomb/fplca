@@ -10,8 +10,24 @@ dependencies = [
     "requests>=2.28",
     "platformdirs>=4.0",
 ]
+keywords = [
+    "lca",
+    "life-cycle-assessment",
+    "life-cycle-inventory",
+    "lcia",
+    "environmental-data",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    # No License classifier: the SPDX `license` field above supersedes it, and
+    # setuptools refuses a build that carries both (PEP 639).
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -19,7 +35,7 @@ classifiers = [
 dev = ["pytest", "pyright==1.1.411"]
 
 [project.urls]
-Documentation = "https://volca.run/docs/guides/pyvolca/"
+Documentation = "https://volca.run/docs/python/"
 Repository = "https://github.com/ccomb/volca/tree/main/pyvolca"
 Issues = "https://github.com/ccomb/volca/issues"
 
