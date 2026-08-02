@@ -122,6 +122,8 @@ databaseParser =
                     <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
                     <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a supplier alias CSV (source/target names, optional locations)"))
                     <> OA.command "export" (info (DbExport <$> exportArgsParser <**> helper) (progDesc "Export a loaded database to a file"))
+                    <> OA.command "create-activities" (info (DbCreateActivities <$> writeArgsParser <**> helper) (progDesc "Write new activities into a database from a JSON file"))
+                    <> OA.command "replace-activity" (info (DbReplaceActivity <$> replaceArgsParser <**> helper) (progDesc "Rewrite one activity of a database from a JSON file"))
                 )
             )
 
@@ -151,6 +153,26 @@ exportArgsParser =
         <$> textArg "DB" "Name of the loaded database to export"
         <*> textOpt "format" Nothing "FMT" "Target format: simapro|ecospold1|ecospold2|ilcd|brightway"
         <*> strOpt "out" Nothing "FILE" "Output file path"
+
+{- | Authoring parser: positional DB plus @--from@, the JSON file holding the
+activities. The file is the same document the HTTP endpoint accepts
+(@{"activities": [...]}@), so one description works over either transport.
+-}
+writeArgsParser :: Parser DbWriteArgs
+writeArgsParser =
+    DbWriteArgs
+        <$> textArg "DB" "Name of the loaded database to write to"
+        <*> strOpt "from" Nothing "FILE" "JSON file holding the activities to write"
+
+{- | Replace parser: as 'writeArgsParser', plus the identity being rewritten.
+The file holds one activity rather than a batch.
+-}
+replaceArgsParser :: Parser DbReplaceArgs
+replaceArgsParser =
+    DbReplaceArgs
+        <$> textArg "DB" "Name of the loaded database holding the activity"
+        <*> textOpt "process-id" Nothing "PID" "Identity of the activity to rewrite (activityUUID_productUUID)"
+        <*> strOpt "from" Nothing "FILE" "JSON file holding the activity"
 
 {- | Method-export parser: positional collection name, @--format@ keyword,
 @--out@ file path. Mirrors @method export <name> --format <fmt> --out <file>@.

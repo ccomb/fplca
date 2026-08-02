@@ -19,6 +19,7 @@ import Test.Hspec
 
 import API.DatabaseHandlers (
     addDependencyHandler,
+    createActivitiesHandler,
     deleteActivitiesHandler,
     deleteDatabaseHandler,
     finalizeDatabaseHandler,
@@ -26,12 +27,13 @@ import API.DatabaseHandlers (
     loadDatabaseHandler,
     relinkDatabaseHandler,
     removeDependencyHandler,
+    replaceActivityHandler,
     unloadDatabaseHandler,
     uploadDatabaseHandler,
  )
 import API.MCP (callTool, toolDefinitions)
 import API.Resources (Resource (..), allResources, resourceMutates)
-import API.Types (DeleteSelectionRequest (..), RelinkRequest (..))
+import API.Types (ActivityInput (..), ActivityWriteRequest (..), DeleteSelectionRequest (..), RelinkRequest (..))
 import App.Env (AppEnv (..), runApp)
 import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly)
 import Database.Manager (initDatabaseManager)
@@ -85,9 +87,23 @@ mutatingHandlers =
     , ("remove-dependency", run (removeDependencyHandler "nope" "dep"))
     , ("finalize", run (finalizeDatabaseHandler "nope"))
     , ("upload", run (uploadDatabaseHandler (Just "nope") Nothing (source [])))
+    , ("create-activities", run (createActivitiesHandler "nope" (ActivityWriteRequest [])))
+    , ("replace-activity", run (replaceActivityHandler "nope" "id" nothingInParticular))
     ]
   where
     run h env = statusOf <$> runHandler (runApp env h)
+    nothingInParticular =
+        ActivityInput
+            { aiName = ""
+            , aiLocation = ""
+            , aiDescription = []
+            , aiProductName = ""
+            , aiProductAmount = 0
+            , aiProductUnit = ""
+            , aiInputs = []
+            , aiBiosphere = []
+            , aiWasteOutputs = []
+            }
     everything =
         DeleteSelectionRequest
             { dsqName = Nothing

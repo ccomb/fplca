@@ -15,6 +15,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import Data.Either (partitionEithers)
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
 import qualified Data.Map as M
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), Referenced (..), ToSchema (..), binarySchema, declareSchemaRef, enum_, format, nullable, properties, required, type_)
@@ -23,9 +24,15 @@ import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
+import Database.Author (
+    AuthoredActivity (..),
+    AuthoredExchange (..),
+    FlowRef (..),
+ )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BiosphereFlow (..), Compartment, Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -960,6 +967,107 @@ spares selected process ids and @dsqExtra@ adds ones the selection missed.
 Process ids are the canonical @activityUUID_productUUID@ strings the UI/CLI
 carry, not matrix indices.
 -}
+
+{- | One technosphere input: a product this activity consumes, named by the
+process that supplies it.
+
+@tiProvider@ is a @process_id@ (@activityUUID_productUUID@, or a bare activity
+UUID when that activity has a single product) — the same currency the read
+endpoints hand out. The flow follows from the supplier, so it is never stated
+separately. @tiUnit@ defaults to the supplier's own reference unit; stating
+another one is allowed as long as it converts.
+-}
+data TechInputAPI = TechInputAPI
+    { tiProvider :: Text
+    , tiAmount :: Double
+    , tiUnit :: Maybe Text
+    , tiComment :: Maybe Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped TechInputAPI)
+
+{- | One biosphere exchange: a resource taken from the environment or an
+emission released into it.
+
+Either @beFlow@ names a flow already in the vocabulary by its identifier, or
+@beName@ + @beCompartment@ introduce one. Giving both is refused rather than
+guessed at. A biosphere amount is never converted, so an exchange on an
+existing flow must be stated in that flow's own unit.
+-}
+data BioExchangeAPI = BioExchangeAPI
+    { beFlow :: Maybe Text
+    , beName :: Maybe Text
+    , beCompartment :: Maybe Text
+    , beSubCompartment :: Maybe Text
+    , beDirection :: Text
+    -- ^ @resource@ (taken from the environment) or @emission@ (released into it)
+    , beAmount :: Double
+    , beUnit :: Maybe Text
+    , beComment :: Maybe Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped BioExchangeAPI)
+
+{- | One waste output: a residue this activity hands to a treatment process.
+@woProvider@ names that treatment process, exactly as a technosphere input
+names its producer.
+-}
+data WasteOutputAPI = WasteOutputAPI
+    { woProvider :: Text
+    , woAmount :: Double
+    , woUnit :: Maybe Text
+    , woComment :: Maybe Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped WasteOutputAPI)
+
+{- | An activity as a client writes it.
+
+The inventory arrives as three lists rather than one tagged list, so a field
+that makes sense for a supplier link cannot be sent on an emission and back
+again. One reference product per activity: coproducts and allocation are a
+later phase, and this shape does not pretend to accept them.
+
+Identity is not sent. It is minted from the name, location, product and unit
+below, so writing the same activity twice addresses the same row instead of
+creating a second one.
+-}
+data ActivityInput = ActivityInput
+    { aiName :: Text
+    , aiLocation :: Text
+    , aiDescription :: [Text]
+    , aiProductName :: Text
+    , aiProductAmount :: Double
+    , aiProductUnit :: Text
+    , aiInputs :: [TechInputAPI]
+    , aiBiosphere :: [BioExchangeAPI]
+    , aiWasteOutputs :: [WasteOutputAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityInput)
+
+-- | A batch of activities to write.
+newtype ActivityWriteRequest = ActivityWriteRequest
+    { awrActivities :: [ActivityInput]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityWriteRequest)
+
+{- | What a write produced: the process ids now addressable, whether they
+survive an unload, and everything the engine wants the author to know but did
+not refuse over.
+-}
+data ActivityWriteResponse = ActivityWriteResponse
+    { awpWritten :: [Text]
+    , awpTransient :: Bool
+    {- ^ True when the write lives in memory only, because the database is one
+    the engine reads from configuration rather than owns.
+    -}
+    , awpWarnings :: [Text]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityWriteResponse)
+
 data DeleteSelectionRequest = DeleteSelectionRequest
     { dsqName :: Maybe Text -- Filter by activity name
     , dsqLocation :: Maybe Text -- Filter by location
@@ -1545,3 +1653,94 @@ instance MimeUnrender OctetStream UploadChunk where
 
 instance ToSchema UploadChunk where
     declareNamedSchema _ = pure $ NamedSchema (Just "UploadChunk") binarySchema
+
+-- ---------------------------------------------------------------------------
+-- Wire → authoring input
+-- ---------------------------------------------------------------------------
+
+{- | Translate the request activities into authoring inputs. Shared by the
+HTTP endpoints and the command line, which read the same JSON document.
+
+What can fail here is only shape — a biosphere line that names its flow in
+two ways at once or in none, a direction that is neither of the two, a flow
+introduced without the unit that is part of its identity; every value is the
+validator's to judge. Complaints accumulate across the whole batch and name
+the activity they belong to, exactly as the validator's do, so a batch is
+fixed in one round trip whichever layer refused it.
+-}
+toAuthoredActivities :: [ActivityInput] -> Either [Text] [AuthoredActivity]
+toAuthoredActivities inputs = case partitionEithers (map toAuthoredActivity inputs) of
+    ([], authored) -> Right authored
+    (errs, _) -> Left (concat errs)
+
+toAuthoredActivity :: ActivityInput -> Either [Text] AuthoredActivity
+toAuthoredActivity ai = case partitionEithers (map toBio (aiBiosphere ai)) of
+    (errs@(_ : _), _) -> Left (map here (concat errs))
+    ([], bio) ->
+        Right
+            AuthoredActivity
+                { aaName = aiName ai
+                , aaLocation = aiLocation ai
+                , aaDescription = aiDescription ai
+                , aaProductName = aiProductName ai
+                , aaProductAmount = aiProductAmount ai
+                , aaProductUnit = aiProductUnit ai
+                , aaExchanges = map toTechInput (aiInputs ai) <> bio <> map toWasteOutput (aiWasteOutputs ai)
+                }
+  where
+    here msg = aiName ai <> " {" <> aiLocation ai <> "}: " <> msg
+    toTechInput ti =
+        AuthoredTechInput
+            { atiProvider = tiProvider ti
+            , atiAmount = tiAmount ti
+            , atiUnit = tiUnit ti
+            , atiComment = tiComment ti
+            }
+    toWasteOutput wo =
+        AuthoredWasteOutput
+            { awProvider = woProvider wo
+            , awAmount = woAmount wo
+            , awUnit = woUnit wo
+            , awComment = woComment wo
+            }
+    -- One bad line can be bad both ways at once; both complaints travel.
+    toBio be = case (bioFlowRef be, bioDirection (beDirection be)) of
+        (Right flow, Right direction) ->
+            Right
+                AuthoredBio
+                    { abFlow = flow
+                    , abDirection = direction
+                    , abAmount = beAmount be
+                    , abUnit = beUnit be
+                    , abComment = beComment be
+                    }
+        (flow, direction) -> Left (leftList flow <> leftList direction)
+    leftList = either pure (const [])
+
+{- | A biosphere line names an existing flow by identifier, or introduces one
+by name and compartment. Both at once is ambiguous and neither says nothing,
+so both are refused instead of picking a winner.
+-}
+bioFlowRef :: BioExchangeAPI -> Either Text FlowRef
+bioFlowRef be = case (beFlow be, beName be) of
+    (Just _, Just _) -> Left "a biosphere exchange names either an existing flow or a new one, not both"
+    (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name and compartment"
+    (Just flowId, Nothing) ->
+        maybe (Left ("not a flow identifier: " <> flowId)) (Right . ExistingFlow) (UUID.fromText flowId)
+    (Nothing, Just name) -> case (beCompartment be, beUnit be) of
+        (Nothing, _) -> Left ("biosphere flow \"" <> name <> "\" needs a compartment (air, water, soil, natural resource)")
+        -- The unit is half of a named flow's identity (see
+        -- 'Database.Author.authoredBioFlowUUID'), so it cannot be defaulted.
+        (_, Nothing) -> Left ("biosphere flow \"" <> name <> "\" needs a unit")
+        (Just medium, Just unit) ->
+            Right $
+                NewBioFlow
+                    name
+                    Compartment{compartmentName = medium, compartmentSub = beSubCompartment be}
+                    unit
+
+bioDirection :: Text -> Either Text BioDirection
+bioDirection raw = case T.toLower (T.strip raw) of
+    "resource" -> Right Resource
+    "emission" -> Right Emission
+    other -> Left ("unknown biosphere direction: " <> other <> " (expected resource|emission)")

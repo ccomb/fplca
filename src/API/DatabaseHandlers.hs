@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -26,6 +27,8 @@ module API.DatabaseHandlers (
     copyDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
+    createActivitiesHandler,
+    replaceActivityHandler,
     exportDatabaseHandler,
     exportMethodHandler,
     uploadDatabaseHandler,
@@ -79,7 +82,7 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
 import Data.Word (Word64)
 import Network.HTTP.Types.URI (urlEncode)
-import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err403, err404, err500, errBody, throwError)
+import Servant (Header, Headers, ServerError, SourceIO, addHeader, err400, err403, err404, err409, err500, errBody, throwError)
 import qualified Servant.Types.SourceT as S
 import qualified System.Directory
 import System.FilePath ((</>))
@@ -95,6 +98,9 @@ import qualified Database.ComputedQuality as CQ
 
 import API.Types (
     ActivateResponse (..),
+    ActivityInput (..),
+    ActivityWriteRequest (..),
+    ActivityWriteResponse (..),
     BinaryContent (..),
     BridgeGroupAPI (..),
     BridgedFlowAPI (..),
@@ -121,6 +127,7 @@ import API.Types (
     SynonymGroupsResponse (..),
     UploadChunk (..),
     UploadResponse (..),
+    toAuthoredActivities,
  )
 import App.Env (AppEnv (..), AppM)
 import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusal)
@@ -132,7 +139,17 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (DeleteOutcome (..), DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
+import Database.Edit (
+    DeleteOutcome (..),
+    DeleteRequest (..),
+    WriteRefusal (..),
+    WriteReport (..),
+    WriteVerb (..),
+    copyDatabase,
+    deleteActivitiesInDB,
+    refusalMessage,
+    writeActivities,
+ )
 import Database.Export (parseExportFormat, parseMethodExportFormat, serializeDatabase, serializeMethodCollection)
 import qualified Database.Loader as Loader
 import Database.Manager (
@@ -196,7 +213,12 @@ import Database.Upload (
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified Method.Coverage as Coverage
 import Method.Mapping (MatchStrategy (..))
-import Types (Database (..), GeographyPolicy (..), blockerReasonDetail, unresolvedCount)
+import Types (
+    Database (..),
+    GeographyPolicy (..),
+    blockerReasonDetail,
+    unresolvedCount,
+ )
 
 -- | List all databases
 getDatabases :: AppM DatabaseListResponse
@@ -524,6 +546,53 @@ deleteActivitiesHandler dbName req = do
                     (doRemoved outcome)
                     (not (doPersisted outcome))
                     (doWarnings outcome)
+
+{- | Write new activities into a loaded database.
+
+The domain decides what is allowed ('Database.Edit.writeActivities'); this
+turns each refusal into the status a client can act on. A key that already
+exists is a 409 — the author is re-describing a row the database holds and
+wants the PUT — and a batch a caller can fix is a 400 carrying every complaint
+at once, so a ten-line inventory is fixed in one round trip.
+-}
+createActivitiesHandler :: Text -> ActivityWriteRequest -> AppM ActivityWriteResponse
+createActivitiesHandler dbName req = runWrite dbName CreateActivities (awrActivities req)
+
+{- | Rewrite one activity the database already holds, keeping its identity. A
+@process_id@ the database does not hold is a 404.
+-}
+replaceActivityHandler :: Text -> Text -> ActivityInput -> AppM ActivityWriteResponse
+replaceActivityHandler dbName processId body =
+    runWrite dbName (ReplaceActivity processId) [body]
+
+runWrite :: Text -> WriteVerb -> [ActivityInput] -> AppM ActivityWriteResponse
+runWrite dbName verb inputs = do
+    guardMutation
+    dbManager <- asks aeDbManager
+    authored <- either (writeErr err400 . T.intercalate "\n") pure (toAuthoredActivities inputs)
+    outcome <- liftIO (writeActivities dbManager dbName verb authored)
+    case outcome of
+        Left refusal -> writeErr (statusFor refusal) (refusalMessage refusal)
+        Right report ->
+            pure
+                ActivityWriteResponse
+                    { awpWritten = wrWritten report
+                    , awpTransient = not (wrPersisted report)
+                    , awpWarnings = wrWarnings report
+                    }
+
+-- | One status per refusal, so a client never has to read the message to branch.
+statusFor :: WriteRefusal -> ServerError
+statusFor = \case
+    NotLoaded _ -> err404
+    NotWritable _ -> err400
+    Malformed _ -> err400
+    AlreadyPresent _ -> err409
+    NotPresent _ -> err404
+    WriteFailed _ -> err400
+
+writeErr :: ServerError -> Text -> AppM a
+writeErr status message = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 message)}
 
 {- | Export a loaded database as a raw octet-stream body — the same shape the
 upload endpoint reads, and the only response cheap enough for a multi-hundred-MB

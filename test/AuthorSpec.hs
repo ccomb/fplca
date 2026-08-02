@@ -128,8 +128,8 @@ spec = do
                     Right _ -> expectationFailure "expected the batch to be refused"
                     Left errs -> do
                         length errs `shouldBe` 3
-                        errs `shouldSatisfy` any (isInfixOf "two-problems {FR}: exchange 1: unknown provider")
-                        errs `shouldSatisfy` any (isInfixOf "exchange 2: no biosphere flow")
+                        errs `shouldSatisfy` any (isInfixOf "two-problems {FR}: input from \"nope\": unknown provider")
+                        errs `shouldSatisfy` any (isInfixOf ": no biosphere flow")
                         errs `shouldSatisfy` any (isInfixOf "unknown unit \"furlong\"")
 
             it "refuses a batch that mints one identity twice" $
