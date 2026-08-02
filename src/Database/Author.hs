@@ -255,7 +255,9 @@ validateOne ctx a =
                         , techAmount = aaProductAmount a
                         , techUnitId = unitRef
                         , techRole = ReferenceProduct
-                        , techActivityLinkId = UUID.nil
+                        , -- Self-link, as every loaded database records its
+                          -- reference products.
+                          techActivityLinkId = fst key
                         , techProcessLinkId = Nothing
                         , techLocation = ""
                         , techComment = Nothing
