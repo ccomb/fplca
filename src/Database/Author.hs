@@ -186,7 +186,7 @@ judged against.
 -}
 data AuthorContext = AuthorContext
     { acDb :: Database
-    , acDeps :: [(Text, Database)]
+    , acDeps :: [Database]
     , acUnitConfig :: UnitConfig
     }
 
@@ -343,7 +343,7 @@ resolveOne ctx ex = case ex of
                 , techUnitId = unitRef
                 , techRole = Input
                 , techActivityLinkId = fst (supKey sup)
-                , techProcessLinkId = supLocalPid sup
+                , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = comment
                 , techPedigree = Nothing
@@ -356,7 +356,7 @@ resolveOne ctx ex = case ex of
                 , waUnitId = unitRef
                 , waIsInput = False
                 , waActivityLinkId = fst (supKey sup)
-                , waProcessLinkId = supLocalPid sup
+                , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = comment
                 , waPedigree = Nothing
@@ -506,13 +506,14 @@ newBioFlow flowId name comp unitRef =
 -- Lookups across the edited database and its dependencies
 -- ---------------------------------------------------------------------------
 
-{- | A resolved provider. 'supLocalPid' is 'Just' only when the provider lives
-in the database being edited: a provider in a dependency has no process id
-here, and its link is left for cross-database relinking to resolve.
+{- | A resolved provider. Only its @(activityUUID, productUUID)@ key goes into
+the exchange, never a 'ProcessId': process ids renumber on every rebuild, so
+an embedded one would silently point at whichever row inherits the number.
+'Database.MatrixBuild.findProducer' resolves the pair, and a provider living
+in a dependency resolves the same way through cross-database relinking.
 -}
 data Supplier = Supplier
     { supKey :: (UUID, UUID)
-    , supLocalPid :: Maybe ProcessId
     , supProducedUnit :: Text
     {- ^ unit of the produced reference output, @""@ for a treatment process
     that has only a reference input. Mirrors
@@ -527,19 +528,17 @@ data Supplier = Supplier
 
 resolveSupplier :: AuthorContext -> Text -> Either Text Supplier
 resolveSupplier ctx provider =
-    case mapMaybe inDatabase ((thisDb, acDb ctx) : acDeps ctx) of
+    case mapMaybe inDatabase (acDb ctx : acDeps ctx) of
         [] -> Left ("unknown provider \"" <> provider <> "\"")
         (sup : _) -> Right sup
   where
-    thisDb = ""
-    inDatabase (name, db) = do
+    inDatabase db = do
         pid <- resolveProcess db provider
         key <- dbProcessIdTable db V.!? fromIntegral pid
         act <- dbActivities db V.!? fromIntegral pid
         pure
             Supplier
                 { supKey = key
-                , supLocalPid = if name == thisDb then Just pid else Nothing
                 , supProducedUnit = refUnitOf db act (\e -> exchangeIsReference e && not (exchangeIsInput e))
                 , supAnyRefUnit = refUnitOf db act exchangeIsReference
                 }
@@ -560,7 +559,7 @@ refUnitOf db act keep = case filter keep (exchanges act) of
 
 findBioFlow :: AuthorContext -> UUID -> Maybe (BiosphereFlow, UnitDB)
 findBioFlow ctx flowId =
-    case mapMaybe look (acDb ctx : map snd (acDeps ctx)) of
+    case mapMaybe look (acDb ctx : acDeps ctx) of
         [] -> Nothing
         (found : _) -> Just found
   where

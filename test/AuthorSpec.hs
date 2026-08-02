@@ -17,6 +17,7 @@ import qualified Data.Set as S
 import Data.Text (Text, isInfixOf)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Test.Hspec
 
 import Database (buildDatabaseWithMatrices)
@@ -39,6 +40,7 @@ import Types (
     Database (..),
     Exchange (..),
     LocationSource (..),
+    SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -135,19 +137,21 @@ spec = do
                 b <- resolveOrFail fixtureDb baseActivity{aaProductUnit = "item"}
                 snd (riKey a) `shouldNotBe` snd (riKey b)
 
-            it "resolves a local supplier to a process link" $ do
+            it "links a local supplier by UUIDs, never by process id" $ do
+                -- Process ids renumber on every rebuild; an embedded one would
+                -- silently point at whichever row inherits the number.
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [techInput supplierPid 2 Nothing]}
                 case [ex | ex <- exchanges (riActivity r), isTechnosphereExchange ex, exchangeAmount ex == 2] of
                     [TechnosphereExchange{techActivityLinkId = link, techProcessLinkId = pid}] -> do
                         link `shouldBe` supplierActId
-                        pid `shouldBe` findProcessId fixtureDb supplierActId supplierProdId
+                        pid `shouldBe` Nothing
                     other -> expectationFailure ("expected one resolved input, got " <> show (length other))
 
             it "leaves a dependency's supplier for cross-database relinking" $ do
                 -- A supplier in another database has no process id here; the link
                 -- carries the activity UUID and waits for the relink.
                 depDb <- buildFixture
-                let ctx = (contextOf fixtureDb){acDeps = [("other", depDb)]}
+                let ctx = (contextOf fixtureDb){acDeps = [depDb]}
                     authored = baseActivity{aaName = "from-dep", aaExchanges = [techInput supplierPid 3 Nothing]}
                 case validateAuthored ctx{acDb = emptyOf fixtureDb} [authored] of
                     Left errs -> expectationFailure ("expected resolution, got " <> show errs)
@@ -204,6 +208,27 @@ spec = do
                 case insertActivities defaultUnitConfig [] fixtureDb{dbDependsOn = ["other"]} of
                     Left err -> expectationFailure ("expected a no-op, got " <> show err)
                     Right db' -> dbDependsOn db' `shouldBe` ["other"]
+
+            it "keeps the supplier linked when insertion renumbers the rows" $ do
+                -- An authored key sorting before the supplier's shifts every
+                -- process id at rebuild; the input must still reach the
+                -- supplier's row, so links carry UUIDs and never a row number.
+                highDb <- buildFixtureAt highActId highProdId
+                let pidText = UUID.toText highActId <> "_" <> UUID.toText highProdId
+                r <- resolveOrFail highDb baseActivity{aaExchanges = [techInput pidText 2 Nothing]}
+                riKey r < (highActId, highProdId) `shouldBe` True
+                case insertActivities defaultUnitConfig [r] highDb of
+                    Left err -> expectationFailure ("insertActivities: " <> show err)
+                    Right db' ->
+                        case (uncurry (findProcessId db') (riKey r), findProcessId db' highActId highProdId) of
+                            (Just col, Just row) ->
+                                [ v
+                                | SparseTriple i j v <- VU.toList (dbTechnosphereTriples db')
+                                , i == row
+                                , j == col
+                                ]
+                                    `shouldBe` [2]
+                            other -> expectationFailure ("missing process ids after insert: " <> show other)
 
             it "restores the original activity set when the insert is deleted again" $ do
                 r <- resolveOrFail fixtureDb baseActivity
@@ -307,12 +332,18 @@ air = Compartment{compartmentName = "air", compartmentSub = Nothing}
 -- ---------------------------------------------------------------------------
 
 buildFixture :: IO Database
-buildFixture = do
+buildFixture = buildFixtureAt supplierActId supplierProdId
+
+{- | The same fixture with the supplier under chosen UUIDs — high ones sort
+after any authored key, which forces a renumbering on insert.
+-}
+buildFixtureAt :: UUID -> UUID -> IO Database
+buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
             defaultUnitConfig
-            (M.singleton (supplierActId, supplierProdId) supplierActivity)
-            (M.singleton supplierProdId milkFlow)
+            (M.singleton (actId, prodId) (supplierActivityAt actId prodId))
+            (M.singleton prodId (milkFlowAt prodId))
             (M.singleton co2Id co2Flow)
             M.empty
             unitTable
@@ -321,10 +352,12 @@ buildFixture = do
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 
-supplierActId, supplierProdId, co2Id, kgUnitId, itemUnitId, metreUnitId :: UUID
+supplierActId, supplierProdId, co2Id, highActId, highProdId, kgUnitId, itemUnitId, metreUnitId :: UUID
 supplierActId = mkUUID 1
 supplierProdId = mkUUID 2
 co2Id = mkUUID 3
+highActId = UUID.fromWords64 maxBound 1
+highProdId = UUID.fromWords64 maxBound 2
 kgUnitId = mkUUID 10
 itemUnitId = mkUUID 11
 metreUnitId = mkUUID 12
@@ -340,10 +373,10 @@ unitTable =
         , (metreUnitId, Unit{unitId = metreUnitId, unitName = "m", unitSymbol = "m", unitComment = ""})
         ]
 
-milkFlow :: TechnosphereFlow
-milkFlow =
+milkFlowAt :: UUID -> TechnosphereFlow
+milkFlowAt prodId =
     TechnosphereFlow
-        { tfId = supplierProdId
+        { tfId = prodId
         , tfName = "milk"
         , tfUnitId = kgUnitId
         , tfSynonyms = M.empty
@@ -363,8 +396,8 @@ co2Flow =
         , bfCompartment = Just air
         }
 
-supplierActivity :: Activity
-supplierActivity =
+supplierActivityAt :: UUID -> UUID -> Activity
+supplierActivityAt actId prodId =
     Activity
         { activityName = "milk production"
         , activityDescription = []
@@ -375,11 +408,11 @@ supplierActivity =
         , activityUnit = "kg"
         , exchanges =
             [ TechnosphereExchange
-                { techFlowId = supplierProdId
+                { techFlowId = prodId
                 , techAmount = 1.0
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
-                , techActivityLinkId = supplierActId
+                , techActivityLinkId = actId
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = Nothing
