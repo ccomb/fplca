@@ -28,7 +28,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.1** speaks wire formats **2 to 5** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.1** speaks wire formats **2 to 6** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 
@@ -541,6 +541,15 @@ the blocker (missing suppliers, no activities parsed) — fix it with
 :meth:`finalize_database`. The gate also holds on re-runs: an upload
 left staged by an earlier failed run goes through the same readiness
 check instead of being loaded half-linked.
+
+##### `Client.explain_cf(method_id: str, flow_id: str) -> ExplainCFResult`
+
+Explain why one flow scores with the characterization factor it does.
+
+``result.explanation`` is a list of sentences written by the engine:
+show them as they are. The structured fields say the same thing in a
+form you can compare or filter on, and ``result.steps_tried`` lists the
+rungs the cascade walked before the one that answered.
 
 ##### `Client.export_database(fmt: str, db_name: str | None = None) -> bytes`
 
@@ -1583,6 +1592,65 @@ endpoint. Derived from the engine's declared topology, not runtime state.
 | `format` | `str \| None` | None |
 | `depends_on` | `list[str]` | list() |
 
+### `ExplainCFResult`
+
+Result of :meth:`Client.explain_cf`.
+
+``explanation`` is written by the engine: show it as it is rather than
+rewording the codes. The structured fields are for comparing, filtering or
+linking. ``outcome`` is ``"characterized"``, ``"conversion_refused"`` (a
+factor was found but the flow's unit cannot be converted to its basis, so
+the flow scores nothing) or ``"no_factor"``.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `method` | `str` | — |
+| `method_unit` | `str` | — |
+| `flow` | `ExplainedFlow` | — |
+| `outcome` | `str` | — |
+| `explanation` | `list[str]` | list() |
+| `match` | `ExplainedMatch \| None` | None |
+| `steps_tried` | `list[ExplainedStep]` | list() |
+| `regional_factor_count` | `int` | 0 |
+
+### `ExplainedFlow`
+
+The flow an explanation is about, as the cascade sees it.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `id` | `str` | — |
+| `name` | `str` | — |
+| `unit` | `str` | — |
+| `category` | `str` | — |
+| `compartment` | `str \| None` | None |
+| `cas` | `str \| None` | None |
+
+### `ExplainedMatch`
+
+The factor that was served, and where it came from.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `rung` | `str` | — |
+| `cf_value` | `float` | — |
+| `cf_unit` | `str` | — |
+| `method_flow_name` | `str` | — |
+| `match_strategy` | `str` | — |
+| `method_cas` | `str \| None` | None |
+| `unit_conversion` | `str \| None` | None |
+| `refusal` | `str \| None` | None |
+
+### `ExplainedStep`
+
+One rung of the factor-matching cascade, and what it made of the flow.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `rung` | `str` | — |
+| `result` | `str` | — |
+| `veto` | `str \| None` | None |
+
 ### `Flow`
 
 A technosphere product or biosphere flow as returned by /flows.
@@ -1614,6 +1682,7 @@ Emitted inside ``LCIAResult.top_contributors``.
 | `category` | `str` | — |
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
+| `match_kind` | `str \| None` | None |
 
 ### `FlowDetail`
 

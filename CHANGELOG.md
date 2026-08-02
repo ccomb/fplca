@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- You can ask why a flow scores with the characterization factor it does.
+  `GET /api/v1/db/{db}/method/{method}/explain-cf/{flow}` and the `explain_cf`
+  MCP tool replay the factor lookup for one flow and answer in sentences the
+  engine writes itself: which rung of the cascade found the factor, which line
+  of the method it came from, whether a synonym or a CAS number tied the two
+  together, and how the amount was carried onto the factor's basis. The reply
+  also lists the rungs tried before that one, including any refused because the
+  flow's subcompartment forbids them. A contributions table gains the short
+  version of the same answer: each flow now carries how its factor was found,
+  so the whole table is annotated without asking per row. This is wire revision
+  6.
+- A factor found but unusable is no longer indistinguishable from no factor at
+  all. When a flow's unit cannot be converted to the basis its factor is
+  written in, the flow scores nothing, which used to look exactly like an
+  uncharacterized flow; the reason is now recorded per flow, reported in the
+  explanation, and named in the warning the engine already emitted.
+
 - Activities can be written into a database you uploaded or copied, instead of
   only deleted from it. `POST /api/v1/db/{db}/activities` adds them,
   `PUT /api/v1/db/{db}/activity/{process-id}` rewrites one, and

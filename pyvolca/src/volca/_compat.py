@@ -25,10 +25,12 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 5
-"""The newest wire revision this pyvolca understands (revision 5 adds writing
-activities; revision 4 added the quality-report routes). An engine advertising
-more is newer than this client and may answer shapes it cannot decode."""
+KNOWN_WIRE = 6
+"""The newest wire revision this pyvolca understands (revision 6 adds
+explain_cf and the match_kind field on flow contributions; revision 5 added
+writing activities; revision 4 added the quality-report routes). An engine
+advertising more is newer than this client and may answer shapes it cannot
+decode."""
 
 MIN_ENGINE_HINT = "0.9.1"
 """First engine release that advertises :data:`REQUIRED_WIRE`. Used only for the

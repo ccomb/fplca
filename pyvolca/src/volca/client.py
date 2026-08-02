@@ -67,6 +67,7 @@ from .types import (
     DatabaseInfo,
     DatabaseStatus,
     Exchange,
+    ExplainCFResult,
     Flow,
     FlowDetail,
     FlowMapping,
@@ -1848,6 +1849,18 @@ class Client:
         """
         return CharacterizationResult.from_json(
             self._call("get_characterization", method_id=method_id, flow=flow, limit=limit)
+        )
+
+    def explain_cf(self, method_id: str, flow_id: str) -> ExplainCFResult:
+        """Explain why one flow scores with the characterization factor it does.
+
+        ``result.explanation`` is a list of sentences written by the engine:
+        show them as they are. The structured fields say the same thing in a
+        form you can compare or filter on, and ``result.steps_tried`` lists the
+        rungs the cascade walked before the one that answered.
+        """
+        return ExplainCFResult.from_json(
+            self._call("explain_cf", method_id=method_id, flow_id=flow_id)
         )
 
     def get_contributing_flows(

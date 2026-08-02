@@ -292,6 +292,7 @@ class FlowContribution(FromJson):
     category: str  # e.g. "air/urban air"
     cf_value: float = 0.0  # raw characterization factor
     compartment: str | None = None
+    match_kind: str | None = None  # how the factor was found; None when the method's tables never walked this flow
 
 
 @dataclass
@@ -1450,6 +1451,104 @@ class CharacterizationFactor(FromJson):
     category: str
     match_strategy: str
     compartment: str | None = None
+
+
+@dataclass
+class ExplainedStep:
+    """One rung of the factor-matching cascade, and what it made of the flow."""
+
+    rung: str
+    result: str  # "hit" | "miss" | "not_applicable" | "vetoed" | "ambiguous"
+    veto: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ExplainedStep":
+        return cls(rung=d["rung"], result=d["result"], veto=d.get("veto"))
+
+
+@dataclass
+class ExplainedFlow:
+    """The flow an explanation is about, as the cascade sees it."""
+
+    id: str
+    name: str
+    unit: str
+    category: str
+    compartment: str | None = None
+    cas: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ExplainedFlow":
+        return cls(
+            id=d["id"],
+            name=d["name"],
+            unit=d["unit"],
+            category=d["category"],
+            compartment=d.get("compartment"),
+            cas=d.get("cas"),
+        )
+
+
+@dataclass
+class ExplainedMatch:
+    """The factor that was served, and where it came from."""
+
+    rung: str
+    cf_value: float
+    cf_unit: str
+    method_flow_name: str
+    match_strategy: str
+    method_cas: str | None = None
+    unit_conversion: str | None = None
+    refusal: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ExplainedMatch":
+        return cls(
+            rung=d["rung"],
+            cf_value=d["cfValue"],
+            cf_unit=d["cfUnit"],
+            method_flow_name=d["methodFlowName"],
+            match_strategy=d["matchStrategy"],
+            method_cas=d.get("methodCas"),
+            unit_conversion=d.get("unitConversion"),
+            refusal=d.get("refusal"),
+        )
+
+
+@dataclass
+class ExplainCFResult:
+    """Result of :meth:`Client.explain_cf`.
+
+    ``explanation`` is written by the engine: show it as it is rather than
+    rewording the codes. The structured fields are for comparing, filtering or
+    linking. ``outcome`` is ``"characterized"``, ``"conversion_refused"`` (a
+    factor was found but the flow's unit cannot be converted to its basis, so
+    the flow scores nothing) or ``"no_factor"``.
+    """
+
+    method: str
+    method_unit: str
+    flow: ExplainedFlow
+    outcome: str
+    explanation: list[str] = field(default_factory=list)
+    match: ExplainedMatch | None = None
+    steps_tried: list[ExplainedStep] = field(default_factory=list)
+    regional_factor_count: int = 0
+
+    @classmethod
+    def from_json(cls, d: dict) -> "ExplainCFResult":
+        raw_match = d.get("match")
+        return cls(
+            method=d["method"],
+            method_unit=d["methodUnit"],
+            flow=ExplainedFlow.from_json(d["flow"]),
+            outcome=d["outcome"],
+            explanation=list(d.get("explanation", [])),
+            match=ExplainedMatch.from_json(raw_match) if raw_match else None,
+            steps_tried=[ExplainedStep.from_json(s) for s in d.get("stepsTried", [])],
+            regional_factor_count=d.get("regionalFactorCount", 0),
+        )
 
 
 @dataclass
