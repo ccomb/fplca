@@ -1240,13 +1240,48 @@ uploadMetaToConfig slug dirPath meta =
         , dcDescription = UploadedDB.umDescription meta
         , dcLoad = False -- Never auto-load uploads
         , dcDefault = False
-        , dcDepends = []
+        , dcDepends = UploadedDB.umDepends meta
         , dcLocationAliases = M.empty
         , dcFormat = Just (UploadedDB.umFormat meta)
         , dcIsUploaded = True -- Discovered from uploads/ directory
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal -- Uploads can't yet express policy; default to permissive
         }
+
+{- | Record an uploaded database's dependency pin where a restart can find it.
+
+The pin otherwise lives in the staging registry and inside the binary matrix
+cache, so a restart between choosing a dependency and finalizing the database
+used to lose it without saying so — the database came back linked to nothing.
+Writes 'UploadedDB.umDepends' and keeps the in-memory config in step.
+
+A configured (TOML) database has no meta.toml to write and owns its
+dependencies in the config file, so it is left alone.
+-}
+persistUploadDepends :: DatabaseManager -> Text -> [Text] -> IO ()
+persistUploadDepends manager dbName deps = do
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    case M.lookup dbName availableDbs of
+        Nothing -> pure ()
+        Just dbConfig
+            | not (dcIsUploaded dbConfig) -> pure ()
+            | otherwise -> do
+                uploadsDir <- UploadedDB.getDatabaseUploadsDir
+                let uploadRoot = uploadsDir </> T.unpack dbName
+                mMeta <- UploadedDB.readUploadMeta uploadRoot
+                case mMeta of
+                    Nothing ->
+                        -- Losing the pin silently is the very bug this exists
+                        -- to fix, so a missing meta.toml at least says so.
+                        reportProgress Warning $
+                            "No meta.toml under "
+                                <> uploadRoot
+                                <> "; the dependency pin of "
+                                <> T.unpack dbName
+                                <> " lives in memory only and is lost at restart"
+                    Just meta -> UploadedDB.writeUploadMeta uploadRoot meta{UploadedDB.umDepends = deps}
+                atomically $
+                    modifyTVar' (dmAvailableDbs manager) (M.adjust (\c -> c{dcDepends = deps}) dbName)
 
 {- | Discover uploaded methods from uploads/methods/ directory
 Reads meta.toml from each subdirectory and converts to MethodConfig
@@ -2826,6 +2861,7 @@ addDependencyToStaged manager dbName depName = do
 
                 -- Save updated staged database
                 atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+                persistUploadDepends manager dbName newDeps
 
                 -- Return updated setup info
                 first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
@@ -2864,6 +2900,7 @@ removeDependencyFromStaged manager dbName depName = do
                         }
 
             atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+            persistUploadDepends manager dbName newDeps
             first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
 
 -- | Finalize a staged database (build matrices and make it ready for queries)
@@ -2954,6 +2991,9 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
                                 modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
                             clearMethodMappingCacheForDb manager dbName
+                            -- Finalizing is the moment the dependency pin becomes
+                            -- the database's own; record it where a restart reads.
+                            persistUploadDepends manager dbName (sdSelectedDeps staged)
 
                             -- Self-relink first against the current
                             -- dep set: a cached or staged build can

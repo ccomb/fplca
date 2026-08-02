@@ -132,7 +132,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Maybe (fromMaybe)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
+import Database.Edit (DeleteOutcome (..), DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
 import Database.Export (parseExportFormat, parseMethodExportFormat, serializeDatabase, serializeMethodCollection)
 import qualified Database.Loader as Loader
 import Database.Manager (
@@ -516,12 +516,14 @@ deleteActivitiesHandler dbName req = do
         -- dependents). Surface it as 4xx so a raw HTTP client can't read the
         -- 200 envelope as success.
         Left err -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 err}
-        Right deleted ->
+        Right outcome ->
             return $
                 DeleteSelectionResponse
                     True
-                    ("Deleted " <> T.pack (show deleted) <> " activities from " <> dbName)
-                    deleted
+                    ("Deleted " <> T.pack (show (doRemoved outcome)) <> " activities from " <> dbName)
+                    (doRemoved outcome)
+                    (not (doPersisted outcome))
+                    (doWarnings outcome)
 
 {- | Export a loaded database as a raw octet-stream body — the same shape the
 upload endpoint reads, and the only response cheap enough for a multi-hundred-MB
@@ -807,6 +809,7 @@ uploadDatabaseHandler mName mDesc src = do
                             , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
+                            , UploadedDB.umDepends = []
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
@@ -1003,6 +1006,7 @@ uploadMethodHandler mName mDesc src =
                             , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = methodFormat
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
+                            , UploadedDB.umDepends = []
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 

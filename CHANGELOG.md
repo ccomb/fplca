@@ -9,9 +9,26 @@
   at once, one per set of loaded databases, can now tell which one answered
   instead of guessing from the data.
 
+### Changed
+- Deleting activities from a database you uploaded or copied now survives a
+  restart. The engine rewrites the database's own source files before it
+  answers, so unloading and reloading returns what was written; previously the
+  sources and the matrix cache kept the pre-edit set and a restart quietly
+  brought every removed activity back. Only a database stored as EcoSpold 2 can
+  be written back, because its file names carry each process identity through a
+  reload; other formats refuse the edit and name the way out (export to
+  EcoSpold 2, upload that). A copy gets files of its own on the first save
+  instead of writing into the database it was copied from. A configured
+  database the engine only reads is still edited in memory alone, and the
+  delete response now says so with two new fields, `transient` and `warnings`.
+
 ### Fixed
 - The MCP handshake announced version `0.6.0` whatever the build was; it now
   reports the running version.
+- The dependency chosen for an uploaded database is now written into its
+  `meta.toml`. It used to live only in memory and in the binary matrix cache,
+  so a restart between choosing the dependency and finalizing the database lost
+  it silently, and the database came back linked to nothing.
 
 ## [0.9.4] - 2026-08-01
 

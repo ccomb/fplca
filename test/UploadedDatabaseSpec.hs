@@ -17,6 +17,7 @@ baseMeta =
         , umDescription = Nothing
         , umFormat = EcoSpold2
         , umDataPath = "data"
+        , umDepends = []
         }
 
 spec :: Spec
@@ -90,6 +91,7 @@ spec = do
                         , umDescription = Nothing
                         , umFormat = EcoSpold2
                         , umDataPath = "data"
+                        , umDepends = []
                         }
 
         it "parses meta with description" $ do
@@ -125,6 +127,17 @@ spec = do
         it "round-trips a path with spaces" $ do
             let meta = baseMeta{umDataPath = "my data/sub dir"}
             fmap umDataPath (parseMetaToml (formatMetaToml meta)) `shouldBe` Just "my data/sub dir"
+
+        it "round-trips the dependency pin" $ do
+            -- The only durable record of which databases this one draws
+            -- suppliers from; it otherwise lived in the staging registry and
+            -- the binary cache, so a restart lost it without saying so.
+            let meta = baseMeta{umDepends = ["agribalyse", "ecoinvent"]}
+            fmap umDepends (parseMetaToml (formatMetaToml meta)) `shouldBe` Just ["agribalyse", "ecoinvent"]
+
+        it "reads a file written before the dependency pin existed as pinning nothing" $ do
+            let toml = "version = 1\ndisplayName = \"DB\"\nformat = \"ecospold2\"\ndataPath = \"data\"\n"
+            fmap umDepends (parseMetaToml toml) `shouldBe` Just []
 
     -- -----------------------------------------------------------------------
     -- readUploadMeta / writeUploadMeta (IO roundtrip)

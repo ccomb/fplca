@@ -34,6 +34,7 @@ import Config (DatabaseConfig (..), defaultConfig)
 import Data.Aeson (eitherDecode, encode)
 import Database (buildDatabaseWithMatrices)
 import Database.Edit (
+    DeleteOutcome (..),
     DeleteRequest (..),
     DeleteSelection (..),
     deleteActivities,
@@ -211,7 +212,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
                 Right deleted -> do
-                    deleted `shouldBe` 1 -- two matched, one kept
+                    doRemoved deleted `shouldBe` 1 -- two matched, one kept
                     loaded <- readTVarIO (dmLoadedDbs manager)
                     let db' = ldDatabase (loaded M.! "edit-me")
                     dbActivityCount db' `shouldBe` 2
@@ -235,7 +236,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
         it "fails when the database is not loaded" $ do
             manager <- initDatabaseManager defaultConfig True Nothing
             r <- deleteActivitiesInDB manager "ghost" emptyDelete
-            r `shouldBe` Left "Database not loaded: ghost"
+            fmap doRemoved r `shouldBe` Left "Database not loaded: ghost"
 
         it "refuses to delete while a loaded database depends on it" $ do
             -- Deleting from "base" would renumber/remove activities that the loaded
@@ -265,7 +266,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
                 Right deleted -> do
-                    deleted `shouldBe` 1
+                    doRemoved deleted `shouldBe` 1
                     loaded <- readTVarIO (dmLoadedDbs manager)
                     let db' = ldDatabase (loaded M.! "by-ids")
                     dbActivityCount db' `shouldBe` 2
@@ -320,7 +321,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
                 Right deleted -> do
-                    deleted `shouldBe` 2 -- foodB and energy; foodA kept
+                    doRemoved deleted `shouldBe` 2 -- foodB and energy; foodA kept
                     loaded <- readTVarIO (dmLoadedDbs manager)
                     let db' = ldDatabase (loaded M.! "by-ids-5")
                     map activityName (V.toList (dbActivities db')) `shouldBe` ["food-A"]
@@ -335,7 +336,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             r <- deleteActivitiesInDB manager "by-ids-6" emptyDelete{drIds = Just [], drExtra = [foodA]}
             case r of
                 Left err -> expectationFailure ("deleteActivitiesInDB failed: " <> show err)
-                Right deleted -> deleted `shouldBe` 1
+                Right deleted -> doRemoved deleted `shouldBe` 1
 
     describe "DeleteSelectionRequest wire compatibility" $ do
         it "decodes a request without the ids key (old clients)" $ do
@@ -402,7 +403,7 @@ mkConfig name =
         , dcDepends = []
         , dcLocationAliases = M.empty
         , dcFormat = Nothing
-        , dcIsUploaded = True
+        , dcIsUploaded = False
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
         }

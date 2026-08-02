@@ -17,7 +17,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import Database.Edit (DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
+import Database.Edit (DeleteOutcome (..), DeleteRequest (..), copyDatabase, deleteActivitiesInDB)
 import Database.Export (exportDatabase, exportMethodCollection, parseExportFormat, parseMethodExportFormat)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), RelinkResult (..), addDatabase, addMethodCollection)
 import qualified Database.Manager as DM
@@ -348,6 +348,7 @@ executeDbUpload fmt manager args = do
                         , UploadedDB.umDescription = uaDescription args
                         , UploadedDB.umFormat = urFormat uploadResult
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
+                        , UploadedDB.umDepends = []
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 
@@ -414,6 +415,7 @@ executeMcUpload fmt manager args = do
                         , UploadedDB.umDescription = uaDescription args
                         , UploadedDB.umFormat = urFormat uploadResult
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
+                        , UploadedDB.umDepends = []
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 
@@ -483,9 +485,16 @@ executeDbDeleteActivities fmt manager args = do
         Left err -> do
             reportError $ "Delete failed: " ++ T.unpack err
             exitFailure
-        Right deleted -> do
-            reportProgress Info $ "Deleted " ++ show deleted ++ " activities from " ++ T.unpack (ddaDb args)
-            outputResult fmt $ object ["database" .= ddaDb args, "deleted" .= deleted]
+        Right outcome -> do
+            reportProgress Info $ "Deleted " ++ show (doRemoved outcome) ++ " activities from " ++ T.unpack (ddaDb args)
+            mapM_ (reportProgress Warning . T.unpack) (doWarnings outcome)
+            outputResult fmt $
+                object
+                    [ "database" .= ddaDb args
+                    , "deleted" .= doRemoved outcome
+                    , "transient" .= not (doPersisted outcome)
+                    , "warnings" .= doWarnings outcome
+                    ]
 
 {- | Execute database load: bring a configured database (and its declared
 dependencies) into memory. Any failed dependency is surfaced in the output.

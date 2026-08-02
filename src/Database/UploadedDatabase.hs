@@ -48,6 +48,13 @@ data UploadMeta = UploadMeta
     , umDescription :: !(Maybe Text) -- Optional description
     , umFormat :: !DatabaseFormat -- Detected database format
     , umDataPath :: !FilePath -- Relative path to data within upload dir
+    , umDepends :: ![Text]
+    {- ^ Names of the databases this one draws suppliers from. The only durable
+    record of the pin: it otherwise lives in the staging registry and inside
+    the binary matrix cache, so a restart between staging and finalizing used
+    to lose it silently. A file written before this field existed reads back
+    with no dependencies, which is what it meant.
+    -}
     }
     deriving (Show, Eq, Generic)
 
@@ -138,7 +145,23 @@ parseMetaToml content = do
             , umDescription = description
             , umFormat = format
             , umDataPath = dataPath
+            , umDepends = maybe [] parseStringList (getValue "depends")
             }
+
+{- | Read a TOML inline array of strings, @["a", "b"]@. Entries that are not
+quoted strings are skipped rather than failing the whole file: the key is
+additive metadata, and a malformed dependency list must not make an otherwise
+good database undiscoverable. The writer's escapes (@\"@, @\\@) are not
+decoded, which is fine for database names: they are slugs and cannot contain
+either character.
+-}
+parseStringList :: Text -> [Text]
+parseStringList raw =
+    [ T.dropAround (== '"') item
+    | item <- map T.strip (T.splitOn "," (T.dropAround (`elem` ("[]" :: String)) (T.strip raw)))
+    , not (T.null item)
+    , T.isPrefixOf "\"" item
+    ]
 
 {- | Parse a format string to a DatabaseFormat.
 Inverse of 'formatMetaToml''s writer below — every slug it can write is read back
@@ -164,6 +187,7 @@ formatMetaToml UploadMeta{..} =
             ++ maybe [] (\d -> ["description = " <> quote d]) umDescription
             ++ [ "format = " <> quote (formatToText umFormat)
                , "dataPath = " <> quote (T.pack umDataPath)
+               , "depends = [" <> T.intercalate ", " (map quote umDepends) <> "]"
                ]
   where
     quote t = "\"" <> escapeToml t <> "\""
