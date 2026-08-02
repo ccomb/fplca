@@ -14,10 +14,13 @@ import SimaPro.Parser (
     BioExchangeRow (..),
     Located (..),
     NameReading (..),
+    ProcessBlock (..),
     ProductRow (..),
     TechExchangeRow (..),
     defaultConfig,
+    emptyProcessBlock,
     extractLocation,
+    fallbackAmounts,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -707,6 +710,28 @@ spec = do
             length bioExchanges `shouldBe` 1
             -- CO2 = 0.5 * allocButter/100 ≈ 0.5 * 0.25285 ≈ 0.1264
             bioAmount (head bioExchanges) `shouldSatisfy` (\x -> abs (x - 0.1264) < 0.01)
+
+    -- The conversion falls back to a lenient numeric parse when an amount is
+    -- neither a number nor an evaluable expression; 'fallbackAmounts' is the
+    -- pure list of those replacements, reported as warnings on import.
+    describe "fallbackAmounts" $ do
+        let mixRow raw =
+                TechExchangeRow
+                    { terName = "Mix input"
+                    , terUnit = "kg"
+                    , terAmount = 0.45
+                    , terAmountRaw = raw
+                    , terUncertainty = ""
+                    , terComment = ""
+                    }
+            block raw = emptyProcessBlock{pbName = "Fungicide mix", pbMaterials = [mixRow raw]}
+        it "lists an amount it cannot resolve, with the value used instead" $
+            fallbackAmounts mempty (block "0.45+bogus")
+                `shouldBe` [("Fungicide mix", "0.45+bogus", 0.45)]
+        it "stays silent for numbers, expressions, and resolvable parameters" $ do
+            fallbackAmounts mempty (block "0.45") `shouldBe` []
+            fallbackAmounts mempty (block "0.45+0.247+.067") `shouldBe` []
+            fallbackAmounts mempty ((block "dose*2"){pbInputParams = [("dose", "0.5")]}) `shouldBe` []
 
     describe "SimaPro amounts summed in place" $ do
         it "sums every term of the expression, integer part or not" $ do

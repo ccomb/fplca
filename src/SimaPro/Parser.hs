@@ -13,6 +13,9 @@ module SimaPro.Parser (
     ProductRow (..),
     TechExchangeRow (..),
     BioExchangeRow (..),
+    GlobalParams (..),
+    emptyProcessBlock,
+    fallbackAmounts,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -36,6 +39,7 @@ module SimaPro.Parser (
 ) where
 
 import Amount (readAmount)
+import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
@@ -876,11 +880,37 @@ extractLocation name =
 resolveAmount :: M.Map Text Double -> Text -> Double -> Double
 resolveAmount env raw fallback
     | T.null raw = fallback
-    | otherwise = case readAmount raw of
-        Just v -> v
-        Nothing -> case Expr.evaluate env raw of
-            Right v -> v
-            Left _ -> fallback
+    | otherwise = fromMaybe fallback (resolveExpr env raw)
+
+-- | A number, or an expression over the parameter environment. Nothing: neither.
+resolveExpr :: M.Map Text Double -> Text -> Maybe Double
+resolveExpr env raw = readAmount raw <|> either (const Nothing) Just (Expr.evaluate env raw)
+
+{- | Every raw amount in a block that 'resolveAmount' will replace with its
+lenient fallback: not a number, and not an expression the block's parameter
+environment can evaluate. Reported as warnings at the IO edge, like the CAS
+conflicts, so the conversion itself stays pure and a wrong amount never
+passes without a word.
+-}
+fallbackAmounts :: GlobalParams -> ProcessBlock -> [(Text, Text, Double)]
+fallbackAmounts gp pb@ProcessBlock{..} =
+    [ (blockName, raw, fallback)
+    | (raw, fallback) <- rawAmounts
+    , not (T.null raw)
+    , isNothing (resolveExpr env raw)
+    ]
+  where
+    -- Forced only when a raw fails 'readAmount', so a block of plain numbers
+    -- never builds its environment a second time.
+    env = fst (blockParamEnv gp pb)
+    blockName = case nonEmptyText (T.strip pbName) of
+        Just n -> n
+        Nothing -> maybe "unnamed process" prName (listToMaybe pbProducts)
+    rawAmounts =
+        concatMap (\p -> [(prAmountRaw p, prAmount p), (prAllocRaw p, prAllocation p)]) pbProducts
+            ++ map (\p -> (prAmountRaw p, prAmount p)) pbAvoidedProducts
+            ++ map (\r -> (terAmountRaw r, terAmount r)) (pbMaterials ++ pbElectricity ++ pbWasteToTreatment)
+            ++ map (\r -> (berAmountRaw r, berAmount r)) (pbResources ++ pbEmissionsAir ++ pbEmissionsWater ++ pbEmissionsSoil ++ pbFinalWaste)
 
 {- | Build the resolved parameter environment and the raw-expression map from
 ordered parameter groups. Input groups are resolved with a single pass each;
@@ -900,6 +930,13 @@ buildParamEnv inputGroups calcGroups =
         let acc' = foldl' evalParam acc params
          in if M.size acc' == M.size acc then acc' else evalToFixpoint acc' params
 
+-- | The parameter environment a block's amounts are evaluated in.
+blockParamEnv :: GlobalParams -> ProcessBlock -> (M.Map Text Double, M.Map Text Text)
+blockParamEnv GlobalParams{..} ProcessBlock{..} =
+    buildParamEnv
+        (reverse <$> [gpDbInput, gpProjInput, pbInputParams])
+        (reverse <$> [gpDbCalc, gpProjCalc, pbCalcParams])
+
 {- | Convert ProcessBlock to list of Activities (one per product)
 This matches EcoSpold behavior where multi-product processes create multiple activities
 Global params (db + project level) are passed in and combined with process-level params.
@@ -909,7 +946,7 @@ processBlockToActivity ::
     GlobalParams ->
     ProcessBlock ->
     [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])]
-processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
+processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     map makeActivity productsInFileOrder
   where
     -- pbProducts is accumulated by prepending; restore file order so the
@@ -925,10 +962,7 @@ processBlockToActivity unitCfg GlobalParams{..} ProcessBlock{..} =
         [] -> ""
     referenceReading = extractLocation referenceName
     fallbackName = maybe referenceName locatedName referenceReading
-    (env, exprMap) =
-        buildParamEnv
-            (reverse <$> [gpDbInput, gpProjInput, pbInputParams])
-            (reverse <$> [gpDbCalc, gpProjCalc, pbCalcParams])
+    (env, exprMap) = blockParamEnv gp pb
 
     processReading = extractLocation pbName
 
@@ -1495,6 +1529,17 @@ parseSimaProCSV unitCfg path = do
 
     -- Convert all blocks to activities (one activity per product) - PARALLEL
     converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
+
+    -- Surface every amount the conversion replaced with its lenient fallback:
+    -- a number that silently shrinks is worse than a warned one.
+    fallbacks <- concat <$> mapConcurrently (evaluate . force . fallbackAmounts globalParams) allBlocks
+    forM_ fallbacks $ \(name, raw, fallback) ->
+        reportProgress Warning $
+            printf
+                "amount '%s' in '%s' is neither a number nor a resolvable expression; using %g"
+                (T.unpack raw)
+                (T.unpack name)
+                fallback
     let activities = map (\(a, _, _, _, _) -> a) converted
         allTechFlows = concatMap (\(_, tf, _, _, _) -> tf) converted
         allBioFlows = concatMap (\(_, _, bf, _, _) -> bf) converted

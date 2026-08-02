@@ -30,7 +30,9 @@
   began with: 0.45 where the file says 0.764. In Agribalyse 3.2 this fell on
   the pesticide emission mixes — the shares of a mix stopped adding up to the
   kilogram they divide, and the freshwater ecotoxicity of the cereal crops
-  built on them came out about 10% low.
+  built on them came out about 10% low. And when an amount really cannot be
+  read, the import now says so: a warning names the process, the text it could
+  not read, and the value used in its place.
 - The MCP handshake announced version `0.6.0` whatever the build was; it now
   reports the running version.
 - The dependency chosen for an uploaded database is now written into its
