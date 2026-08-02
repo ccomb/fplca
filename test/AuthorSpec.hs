@@ -86,6 +86,13 @@ spec = do
                     "cannot convert \"m\" into the supplier's \"kg\""
                     (baseActivity{aaExchanges = [techInput supplierPid 1 (Just "m")]})
 
+            it "refuses a waste output restated in a unit its treatment does not use" $
+                -- The matrix never converts into a reference input, so a
+                -- mismatched unit would land as a wrong raw number.
+                failsWith
+                    "amounts to a provider with no produced output are not converted"
+                    (baseActivity{aaExchanges = [wasteOut treatPid 1 (Just "m")]})
+
             it "refuses a non-finite exchange amount" $
                 failsWith
                     "finite non-zero"
@@ -146,6 +153,16 @@ spec = do
                         link `shouldBe` supplierActId
                         pid `shouldBe` Nothing
                     other -> expectationFailure ("expected one resolved input, got " <> show (length other))
+
+            it "defaults a waste output to the treatment's reference unit" $ do
+                -- A treatment has no produced unit to borrow; the omitted unit
+                -- falls back to its reference input's.
+                r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [wasteOut treatPid 1 Nothing]}
+                case [ex | ex@WasteExchange{} <- exchanges (riActivity r)] of
+                    [WasteExchange{waActivityLinkId = link, waUnitId = unit}] -> do
+                        link `shouldBe` treatActId
+                        unit `shouldBe` kgUnitId
+                    other -> expectationFailure ("expected one waste output, got " <> show (length other))
 
             it "leaves a dependency's supplier for cross-database relinking" $ do
                 -- A supplier in another database has no process id here; the link
@@ -314,6 +331,13 @@ techInput :: Text -> Double -> Maybe Text -> AuthoredExchange
 techInput provider amount unit =
     AuthoredTechInput{atiProvider = provider, atiAmount = amount, atiUnit = unit, atiComment = Nothing}
 
+wasteOut :: Text -> Double -> Maybe Text -> AuthoredExchange
+wasteOut provider amount unit =
+    AuthoredWasteOutput{awProvider = provider, awAmount = amount, awUnit = unit, awComment = Nothing}
+
+treatPid :: Text
+treatPid = UUID.toText treatActId <> "_" <> UUID.toText usedOilId
+
 bioOf :: FlowRef -> Double -> Maybe Text -> AuthoredExchange
 bioOf flow amount unit =
     AuthoredBio
@@ -342,8 +366,16 @@ buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
             defaultUnitConfig
-            (M.singleton (actId, prodId) (supplierActivityAt actId prodId))
-            (M.singleton prodId (milkFlowAt prodId))
+            ( M.fromList
+                [ ((actId, prodId), supplierActivityAt actId prodId)
+                , ((treatActId, usedOilId), treatmentActivity)
+                ]
+            )
+            ( M.fromList
+                [ (prodId, milkFlowAt prodId)
+                , (usedOilId, usedOilFlow)
+                ]
+            )
             (M.singleton co2Id co2Flow)
             M.empty
             unitTable
@@ -352,10 +384,12 @@ buildFixtureAt actId prodId = do
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 
-supplierActId, supplierProdId, co2Id, highActId, highProdId, kgUnitId, itemUnitId, metreUnitId :: UUID
+supplierActId, supplierProdId, co2Id, treatActId, usedOilId, highActId, highProdId, kgUnitId, itemUnitId, metreUnitId :: UUID
 supplierActId = mkUUID 1
 supplierProdId = mkUUID 2
 co2Id = mkUUID 3
+treatActId = mkUUID 4
+usedOilId = mkUUID 5
 highActId = UUID.fromWords64 maxBound 1
 highProdId = UUID.fromWords64 maxBound 2
 kgUnitId = mkUUID 10
@@ -394,6 +428,52 @@ co2Flow =
         , bfCAS = Just "124-38-9"
         , bfSubstanceId = Nothing
         , bfCompartment = Just air
+        }
+
+usedOilFlow :: TechnosphereFlow
+usedOilFlow =
+    TechnosphereFlow
+        { tfId = usedOilId
+        , tfName = "used oil"
+        , tfUnitId = kgUnitId
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
+        }
+
+{- | A treatment process: its only reference is an input, so it has no
+produced unit for the matrix to convert into.
+-}
+treatmentActivity :: Activity
+treatmentActivity =
+    Activity
+        { activityName = "waste oil incineration"
+        , activityDescription = []
+        , activitySynonyms = M.empty
+        , activityClassification = M.empty
+        , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
+        , activityUnit = "kg"
+        , exchanges =
+            [ TechnosphereExchange
+                { techFlowId = usedOilId
+                , techAmount = 1.0
+                , techUnitId = kgUnitId
+                , techRole = ReferenceInput
+                , techActivityLinkId = treatActId
+                , techProcessLinkId = Nothing
+                , techLocation = ""
+                , techComment = Nothing
+                , techPedigree = Nothing
+                }
+            ]
+        , activityParams = M.empty
+        , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
+        , activityNativeType = Nothing
+        , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
         }
 
 supplierActivityAt :: UUID -> UUID -> Activity

@@ -382,7 +382,7 @@ resolveLinked ctx provider amount mUnit build =
              in case lookupUnit ctx stated of
                     Nothing -> Left ["unknown unit \"" <> stated <> "\""]
                     Just (unitRef, unitLabel) ->
-                        case conversionError ctx unitLabel (supProducedUnit sup) of
+                        case unitError ctx sup unitLabel of
                             Just err -> Left [err]
                             Nothing -> Right (ResolvedExchange (build sup unitRef) Nothing [])
         (errs, Right _) -> Left errs
@@ -397,6 +397,28 @@ resolveLinked ctx provider amount mUnit build =
             ("", "") -> ""
             ("", other) -> other
             (produced, _) -> produced
+
+{- | Judge the unit an amount is stated in against what the matrix will do
+with it. A provider with a produced reference output gets the conversion
+check; a provider whose only reference is an input (a treatment process) gets
+an exact-match rule instead, because 'Database.MatrixBuild.techTriple' never
+converts into a reference input — a mismatched unit would land as a wrong raw
+number, not as a conversion.
+-}
+unitError :: AuthorContext -> Supplier -> Text -> Maybe Text
+unitError ctx sup stated
+    | T.null (supProducedUnit sup)
+    , not (T.null (supAnyRefUnit sup))
+    , normalizeUnit stated /= normalizeUnit (supAnyRefUnit sup) =
+        Just $
+            "the provider's reference is stated in \""
+                <> supAnyRefUnit sup
+                <> "\" but the exchange states \""
+                <> stated
+                <> "\"; amounts to a provider with no produced output are not converted, so restate it in \""
+                <> supAnyRefUnit sup
+                <> "\""
+    | otherwise = conversionError ctx stated (supProducedUnit sup)
 
 {- | The unit a value must be stated in before it can enter the technosphere
 matrix. Mirrors 'Database.MatrixBuild.techTriple' exactly — same emptiness
