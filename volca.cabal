@@ -298,6 +298,7 @@ test-suite lca-tests
                      , StructuredFiltersSpec
                      , BM25Spec
                      , FuzzySpec
+                     , FlowSearchSpec
                      , NestedSubstitutionSpec
                      , SubstitutionSpec
                      , SensitivitySpec

@@ -778,35 +778,56 @@ getActivityFlowSummaries db activity = map mkSummary (exchanges activity)
         | exchangeIsInput ex = InputFlow
         | otherwise = OutputFlow
 
+{- | Project matched flows into API results, in the order the filter asks for.
+
+Sorting on the requested column alone leaves flows that share that column in
+whatever order the database yields them (their UUID). Seven @Deltamethrin@
+flows then arrive interleaved and, since a row shows its medium but not its
+sub-compartment, read as duplicates. Every sort key therefore continues with
+the remaining displayed fields, so equal-looking rows end up adjacent and
+ordered.
+
+Shared by the REST and MCP/CLI search paths, which differ only in how they
+paginate.
+-}
+flowSearchResults :: UnitDB -> FlowFilter -> [FlowKind] -> [FlowSearchResult]
+flowSearchResults units FlowFilter{ffSort = sortParam, ffOrder = orderParam} =
+    L.sortBy (direction (\a b -> compare (sortKey a) (sortKey b))) . map toResult
+  where
+    direction = if orderParam == Just "desc" then flip else id
+    -- Parsers turn an absent sub-compartment into 'Nothing', never @""@, so
+    -- the empty string sorts where 'Nothing' would: ahead of every named one.
+    sub = fromMaybe "" . fsrCompartment
+    sortKey r = case sortParam of
+        Just "category" -> (fsrCategory r, sub r, fsrName r, fsrUnitName r)
+        Just "unit" -> (fsrUnitName r, fsrName r, fsrCategory r, sub r)
+        _ -> (fsrName r, fsrCategory r, sub r, fsrUnitName r)
+    -- Three-arm projections from Types are total over FlowKind.
+    toResult flow =
+        FlowSearchResult
+            { fsrId = flowKindId flow
+            , fsrName = flowKindName flow
+            , fsrCategory = flowKindCategory flow
+            , fsrCompartment = flowKindCompartmentSub flow
+            , fsrUnitName = flowKindUnitName units flow
+            , fsrSynonyms = M.map S.toList (flowKindSynonyms flow)
+            }
+
 {- | Search flows (returns same format as API). The query is required by the
 type; callers with no query return 'emptyFlowSearchResults' directly.
 -}
 searchFlows :: Database -> FlowFilter -> IO (Either ServiceError Value)
-searchFlows db FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offsetParam, ffSort = sortParam, ffOrder = orderParam} = do
+searchFlows db ff@FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = offsetParam} = do
     startTime <- getCurrentTime
     let limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
-        rawResults = findFlowsBySynonym db query
-        isDesc = orderParam == Just "desc"
-        -- Three-arm projections from API.Types are total over FlowKind.
-        unitOf = flowKindUnitName (dbUnits db)
-        flowCmp = case sortParam of
-            Just "category" -> \a b -> compare (flowKindCategory a) (flowKindCategory b)
-            Just "unit" -> \a b -> compare (unitOf a) (unitOf b)
-            _ -> \a b -> compare (flowKindName a) (flowKindName b)
-        allResults = L.sortBy (if isDesc then flip flowCmp else flowCmp) rawResults
+        allResults = flowSearchResults (dbUnits db) ff (findFlowsBySynonym db query)
         total = length allResults
-        dropped = drop offset allResults
-        taken = take (limit + 1) dropped
+        taken = take (limit + 1) (drop offset allResults)
         hasMore = length taken > limit
-        pagedResults = take limit taken
-        flowResults =
-            map
-                (\flow -> FlowSearchResult (flowKindId flow) (flowKindName flow) (flowKindCategory flow) (unitOf flow) (M.map S.toList (flowKindSynonyms flow)))
-                pagedResults
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
-    return $ Right $ toJSON $ SearchResults flowResults total offset limit hasMore searchTimeMs
+    return $ Right $ toJSON $ SearchResults (take limit taken) total offset limit hasMore searchTimeMs
 
 {- | Retrieve activities by BM25 score. Returns pairs already ordered by score
 descending; only documents with score > 0 are included.

@@ -226,7 +226,8 @@ data ConsumersResponse = ConsumersResponse
 data FlowSearchResult = FlowSearchResult
     { fsrId :: UUID
     , fsrName :: Text
-    , fsrCategory :: Text
+    , fsrCategory :: Text -- Medium only (e.g. "soil"), never the sub-compartment
+    , fsrCompartment :: Maybe Text -- Sub-compartment (e.g. "agricultural")
     , fsrUnitName :: Text
     , fsrSynonyms :: M.Map Text [Text] -- Synonyms by language (converted from Set to List for JSON)
     }
@@ -479,7 +480,7 @@ data FlowContributionEntry = FlowContributionEntry
     , fcoContribution :: Double -- Contribution in impact unit
     , fcoSharePct :: Double -- Percentage of total score (0-100)
     , fcoFlowId :: Text -- Flow UUID for disambiguation
-    , fcoCategory :: Text -- e.g. "air/urban air"
+    , fcoCategory :: Text -- Medium only (e.g. "air")
     , fcoCompartment :: Maybe Text -- Sub-compartment (e.g. "urban air")
     , fcoCfValue :: Double -- Raw characterization factor value
     , fcoMatchKind :: Maybe Text -- How the factor was found ("exact_name", "cas_number", …); absent for a flow the method's tables never walked
