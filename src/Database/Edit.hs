@@ -17,16 +17,10 @@ nothing is mutable. The only fresh allocation is the solver (it holds an
 let the two registry entries share a factorization cache, so the copy gets
 its own.
 
-DELETE is reconstruction, not mutation either. 'deleteActivities' drops a set
-of activities and rebuilds every dependent structure (interning tables,
-indexes, sparse matrices, product index) from the surviving activities. The
-rebuild reuses the exact pure builders that back a freshly-loaded database
-('buildInterningTables' / 'buildTechTriples' / 'buildBioTriples' /
-'buildProductIndex' / 'buildIndexesWithProcessIds'), so a deleted-from
-database is byte-for-byte indistinguishable from one that never carried the
-removed rows. Exchanges in surviving activities that referenced a deleted
-activity are UNLINKED (their activity link reset to nil), leaving the value
-ready for relinking — never silently dropped.
+What an edit does to the activity set itself is pure and lives in
+"Database.Rebuild"; this module is the effectful half around it — which
+database, under what reservation, written where, swapped into the registry
+how.
 
 Memory cost (copy): the copy keeps the source 'Database' alive for as long as
 it is loaded. Structural sharing means we don't re-allocate the activity/flow
@@ -35,15 +29,11 @@ while any copy of it is loaded.
 -}
 module Database.Edit (
     copyDatabase,
-    deleteActivities,
-    deleteActivitiesWith,
     resolveDeleteSelection,
     DeleteSelection (..),
     DeleteRequest (..),
     DeleteOutcome (..),
     deleteActivitiesInDB,
-    insertActivities,
-    replaceActivities,
     MutationOutcome (..),
     mutateUploadedDatabase,
     WriteVerb (..),
@@ -55,10 +45,7 @@ module Database.Edit (
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (SomeException, finally, try)
-import Data.Bifunctor (first)
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.IntSet as IS
-import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as S
@@ -67,21 +54,11 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import System.Directory (
-    createDirectoryIfMissing,
-    doesDirectoryExist,
-    removePathForcibly,
-    renameDirectory,
- )
-import System.FilePath (makeRelative, splitDirectories, takeDirectory, (</>))
+import System.Directory (createDirectoryIfMissing, makeAbsolute)
+import System.FilePath ((</>))
 
 import Config (DatabaseConfig (..))
-import Database (
-    applyStructuredFilters,
-    buildIndexesWithProcessIds,
-    buildProductIndex,
-    findActivitiesByFields,
- )
+import Database (applyStructuredFilters, findActivitiesByFields)
 import Database.Author (
     AuthorContext (..),
     AuthoredActivity,
@@ -89,25 +66,25 @@ import Database.Author (
     validateAuthored,
  )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
-import Database.Export (serializeDatabaseFiles)
+import Database.Journal (
+    JournalOp (..),
+    appendEvent,
+    applyOp,
+    journalStamp,
+    writeAppliedStamp,
+ )
 import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseManager (..),
     LoadedDatabase (..),
     clearMethodMappingCacheForDb,
+    editHome,
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
     relinkDatabase,
  )
-import Database.MatrixBuild (
-    InterningTables (..),
-    buildBioTriples,
-    buildInterningTables,
-    buildSupplierRefUnits,
-    buildTechTriples,
-    collectBioFlowOrder,
- )
+import Database.Rebuild (processKey, renderKey, resolveProcess)
 import Database.Upload (DatabaseFormat (..), slugify)
 import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
@@ -115,20 +92,13 @@ import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
 import SharedSolver (createSharedSolver)
 import Types (
-    Activity (..),
-    BiosphereFlow (..),
     Database (..),
-    Exchange (..),
     ProcessId,
     SparseTriple (..),
-    TechnosphereFlow (..),
-    UUID,
-    findProcessId,
     findProcessIdByActivityUUID,
     initializeRuntimeFields,
     parseUUIDPair,
  )
-import UnitConversion (UnitConfig, defaultUnitConfig)
 
 {- | Copy a loaded database into the runtime registry under the slugified
 @newName@.
@@ -173,35 +143,79 @@ copyDatabase manager srcName newName = do
 
 {- | Build the copy's solver/index and insert it under @slug@. Caller holds the
 'dmStagingDbs' reservation for @slug@.
+
+The home is written before anything is registered: a copy that cannot be
+recorded on disk would work until the restart and then be gone, which is the
+kind of quiet loss this ordering exists to refuse. Nothing after the write can
+fail into an inconsistent state — the registry swap is a pure STM commit.
 -}
 registerCopy :: DatabaseManager -> Text -> LoadedDatabase -> IO (Either Text ())
-registerCopy manager slug src = do
-    let copiedDb = ldDatabase src
-        newConfig = renameConfig slug (ldConfig src)
-        -- Fresh solver: a distinct name keys a distinct factorization cache.
-        techTriplesInt =
-            [ (fromIntegral i, fromIntegral j, v)
-            | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
-            ]
-    solver <-
-        createSharedSolver
-            slug
-            techTriplesInt
-            (fromIntegral (dbActivityCount copiedDb))
-    synonymDB <- getMergedSynonymDB manager
-    let copied =
-            LoadedDatabase
-                { ldDatabase = copiedDb
-                , ldSharedSolver = solver
-                , ldConfig = newConfig
+registerCopy manager slug src =
+    recordCopy slug src >>= \case
+        Left err -> pure (Left err)
+        Right () -> do
+            let copiedDb = ldDatabase src
+                newConfig = renameConfig slug (ldConfig src)
+                -- Fresh solver: a distinct name keys a distinct factorization cache.
+                techTriplesInt =
+                    [ (fromIntegral i, fromIntegral j, v)
+                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
+                    ]
+            solver <-
+                createSharedSolver
+                    slug
+                    techTriplesInt
+                    (fromIntegral (dbActivityCount copiedDb))
+            synonymDB <- getMergedSynonymDB manager
+            let copied =
+                    LoadedDatabase
+                        { ldDatabase = copiedDb
+                        , ldSharedSolver = solver
+                        , ldConfig = newConfig
+                        }
+                indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
+                modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
+                modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
+            clearMethodMappingCacheForDb manager slug
+            pure (Right ())
+
+{- | Give the copy a home: a directory of its own holding the @meta.toml@ that
+describes it and, once it is edited, its journal.
+
+It is written now rather than at the first edit, so a copy survives a restart
+from the moment it exists. The home holds no data: @dataPath@ points at the
+source's own files, which the copy reads and never writes, and @source@ names
+whose they are so a delete can refuse to take files a copy still needs. That
+is what makes a copy cost a directory rather than a second database.
+-}
+recordCopy :: Text -> LoadedDatabase -> IO (Either Text ())
+recordCopy slug src = do
+    written <- try $ do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        let home = uploadsDir </> T.unpack slug
+            config = ldConfig src
+        createDirectoryIfMissing True home
+        -- The source's path may be relative to the working directory, while
+        -- the copy's is read back from its own home; 'uploadMetaToConfig'
+        -- keeps an absolute path as it is.
+        sourcePath <- makeAbsolute (dcPath config)
+        UploadedDB.writeUploadMeta
+            home
+            UploadedDB.UploadMeta
+                { UploadedDB.umVersion = UploadedDB.metaVersion
+                , UploadedDB.umDisplayName = slug
+                , UploadedDB.umDescription = dcDescription config
+                , UploadedDB.umFormat = fromMaybe UnknownFormat (dcFormat config)
+                , UploadedDB.umDataPath = sourcePath
+                , UploadedDB.umDepends = dbDependsOn (ldDatabase src)
+                , UploadedDB.umSource = Just (dcName config)
                 }
-        indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
-    atomically $ do
-        modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
-        modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
-        modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
-    clearMethodMappingCacheForDb manager slug
-    pure $ Right ()
+    pure $ case written of
+        Right () -> Right ()
+        Left (err :: SomeException) ->
+            Left $ "could not record the copy " <> slug <> ": " <> T.pack (show err)
 
 {- | Rename a config for the copy: new internal name, derived display name, and
 forced deletable/uploaded so the copy can be removed again via the normal
@@ -215,222 +229,6 @@ renameConfig newName cfg =
         , dcIsUploaded = True
         , dcDeletable = True
         }
-
--- ---------------------------------------------------------------------------
--- Delete by selection
--- ---------------------------------------------------------------------------
-
-{- | Remove a set of activities (by 'ProcessId') and rebuild every dependent
-structure. Uses 'defaultUnitConfig'; effectful call sites that carry a merged
-unit config (the only place where non-SI conversions matter) should call
-'deleteActivitiesWith' instead so a coefficient is never silently dropped on
-an unknown-unit conversion.
--}
-deleteActivities :: [ProcessId] -> Database -> Either Text Database
-deleteActivities = deleteActivitiesWith defaultUnitConfig
-
-{- | 'deleteActivities' with an explicit 'UnitConfig'.
-
-Steps, all pure:
-
-  1. Resolve the delete set to the @(activityUUID, productUUID)@ keys it
-     occupies in 'dbProcessIdTable', validating that every requested
-     'ProcessId' exists (no silent skip).
-  2. Drop those keys; for every surviving activity, UNLINK any technosphere /
-     waste exchange whose @(activityLink, flow)@ pointed at a deleted key —
-     reset its activity link to 'UUID.nil' and clear the stale process link.
-  3. Rebuild interning tables, indexes, matrices and the product index from
-     the surviving activity map via the shared loader builders.
-
-Fails (Left) when an out-of-range 'ProcessId' is requested, when the result
-would be empty, or when matrix construction reports an inconsistency (e.g. an
-unknown unit conversion under the given config).
--}
-deleteActivitiesWith :: UnitConfig -> [ProcessId] -> Database -> Either Text Database
-deleteActivitiesWith unitConfig pids db = do
-    deletedKeys <- resolveDeleteKeys db pids
-    let survivors = surviving db deletedKeys
-        survivingKeys = M.keysSet survivors
-        unlinkedMap = M.map (unlinkActivity survivingKeys) survivors
-    if M.null unlinkedMap
-        then Left "Refusing to delete: the result would have no activities"
-        else rebuildFromActivities unitConfig db unlinkedMap
-
-{- | Resolve each requested 'ProcessId' to its @(activityUUID, productUUID)@ key.
-Every id must be in range — an out-of-range id is a caller error, surfaced as
-'Left' rather than silently ignored. The result is a 'Set' so membership tests
-during unlinking are @O(log n)@.
--}
-resolveDeleteKeys :: Database -> [ProcessId] -> Either Text (S.Set (UUID, UUID))
-resolveDeleteKeys db = fmap S.fromList . traverse keyOf
-  where
-    table = dbProcessIdTable db
-    n = V.length table
-    keyOf pid
-        | i >= 0 && i < n = Right (table V.! i)
-        | otherwise = Left ("Delete: ProcessId out of range: " <> T.pack (show pid))
-      where
-        i = fromIntegral pid
-
--- | The activity map keyed by @(activityUUID, productUUID)@, minus the deleted keys.
-surviving :: Database -> S.Set (UUID, UUID) -> M.Map (UUID, UUID) Activity
-surviving db deletedKeys =
-    M.fromList
-        [ (key, dbActivities db V.! i)
-        | i <- [0 .. V.length (dbActivities db) - 1]
-        , let key = dbProcessIdTable db V.! i
-        , not (S.member key deletedKeys)
-        ]
-
-{- | Reset technosphere / waste exchanges on a surviving activity whose producer
-link no longer resolves to a surviving @(activityUUID, productUUID)@ key.
-
-The link target is exactly that pair: 'findProducer' resolves
-@(activityLink, flowId)@ against the interning table, so a multi-product
-activity that keeps at least one product stays a valid target for exchanges
-pointing at a *surviving* product, while exchanges pointing at a deleted
-product are unlinked. A biosphere exchange has no producer link and is
-returned unchanged. The stale 'ProcessId' link is always cleared because
-deletion renumbers every 'ProcessId'. An already-orphan link
-(@activityLink == nil@) stays orphan.
--}
-unlinkActivity :: S.Set (UUID, UUID) -> Activity -> Activity
-unlinkActivity survivingKeys act =
-    act{exchanges = map unlinkExchange (exchanges act)}
-  where
-    dangling link flow = link /= UUID.nil && not (S.member (link, flow) survivingKeys)
-    unlinkExchange ex = case ex of
-        BiosphereExchange{} -> ex
-        TechnosphereExchange{techActivityLinkId = link, techFlowId = flow}
-            | dangling link flow ->
-                ex{techActivityLinkId = UUID.nil, techProcessLinkId = Nothing}
-            | otherwise -> ex{techProcessLinkId = Nothing}
-        WasteExchange{waActivityLinkId = link, waFlowId = flow}
-            | dangling link flow ->
-                ex{waActivityLinkId = UUID.nil, waProcessLinkId = Nothing}
-            | otherwise -> ex{waProcessLinkId = Nothing}
-
-{- | Rebuild a 'Database' from a surviving activity map, reusing the exact pure
-builders that back a freshly-loaded database. Flow / unit tables are carried
-over unchanged: deletion removes activities, never the flow or unit
-vocabulary, so a relink can still resolve the surviving links. Runtime fields
-(synonym, flow-name, BM25 indexes) are reset to their unloaded state; the
-effectful caller re-attaches them with the merged synonym DB.
--}
-rebuildFromActivities :: UnitConfig -> Database -> M.Map (UUID, UUID) Activity -> Either Text Database
-rebuildFromActivities unitConfig db activityMap =
-    let tables = buildInterningTables activityMap
-        supplierRefUnits = buildSupplierRefUnits (dbUnits db) (itActivities tables)
-        indexes = buildIndexesWithProcessIds (itActivities tables) (itProcessIdTable tables)
-        bioFlowUUIDs = collectBioFlowOrder (itActivities tables)
-        bioTriples = buildBioTriples bioFlowUUIDs tables
-        productIndex = buildProductIndex (itActivities tables) (itProcessIdTable tables) (dbTechFlows db)
-     in case buildTechTriples unitConfig (dbUnits db) tables supplierRefUnits of
-            Left err -> Left err
-            Right (techTriples, _warnings) ->
-                Right
-                    db
-                        { dbProcessIdTable = itProcessIdTable tables
-                        , dbProcessIdLookup = itProcessIdLookup tables
-                        , dbActivityUUIDIndex = itActivityUUIDIndex tables
-                        , dbActivityProductsIndex = itActivityProductsIndex tables
-                        , dbProductIndex = productIndex
-                        , dbActivities = itActivities tables
-                        , dbIndexes = indexes
-                        , dbTechnosphereTriples = techTriples
-                        , dbBiosphereTriples = bioTriples
-                        , dbActivityIndex = V.generate (fromIntegral (itActivityCount tables)) fromIntegral
-                        , dbBiosphereOrder = bioFlowUUIDs
-                        , dbActivityCount = itActivityCount tables
-                        , dbBiosphereCount = fromIntegral (V.length bioFlowUUIDs)
-                        , -- Cross-DB links may now reference deleted activities; clear so a
-                          -- subsequent relink rebuilds them against the surviving set.
-                          dbCrossDBLinks = []
-                        , -- Linking stats describe the pre-delete set (input count, completeness,
-                          -- missing suppliers); reset to the fresh-load default so the setup/status
-                          -- endpoint never reports stale numbers until the next relink.
-                          dbLinkingStats = mempty
-                        , -- Runtime-only indexes are reset; re-attached by the effectful caller.
-                          dbSynonymDB = Nothing
-                        , dbFlowsByName = M.empty
-                        , dbFlowsByCAS = M.empty
-                        , dbProductSearchIndex = M.empty
-                        , dbBM25Index = Nothing
-                        }
-
--- ---------------------------------------------------------------------------
--- Insert / replace
--- ---------------------------------------------------------------------------
-
-{- | Whether a batch means to add rows the database does not have, or to
-rewrite rows it does. There is deliberately no upsert: a mistyped identity
-must fail, not quietly become a second copy of an activity the author thought
-they were correcting.
--}
-data WriteIntent = Insert | Replace
-
-{- | Add authored activities to a database and rebuild everything that depends
-on them.
-
-Every key must be absent — 'Database.Author' mints identity from the activity's
-own name, location, product and unit, so a key that already exists means the
-author is re-describing something the database already holds and wants
-'replaceActivities' instead.
--}
-insertActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-insertActivities = applyResolved Insert
-
-{- | Rewrite activities the database already holds, keeping their identity.
-
-Every key must be present. Replacing keeps the old version's flows in the
-vocabulary, exactly as deletion does: a flow no activity uses any more is
-inert, and dropping it would break a relink that still resolves through it.
--}
-replaceActivities :: UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-replaceActivities = applyResolved Replace
-
-{- | Shared write path. The vocabulary the batch brings (its product flows and
-any new biosphere flows) lands in the same step as the activities that
-reference it, so no intermediate value exists in which an exchange points at a
-flow the database cannot name.
-
-An empty batch returns the database untouched rather than rebuilding: a
-rebuild resets cross-database links ('rebuildFromActivities'), so treating "no
-activities to write" as a no-op is what keeps a caller's empty request from
-silently unlinking the database.
--}
-applyResolved :: WriteIntent -> UnitConfig -> [ResolvedInsert] -> Database -> Either Text Database
-applyResolved intent unitConfig inserts db
-    | null inserts = Right db
-    | otherwise = do
-        let existing = surviving db S.empty
-        checkKeys intent existing (map riKey inserts)
-        rebuildFromActivities
-            unitConfig
-            db
-                { dbTechFlows = M.union (indexBy tfId (concatMap riNewTechFlows inserts)) (dbTechFlows db)
-                , dbBioFlows = M.union (indexBy bfId (concatMap riNewBioFlows inserts)) (dbBioFlows db)
-                }
-            (M.union (M.fromList [(riKey i, riActivity i) | i <- inserts]) existing)
-  where
-    indexBy key xs = M.fromList [(key x, x) | x <- xs]
-
-{- | Refuse a batch whose keys contradict the intent, naming every offending
-identity at once so a long batch is not fixed one round-trip at a time.
--}
-checkKeys :: WriteIntent -> M.Map (UUID, UUID) Activity -> [(UUID, UUID)] -> Either Text ()
-checkKeys intent existing keys = case intent of
-    Insert -> refuse "already exists" (filter (`M.member` existing) keys)
-    Replace -> refuse "does not exist" (filter (not . (`M.member` existing)) keys)
-  where
-    refuse _ [] = Right ()
-    refuse what offenders =
-        Left $
-            "Refusing to write: "
-                <> T.intercalate ", " (map renderKey offenders)
-                <> " "
-                <> what
-                <> " in this database"
 
 -- ---------------------------------------------------------------------------
 -- Writing authored activities
@@ -492,23 +290,36 @@ writeActivities manager dbName verb authored =
         Just loaded
             | not (dcIsUploaded (ldConfig loaded)) -> pure (Left (NotWritable dbName))
             | otherwise -> do
-                deps <- loadedDependencies manager (ldDatabase loaded)
-                unitConfig <- getMergedUnitConfig manager
-                let ctx =
-                        AuthorContext
-                            { acDb = ldDatabase loaded
-                            , acDeps = deps
-                            , acUnitConfig = unitConfig
-                            }
+                ctx <- authorContext manager (ldDatabase loaded)
                 case validateAuthored ctx authored of
                     Left errs -> pure (Left (Malformed errs))
                     Right (resolved, warnings) ->
                         case presenceRefusal (ldDatabase loaded) verb resolved of
                             Just refusal -> pure (Left refusal)
-                            Nothing -> commit deps unitConfig resolved warnings
+                            Nothing -> either (pure . Left) (commit resolved warnings) (operation resolved)
   where
-    commit deps unitConfig resolved warnings = do
-        outcome <- mutateUploadedDatabase manager dbName (edit deps unitConfig)
+    {- The operation is what gets journalled and what gets applied - one
+    description, so the record and the result cannot disagree. Its identities
+    are the canonical ones minted here, which is also what a replay compares
+    against. -}
+    operation resolved = case (verb, zip authored (map (renderKey . riKey) resolved)) of
+        -- Refused rather than journalled: a line recording that nothing
+        -- happened would be replayed forever for nothing.
+        (CreateActivities, []) -> Left (Malformed ["a create writes at least one activity"])
+        (CreateActivities, written) -> Right (Created authored (map snd written))
+        (ReplaceActivity _, [(activity, key)]) -> Right (Replaced key activity)
+        (ReplaceActivity target, _) ->
+            Left (Malformed ["a replace writes exactly one activity over " <> target])
+    -- Everything above judged a snapshot taken before the reservation;
+    -- 'mutateReserved' re-reads the database under it and validates the
+    -- operation again against what is actually there, so a batch overtaken by
+    -- a concurrent edit is refused rather than written with a supplier link
+    -- that no longer resolves. In that rare interleaving the refusal degrades
+    -- from a classified status to a 'WriteFailed' message, never to a dangling
+    -- link. Identity minting is pure, so the keys cannot differ between the
+    -- two runs.
+    commit resolved warnings op = do
+        outcome <- mutateUploadedDatabase manager dbName op
         pure $ case outcome of
             Left err -> Left (WriteFailed err)
             Right done ->
@@ -518,20 +329,6 @@ writeActivities manager dbName verb authored =
                         , wrPersisted = moPersisted done
                         , wrWarnings = warnings <> moWarnings done
                         }
-    -- Everything above judged a snapshot taken before the staging
-    -- reservation; 'mutateReserved' re-reads the database under it. The edit
-    -- therefore validates again against what is actually there, so a batch
-    -- overtaken by a concurrent edit is refused rather than written with a
-    -- supplier link that no longer resolves. In that rare interleaving the
-    -- refusal degrades from a classified status to a 'WriteFailed' message —
-    -- never to a dangling link. Identity minting is pure, so the keys cannot
-    -- differ between the two runs.
-    edit deps unitConfig db = do
-        let ctx = AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
-        (resolved, _) <- first (T.intercalate "\n") (validateAuthored ctx authored)
-        case verb of
-            CreateActivities -> insertActivities unitConfig resolved db
-            ReplaceActivity _ -> replaceActivities unitConfig resolved db
 
 {- | The two refusals only a verb can name: creating over a process that is
 already there, and rewriting one that is not. Checked before the mutation so
@@ -588,10 +385,6 @@ loadedDependencies manager db = do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
     pure [ldDatabase ld | name <- dbDependsOn db, Just ld <- [M.lookup name loadedDbs]]
 
--- | @activityUUID_productUUID@, the identity a process is addressed by.
-renderKey :: (UUID, UUID) -> Text
-renderKey (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
-
 {- | Plain-language rendering, for callers with nowhere to put a status code.
 An HTTP caller maps the constructors to codes instead.
 -}
@@ -623,38 +416,41 @@ data MutationOutcome = MutationOutcome
     , moWarnings :: [Text]
     }
 
-{- | Apply a pure edit to a loaded database, then commit it to memory and — for
-a database that owns its files — to disk.
+{- | Apply an edit to a loaded database and record it where a later load will
+find it again.
 
-The sequence is prepare-then-commit, because everything that can fail must
-fail before anything is visible:
+The order is what makes an acknowledged edit durable:
 
   1. refuse while another loaded database depends on this one (a rebuild
      renumbers processes, and the dependent's cross-database links would
      resolve to the wrong rows or silently drop at solve time);
-  2. run the pure edit;
-  3. serialize the result and write it into a staging directory beside the
-     live one — nothing observable yet;
-  4. build the runtime indexes and a fresh solver for the edited value;
-  5. commit: swing the staging directory into place and swap the registry;
-  6. relink across dependencies and save the matrix cache, so an unload and
-     reload gives back what was just written rather than the pre-edit sources.
+  2. apply the operation to the loaded value, which is where every refusal
+     the author can act on comes from;
+  3. append it to the database's journal, the commit point: it is the last
+     step that can fail while nothing has been claimed yet;
+  4. install the result - fresh solver, registry swap, relink;
+  5. save the matrix cache, then stamp it with the journal it now holds.
 
-Steps 1-4 leave both memory and disk untouched on failure. Step 5 is two
-renames rather than one atomic operation; a crash between them leaves the
-previous sources beside the new ones under a @.old@ suffix rather than
-losing them.
+A crash before step 3 leaves nothing behind. A crash after it leaves an edit
+in the journal, which the next load replays: the same answer the caller was
+given. A crash between 4 and 5 leaves a cache that predates the journal, and
+the missing stamp is what makes the next load read the sources again rather
+than trust it.
+
+The database's own files are never rewritten. They are what their author
+uploaded, and only some formats could be written back without moving every
+process identity in them ("Database.Journal" says why).
 -}
 mutateUploadedDatabase ::
     DatabaseManager ->
     Text ->
-    (Database -> Either Text Database) ->
+    JournalOp ->
     IO (Either Text MutationOutcome)
-mutateUploadedDatabase manager dbName edit = do
-    -- Two concurrent edits of the same database would share one staging
-    -- directory and interleave the renames over the live sources. Reserve the
-    -- name (the same reservation copy and setup staging use) and refuse the
-    -- second edit rather than queue it: edits are interactive and rare.
+mutateUploadedDatabase manager dbName op = do
+    -- Two concurrent edits of the same database would each apply to the value
+    -- the other started from, and both would land in the journal. Reserve the
+    -- name (the same reservation copy and staging use) and refuse the second
+    -- rather than queue it: edits are interactive and rare.
     reserved <- atomically $ do
         staging <- readTVar (dmStagingDbs manager)
         if S.member dbName staging
@@ -664,28 +460,36 @@ mutateUploadedDatabase manager dbName edit = do
         then pure $ Left $ "An edit of " <> dbName <> " is already in progress. Retry when it finishes."
         else
             finally
-                (mutateReserved manager dbName edit)
+                (mutateReserved manager dbName op)
                 (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
 
 -- | The mutation proper. The caller holds the 'dmStagingDbs' reservation.
-mutateReserved ::
-    DatabaseManager ->
-    Text ->
-    (Database -> Either Text Database) ->
-    IO (Either Text MutationOutcome)
-mutateReserved manager dbName edit =
+mutateReserved :: DatabaseManager -> Text -> JournalOp -> IO (Either Text MutationOutcome)
+mutateReserved manager dbName op =
     getDatabase manager dbName >>= \case
         Nothing -> pure $ Left $ "Database not loaded: " <> dbName
         Just loaded -> do
             loadedDbs <- readTVarIO (dmLoadedDbs manager)
-            case guardDependents dbName loadedDbs *> edit (ldDatabase loaded) of
+            ctx <- authorContext manager (ldDatabase loaded)
+            case guardDependents dbName loadedDbs *> applyOp ctx op of
                 Left err -> pure (Left err)
                 Right edited -> do
-                    prepared <- prepareSources dbName (ldConfig loaded) edited
-                    case prepared of
+                    home <- editHome (ldConfig loaded)
+                    recorded <- traverse (`appendEvent` op) home
+                    case sequence recorded of
                         Left err -> pure (Left err)
-                        Right (staging, warnings) ->
-                            Right <$> commitMutation manager dbName loaded edited staging warnings
+                        Right _ -> Right <$> commitMutation manager dbName loaded edited home
+
+{- | Everything an edit is judged against: the database it applies to, the
+dependencies its suppliers may live in, and the units its amounts are stated
+in. The same context serves a live edit and a replay, which is what keeps the
+two from disagreeing about what is valid.
+-}
+authorContext :: DatabaseManager -> Database -> IO AuthorContext
+authorContext manager db = do
+    deps <- loadedDependencies manager db
+    unitConfig <- getMergedUnitConfig manager
+    pure AuthorContext{acDb = db, acDeps = deps, acUnitConfig = unitConfig}
 
 {- | Refuse an edit while another loaded database depends on this one. Shared
 with the delete path, which has the same reason: rebuilding renumbers every
@@ -710,118 +514,18 @@ guardDependents dbName loadedDbs = case dependents of
         , dbName `elem` dbDependsOn (ldDatabase ld)
         ]
 
-{- | Sources written and waiting to be swung into place, or 'Nothing' when the
-database has no files of its own to write.
--}
-data StagedSources = StagedSources
-    { ssDataDir :: FilePath
-    -- ^ where the live sources are, or will be
-    , ssStaging :: FilePath
-    -- ^ the fully-written replacement, still invisible
-    , ssHome :: Maybe (FilePath, DatabaseFormat)
-    {- ^ set when this write gives the database a home it did not have; the
-    upload root whose @meta.toml@ has to be written on commit
-    -}
-    }
-
-{- | Serialize the edited database and stage it beside its live sources.
-
-Three cases, in the order they are decided:
-
-  * a configured (TOML) database writes nothing — it is a background database
-    the engine reads and never owns, so its edits stay in memory;
-  * a database with its own upload directory is rewritten in its own format,
-    and refused when that format cannot record process identity
-    ('Database.Export.serializeDatabaseFiles' says which and why);
-  * a copy has no files at all — 'copyDatabase' shares the source's value
-    without duplicating its directory — so the first write gives it one. It
-    gets EcoSpold 2, the format that survives the round trip. The source's
-    own files are never touched: writing through the shared path would edit a
-    database nobody asked to edit.
--}
-prepareSources ::
-    Text ->
-    DatabaseConfig ->
-    Database ->
-    IO (Either Text (Maybe StagedSources, [Text]))
-prepareSources dbName config edited
-    | not (dcIsUploaded config) = pure (Right (Nothing, []))
-    | otherwise = do
-        uploadsDir <- UploadedDB.getDatabaseUploadsDir
-        let home = uploadsDir </> T.unpack dbName
-            -- Judged on path components, not on text: a textual prefix would
-            -- make a database named "agri" the owner of "agribalyse"'s files,
-            -- and its first save would rewrite them.
-            ownsItsFiles = splitDirectories home `isPrefixOf` splitDirectories (dcPath config)
-            dataDir = if ownsItsFiles then dcPath config else home </> "data"
-            format = if ownsItsFiles then fromMaybe UnknownFormat (dcFormat config) else EcoSpold2
-        case serializeDatabaseFiles format edited of
-            Left err -> pure (Left err)
-            Right (entries, warnings) -> do
-                written <- writeStaging (dataDir <> ".new") entries
-                pure $ case written of
-                    Left err -> Left err
-                    Right staging ->
-                        Right
-                            ( Just
-                                StagedSources
-                                    { ssDataDir = dataDir
-                                    , ssStaging = staging
-                                    , ssHome = if ownsItsFiles then Nothing else Just (home, format)
-                                    }
-                            , warnings
-                            )
-
-{- | Write every entry into a fresh staging directory, replacing any leftover
-from an interrupted write. Returns the directory on success; on failure the
-partial directory is removed, so a retry never inherits half of a previous
-attempt.
--}
-writeStaging :: FilePath -> [(FilePath, BL.ByteString)] -> IO (Either Text FilePath)
-writeStaging staging entries = do
-    attempt <- try $ do
-        removePathForcibly staging
-        createDirectoryIfMissing True staging
-        mapM_ writeEntry entries
-    case attempt of
-        Right () -> pure (Right staging)
-        Left err -> do
-            removePathForcibly staging
-            pure $ Left $ "could not write the database sources: " <> T.pack (show (err :: SomeException))
-  where
-    writeEntry (relPath, bytes) = do
-        let full = staging </> relPath
-        createDirectoryIfMissing True (takeDirectory full)
-        BL.writeFile full bytes
-
-{- | Swing the staged sources into place, keeping the previous ones until the
-new ones are live.
--}
-commitSources :: StagedSources -> IO ()
-commitSources staged = do
-    let live = ssDataDir staged
-        previous = live <> ".old"
-    hadSources <- doesDirectoryExist live
-    removePathForcibly previous
-    if hadSources
-        then renameDirectory live previous
-        else createDirectoryIfMissing True (takeDirectory live)
-    renameDirectory (ssStaging staged) live
-    removePathForcibly previous
-
-{- | Install the edited database: commit its sources, swap it into the
-registry behind a fresh solver, then relink and re-cache so a reload returns
-what was written.
+{- | Install the edited database: rebuilt runtime indexes, a fresh solver, the
+registry swap, and - for a database that has a journal - a matrix cache the
+next load can trust.
 -}
 commitMutation ::
     DatabaseManager ->
     Text ->
     LoadedDatabase ->
     Database ->
-    Maybe StagedSources ->
-    [Text] ->
+    Maybe FilePath ->
     IO MutationOutcome
-commitMutation manager dbName loaded edited staged warnings = do
+commitMutation manager dbName loaded edited home = do
     synonymDB <- getMergedSynonymDB manager
     let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
         techTriplesInt =
@@ -832,15 +536,13 @@ commitMutation manager dbName loaded edited staged warnings = do
     -- destroy it before installing the rebuilt one, as the delete path does.
     clearCachedSolver dbName
     solver <- createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount withRuntime))
-    mapM_ commitSources staged
-    config <- maybe (pure (ldConfig loaded)) (recordHome manager dbName (ldConfig loaded) edited) staged
-    let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver, ldConfig = config}
+    let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver}
         indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
     atomically $ do
         modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
         modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
     clearMethodMappingCacheForDb manager dbName
-    relinkWarnings <- case staged of
+    warnings <- case home of
         -- The transient path must not relink: 'relinkDatabase' saves the
         -- matrix cache when links change, which would half-persist an edit
         -- the caller is being told is memory-only. Say what that costs.
@@ -852,39 +554,19 @@ commitMutation manager dbName loaded edited staged warnings = do
                 | not (null (dbDependsOn edited))
                 , null (dbCrossDBLinks edited)
                 ]
-        Just source -> do
+        Just dir -> do
             -- Rebuilding cleared the cross-database links; rebuild them against
             -- the current dependency set before the cache records the result.
             relinked <- relinkDatabase manager dbName
             saved <- getDatabase manager dbName
-            mapM_ (Loader.saveCachedDatabaseWithMatrices dbName (ssDataDir source) . ldDatabase) saved
+            mapM_ (Loader.saveCachedDatabaseWithMatrices dbName (dcPath (ldConfig loaded)) . ldDatabase) saved
+            journalStamp dir >>= writeAppliedStamp dir
             pure (either (\err -> ["the edit is saved, but relinking failed: " <> err]) (const []) relinked)
     pure
         MutationOutcome
-            { moPersisted = isJust staged
-            , moWarnings = warnings <> relinkWarnings
+            { moPersisted = isJust home
+            , moWarnings = warnings
             }
-
-{- | Give a database that had no files of its own a @meta.toml@ describing the
-home it just acquired, and point its config at the new sources.
--}
-recordHome :: DatabaseManager -> Text -> DatabaseConfig -> Database -> StagedSources -> IO DatabaseConfig
-recordHome manager dbName config edited staged = case ssHome staged of
-    Nothing -> pure config
-    Just (home, format) -> do
-        UploadedDB.writeUploadMeta
-            home
-            UploadedDB.UploadMeta
-                { UploadedDB.umVersion = 1
-                , UploadedDB.umDisplayName = dcDisplayName config
-                , UploadedDB.umDescription = dcDescription config
-                , UploadedDB.umFormat = format
-                , UploadedDB.umDataPath = makeRelative home (ssDataDir staged)
-                , UploadedDB.umDepends = dbDependsOn edited
-                }
-        let config' = config{dcPath = ssDataDir staged, dcFormat = Just format}
-        atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert dbName config')
-        pure config'
 
 -- ---------------------------------------------------------------------------
 -- Selection resolver
@@ -955,20 +637,6 @@ filteredProcessIds db nameP geoP prodP classFilters exactMatch =
 -- Effectful entry point (registry swap)
 -- ---------------------------------------------------------------------------
 
-{- | Resolve a process-id string to its 'ProcessId'. Accepts the canonical
-@activityUUID_productUUID@ form and the bare-activity-UUID fallback (when the
-activity has a unique reference product), mirroring
-'Service.resolveActivityAndProcessId'. The UI and CLI carry these textual ids,
-so keep/extra adjustments are expressed in the same currency as the rows the
-user sees — not the volatile integer matrix index. Unresolvable ids fail loudly
-rather than being silently dropped.
--}
-resolvePid :: Database -> Text -> Either Text ProcessId
-resolvePid db queryText =
-    maybe (Left ("Unknown process id: " <> queryText)) Right $ case parseUUIDPair queryText of
-        Just (a, p) -> findProcessId db a p
-        Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
-
 {- | One delete-by-selection request against a loaded database. Two exclusive
 selection modes: the filter fields select the whole matching set (@drIds =
 Nothing@), or @drIds@ names the set exactly — every filter field must then be
@@ -1029,19 +697,24 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
                 selectionE = case mIds of
                     Just ids
                         | hasFilter -> Left "ids cannot be combined with name/location/product/classification/exact filters"
-                        | otherwise -> traverse (resolvePid db) ids
+                        | otherwise -> traverse (resolveProcess db) ids
                     Nothing -> Right (filteredProcessIds db nameP geoP prodP classFilters exactMatch)
-            case (,,) <$> traverse (resolvePid db) keep <*> traverse (resolvePid db) extra <*> selectionE of
+            case (,,) <$> traverse (resolveProcess db) keep <*> traverse (resolveProcess db) extra <*> selectionE of
                 Left err -> pure $ Left err
                 Right (keepPids, extraPids, filtered) -> do
                     let toDelete =
                             resolveDeleteSelection
                                 DeleteSelection{dsFiltered = filtered, dsKeep = keepPids, dsExtra = extraPids}
-                    unitConfig <- getMergedUnitConfig manager
-                    outcome <- mutateUploadedDatabase manager dbName (deleteActivitiesWith unitConfig toDelete)
-                    pure $ flip fmap outcome $ \done ->
-                        DeleteOutcome
-                            { doRemoved = length toDelete
-                            , doPersisted = moPersisted done
-                            , doWarnings = moWarnings done
-                            }
+                    case traverse (fmap renderKey . processKey db) toDelete of
+                        Left err -> pure (Left err)
+                        -- A filter that matched nothing changes nothing: no
+                        -- rebuild, and no line in the journal saying an empty
+                        -- deletion happened.
+                        Right [] -> pure (Right (removed 0 (dcIsUploaded (ldConfig loaded)) []))
+                        Right targets -> do
+                            outcome <- mutateUploadedDatabase manager dbName (Deleted targets)
+                            pure $ flip fmap outcome $ \done ->
+                                removed (length targets) (moPersisted done) (moWarnings done)
+  where
+    removed count persisted warnings =
+        DeleteOutcome{doRemoved = count, doPersisted = persisted, doWarnings = warnings}

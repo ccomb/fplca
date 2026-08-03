@@ -884,12 +884,13 @@ uploadDatabaseHandler mName mDesc src = do
                 -- Create meta.toml for self-describing upload
                 let meta =
                         UploadedDB.UploadMeta
-                            { UploadedDB.umVersion = 1
+                            { UploadedDB.umVersion = UploadedDB.metaVersion
                             , UploadedDB.umDisplayName = name
                             , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = urFormat uploadResult -- Types are now unified
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                             , UploadedDB.umDepends = []
+                            , UploadedDB.umSource = Nothing
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
@@ -1081,12 +1082,13 @@ uploadMethodHandler mName mDesc src =
                 -- Create meta.toml (store path relative to upload dir)
                 let meta =
                         UploadedDB.UploadMeta
-                            { UploadedDB.umVersion = 1
+                            { UploadedDB.umVersion = UploadedDB.metaVersion
                             , UploadedDB.umDisplayName = name
                             , UploadedDB.umDescription = mDescription
                             , UploadedDB.umFormat = methodFormat
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
                             , UploadedDB.umDepends = []
+                            , UploadedDB.umSource = Nothing
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 

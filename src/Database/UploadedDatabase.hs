@@ -7,6 +7,7 @@ module Database.UploadedDatabase (
     -- * Types
     UploadMeta (..),
     DatabaseFormat (..),
+    metaVersion,
 
     -- * Meta file operations
     readUploadMeta,
@@ -55,8 +56,23 @@ data UploadMeta = UploadMeta
     to lose it silently. A file written before this field existed reads back
     with no dependencies, which is what it meant.
     -}
+    , umSource :: !(Maybe Text)
+    {- ^ The database this one is a copy of, when it is one. A copy has no
+    files: 'umDataPath' points at the source's, and this says whose they are,
+    which is what lets a delete refuse to take the files a copy still reads.
+    A file written before this field existed is not a copy, which is what it
+    meant.
+    -}
     }
     deriving (Show, Eq, Generic)
+
+{- | The @meta.toml@ shape this engine writes, stamped by every writer.
+Version 3 added @source@, which is what tells a copy from an upload. The
+parser reads every version, taking absent fields to mean what their absence
+meant when they did not exist.
+-}
+metaVersion :: Int
+metaVersion = 3
 
 -- | Name of the metadata file in each upload directory
 metaFileName :: FilePath
@@ -130,7 +146,7 @@ parseMetaToml content = do
             , let v = T.strip $ T.drop 1 rest
             ]
         getValue key = lookup key kvPairs
-        unquote = T.dropAround (== '"')
+        unquote = unescapeToml . T.dropAround (== '"')
 
     version <- getValue "version" >>= readMaybe . T.unpack
     displayName <- unquote <$> getValue "displayName"
@@ -146,7 +162,24 @@ parseMetaToml content = do
             , umFormat = format
             , umDataPath = dataPath
             , umDepends = maybe [] parseStringList (getValue "depends")
+            , umSource = unquote <$> getValue "source"
             }
+
+{- | Undo the escaping 'formatMetaToml' writes, so a value survives the round
+trip it is written for.
+
+A Windows path is why this is not academic: its separators are backslashes,
+which the writer doubles as TOML requires, and a reader that took the value
+verbatim handed back a path with every separator twice over.
+-}
+unescapeToml :: Text -> Text
+unescapeToml = T.pack . unescape . T.unpack
+  where
+    unescape ('\\' : '"' : rest) = '"' : unescape rest
+    unescape ('\\' : '\\' : rest) = '\\' : unescape rest
+    unescape ('\\' : 'n' : rest) = '\n' : unescape rest
+    unescape (c : rest) = c : unescape rest
+    unescape [] = []
 
 {- | Read a TOML inline array of strings, @["a", "b"]@. Entries that are not
 quoted strings are skipped rather than failing the whole file: the key is
@@ -189,6 +222,7 @@ formatMetaToml UploadMeta{..} =
                , "dataPath = " <> quote (T.pack umDataPath)
                , "depends = [" <> T.intercalate ", " (map quote umDepends) <> "]"
                ]
+            ++ maybe [] (\s -> ["source = " <> quote s]) umSource
   where
     quote t = "\"" <> escapeToml t <> "\""
 

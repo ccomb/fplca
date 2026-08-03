@@ -39,6 +39,7 @@ import SharedSolver (
     getFactorization,
     solveWithSharedSolver,
  )
+import TestHelpers (withScratchDataDir)
 import Types (
     Activity (..),
     Database (..),
@@ -54,7 +55,9 @@ import Types (
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
-spec = describe "Database.Edit copy primitive" $ do
+-- A copy now leaves a directory of its own behind, so each example gets a data
+-- directory of its own rather than writing into the tree it was run from.
+spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
     it "registers an independent copy under the new name" $ do
         manager <- initDatabaseManager defaultConfig True Nothing
         srcDb <- buildOrFail (supplierDB 100 ["p1", "p2"])

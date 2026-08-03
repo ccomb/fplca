@@ -138,6 +138,7 @@ data FlowRef
     = ExistingFlow UUID
     | -- | name, compartment, unit
       NewBioFlow Text Compartment Text
+    deriving (Eq, Show)
 
 {- | One line of an authored activity's inventory.
 
@@ -170,6 +171,7 @@ data AuthoredExchange
         , awUnit :: Maybe Text
         , awComment :: Maybe Text
         }
+    deriving (Eq, Show)
 
 -- | A complete activity as an author states it: what it is, and what it exchanges.
 data AuthoredActivity = AuthoredActivity
@@ -181,6 +183,7 @@ data AuthoredActivity = AuthoredActivity
     , aaProductUnit :: Text
     , aaExchanges :: [AuthoredExchange]
     }
+    deriving (Eq, Show)
 
 {- | Everything resolution needs to read: the database being edited, the
 databases it may draw suppliers from, and the unit table conversions are

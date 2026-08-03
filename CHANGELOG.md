@@ -40,19 +40,27 @@
   instead of guessing from the data.
 
 ### Changed
-- Deleting activities from a database you uploaded or copied now survives a
-  restart. The engine rewrites the database's own source files before it
-  answers, so unloading and reloading returns what was written; previously the
-  sources and the matrix cache kept the pre-edit set and a restart quietly
-  brought every removed activity back. Only a database stored as EcoSpold 2 can
-  be written back, because its file names carry each process identity through a
-  reload; other formats refuse the edit and name the way out (export to
-  EcoSpold 2, upload that). A copy gets files of its own on the first save
-  instead of writing into the database it was copied from. A configured
+- Editing a database you uploaded or copied now survives a restart, whatever
+  format it is stored in. Previously the sources and the matrix cache kept the
+  pre-edit set, so a restart quietly brought every removed activity back. The
+  edits are now recorded in a journal beside the database's own files and
+  replayed when it is loaded again; the files themselves are never rewritten.
+  That is what lets an EcoSpold 1, SimaPro CSV, ILCD or Brightway Excel
+  database be edited at all: rewriting them would have worked only for
+  EcoSpold 2, because the others derive each process identity from names,
+  categories and the position of a dataset in its file, so saving would have
+  given every activity a new identity at the next read. A copy now gets a
+  directory of its own the moment it is made, holding its identity and its
+  edits but no data - it reads the files of the database it was copied from,
+  which can no longer be deleted while a copy still needs them. A configured
   database the engine only reads is still edited in memory alone, and the
-  delete response now says so with two new fields, `transient` and `warnings`.
+  delete response says so with two fields, `transient` and `warnings`.
 
 ### Fixed
+- An uploaded database whose `meta.toml` recorded a path containing a backslash
+  or a quote came back with that character doubled. The file escapes them as
+  its format requires and nothing undid it on the way back, which on Windows
+  meant a nested data path that resolved to nothing.
 - A regionalized factor now comes from the method's most specific line, not from
   whichever line the file happened to list last. When a method writes both a
   medium-level factor and one naming the flow's own subcompartment, and both

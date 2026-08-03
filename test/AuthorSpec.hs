@@ -31,7 +31,7 @@ import Database.Author (
     authoredProductUUID,
     validateAuthored,
  )
-import Database.Edit (deleteActivities, insertActivities, replaceActivities)
+import Database.Rebuild (deleteActivities, insertActivities, replaceActivities)
 import Types (
     Activity (..),
     BioDirection (..),

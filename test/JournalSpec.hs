@@ -1,0 +1,367 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+{- | Tests for the edit journal ("Database.Journal").
+
+The journal is what makes an edit outlive the process without rewriting the
+database's own files, so two properties carry the whole design: what it writes
+it can read back, and replaying it produces the database the edit produced.
+The rest is about the ways a file can be wrong, and each of them says so
+rather than quietly losing an edit.
+-}
+module JournalSpec (spec) where
+
+import Control.Monad (void)
+import Data.Aeson (Value, decodeStrict, encode, toJSON)
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import Data.Text (Text, isInfixOf)
+import qualified Data.Text as T
+import qualified Data.UUID as UUID
+import qualified Data.Vector as V
+import System.IO.Temp (withSystemTempDirectory)
+import Test.Hspec
+
+import Database (buildDatabaseWithMatrices)
+import Database.Author (
+    AuthorContext (..),
+    AuthoredActivity (..),
+    AuthoredExchange (..),
+    FlowRef (..),
+    ResolvedInsert (..),
+    validateAuthored,
+ )
+import Database.Journal (
+    JournalEvent (..),
+    JournalOp (..),
+    appendEvent,
+    journalPath,
+    readJournal,
+    replayJournal,
+ )
+import Database.Rebuild (renderKey)
+import Types (
+    Activity (..),
+    BioDirection (..),
+    BiosphereFlow (..),
+    Compartment (..),
+    Database (..),
+    Exchange (..),
+    LocationSource (..),
+    TechRole (..),
+    TechnosphereFlow (..),
+    UUID,
+    Unit (..),
+ )
+import UnitConversion (defaultUnitConfig)
+
+spec :: Spec
+spec = do
+    fixture <- runIO buildFixture
+    let ctx = AuthorContext{acDb = fixture, acDeps = [], acUnitConfig = defaultUnitConfig}
+        cheeseKey = mintedKey fixture cheese
+
+    describe "Database.Journal (codec)" $ do
+        it "writes the shape it documents" $
+            -- A golden on names and nesting rather than on bytes: what has to
+            -- stay stable is the vocabulary on disk, not the order aeson
+            -- happens to serialize an object in.
+            Just (toJSON (event (Created [cheese] ["a_b"])))
+                `shouldBe` (decodeStrict expectedCreateJSON :: Maybe Value)
+
+        it "reads back every event it writes" $
+            -- One event per operation, and one exchange per kind, so a field
+            -- lost in the codec cannot hide behind the others.
+            mapM_ (\written -> decodeStrict (BL.toStrict (encode written)) `shouldBe` Just written) richEvents
+
+    describe "Database.Journal (file)" $ do
+        it "reads a database that has never been edited as an empty journal" $
+            withSystemTempDirectory "journal" $ \home ->
+                readJournal home `shouldReturn` Right []
+
+        it "appends and reads back in order" $
+            withSystemTempDirectory "journal" $ \home -> do
+                mapM_ (appendOrFail home . jeOp) richEvents
+                read' <- readJournal home
+                fmap (map jeOp) read' `shouldBe` Right (map jeOp richEvents)
+
+        it "refuses a version it does not read" $
+            withJournalFile
+                ["{\"v\":2,\"at\":\"now\",\"op\":\"delete\",\"targets\":[]}"]
+                (`shouldSatisfy` failsWith "version 2")
+
+        it "refuses a line it cannot parse, naming it" $
+            withJournalFile
+                [deleteLine, "{ this is not json", deleteLine]
+                (`shouldSatisfy` failsWith "line 2")
+
+        it "drops a torn last line, because its edit was never acknowledged" $
+            -- The line is written and flushed before the caller is told the
+            -- edit happened, so a half-written final line belongs to an edit
+            -- nobody knows about.
+            withJournalFile
+                [deleteLine, deleteLine, "{\"v\":1,\"at\":\"now\",\"op\":\"del"]
+                (\result -> fmap length result `shouldBe` Right 2)
+
+        it "never fuses an edit onto the torn tail a crash left behind" $
+            -- A torn tail has no newline, so a blind append would glue the
+            -- next line onto it, and that line's edit IS acknowledged. The
+            -- append truncates the tail first: what is dropped is exactly the
+            -- unacknowledged debris, never the edit being recorded.
+            withSystemTempDirectory "journal" $ \home -> do
+                appendOrFail home (Deleted ["a_b"])
+                appendFile (journalPath home) "{\"v\":1,\"at\":\"now\",\"op\":\"del"
+                appendOrFail home (Deleted ["c_d"])
+                read' <- readJournal home
+                fmap (map jeOp) read' `shouldBe` Right [Deleted ["a_b"], Deleted ["c_d"]]
+
+    describe "Database.Journal (replay)" $ do
+        it "applies a create" $
+            case replayJournal ctx [event (Created [cheese] [cheeseKey])] of
+                Left err -> expectationFailure ("replay: " <> show err)
+                Right db -> processKeys db `shouldBe` S.insert cheeseKey (processKeys fixture)
+
+        it "gives the same database every time it is replayed" $
+            let journal = [event (Created [cheese] [cheeseKey]), event (Replaced cheeseKey cheese{aaProductAmount = 2})]
+             in fmap processKeys (replayJournal ctx journal)
+                    `shouldBe` fmap processKeys (replayJournal ctx journal)
+
+        it "applies a delete, leaving the database it started from" $
+            case replayJournal ctx [event (Created [cheese] [cheeseKey]), event (Deleted [cheeseKey])] of
+                Left err -> expectationFailure ("replay: " <> show err)
+                Right db -> processKeys db `shouldBe` processKeys fixture
+
+        it "refuses an identity that no longer mints the same way" $
+            -- The guard the whole file exists for: if minting ever moves, a
+            -- replay must stop rather than land the activity somewhere else.
+            replayOutcome ctx [event (Created [cheese] ["8f3c-not-what-this-mints"])]
+                `shouldSatisfy` failsWith "now mints"
+
+        it "names the event that failed" $
+            replayOutcome ctx [event (Deleted [cheeseKey]), event (Created [cheese] [cheeseKey])]
+                `shouldSatisfy` failsWith "journal event 1 (delete)"
+
+        it "refuses a delete of something the database does not have" $
+            replayOutcome ctx [event (Deleted [cheeseKey])]
+                `shouldSatisfy` failsWith "Unknown process id"
+
+        it "refuses a replace whose description no longer addresses its target" $
+            replayOutcome ctx [event (Replaced supplierPid cheese)]
+                `shouldSatisfy` failsWith "now mints"
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+event :: JournalOp -> JournalEvent
+event = JournalEvent "2026-08-03T09:12:41Z"
+
+-- | Replay, keeping only what a failed assertion can print.
+replayOutcome :: AuthorContext -> [JournalEvent] -> Either Text ()
+replayOutcome ctx = void . replayJournal ctx
+
+failsWith :: Text -> Either Text a -> Bool
+failsWith needle = either (isInfixOf needle) (const False)
+
+appendOrFail :: FilePath -> JournalOp -> IO ()
+appendOrFail home op = appendEvent home op >>= either (fail . show) pure
+
+{- | Run a check against a journal file written verbatim, so a line this
+engine would never write can still be read.
+-}
+withJournalFile :: [BS.ByteString] -> (Either Text [JournalEvent] -> Expectation) -> Expectation
+withJournalFile lines' check =
+    withSystemTempDirectory "journal" $ \home -> do
+        BS.writeFile (journalPath home) (BS.intercalate "\n" lines')
+        readJournal home >>= check
+
+deleteLine :: BS.ByteString
+deleteLine = "{\"v\":1,\"at\":\"now\",\"op\":\"delete\",\"targets\":[\"" <> ascii supplierPid <> "\"]}"
+
+-- | A 'Text' that is known to be ASCII, spliced into a JSON literal.
+ascii :: Text -> BS.ByteString
+ascii = BS.pack . T.unpack
+
+{- | The identity an authored activity mints against a given database. A
+fixture that does not resolve yields a key nothing matches, so the test that
+depends on it fails on the assertion rather than here.
+-}
+mintedKey :: Database -> AuthoredActivity -> Text
+mintedKey db activity = case validateAuthored ctx [activity] of
+    Right ([resolved], _) -> renderKey (riKey resolved)
+    Right _ -> "the fixture activity resolved to something other than one process"
+    Left errs -> "the fixture activity does not resolve: " <> T.intercalate "; " errs
+  where
+    ctx = AuthorContext{acDb = db, acDeps = [], acUnitConfig = defaultUnitConfig}
+
+processKeys :: Database -> S.Set Text
+processKeys = S.fromList . map renderKey . V.toList . dbProcessIdTable
+
+-- ---------------------------------------------------------------------------
+-- What the journal carries
+-- ---------------------------------------------------------------------------
+
+-- | An activity using every exchange kind the journal has to record.
+cheese :: AuthoredActivity
+cheese =
+    AuthoredActivity
+        { aaName = "cheese, at dairy"
+        , aaLocation = "FR"
+        , aaDescription = ["An authored activity."]
+        , aaProductName = "cheese"
+        , aaProductAmount = 1.0
+        , aaProductUnit = "kg"
+        , aaExchanges =
+            [ AuthoredTechInput
+                { atiProvider = supplierPid
+                , atiAmount = 8.0
+                , atiUnit = Just "kg"
+                , atiComment = Just "milk in"
+                }
+            , AuthoredBio
+                { abFlow = ExistingFlow co2Id
+                , abDirection = Emission
+                , abAmount = 0.5
+                , abUnit = Nothing
+                , abComment = Nothing
+                }
+            , AuthoredBio
+                { abFlow =
+                    NewBioFlow
+                        "Methane"
+                        Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
+                        "kg"
+                , abDirection = Emission
+                , abAmount = 0.01
+                , abUnit = Just "kg"
+                , abComment = Nothing
+                }
+            ]
+        }
+
+richEvents :: [JournalEvent]
+richEvents =
+    [ event (Created [cheese] ["a_b"])
+    , event (Replaced "a_b" cheese)
+    , event (Deleted ["a_b", "c_d"])
+    , event
+        ( Created
+            [cheese{aaExchanges = [AuthoredWasteOutput{awProvider = supplierPid, awAmount = 0.2, awUnit = Nothing, awComment = Nothing}]}]
+            ["a_b"]
+        )
+    ]
+
+expectedCreateJSON :: BS.ByteString
+expectedCreateJSON =
+    "{\"v\":1,\"at\":\"2026-08-03T09:12:41Z\",\"op\":\"create\",\"written\":[\"a_b\"],\
+    \\"activities\":[{\
+    \\"name\":\"cheese, at dairy\",\"location\":\"FR\",\
+    \\"description\":[\"An authored activity.\"],\
+    \\"product\":{\"name\":\"cheese\",\"amount\":1,\"unit\":\"kg\"},\
+    \\"exchanges\":[\
+    \{\"kind\":\"input\",\"provider\":\""
+        <> ascii supplierPid
+        <> "\",\"amount\":8,\"unit\":\"kg\",\"comment\":\"milk in\"},\
+           \{\"kind\":\"biosphere\",\"flow\":{\"id\":\""
+        <> ascii (UUID.toText co2Id)
+        <> "\"},\"direction\":\"emission\",\"amount\":0.5},\
+           \{\"kind\":\"biosphere\",\"flow\":{\"name\":\"Methane\",\"compartment\":\"air\",\
+           \\"sub_compartment\":\"low population density\",\"unit\":\"kg\"},\
+           \\"direction\":\"emission\",\"amount\":0.01,\"unit\":\"kg\"}]}]}"
+
+-- ---------------------------------------------------------------------------
+-- Fixture: one supplier producing milk in kg, emitting CO2
+-- ---------------------------------------------------------------------------
+
+buildFixture :: IO Database
+buildFixture = do
+    built <-
+        buildDatabaseWithMatrices
+            defaultUnitConfig
+            (M.singleton (supplierActId, supplierProdId) supplierActivity)
+            (M.singleton supplierProdId milkFlow)
+            (M.singleton co2Id co2Flow)
+            M.empty
+            unitTable
+    either (fail . show) pure built
+
+mkUUID :: Int -> UUID
+mkUUID n = UUID.fromWords64 (fromIntegral n) 0
+
+supplierActId, supplierProdId, co2Id, kgUnitId :: UUID
+supplierActId = mkUUID 1
+supplierProdId = mkUUID 2
+co2Id = mkUUID 3
+kgUnitId = mkUUID 10
+
+supplierPid :: Text
+supplierPid = renderKey (supplierActId, supplierProdId)
+
+unitTable :: M.Map UUID Unit
+unitTable =
+    M.singleton kgUnitId Unit{unitId = kgUnitId, unitName = "kg", unitSymbol = "kg", unitComment = ""}
+
+milkFlow :: TechnosphereFlow
+milkFlow =
+    TechnosphereFlow
+        { tfId = supplierProdId
+        , tfName = "milk"
+        , tfUnitId = kgUnitId
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
+        }
+
+co2Flow :: BiosphereFlow
+co2Flow =
+    BiosphereFlow
+        { bfId = co2Id
+        , bfName = "Carbon dioxide"
+        , bfUnitId = kgUnitId
+        , bfSynonyms = M.empty
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Just Compartment{compartmentName = "air", compartmentSub = Nothing}
+        }
+
+supplierActivity :: Activity
+supplierActivity =
+    Activity
+        { activityName = "milk production"
+        , activityDescription = []
+        , activitySynonyms = M.empty
+        , activityClassification = M.empty
+        , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
+        , activityUnit = "kg"
+        , exchanges =
+            [ TechnosphereExchange
+                { techFlowId = supplierProdId
+                , techAmount = 1.0
+                , techUnitId = kgUnitId
+                , techRole = ReferenceProduct
+                , techActivityLinkId = supplierActId
+                , techProcessLinkId = Nothing
+                , techLocation = ""
+                , techComment = Nothing
+                , techPedigree = Nothing
+                }
+            , BiosphereExchange
+                { bioFlowId = co2Id
+                , bioAmount = 1.2
+                , bioUnitId = kgUnitId
+                , bioDirection = Emission
+                , bioLocation = ""
+                , bioComment = Nothing
+                , bioPedigree = Nothing
+                }
+            ]
+        , activityParams = M.empty
+        , activityParamExprs = M.empty
+        , activityAllocationPercent = Nothing
+        , activityAllocationFormula = Nothing
+        , activityNativeType = Nothing
+        , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
+        }
