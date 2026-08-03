@@ -31,6 +31,9 @@ module Config (
     redirectIntoDataDir,
     applyDataDir,
 
+    -- * Config-relative path resolution
+    resolveConfigPaths,
+
     -- * Default values
     defaultConfig,
 
@@ -50,7 +53,7 @@ import Database.Upload (DatabaseFormat (..))
 import GHC.Generics (Generic)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
-import System.FilePath (takeFileName)
+import System.FilePath (isAbsolute, normalise, takeDirectory, takeFileName, (</>))
 import TOML (DecodeTOML (..), Decoder, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
 import Types (GeographyPolicy (..))
 
@@ -524,6 +527,36 @@ applyDataDir mDataDir cfg =
   where
     resolve = redirectIntoDataDir mDataDir
     mapPath f r = r{rdPath = f (rdPath r)}
+
+{- | Resolve every relative path a config carries against the directory the
+config file sits in, so one file describes the same setup from any working
+directory. An absolute path is already unambiguous and is left alone; 'Nothing'
+(no config file) means the process directory, which is all there is to go on.
+
+Every path-bearing field is listed here, and nothing resolves paths anywhere
+else: a config whose @[[databases]]@ path followed the file while its
+@[[methods]]@ path followed the process was the bug this replaces.
+
+Runs after 'applyDataDir', which is what recognises a leading @data/@ as the
+shipped bundle - prefixing it with a directory first would hide it.
+-}
+resolveConfigPaths :: Maybe FilePath -> Config -> Config
+resolveConfigPaths mConfigPath cfg =
+    cfg
+        { cfgDatabases = map (\d -> d{dcPath = resolve (dcPath d)}) (cfgDatabases cfg)
+        , cfgMethods = map (\m -> m{mcPath = resolve (mcPath m)}) (cfgMethods cfg)
+        , cfgFlowSynonyms = map refData (cfgFlowSynonyms cfg)
+        , cfgCompartmentMappings = map refData (cfgCompartmentMappings cfg)
+        , cfgUnits = map refData (cfgUnits cfg)
+        , cfgEnergyDensities = map refData (cfgEnergyDensities cfg)
+        , cfgGeographies = fmap resolve (cfgGeographies cfg)
+        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
+        , cfgSubstanceEdges = fmap resolve (cfgSubstanceEdges cfg)
+        }
+  where
+    configDir = maybe "." takeDirectory mConfigPath
+    resolve p = normalise $ if isAbsolute p then p else configDir </> p
+    refData r = r{rdPath = resolve (rdPath r)}
 
 -- | Validate configuration
 validateConfig :: Config -> Either Text Config

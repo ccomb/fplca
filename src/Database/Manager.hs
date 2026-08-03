@@ -144,7 +144,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import GHC.Generics (Generic)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive, removeFile)
-import System.FilePath (isAbsolute, normalise, takeDirectory, takeExtension, takeFileName, (</>))
+import System.FilePath (takeDirectory, takeExtension, takeFileName, (</>))
 import System.Mem (performGC)
 
 import Config
@@ -929,14 +929,14 @@ Pre-loads databases with load=true at startup
 Also discovers uploaded databases from uploads/ directory
 -}
 initDatabaseManager :: Config -> Bool -> Maybe FilePath -> IO DatabaseManager
-initDatabaseManager config noCache configPath = do
-    -- Resolve relative paths against the config file's directory
-    let configDir = maybe "." takeDirectory configPath
-        resolveRelative p = normalise $ if isAbsolute p then p else configDir </> p
+initDatabaseManager rawConfig noCache configPath = do
+    -- Every path the config carries is made config-relative in one place, so
+    -- the rest of this function only ever sees paths it can open.
+    let config = resolveConfigPaths configPath rawConfig
 
     -- Get configured databases and detect their format
     configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
-        resolvedPath <- resolveDataPath (resolveRelative (dcPath dbConfig))
+        resolvedPath <- resolveDataPath (dcPath dbConfig)
         format <- Upload.detectDatabaseFormat resolvedPath
         return dbConfig{dcPath = resolvedPath, dcFormat = Just format}
 
@@ -965,12 +965,10 @@ initDatabaseManager config noCache configPath = do
     uploadedCompMaps <- discoverUploadedRefData "uploads/compartment-mappings"
     uploadedUnitDefs <- discoverUploadedRefData "uploads/units"
     uploadedEnergyDensities <- discoverUploadedRefData "uploads/energy-densities"
-    -- Resolve reference data paths relative to config directory
-    let resolveRdPath rd = rd{rdPath = resolveRelative (rdPath rd)}
-    let allFlowSyns = map resolveRdPath (cfgFlowSynonyms config) ++ uploadedFlowSyns
-        allCompMaps = map resolveRdPath (cfgCompartmentMappings config) ++ uploadedCompMaps
-        allUnitDefs = map resolveRdPath (cfgUnits config) ++ uploadedUnitDefs
-        allEnergyDensities = map resolveRdPath (cfgEnergyDensities config) ++ uploadedEnergyDensities
+    let allFlowSyns = cfgFlowSynonyms config ++ uploadedFlowSyns
+        allCompMaps = cfgCompartmentMappings config ++ uploadedCompMaps
+        allUnitDefs = cfgUnits config ++ uploadedUnitDefs
+        allEnergyDensities = cfgEnergyDensities config ++ uploadedEnergyDensities
     availableFlowSynsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allFlowSyns]
     loadedFlowSynsVar <- newTVarIO M.empty
     availableCompMapsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allCompMaps]
@@ -983,7 +981,7 @@ initDatabaseManager config noCache configPath = do
     geographies <- case cfgGeographies config of
         Nothing -> return M.empty
         Just path -> do
-            result <- parseGeographiesCSV (resolveRelative path)
+            result <- parseGeographiesCSV path
             case result of
                 Right geos -> pure geos
                 -- Falling back to the built-in hierarchy silently would change
