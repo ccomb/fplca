@@ -29,7 +29,6 @@ module Database.Rebuild (
 
     -- * The rebuild itself
     rebuildFromActivities,
-    activityMap,
 
     -- * Identity
     renderKey,
