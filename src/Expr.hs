@@ -79,10 +79,17 @@ pUnary env =
         <|> (symbol "+" *> pUnary env)
         <|> pPower env
 
+{- | Exponentiation, right-associative and binding tighter than @*@ and @/@.
+
+The exponent goes through 'pUnary' rather than straight back to 'pPower', so it
+may carry a sign. SimaPro writes scale factors that way — @1*10^-3*50@ — and
+without it the @-@ met 'pPrimary', which knows numbers but not signs, and the
+whole expression failed.
+-}
 pPower :: M.Map Text Double -> Parser Double
 pPower env = do
     base <- pPrimary env
-    (symbol "^" *> ((base **) <$> pPower env)) <|> pure base
+    (symbol "^" *> ((base **) <$> pUnary env)) <|> pure base
 
 pPrimary :: M.Map Text Double -> Parser Double
 pPrimary env =
@@ -211,7 +218,7 @@ pSynUnary :: Parser ()
 pSynUnary = (symbol "-" *> pSynUnary) <|> (symbol "+" *> pSynUnary) <|> pSynPower
 
 pSynPower :: Parser ()
-pSynPower = pSynPrimary >> ((symbol "^" *> pSynPower) <|> pure ())
+pSynPower = pSynPrimary >> ((symbol "^" *> pSynUnary) <|> pure ())
 
 pSynPrimary :: Parser ()
 pSynPrimary =
