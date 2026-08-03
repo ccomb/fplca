@@ -69,7 +69,7 @@ module Database.Journal (
 ) where
 
 import Control.Exception (SomeException, try)
-import Control.Monad (foldM)
+import Control.Monad (foldM, when)
 import Data.Aeson (
     FromJSON (..),
     Object,
@@ -98,7 +98,15 @@ import qualified Data.UUID as UUID
 import Data.Word (Word64)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
-import System.IO (IOMode (AppendMode), withFile)
+import System.IO (
+    Handle,
+    IOMode (ReadWriteMode),
+    SeekMode (AbsoluteSeek, SeekFromEnd),
+    hFileSize,
+    hSeek,
+    hSetFileSize,
+    withFile,
+ )
 
 import Database.Author (
     AuthorContext (..),
@@ -170,7 +178,9 @@ appendEvent home op = do
     let event = JournalEvent{jeAt = T.pack (iso8601Show now), jeOp = op}
     written <- try $ do
         createDirectoryIfMissing True home
-        withFile (journalPath home) AppendMode $ \handle ->
+        withFile (journalPath home) ReadWriteMode $ \handle -> do
+            dropTornTail handle
+            hSeek handle SeekFromEnd 0
             BL.hPut handle (encode event <> "\n")
     pure $ case written of
         Right () -> Right ()
@@ -180,6 +190,26 @@ appendEvent home op = do
                     <> T.pack (journalPath home)
                     <> ": "
                     <> T.pack (show err)
+
+{- | Remove a torn tail before appending, so the new line starts a line.
+
+A file that does not end in a newline carries the tail of an append that was
+cut short, which belongs to an edit that was never acknowledged (the line is
+on disk before the caller is answered). Appending straight after it would fuse
+the new line with the debris, turning an edit that /was/ acknowledged into a
+line no replay can read. Truncating to the last newline drops exactly what the
+replay's torn-last-line rule would have dropped, one write earlier.
+-}
+dropTornTail :: Handle -> IO ()
+dropTornTail handle = do
+    size <- hFileSize handle
+    when (size > 0) $ do
+        hSeek handle AbsoluteSeek (size - 1)
+        lastByte <- BS.hGet handle 1
+        when (lastByte /= "\n") $ do
+            hSeek handle AbsoluteSeek 0
+            bytes <- BS.hGet handle (fromIntegral size)
+            hSetFileSize handle (fromIntegral (BS.length (BS.dropWhileEnd (/= '\n') bytes)))
 
 {- | Read a database's journal. A database with no journal has made no edits,
 which is not an error.

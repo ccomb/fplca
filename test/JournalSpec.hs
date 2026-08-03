@@ -104,6 +104,18 @@ spec = do
                 [deleteLine, deleteLine, "{\"v\":1,\"at\":\"now\",\"op\":\"del"]
                 (\result -> fmap length result `shouldBe` Right 2)
 
+        it "never fuses an edit onto the torn tail a crash left behind" $
+            -- A torn tail has no newline, so a blind append would glue the
+            -- next line onto it, and that line's edit IS acknowledged. The
+            -- append truncates the tail first: what is dropped is exactly the
+            -- unacknowledged debris, never the edit being recorded.
+            withSystemTempDirectory "journal" $ \home -> do
+                appendOrFail home (Deleted ["a_b"])
+                appendFile (journalPath home) "{\"v\":1,\"at\":\"now\",\"op\":\"del"
+                appendOrFail home (Deleted ["c_d"])
+                read' <- readJournal home
+                fmap (map jeOp) read' `shouldBe` Right [Deleted ["a_b"], Deleted ["c_d"]]
+
     describe "Database.Journal (replay)" $ do
         it "applies a create" $
             case replayJournal ctx [event (Created [cheese] [cheeseKey])] of
