@@ -64,7 +64,7 @@ hosting ro =
 -- | Build an environment whose only interesting knob is the hosting stance.
 envWith :: Maybe HostingConfig -> IO AppEnv
 envWith hc = do
-    manager <- initDatabaseManager defaultConfig True Nothing
+    manager <- initDatabaseManager defaultConfig True
     pure
         AppEnv
             { aeDbManager = manager
@@ -169,7 +169,7 @@ spec = do
 
     describe "MCP tools under read_only" $ do
         it "refuse the state-changing tools" $ do
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             let call name =
                     callTool manager [] (Just (hosting True)) Nothing Null name $
                         KM.singleton "database" (String "nope")
@@ -179,7 +179,7 @@ spec = do
             isToolError unloadResp `shouldBe` True
 
         it "still answer a read-only tool" $ do
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             listed <- callTool manager [] (Just (hosting True)) Nothing Null "list_databases" KM.empty
             isToolError listed `shouldBe` False
 

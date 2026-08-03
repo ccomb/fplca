@@ -114,7 +114,7 @@ isLocalCommand _ = False
 runCLIWithConfig :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIWithConfig cliConfig cmd cfgFile = do
     config <- loadConfigOrDie (Just cfgFile)
-    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
+    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
     executeCommand cliConfig cmd dbManager
 
 {- | HTTP manager for client-mode commands, with the 30 s default response
@@ -246,7 +246,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
     config <- applyLoadOverride serverOpts <$> loadConfigOrDie mCfgFile
     warnUnknownLoadNames serverOpts config
     reportProgress Info "Initializing database manager..."
-    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) mCfgFile
+    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
     logLoadedDatabases dbManager
     let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
         staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
@@ -285,7 +285,7 @@ runConfigLoadOnly cliConfig cfgFile = do
 
     -- Initialize DatabaseManager (pre-loads databases with load=true)
     reportProgress Info "Loading all databases from config..."
-    _dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig)) (Just cfgFile)
+    _dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
 
     -- Report success
     let loadCount = length $ filter dcLoad (cfgDatabases config)

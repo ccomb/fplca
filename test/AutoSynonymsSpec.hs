@@ -33,7 +33,7 @@ withTempManager action =
     withSystemTempDirectory "volca-auto-syns" $ \tmp -> do
         oldCwd <- getCurrentDirectory
         setCurrentDirectory tmp
-        (initDatabaseManager defaultConfig True Nothing >>= action)
+        (initDatabaseManager defaultConfig True >>= action)
             `finally` setCurrentDirectory oldCwd
 
 spec :: Spec

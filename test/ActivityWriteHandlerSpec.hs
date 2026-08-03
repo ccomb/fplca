@@ -363,7 +363,7 @@ withDb mkConfig act =
         bracket_ (setEnv "VOLCA_DATA_DIR" root) (unsetEnv "VOLCA_DATA_DIR") $ do
             let dataDir = root </> "uploads" </> "databases" </> "authored" </> "data"
             createDirectoryIfMissing True dataDir
-            dbm <- initDatabaseManager defaultConfig True Nothing
+            dbm <- initDatabaseManager defaultConfig True
             db <- buildFixture
             solver <- createSharedSolver "authored" (triplesOf db) (fromIntegral (dbActivityCount db))
             let config = mkConfig "authored" dataDir

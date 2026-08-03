@@ -80,7 +80,7 @@ isError _ = False
 
 call :: Text -> IO Value
 call name = do
-    manager <- initDatabaseManager defaultConfig True Nothing
+    manager <- initDatabaseManager defaultConfig True
     callTool manager [] Nothing Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
 {- | Call the edit tool with one line named. An edit that names nothing is
@@ -89,7 +89,7 @@ test is actually about.
 -}
 callEdit :: IO Value
 callEdit = do
-    manager <- initDatabaseManager defaultConfig True Nothing
+    manager <- initDatabaseManager defaultConfig True
     callTool manager [] Nothing Nothing Null "edit_exchanges" $
         KM.fromList
             [ ("database", String "no-such-db")
@@ -207,7 +207,7 @@ spec = describe "MCP database load/unload tools" $ do
                     , cpFilters = [ClassificationEntry{ceSystem = "AGB", ceValue = "Agriculture", ceMode = "exact"}]
                     }
             callWithPreset name = do
-                manager <- initDatabaseManager defaultConfig True Nothing
+                manager <- initDatabaseManager defaultConfig True
                 callTool manager [configured] Nothing Nothing Null name $
                     KM.fromList
                         [ ("database", String "no-such-db")
@@ -247,7 +247,7 @@ spec = describe "MCP database load/unload tools" $ do
                         , dcGeographyPolicy = GeoGlobal
                         }
                 callOnSample name presetArgs = do
-                    manager <- initDatabaseManager defaultConfig True Nothing
+                    manager <- initDatabaseManager defaultConfig True
                     addDatabase manager sampleConfig
                     loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
                     callTool manager [configured] Nothing Nothing Null name $

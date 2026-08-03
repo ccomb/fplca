@@ -7,6 +7,7 @@ import Config (
     ClassificationEntry (..),
     ClassificationPreset (..),
     Config (..),
+    DatabaseConfig (..),
     MethodConfig (..),
     MethodPatch (..),
     MethodPatchMatch (..),
@@ -17,10 +18,12 @@ import Config (
     expandClassificationPreset,
     loadConfigOrDefault,
     redirectIntoDataDir,
+    resolveConfigPaths,
  )
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.FilePath (normalise)
 import qualified TOML
 import Test.Hspec
 
@@ -182,6 +185,63 @@ spec = do
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
+
+    describe "resolveConfigPaths" $ do
+        let decodeDb t = TOML.decode t :: Either TOML.TOMLError DatabaseConfig
+            decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
+            withParsed body =
+                case (decodeDb "name = \"agb\"\npath = \"agb.CSV\"\n", decodeMethod "name = \"EF\"\npath = \"ef.zip\"\n") of
+                    (Right db, Right method) -> body db method
+                    (Left e, _) -> expectationFailure (show e)
+                    (_, Left e) -> expectationFailure (show e)
+
+        it "prefixes every relative path with the config file's directory" $
+            withParsed $ \db method -> do
+                let cfg =
+                        defaultConfig
+                            { cfgDatabases = [db]
+                            , cfgMethods = [method]
+                            , cfgFlowSynonyms = [mkRef "flows.csv"]
+                            , cfgCompartmentMappings = [mkRef "compartments.csv"]
+                            , cfgUnits = [mkRef "units.csv"]
+                            , cfgEnergyDensities = [mkRef "energy.csv"]
+                            , cfgGeographies = Just "geographies.csv"
+                            , cfgChemSynonyms = Just "chem.csv"
+                            , cfgSubstanceEdges = Just "edges.csv"
+                            }
+                    resolved = resolveConfigPaths (Just "/etc/volca/volca.toml") cfg
+                -- A method path used to follow the process while the database
+                -- path beside it followed the file. They move together now.
+                -- Expected values go through 'normalise' too: on Windows the
+                -- resolver emits backslashes.
+                map dcPath (cfgDatabases resolved) `shouldBe` [normalise "/etc/volca/agb.CSV"]
+                map mcPath (cfgMethods resolved) `shouldBe` [normalise "/etc/volca/ef.zip"]
+                map rdPath (cfgFlowSynonyms resolved) `shouldBe` [normalise "/etc/volca/flows.csv"]
+                map rdPath (cfgCompartmentMappings resolved) `shouldBe` [normalise "/etc/volca/compartments.csv"]
+                map rdPath (cfgUnits resolved) `shouldBe` [normalise "/etc/volca/units.csv"]
+                map rdPath (cfgEnergyDensities resolved) `shouldBe` [normalise "/etc/volca/energy.csv"]
+                cfgGeographies resolved `shouldBe` Just (normalise "/etc/volca/geographies.csv")
+                cfgChemSynonyms resolved `shouldBe` Just (normalise "/etc/volca/chem.csv")
+                cfgSubstanceEdges resolved `shouldBe` Just (normalise "/etc/volca/edges.csv")
+
+        it "leaves an absolute path alone" $
+            withParsed $ \_ method -> do
+                let cfg = defaultConfig{cfgMethods = [method{mcPath = "/srv/methods/ef.zip"}]}
+                map mcPath (cfgMethods (resolveConfigPaths (Just "/etc/volca/volca.toml") cfg))
+                    `shouldBe` [normalise "/srv/methods/ef.zip"]
+
+        it "falls back to the process directory when there is no config file" $
+            withParsed $ \_ method -> do
+                let cfg = defaultConfig{cfgMethods = [method]}
+                map mcPath (cfgMethods (resolveConfigPaths Nothing cfg)) `shouldBe` ["ef.zip"]
+
+        it "keeps the shipped data bundle applyDataDir already pointed at" $ do
+            -- applyDataDir runs first and turns "data/x" into an absolute path;
+            -- resolving after it must not prefix that a second time.
+            let cfg = defaultConfig{cfgFlowSynonyms = [mkRef "data/flows.csv"]}
+                bundled = applyDataDir (Just "/opt/volca/data") cfg
+            map rdPath (cfgFlowSynonyms (resolveConfigPaths (Just "/etc/volca/volca.toml") bundled))
+                `shouldBe` [normalise "/opt/volca/data/flows.csv"]
 
     describe "loadConfigOrDefault" $ do
         it "yields the validated defaults when no path is given" $ do

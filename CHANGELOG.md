@@ -74,6 +74,16 @@
   delete response says so with two fields, `transient` and `warnings`.
 
 ### Fixed
+- Every path in a configuration file now means the same thing. A relative
+  `path` under `[[databases]]`, `[[flow-synonyms]]`, `[[compartment-mappings]]`,
+  `[[units]]`, `[[energy-densities]]` or `geographies` was read next to the
+  configuration file, while the same key under `[[methods]]`, `chem_synonyms`
+  or `substance_edges` was read next to wherever the engine happened to be
+  started from. Two neighbouring lines of one file therefore pointed at two
+  different places, and the usual way out was to write absolute paths, which
+  makes the file describe one machine. All of them now follow the file, so a
+  configuration and the data beside it can be moved or shared as one directory.
+  Absolute paths are untouched.
 - A flow search now tells same-named flows apart. Agribalyse 3.2 carries seven
   `Deltamethrin` flows that differ only by compartment; a search returned seven
   rows with the same name, medium and unit, in an order that interleaved them.
