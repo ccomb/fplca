@@ -303,6 +303,9 @@ writeActivities manager dbName verb authored =
     are the canonical ones minted here, which is also what a replay compares
     against. -}
     operation resolved = case (verb, zip authored (map (renderKey . riKey) resolved)) of
+        -- Refused rather than journalled: a line recording that nothing
+        -- happened would be replayed forever for nothing.
+        (CreateActivities, []) -> Left (Malformed ["a create writes at least one activity"])
         (CreateActivities, written) -> Right (Created authored (map snd written))
         (ReplaceActivity _, [(activity, key)]) -> Right (Replaced key activity)
         (ReplaceActivity target, _) ->
