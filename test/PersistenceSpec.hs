@@ -137,6 +137,17 @@ spec = describe "persisting an edit" $ do
                 fmap umDataPath meta `shouldBe` Just (home </> "data")
                 listDirectory (uploads </> "bafu-mine") `shouldReturn` ["meta.toml"]
 
+        it "forks from the source as it stands, not as it was uploaded" $
+            -- What was copied is the source's value after its edits, but the
+            -- source's files never carry them: the copy starts from a snapshot
+            -- of the source's journal, or a reload would quietly resurrect
+            -- everything the source had removed before the copy was made.
+            withEcoSpold1Database $ \manager _ -> do
+                keys <- processKeysOf manager "bafu-like"
+                _ <- deleteFirst manager "bafu-like" keys
+                copyDatabase manager "bafu-like" "bafu-mine" `shouldReturn` Right ()
+                reloadOf manager "bafu-mine" `shouldReturn` drop 1 keys
+
         it "keeps the database it was copied from from being deleted" $
             withEcoSpold1Database $ \manager home -> do
                 copyDatabase manager "bafu-like" "bafu-mine" `shouldReturn` Right ()

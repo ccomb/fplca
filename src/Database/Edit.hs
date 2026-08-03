@@ -45,6 +45,7 @@ module Database.Edit (
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (SomeException, finally, try)
+import Control.Monad (when)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
@@ -54,7 +55,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import System.Directory (createDirectoryIfMissing, makeAbsolute)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, makeAbsolute)
 import System.FilePath ((</>))
 
 import Config (DatabaseConfig (..))
@@ -70,6 +71,7 @@ import Database.Journal (
     JournalOp (..),
     appendEvent,
     applyOp,
+    journalPath,
     journalStamp,
     writeAppliedStamp,
  )
@@ -189,6 +191,12 @@ from the moment it exists. The home holds no data: @dataPath@ points at the
 source's own files, which the copy reads and never writes, and @source@ names
 whose they are so a delete can refuse to take files a copy still needs. That
 is what makes a copy cost a directory rather than a second database.
+
+The copy forks from the source as it stands, not as it was uploaded: what was
+copied is the source's value /after/ its edits, but its files never carry
+them, so the copy starts from a snapshot of the source's journal and a load
+replays the source's edits before its own. Edits the source makes later
+belong to the source alone.
 -}
 recordCopy :: Text -> LoadedDatabase -> IO (Either Text ())
 recordCopy slug src = do
@@ -196,11 +204,14 @@ recordCopy slug src = do
         uploadsDir <- UploadedDB.getDatabaseUploadsDir
         let home = uploadsDir </> T.unpack slug
             config = ldConfig src
+            srcJournal = journalPath (uploadsDir </> T.unpack (dcName config))
         createDirectoryIfMissing True home
         -- The source's path may be relative to the working directory, while
         -- the copy's is read back from its own home; 'uploadMetaToConfig'
         -- keeps an absolute path as it is.
         sourcePath <- makeAbsolute (dcPath config)
+        hasJournal <- doesFileExist srcJournal
+        when hasJournal $ copyFile srcJournal (journalPath home)
         UploadedDB.writeUploadMeta
             home
             UploadedDB.UploadMeta
