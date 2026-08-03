@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.5] - 2026-08-04
 
 ### Added
 - You can adjust what an activity consumes and emits without re-describing it.
@@ -74,6 +74,13 @@
   delete response says so with two fields, `transient` and `warnings`.
 
 ### Fixed
+- A copy made from an edited database now keeps the source's edits. What was
+  copied is the source as it stands, but those edits live in the source's
+  journal and the copy's home had none, so the next load read the untouched
+  files and quietly brought back everything the source had removed before the
+  copy was made. The copy's journal now starts as a snapshot of the source's;
+  edits the source makes afterwards stay the source's alone - the copy forks
+  at the current point, as a branch should.
 - Every path in a configuration file now means the same thing. A relative
   `path` under `[[databases]]`, `[[flow-synonyms]]`, `[[compartment-mappings]]`,
   `[[units]]`, `[[energy-densities]]` or `geographies` was read next to the
