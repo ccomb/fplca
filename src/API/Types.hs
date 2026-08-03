@@ -1175,7 +1175,20 @@ data ExchangeEditRequest = ExchangeEditRequest
     , eerAddWasteOutputs :: [WasteOutputAPI]
     }
     deriving (Generic)
-    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeEditRequest)
+    deriving (ToJSON, ToSchema) via (Stripped ExchangeEditRequest)
+
+{- | A list left unstated is a list of nothing — a document that only removes
+a line should not have to say four times that it does nothing else. The
+assistant tool already reads its arguments this way.
+-}
+instance FromJSON ExchangeEditRequest where
+    parseJSON = withObject "ExchangeEditRequest" $ \o ->
+        ExchangeEditRequest
+            <$> o .:? "remove" .!= []
+            <*> o .:? "setAmounts" .!= []
+            <*> o .:? "addInputs" .!= []
+            <*> o .:? "addBiosphere" .!= []
+            <*> o .:? "addWasteOutputs" .!= []
 
 {- | What an inventory edit produced: one count per selector, in the order the
 selectors were stated. A caller that meant to drop one line and reads three

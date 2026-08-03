@@ -482,8 +482,8 @@ class TestEditExchanges:
         body = session.post.call_args[1]["json"]
         assert body["remove"] == [{"kind": "biosphere", "flow": "f-1"}]
         assert body["addInputs"] == [{"provider": "c_d", "amount": 2.5}]
-        # All five lists travel even when empty: the engine's decoder requires
-        # every key, and a missing one turns the whole edit into a 400.
+        # All five lists travel even when empty. The engine reads an absent
+        # list as empty; sending them all keeps the body one canonical shape.
         assert body["setAmounts"] == []
         assert body["addBiosphere"] == []
         assert body["addWasteOutputs"] == []

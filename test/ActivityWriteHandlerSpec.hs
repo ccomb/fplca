@@ -16,6 +16,7 @@ module ActivityWriteHandlerSpec (spec) where
 
 import Control.Concurrent.STM (atomically, modifyTVar')
 import Control.Monad (void)
+import Data.Aeson (decode)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
@@ -231,6 +232,21 @@ editingSpec = describe "editing an activity's exchanges over HTTP" $ do
                     eepRemoved report `shouldBe` [1]
                     eepAdded report `shouldBe` 0
                     eepTransient report `shouldBe` False
+
+    it "reads a document that states only the lists it uses" $
+        -- The same leniency the assistant tool has: a document that only
+        -- removes a line does not say four times that it does nothing else.
+        case decode "{\"remove\":[{\"kind\":\"biosphere\",\"flow\":\"f-1\"}]}" of
+            Nothing -> expectationFailure "expected the document to be read"
+            Just req -> do
+                map esKind (eerRemove req) `shouldBe` ["biosphere"]
+                let unstated =
+                        [ length (eerSetAmounts req)
+                        , length (eerAddInputs req)
+                        , length (eerAddBiosphere req)
+                        , length (eerAddWasteOutputs req)
+                        ]
+                unstated `shouldBe` [0, 0, 0, 0]
 
     it "reports each part of an edit separately" $
         withWritableDb $ \env -> do
