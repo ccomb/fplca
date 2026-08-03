@@ -23,7 +23,7 @@ import Data.Aeson
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (asum)
-import Data.List (intercalate, sortBy, sortOn)
+import Data.List (intercalate, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -2267,18 +2267,13 @@ The 'ffQuery' is always present (callers short-circuit on the no-query
 case); language filtering is not yet implemented.
 -}
 searchFlowsInternal :: Database -> Service.FlowFilter -> AppM (SearchResults FlowSearchResult)
-searchFlowsInternal db Service.FlowFilter{Service.ffQuery = query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam, Service.ffSort = sortParam, Service.ffOrder = orderParam} = do
+searchFlowsInternal db ff@Service.FlowFilter{Service.ffQuery = query, Service.ffLimit = limitParam, Service.ffOffset = offsetParam} =
     -- Language filtering not yet implemented, search all synonyms
-    let flows = findFlowsBySynonym db query
-        unitOf = flowKindUnitName (dbUnits db)
-        allResults = [FlowSearchResult (flowKindId flow) (flowKindName flow) (flowKindCategory flow) (unitOf flow) (M.map S.toList (flowKindSynonyms flow)) | flow <- flows]
-        isDesc = orderParam == Just "desc"
-        fsCmp = case sortParam of
-            Just "category" -> \a b -> compare (fsrCategory a) (fsrCategory b)
-            Just "unit" -> \a b -> compare (fsrUnitName a) (fsrUnitName b)
-            _ -> \a b -> compare (fsrName a) (fsrName b)
-        sorted = sortBy (if isDesc then flip fsCmp else fsCmp) allResults
-    liftIO $ paginateResults sorted limitParam offsetParam
+    liftIO $
+        paginateResults
+            (Service.flowSearchResults (dbUnits db) ff (findFlowsBySynonym db query))
+            limitParam
+            offsetParam
 
 -- | Proxy for the API
 lcaAPI :: Proxy LCAAPI

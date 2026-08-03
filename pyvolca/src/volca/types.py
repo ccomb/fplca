@@ -555,15 +555,18 @@ class Activity(FromJson):
 class Flow(FromJson):
     """A technosphere product or biosphere flow as returned by /flows.
 
-    Mirrors the server's :code:`FlowSearchResult`. ``synonyms`` maps
-    language code → list of synonym strings (empty when the database
-    carries no synonym index).
+    Mirrors the server's :code:`FlowSearchResult`. ``category`` is the
+    medium alone ("soil"); ``compartment`` is the sub-compartment
+    ("agricultural"), which is often all that tells two same-named flows
+    apart. ``synonyms`` maps language code → list of synonym strings
+    (empty when the database carries no synonym index).
     """
 
     id: str
     name: str
     category: str
     unit_name: str
+    compartment: str | None = None
     synonyms: dict[str, list[str]] = field(default_factory=dict)
 
 

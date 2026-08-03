@@ -57,6 +57,13 @@
   delete response says so with two fields, `transient` and `warnings`.
 
 ### Fixed
+- A flow search now tells same-named flows apart. Agribalyse 3.2 carries seven
+  `Deltamethrin` flows that differ only by compartment; a search returned seven
+  rows with the same name, medium and unit, in an order that interleaved them.
+  Each result now carries its sub-compartment in a `compartment` field, next to
+  `category`, which has always held the medium alone, and every sort order
+  continues through the remaining displayed columns, so flows that look alike
+  arrive adjacent and ordered instead of scattered.
 - An uploaded database whose `meta.toml` recorded a path containing a backslash
   or a quote came back with that character doubled. The file escapes them as
   its format requires and nothing undid it on the way back, which on Windows

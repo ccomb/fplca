@@ -607,6 +607,16 @@ flowKindCategory (TechKind _) = ""
 flowKindCategory (BioKind f) = bfCompartmentName f
 flowKindCategory (WasteKind _) = ""
 
+{- | Sub-compartment projection, the companion of 'flowKindCategory'. Two
+biosphere flows of the same name and medium are told apart by this alone
+(e.g. @soil / agricultural@ vs @soil / forestry@), so a flat list view that
+drops it shows what look like duplicate rows.
+-}
+flowKindCompartmentSub :: FlowKind -> Maybe Text
+flowKindCompartmentSub (TechKind _) = Nothing
+flowKindCompartmentSub (BioKind f) = bfCompartmentSub f
+flowKindCompartmentSub (WasteKind _) = Nothing
+
 -- | Unit-id accessor — for unit-name lookup against the 'UnitDB'.
 flowKindUnitId :: FlowKind -> UUID
 flowKindUnitId (TechKind f) = tfUnitId f
