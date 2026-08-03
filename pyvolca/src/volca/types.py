@@ -2117,7 +2117,7 @@ class ExchangeSelector:
                 )
         elif self.provider is None or self.flow is not None:
             raise ValueError(
-                f"an {self.kind} selector names its provider (provider=...), and nothing else"
+                f"a selector of kind {self.kind} names its provider (provider=...), and nothing else"
             )
 
     @classmethod

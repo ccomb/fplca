@@ -1896,7 +1896,7 @@ toSelector es = case (T.toLower (T.strip (esKind es)), esProvider es, esFlow es)
         maybe (Left ["not a flow identifier: " <> flowId]) (Right . SelectBiosphere) (UUID.fromText flowId)
     (kind, _, _)
         | kind `elem` ["input", "waste"] ->
-            Left ["an " <> kind <> " selector names its provider, and nothing else"]
+            Left ["a selector of kind " <> kind <> " names its provider, and nothing else"]
         | kind == "biosphere" ->
             Left ["a biosphere selector names its flow, and nothing else"]
         | otherwise ->
