@@ -1269,7 +1269,10 @@ uploadMetaToConfig slug dirPath meta =
     DatabaseConfig
         { dcName = slug
         , dcDisplayName = UploadedDB.umDisplayName meta
-        , dcPath = dirPath </> UploadedDB.umDataPath meta -- Full path to data
+        , -- Full path to data. An upload's path is relative to its home; a
+          -- copy's is absolute (it names the source's files), and '</>'
+          -- returns an absolute right operand as it is.
+          dcPath = dirPath </> UploadedDB.umDataPath meta
         , dcDescription = UploadedDB.umDescription meta
         , dcLoad = False -- Never auto-load uploads
         , dcDefault = False

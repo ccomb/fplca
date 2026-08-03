@@ -44,7 +44,7 @@ module Database.Edit (
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
-import Control.Exception (finally)
+import Control.Exception (SomeException, finally, try)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
@@ -143,35 +143,43 @@ copyDatabase manager srcName newName = do
 
 {- | Build the copy's solver/index and insert it under @slug@. Caller holds the
 'dmStagingDbs' reservation for @slug@.
+
+The home is written before anything is registered: a copy that cannot be
+recorded on disk would work until the restart and then be gone, which is the
+kind of quiet loss this ordering exists to refuse. Nothing after the write can
+fail into an inconsistent state — the registry swap is a pure STM commit.
 -}
 registerCopy :: DatabaseManager -> Text -> LoadedDatabase -> IO (Either Text ())
-registerCopy manager slug src = do
-    let copiedDb = ldDatabase src
-        newConfig = renameConfig slug (ldConfig src)
-        -- Fresh solver: a distinct name keys a distinct factorization cache.
-        techTriplesInt =
-            [ (fromIntegral i, fromIntegral j, v)
-            | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
-            ]
-    solver <-
-        createSharedSolver
-            slug
-            techTriplesInt
-            (fromIntegral (dbActivityCount copiedDb))
-    synonymDB <- getMergedSynonymDB manager
-    let copied =
-            LoadedDatabase
-                { ldDatabase = copiedDb
-                , ldSharedSolver = solver
-                , ldConfig = newConfig
-                }
-        indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
-    atomically $ do
-        modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
-        modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
-        modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
-    clearMethodMappingCacheForDb manager slug
-    Right <$> recordCopy slug src
+registerCopy manager slug src =
+    recordCopy slug src >>= \case
+        Left err -> pure (Left err)
+        Right () -> do
+            let copiedDb = ldDatabase src
+                newConfig = renameConfig slug (ldConfig src)
+                -- Fresh solver: a distinct name keys a distinct factorization cache.
+                techTriplesInt =
+                    [ (fromIntegral i, fromIntegral j, v)
+                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
+                    ]
+            solver <-
+                createSharedSolver
+                    slug
+                    techTriplesInt
+                    (fromIntegral (dbActivityCount copiedDb))
+            synonymDB <- getMergedSynonymDB manager
+            let copied =
+                    LoadedDatabase
+                        { ldDatabase = copiedDb
+                        , ldSharedSolver = solver
+                        , ldConfig = newConfig
+                        }
+                indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
+                modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
+                modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
+            clearMethodMappingCacheForDb manager slug
+            pure (Right ())
 
 {- | Give the copy a home: a directory of its own holding the @meta.toml@ that
 describes it and, once it is edited, its journal.
@@ -182,32 +190,32 @@ source's own files, which the copy reads and never writes, and @source@ names
 whose they are so a delete can refuse to take files a copy still needs. That
 is what makes a copy cost a directory rather than a second database.
 -}
-recordCopy :: Text -> LoadedDatabase -> IO ()
+recordCopy :: Text -> LoadedDatabase -> IO (Either Text ())
 recordCopy slug src = do
-    uploadsDir <- UploadedDB.getDatabaseUploadsDir
-    let home = uploadsDir </> T.unpack slug
-        config = ldConfig src
-    createDirectoryIfMissing True home
-    -- The source's path may be relative to the working directory, while the
-    -- copy's is read back relative to its own home.
-    sourcePath <- makeAbsolute (dcPath config)
-    UploadedDB.writeUploadMeta
-        home
-        UploadedDB.UploadMeta
-            { UploadedDB.umVersion = metaVersion
-            , UploadedDB.umDisplayName = slug
-            , UploadedDB.umDescription = dcDescription config
-            , UploadedDB.umFormat = fromMaybe UnknownFormat (dcFormat config)
-            , UploadedDB.umDataPath = sourcePath
-            , UploadedDB.umDepends = dbDependsOn (ldDatabase src)
-            , UploadedDB.umSource = Just (dcName config)
-            }
-
-{- | The @meta.toml@ shape this engine writes. Version 3 added @source@, which
-is what tells a copy from an upload.
--}
-metaVersion :: Int
-metaVersion = 3
+    written <- try $ do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        let home = uploadsDir </> T.unpack slug
+            config = ldConfig src
+        createDirectoryIfMissing True home
+        -- The source's path may be relative to the working directory, while
+        -- the copy's is read back from its own home; 'uploadMetaToConfig'
+        -- keeps an absolute path as it is.
+        sourcePath <- makeAbsolute (dcPath config)
+        UploadedDB.writeUploadMeta
+            home
+            UploadedDB.UploadMeta
+                { UploadedDB.umVersion = UploadedDB.metaVersion
+                , UploadedDB.umDisplayName = slug
+                , UploadedDB.umDescription = dcDescription config
+                , UploadedDB.umFormat = fromMaybe UnknownFormat (dcFormat config)
+                , UploadedDB.umDataPath = sourcePath
+                , UploadedDB.umDepends = dbDependsOn (ldDatabase src)
+                , UploadedDB.umSource = Just (dcName config)
+                }
+    pure $ case written of
+        Right () -> Right ()
+        Left (err :: SomeException) ->
+            Left $ "could not record the copy " <> slug <> ": " <> T.pack (show err)
 
 {- | Rename a config for the copy: new internal name, derived display name, and
 forced deletable/uploaded so the copy can be removed again via the normal
