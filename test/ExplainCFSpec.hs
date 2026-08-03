@@ -10,6 +10,7 @@ guess, for the cases the cascade exists to get right.
 -}
 module ExplainCFSpec (spec) where
 
+import Data.Foldable (for_)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -314,6 +315,62 @@ spec = do
             case ceResolution explained of
                 ConversionRefused _ (DimensionalMismatch "kg" "m3") -> pure ()
                 other -> expectationFailure ("expected a refused conversion, got " <> show other)
+
+    describe "flowMatchKind (the recorded answer agrees with the replay)" $ do
+        -- 'mtResolution' is recorded when the broadcast vector is filled;
+        -- 'explainFlowCF' replays the cascade on demand. Two paths to one
+        -- answer: pin them together, or a recording bug would annotate a
+        -- whole contributions table with a rung the full explanation then
+        -- contradicts.
+        let replayedKind cfg tables f = case ceResolution (explainOf cfg tables f) of
+                Characterized m _ -> Just (rungName (cmRung m))
+                ConversionRefused m _ -> Just (rungName (cmRung m))
+                Uncharacterized -> Nothing
+            agreesFor cfg densities mappings flows =
+                let tables =
+                        fillBroadcastVector cfg unitDB (flowDBOf flows) $
+                            buildMethodTables OtherCFFamily M.empty densities mappings
+                 in for_ flows $ \f ->
+                        (bfName f, flowMatchKind tables (bfId f))
+                            `shouldBe` (bfName f, replayedKind cfg tables f)
+
+        it "agrees for a direct hit" $ do
+            let flow = flowIn 20 "Methane, fossil" "air" Nothing
+            agreesFor defaultUnitConfig M.empty [(cfLine "Methane, fossil" "" "kg" 29.8, Just (flow, ByUUID))] [flow]
+
+        it "agrees under the sea-water veto, factor served and factor withheld" $ do
+            let ocean = flowIn 21 "Water" "water" (Just "ocean")
+                fresh = flowIn 22 "Water" "water" Nothing
+            agreesFor
+                defaultUnitConfig
+                M.empty
+                [ (waterLine "Water" "" 1.0, Just (fresh, ByName))
+                , (waterLine "Sea water" "ocean" 0.0, Nothing)
+                ]
+                [ocean, fresh]
+
+        it "agrees when the energy family refuses to guess" $ do
+            let coal = flowIn 23 "Coal, 18 MJ per kg" "resource" Nothing
+                hard = flowIn 24 "Coal, hard" "resource" Nothing
+                brown = flowIn 25 "Coal, brown" "resource" Nothing
+                densities =
+                    M.fromList
+                        [ (normalizeName "Coal, hard", EnergyDensity 18.0 "MJ" "kg")
+                        , (normalizeName "Coal, brown", EnergyDensity 9.0 "MJ" "kg")
+                        ]
+            agreesFor
+                defaultUnitConfig
+                densities
+                [ (resourceLine "Coal, hard" "MJ" 1.0, Just (hard, ByName))
+                , (resourceLine "Coal, brown" "MJ" 2.0, Just (brown, ByName))
+                ]
+                [coal, hard, brown]
+
+        it "agrees for a factor found but refused on units" $ do
+            -- The refused flow must still annotate: it scores 0, but its
+            -- match kind is the rung that found the factor, not "none".
+            let flow = flowIn 26 "Water" "resource" Nothing
+            agreesFor volumeMassConfig M.empty [(resourceLine "Water" "m3" 42.95, Just (flow, ByName))] [flow]
   where
     -- kg and m3 known but dimensionally apart, so the pair is a mismatch.
     volumeMassConfig =
