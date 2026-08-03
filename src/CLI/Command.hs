@@ -358,7 +358,7 @@ executeDbUpload fmt manager args = do
 
             let meta =
                     UploadedDB.UploadMeta
-                        { UploadedDB.umVersion = 1
+                        { UploadedDB.umVersion = UploadedDB.metaVersion
                         , UploadedDB.umDisplayName = uaName args
                         , UploadedDB.umDescription = uaDescription args
                         , UploadedDB.umFormat = urFormat uploadResult
@@ -426,7 +426,7 @@ executeMcUpload fmt manager args = do
 
             let meta =
                     UploadedDB.UploadMeta
-                        { UploadedDB.umVersion = 1
+                        { UploadedDB.umVersion = UploadedDB.metaVersion
                         , UploadedDB.umDisplayName = uaName args
                         , UploadedDB.umDescription = uaDescription args
                         , UploadedDB.umFormat = urFormat uploadResult

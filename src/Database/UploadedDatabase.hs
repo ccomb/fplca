@@ -7,6 +7,7 @@ module Database.UploadedDatabase (
     -- * Types
     UploadMeta (..),
     DatabaseFormat (..),
+    metaVersion,
 
     -- * Meta file operations
     readUploadMeta,
@@ -64,6 +65,14 @@ data UploadMeta = UploadMeta
     -}
     }
     deriving (Show, Eq, Generic)
+
+{- | The @meta.toml@ shape this engine writes, stamped by every writer.
+Version 3 added @source@, which is what tells a copy from an upload. The
+parser reads every version, taking absent fields to mean what their absence
+meant when they did not exist.
+-}
+metaVersion :: Int
+metaVersion = 3
 
 -- | Name of the metadata file in each upload directory
 metaFileName :: FilePath
