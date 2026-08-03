@@ -36,6 +36,12 @@
   delete response now says so with two new fields, `transient` and `warnings`.
 
 ### Fixed
+- A regionalized factor now comes from the method's most specific line, not from
+  whichever line the file happened to list last. When a method writes both a
+  medium-level factor and one naming the flow's own subcompartment, and both
+  carry a location, the two used to collide and the later row won: reordering
+  the same file changed the score. The line that names the subcompartment wins,
+  and between two of the same kind the larger factor does, as everywhere else.
 - An emission to the sea is now characterized by an impact category that writes
   no sea-water factor of its own. A method file spells out a subcompartment only
   when its factor differs from the medium-level ("unspecified") one, so a

@@ -1136,6 +1136,15 @@ heuristic/expanded): when two CFs collide on one flow or table key, the lower
 rank — the more discriminating match — wins. Exported so diagnostics dedup
 with the same preference the score tables use.
 -}
+
+{- | How a CF's own subcompartment met the flow's: by naming it, or by naming
+none at all and standing as the method's medium-level default. Only
+'mtRegionalizedCF' needs to tell the two apart, because it is the one table
+where both compete for a single key.
+-}
+data SubMatch = ExactSub | MediumLevelSub
+    deriving (Eq, Show)
+
 strategyPriority :: MatchStrategy -> Int
 strategyPriority ByUUID = 0
 strategyPriority ByName = 1
@@ -1339,12 +1348,14 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             -- ByName/synonym fan-out and clobbers the correct (unspecified)
             -- fallback CF. CFs with no specific subcomp ('isUnspecifiedSub')
             -- are wildcards and match any flow subcomp.
-            M.fromList
-                [ ((bfId flow, Location loc), cfOf cf)
-                | (cf, Just (flow, _)) <- mappings
-                , cfSubcompMatchesFlow cf flow
-                , Just loc <- [mcfConsumerLocation cf]
-                ]
+            M.map snd $
+                M.fromListWith
+                    preferRegional
+                    [ ((bfId flow, Location loc), (m, cfOf cf))
+                    | (cf, Just (flow, _)) <- mappings
+                    , Just m <- [cfSubcompMatchesFlow cf flow]
+                    , Just loc <- [mcfConsumerLocation cf]
+                    ]
         , mtCFFamily = methodFamily
         , mtSeaWaterCFs = seaWaterCFs
         , mtCompartmentMap = cmap
@@ -1444,7 +1455,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     -- 'compartmentSub' field, fall back to the tail of "<medium>/<sub>"
     -- parsed from the compartment name.
     cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
-        Nothing -> True
+        Nothing -> Just MediumLevelSub
         Just comp ->
             let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
                 !cfSubN = T.toLower (T.strip cfSubRaw)
@@ -1464,9 +1475,28 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                 -- non-regional path — both tiers: a foreign medium (sea/ocean)
                 -- never borrows a freshwater CF, and long-term groundwater
                 -- borrows no surface USEtox CF. An explicit same-sub CF still
-                -- matches.
-                (isUnspecifiedSub cfSubN && wildcardReachesSub methodFamily seaWaterCFs (Subcompartment flowSubN))
-                    || cfSubN == flowSubN
+                -- matches, and says so, because the two are ranked against each
+                -- other when both land on one (flow, location).
+                subMatch cfSubN flowSubN
+
+    subMatch cfSubN flowSubN
+        | cfSubN == flowSubN = Just ExactSub
+        | isUnspecifiedSub cfSubN
+        , wildcardReachesSub methodFamily seaWaterCFs (Subcompartment flowSubN) =
+            Just MediumLevelSub
+        | otherwise = Nothing
+
+    -- Rank two CFs competing for one (flow, location) key. 'mtRegionalizedCF' is
+    -- the only table where an exact-subcompartment CF and a medium-level one
+    -- compete at all: 'mtExactCF' and 'mtFallbackCF' are kept apart by
+    -- construction and the read cascade orders them. Here both land on the same
+    -- key, so without a rank the winner is whichever row the method file listed
+    -- last. The method's more specific line wins; between two of the same kind,
+    -- the larger factor, as everywhere else in this module.
+    preferRegional a@(mA, CF va _) b@(mB, CF vb _)
+        | mA /= mB = if mA == ExactSub then a else b
+        | abs va >= abs vb = a
+        | otherwise = b
 
     -- Rank colliding CFs for one name key: better match strategy first, then a
     -- CF whose own (raw) flow name equals the matched DB flow's name — when
