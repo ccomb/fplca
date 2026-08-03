@@ -452,13 +452,37 @@ spec = do
             M.lookup (fid, Location "DE") (mtRegionalizedCF tUnspec) `shouldBe` Just (CF 7.0 (CFUnit "kg"))
             M.lookup (fid, Location "DE") (mtRegionalizedCF tUnspecBare) `shouldBe` Just (CF 9.0 (CFUnit "kg"))
 
+        it "prefers the CF that names the flow's subcompartment, whatever the row order" $ do
+            -- Both a medium-level CF and an exact-subcompartment one apply to a
+            -- river flow, and both land on the same (flow, location) key. The
+            -- method's more specific line is the answer; before this was ranked,
+            -- the winner was whichever row the file happened to list last.
+            let fid = mkUuid 134
+                uidKg = mkUuid 200
+                flowRiver =
+                    (mkFlow fid "water" uidKg)
+                        { bfCompartment = Just (VT.Compartment "water" (Just "river"))
+                        }
+                cfAt sub value =
+                    (mkCF fid value)
+                        { mcfFlowName = "water"
+                        , mcfCompartment = Just (Compartment "water" sub "")
+                        , mcfConsumerLocation = Just "DE"
+                        }
+                tablesFrom rows =
+                    mtRegionalizedCF (buildMethodTables OtherCFFamily M.empty M.empty rows)
+                medium = (cfAt "(unspecified)" 7.0, Just (flowRiver, ByName))
+                exact = (cfAt "river" 3.0, Just (flowRiver, ByName))
+            M.lookup (fid, Location "DE") (tablesFrom [medium, exact])
+                `shouldBe` Just (CF 3.0 (CFUnit "kg"))
+            M.lookup (fid, Location "DE") (tablesFrom [exact, medium])
+                `shouldBe` Just (CF 3.0 (CFUnit "kg"))
+
         it "does not let a wildcard CF reach a sea/ocean flow (foreign medium)" $ do
             -- A freshwater CF must not characterize a sea-water release via the
             -- regionalized wildcard. The method says so itself: EF writes a
             -- sea-water factor of its own, and that line — not the freshwater
-            -- one — is what a release to the sea gets. Ranking colliding CFs
-            -- keeps the larger value, so without the gate the 7.0 would beat
-            -- the method's own sea line.
+            -- one — is what a release to the sea gets.
             let fid = mkUuid 130
                 uidKg = mkUuid 200
                 flowOcean =
