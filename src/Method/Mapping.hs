@@ -2209,7 +2209,7 @@ data RungId
     deriving (Eq, Show, Enum, Bounded)
 
 {- | Why a wildcard rung refused a flow's subcompartment — the two tiers of
-'wildcardReachesSub'.
+'wildcardVeto'.
 -}
 data VetoReason = ForeignMediumVeto | LongTermUSEtoxVeto
     deriving (Eq, Show)
@@ -2288,13 +2288,8 @@ cascadeTrail tables flowDB fid =
         -- surface water, so the method characterizes it). An explicit
         -- exact-sub CF and the method's own long-term default are never
         -- gated.
-        reachable = wildcardReachesSub (mtCFFamily tables) (mtSeaWaterCFs tables) normSub
-        veto
-            | mtSeaWaterCFs tables == MethodDeclaresSeaWater && isForeignMediumSub normSub = ForeignMediumVeto
-            | otherwise = LongTermUSEtoxVeto
-        gated r
-            | reachable = plain r
-            | otherwise = RungVetoed veto
+        mVeto = wildcardVeto (mtCFFamily tables) (mtSeaWaterCFs tables) normSub
+        gated r = maybe (plain r) RungVetoed mVeto
 
         -- 'mtUnitVariantCF' is empty for every method whose factor lines
         -- carry no unit suffix — the common case — and 'M.lookup' is strict
@@ -2329,9 +2324,9 @@ cascadeTrail tables flowDB fid =
         -- suffix with this same 'extractLocationSuffix' before looking a density
         -- up: whatever name lends the factor must also lend the density, or the
         -- flow holds a factor it cannot be converted to and scores 0.
-        regionOutcome
-            | not reachable = RungVetoed veto
-            | otherwise = case extractLocationSuffix (bfName flow) of
+        regionOutcome = case mVeto of
+            Just veto -> RungVetoed veto
+            Nothing -> case extractLocationSuffix (bfName flow) of
                 (base, Just _) -> plain (regionLookupAt base)
                 (_, Nothing) -> RungNotApplicable
         regionLookupAt base =
@@ -2469,15 +2464,21 @@ isDetachedSub (Subcompartment s) = "groundwater" `T.isPrefixOf` s
 isForeignMediumSub :: Subcompartment -> Bool
 isForeignMediumSub (Subcompartment s) = s == "ocean"
 
-{- | Whether a medium-level (wildcard / fallback) CF may reach the given
-subcompartment — both tiers above, combined. Shared by the read-path
-'lookupCascadeCF' gate and the build-time regionalized wildcard match so the
-two scoring paths apply the same rule and can't drift.
+{- | The veto a medium-level (wildcard / fallback) CF meets at the given
+subcompartment, or 'Nothing' when it reaches — both tiers above, decided in
+one place. Shared by the read-path cascade gate (which also reports the
+reason in a trail) and the build-time regionalized wildcard match, so the
+two scoring paths apply the same rule, under the same name, and can't drift.
 -}
+wildcardVeto :: CFFamily -> SeaWaterCFs -> Subcompartment -> Maybe VetoReason
+wildcardVeto family seaWater sub
+    | seaWater == MethodDeclaresSeaWater && isForeignMediumSub sub = Just ForeignMediumVeto
+    | isDetachedSub sub && isLongTermSub sub && family == USEtoxFamily = Just LongTermUSEtoxVeto
+    | otherwise = Nothing
+
+-- | 'wildcardVeto' for the caller that only asks whether the CF reaches.
 wildcardReachesSub :: CFFamily -> SeaWaterCFs -> Subcompartment -> Bool
-wildcardReachesSub family seaWater sub =
-    not (seaWater == MethodDeclaresSeaWater && isForeignMediumSub sub)
-        && not (isDetachedSub sub && isLongTermSub sub && family == USEtoxFamily)
+wildcardReachesSub family seaWater = isNothing . wildcardVeto family seaWater
 
 {- | A subcompartment that names the long-term catch-all: @"unspecified
 (long-term)"@, @"(long-term)"@ — i.e. unspecified once the time-horizon marker is
