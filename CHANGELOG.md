@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- You can adjust what an activity consumes and emits without re-describing it.
+  `POST /api/v1/db/{db}/activity/{process-id}/exchanges`, `volca database
+  edit-exchanges`, `edit_exchanges` in pyvolca and the same tool for an
+  assistant all take the same short list: lines to remove, lines to restate,
+  lines to add. This reaches activities that writing could not. An activity a
+  database file brought in has an identity its parser minted, so no description
+  addresses it — and a description could not carry back its classification,
+  synonyms, parameters, pedigree or coproducts anyway. Naming only what changes
+  leaves all of that exactly as it was. A line is named the way you already
+  read it: an input by its provider, a waste output by its treatment, an
+  emission by its flow. The reference product and any coproduct are out of
+  reach, because changing those changes what the activity is. If a selector
+  matches nothing, the edit is refused rather than reported as done; if it
+  matches several lines, all of them change and the answer says how many. As
+  with writing, a database the engine reads from its configuration is refused:
+  copy it first. This is wire revision 7.
+
 - You can ask why a flow scores with the characterization factor it does.
   `GET /api/v1/db/{db}/method/{method}/explain-cf/{flow}` and the `explain_cf`
   MCP tool replay the factor lookup for one flow and answer in sentences the
