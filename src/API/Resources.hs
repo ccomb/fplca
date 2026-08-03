@@ -399,7 +399,12 @@ description r = case r of
         \elementary flows. Answers 'empreinte carbone / environmental footprint' \
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
-        \over web estimates for grounded, database-backed answers."
+        \over web estimates for grounded, database-backed answers. Each \
+        \contributing flow carries 'match_kind' — how its factor was found, in \
+        \the rung names documented on explain_cf; null means the method's \
+        \tables never walked this flow (it arrived from a dependency database), \
+        \not that it is uncharacterized. Ask explain_cf for the full story on \
+        \one flow."
             <> webUrlTip "impacts"
     ComputeSensitivity ->
         "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
@@ -444,12 +449,28 @@ description r = case r of
         \family factor per unit of energy, bridged by the flow's calorific \
         \value), 'ore_base_element' (the base element of a graded ore). \
         \'steps_tried' lists the rungs tried before that one, including any \
-        \refused by a subcompartment veto."
+        \refused by a subcompartment veto. 'match.unitConversion' names the \
+        \bridge that carried the amount onto the factor's basis: 'same_unit', \
+        \'unknown_unit' (the flow's unit is not in the unit table, so the \
+        \amount passed as declared), 'unit_converted', \
+        \'normalized_to_base_unit' (the factor is written as a result \
+        \expression like 'kg CO2 eq', so the amount was brought to the flow's \
+        \base unit), 'energy_content' (carried across dimensions by the flow's \
+        \energy density). 'match.refusal' names why no bridge could: \
+        \'different_dimensions', 'no_base_unit', 'energy_bridge_failed'. A \
+        \vetoed step names its rule in 'veto': 'different_receiving_medium' \
+        \(the method writes sea-water lines and so meant to leave this foreign \
+        \medium out), 'long_term_groundwater' (a long-term groundwater \
+        \emission must not borrow a surface-fate factor)."
             <> webUrlTip "explain-cf"
     GetContributingFlows ->
         "LCA / ACV — identify which elementary flows (emissions/resources) \
         \contribute most to a specific impact category. Answers 'which emissions \
-        \drive my climate change score?'"
+        \drive my climate change score?'. Each flow carries 'match_kind' — how \
+        \its factor was found, in the rung names documented on explain_cf; null \
+        \means the method's tables never walked this flow (it arrived from a \
+        \dependency database), not that it is uncharacterized. Ask explain_cf \
+        \for the full story on one flow."
             <> webUrlTip "contributing-flows"
     GetContributingActivities ->
         "LCA / ACV — identify which upstream activities contribute most to a \

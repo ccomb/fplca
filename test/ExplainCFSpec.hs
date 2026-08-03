@@ -201,6 +201,33 @@ spec = do
                 undocumented = [o | o <- outcomes, not (o `T.isInfixOf` told)]
             undocumented `shouldBe` []
 
+        -- Bridges, refusals and vetoes reach clients the same way the rungs
+        -- do, so they earn the same guarantee. The lists are spelled out
+        -- because these constructors carry fields — a new one still cannot
+        -- ship unnamed ('bridgeName' and friends match exhaustively), only
+        -- undocumented, which is exactly what this pins.
+        it "documents every bridge, refusal and veto name in the tool description" $ do
+            let told = R.description R.ExplainCF
+                bridges =
+                    map
+                        bridgeName
+                        [ UnitsIdentical
+                        , UnitUnknown "kg"
+                        , UnitConverted "kg" "g"
+                        , NormalizedToBase "kg"
+                        , EnergyBridged (EnergyDensity 18.0 "MJ" "kg") DensityForward
+                        ]
+                refusals =
+                    map
+                        refusalName
+                        [ DimensionalMismatch "kg" "m3"
+                        , NoCanonicalBase "kg"
+                        , EnergyBridgeRefused (EnergyDensity 18.0 "MJ" "kg")
+                        ]
+                vetoes = map vetoName [ForeignMediumVeto, LongTermUSEtoxVeto]
+                undocumented = [n | n <- bridges ++ refusals ++ vetoes, not (n `T.isInfixOf` told)]
+            undocumented `shouldBe` []
+
     describe "explainFlowCF (replaying the cascade)" $ do
         it "reports the rung that answered and stops there" $ do
             let flow = flowIn 1 "Methane, fossil" "air" Nothing
