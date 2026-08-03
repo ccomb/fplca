@@ -23,6 +23,7 @@ import Config (
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.FilePath (normalise)
 import qualified TOML
 import Test.Hspec
 
@@ -211,21 +212,23 @@ spec = do
                     resolved = resolveConfigPaths (Just "/etc/volca/volca.toml") cfg
                 -- A method path used to follow the process while the database
                 -- path beside it followed the file. They move together now.
-                map dcPath (cfgDatabases resolved) `shouldBe` ["/etc/volca/agb.CSV"]
-                map mcPath (cfgMethods resolved) `shouldBe` ["/etc/volca/ef.zip"]
-                map rdPath (cfgFlowSynonyms resolved) `shouldBe` ["/etc/volca/flows.csv"]
-                map rdPath (cfgCompartmentMappings resolved) `shouldBe` ["/etc/volca/compartments.csv"]
-                map rdPath (cfgUnits resolved) `shouldBe` ["/etc/volca/units.csv"]
-                map rdPath (cfgEnergyDensities resolved) `shouldBe` ["/etc/volca/energy.csv"]
-                cfgGeographies resolved `shouldBe` Just "/etc/volca/geographies.csv"
-                cfgChemSynonyms resolved `shouldBe` Just "/etc/volca/chem.csv"
-                cfgSubstanceEdges resolved `shouldBe` Just "/etc/volca/edges.csv"
+                -- Expected values go through 'normalise' too: on Windows the
+                -- resolver emits backslashes.
+                map dcPath (cfgDatabases resolved) `shouldBe` [normalise "/etc/volca/agb.CSV"]
+                map mcPath (cfgMethods resolved) `shouldBe` [normalise "/etc/volca/ef.zip"]
+                map rdPath (cfgFlowSynonyms resolved) `shouldBe` [normalise "/etc/volca/flows.csv"]
+                map rdPath (cfgCompartmentMappings resolved) `shouldBe` [normalise "/etc/volca/compartments.csv"]
+                map rdPath (cfgUnits resolved) `shouldBe` [normalise "/etc/volca/units.csv"]
+                map rdPath (cfgEnergyDensities resolved) `shouldBe` [normalise "/etc/volca/energy.csv"]
+                cfgGeographies resolved `shouldBe` Just (normalise "/etc/volca/geographies.csv")
+                cfgChemSynonyms resolved `shouldBe` Just (normalise "/etc/volca/chem.csv")
+                cfgSubstanceEdges resolved `shouldBe` Just (normalise "/etc/volca/edges.csv")
 
         it "leaves an absolute path alone" $
             withParsed $ \_ method -> do
                 let cfg = defaultConfig{cfgMethods = [method{mcPath = "/srv/methods/ef.zip"}]}
                 map mcPath (cfgMethods (resolveConfigPaths (Just "/etc/volca/volca.toml") cfg))
-                    `shouldBe` ["/srv/methods/ef.zip"]
+                    `shouldBe` [normalise "/srv/methods/ef.zip"]
 
         it "falls back to the process directory when there is no config file" $
             withParsed $ \_ method -> do
@@ -238,7 +241,7 @@ spec = do
             let cfg = defaultConfig{cfgFlowSynonyms = [mkRef "data/flows.csv"]}
                 bundled = applyDataDir (Just "/opt/volca/data") cfg
             map rdPath (cfgFlowSynonyms (resolveConfigPaths (Just "/etc/volca/volca.toml") bundled))
-                `shouldBe` ["/opt/volca/data/flows.csv"]
+                `shouldBe` [normalise "/opt/volca/data/flows.csv"]
 
     describe "loadConfigOrDefault" $ do
         it "yields the validated defaults when no path is given" $ do
