@@ -1131,12 +1131,6 @@ expandProxyEdges targets edges mappings =
     flowsMatching (SR.ByCAS (SR.CASNumber c)) = M.findWithDefault [] c (ptByCAS targets)
     flowsMatching (SR.ByUUID (SR.FlowUUID u)) = maybe [] pure (M.lookup u (ptByUUID targets))
 
-{- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
-heuristic/expanded): when two CFs collide on one flow or table key, the lower
-rank — the more discriminating match — wins. Exported so diagnostics dedup
-with the same preference the score tables use.
--}
-
 {- | How a CF's own subcompartment met the flow's: by naming it, or by naming
 none at all and standing as the method's medium-level default. Only
 'mtRegionalizedCF' needs to tell the two apart, because it is the one table
@@ -1145,6 +1139,11 @@ where both compete for a single key.
 data SubMatch = ExactSub | MediumLevelSub
     deriving (Eq, Show)
 
+{- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
+heuristic/expanded): when two CFs collide on one flow or table key, the lower
+rank — the more discriminating match — wins. Exported so diagnostics dedup
+with the same preference the score tables use.
+-}
 strategyPriority :: MatchStrategy -> Int
 strategyPriority ByUUID = 0
 strategyPriority ByName = 1
