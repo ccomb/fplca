@@ -119,6 +119,10 @@ spec = do
             cmd <- parseCmd ["database", "delete", "ecoinvent"]
             cmd `shouldBe` Database (DbDelete "ecoinvent")
 
+        it "parses `database edit-exchanges DB --process-id PID --from FILE`" $ do
+            cmd <- parseCmd ["database", "edit-exchanges", "mine", "--process-id", "a_b", "--from", "edits.json"]
+            cmd `shouldBe` Database (DbEditExchanges (DbActivityArgs "mine" "a_b" "edits.json"))
+
         it "parses `database upload FILE --name NAME`" $ do
             cmd <- parseCmd ["database", "upload", "db.7z", "--name", "My DB"]
             case cmd of

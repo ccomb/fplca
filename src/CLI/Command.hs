@@ -3,9 +3,9 @@
 
 module CLI.Command where
 
-import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivities)
+import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivities, toExchangeEdits)
 import CLI.Client (readJsonFile)
-import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbReplaceArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
+import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbActivityArgs (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson (Value, encode, object, toJSON, (.=))
@@ -22,10 +22,12 @@ import qualified Data.Vector as V
 import Database.Edit (
     DeleteOutcome (..),
     DeleteRequest (..),
+    EditReport (..),
     WriteReport (..),
     WriteVerb (..),
     copyDatabase,
     deleteActivitiesInDB,
+    editExchanges,
     refusalMessage,
     writeActivities,
  )
@@ -125,6 +127,8 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
             executeDbCreateActivities outputFormat manager args
         Database (DbReplaceActivity args) ->
             executeDbReplaceActivity outputFormat manager args
+        Database (DbEditExchanges args) ->
+            executeDbEditExchanges outputFormat manager args
         Method McList ->
             DM.listMethodCollections manager >>= out . toJSON
         Method (McUpload args) ->
@@ -528,12 +532,44 @@ executeDbCreateActivities fmt manager args = do
         Right req -> runWrite fmt manager (dwaDb args) CreateActivities (awrActivities req)
 
 -- | Rewrite one activity, addressed by the process id it already has.
-executeDbReplaceActivity :: OutputFormat -> DatabaseManager -> DbReplaceArgs -> IO ()
+executeDbReplaceActivity :: OutputFormat -> DatabaseManager -> DbActivityArgs -> IO ()
 executeDbReplaceActivity fmt manager args = do
-    activity <- readJsonFile (drpFile args)
+    activity <- readJsonFile (daFile args)
     case activity of
         Left err -> reportError err >> exitFailure
-        Right body -> runWrite fmt manager (drpDb args) (ReplaceActivity (drpProcessId args)) [body]
+        Right body -> runWrite fmt manager (daDb args) (ReplaceActivity (daProcessId args)) [body]
+
+{- | Change one activity's inventory, keeping everything else it carries.
+
+Reaches what a rewrite cannot: an activity a database file brought in, whose
+identity no description mints. The file is the same document the HTTP endpoint
+accepts, and the refusals are the same ones.
+-}
+executeDbEditExchanges :: OutputFormat -> DatabaseManager -> DbActivityArgs -> IO ()
+executeDbEditExchanges fmt manager args = do
+    request <- readJsonFile (daFile args)
+    case request >>= mapLeft (T.unpack . T.intercalate "\n") . toExchangeEdits of
+        Left err -> reportError err >> exitFailure
+        Right edits -> do
+            outcome <- editExchanges manager (daDb args) (daProcessId args) edits
+            case outcome of
+                Left refusal -> do
+                    reportError (T.unpack (refusalMessage refusal))
+                    exitFailure
+                Right report -> do
+                    mapM_ (reportProgress Warning . T.unpack) (erWarnings report)
+                    outputResult fmt $
+                        object
+                            [ "database" .= daDb args
+                            , "activity" .= daProcessId args
+                            , "removed" .= erRemoved report
+                            , "amountsSet" .= erAmountsSet report
+                            , "added" .= erAdded report
+                            , "transient" .= not (erPersisted report)
+                            , "warnings" .= erWarnings report
+                            ]
+  where
+    mapLeft f = either (Left . f) Right
 
 {- | Shared tail of both write commands: translate, write, and report. A
 refusal is printed and exits non-zero, so a script can tell a rejected batch
