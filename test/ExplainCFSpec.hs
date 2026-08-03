@@ -80,6 +80,10 @@ resourceLine :: Text -> Text -> Double -> MethodCF
 resourceLine name unit val =
     (cfLine name "" unit val){mcfCompartment = Just (Compartment "resource" "" "")}
 
+waterLine :: Text -> Text -> Double -> MethodCF
+waterLine name sub val =
+    (cfLine name sub "kg" val){mcfCompartment = Just (Compartment "water" sub "")}
+
 flowIn :: Integer -> Text -> Text -> Maybe Text -> BiosphereFlow
 flowIn i name medium sub =
     BiosphereFlow
@@ -214,16 +218,35 @@ spec = do
             lookup RungCasBridge results `shouldBe` Nothing
 
         it "records the sea-water veto on every wildcard rung it blocks" $ do
-            -- A freshwater factor must not reach an emission to the ocean, and
-            -- the trail must say the veto is what stopped it.
+            -- A method that names the sea somewhere meant to leave this
+            -- emission out, so its freshwater factor must not reach the ocean,
+            -- and the trail must say the veto is what stopped it.
             let ocean = flowIn 2 "Water" "water" (Just "ocean")
                 fresh = flowIn 3 "Water" "water" Nothing
-                tables = tablesFor M.empty [(cfLine "Water" "" "kg" 1.0, Just (fresh, ByName))] [ocean, fresh]
+                tables =
+                    tablesFor
+                        M.empty
+                        [ (waterLine "Water" "" 1.0, Just (fresh, ByName))
+                        , (waterLine "Sea water" "ocean" 0.0, Nothing)
+                        ]
+                        [ocean, fresh]
                 explained = explainOf defaultUnitConfig tables ocean
                 vetoed = [rung | (rung, StepVetoed ForeignMediumVeto _) <- resultsFor explained]
             ceResolution explained `shouldBe` Uncharacterized
             vetoed `shouldContain` [RungMediumDefault]
             vetoed `shouldContain` [RungSubBlind]
+
+        it "lets a method that never names the sea characterize an ocean flow" $ do
+            -- The mirror case: silence about sea water is not an exclusion, so
+            -- the freshwater default applies and no veto appears in the trail.
+            let ocean = flowIn 12 "Water" "water" (Just "ocean")
+                fresh = flowIn 13 "Water" "water" Nothing
+                tables = tablesFor M.empty [(waterLine "Water" "" 1.0, Just (fresh, ByName))] [ocean, fresh]
+                explained = explainOf defaultUnitConfig tables ocean
+            [rung | (rung, StepVetoed ForeignMediumVeto _) <- resultsFor explained] `shouldBe` []
+            case ceResolution explained of
+                Characterized m _ -> cmRung m `shouldBe` RungMediumDefault
+                other -> expectationFailure ("expected the freshwater factor to apply, got " <> show other)
 
         it "marks a rung the flow cannot use as not applicable" $ do
             -- No CAS on the flow, so the CAS bridge is not a miss: it never ran.
