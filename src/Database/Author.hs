@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -30,6 +31,14 @@ units" unrepresentable rather than merely unlikely.
 Scope: one reference product per authored activity. Coproducts and allocation
 are a later phase, and the types here do not pretend to support them — an
 'AuthoredActivity' has exactly one product field group, not a list.
+
+Editing an imported activity is the other half ('applyExchangeEdits'). A row
+that came in from a database file cannot be re-authored: its identity was
+minted by whichever parser read it, so re-describing it addresses a different
+row. And even if it could be addressed, a description cannot carry back what
+it never expressed — classification, synonyms, parameters, pedigree,
+coproducts. So adjusting an imported inventory names the lines to change and
+leaves everything else exactly as it was.
 -}
 module Database.Author (
     -- * What an author writes
@@ -42,6 +51,13 @@ module Database.Author (
     ResolvedInsert (..),
     validateAuthored,
 
+    -- * Editing an inventory in place
+    ExchangeSelector (..),
+    ExchangeEdit (..),
+    EditedActivity (..),
+    applyExchangeEdits,
+    describeSelector,
+
     -- * Deterministic identity
     authoredNamespace,
     authoredActivityUUID,
@@ -52,7 +68,7 @@ module Database.Author (
 import qualified Data.ByteString as BS
 import Data.Either (partitionEithers)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -340,6 +356,236 @@ been written — and it would divide into a zero normalization factor.
 isUsableAmount :: Double -> Bool
 isUsableAmount x = not (isNaN x) && not (isInfinite x) && x /= 0
 
+-- | The complaint an unusable amount earns, in the one wording every surface shows.
+amountCheck :: Double -> [Text]
+amountCheck amount =
+    [ "the amount is " <> T.pack (show amount) <> "; it must be a finite non-zero number"
+    | not (isUsableAmount amount)
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Editing an inventory in place
+-- ---------------------------------------------------------------------------
+
+{- | Which line of an inventory an edit is about.
+
+A technosphere input names its provider, a waste output names the treatment it
+hands the waste to, a biosphere exchange names its flow — the same currency an
+author writes in ('AuthoredExchange'). What is missing is missing on purpose:
+the reference product and any coproduct carry the activity's identity and its
+allocation, and a reference input belongs to the treatment that consumes it.
+Those lines match no selector, so an edit cannot reach them by accident.
+-}
+data ExchangeSelector
+    = -- | Technosphere input, by its provider's process id.
+      SelectInput Text
+    | -- | Biosphere exchange, by flow identity.
+      SelectBiosphere UUID
+    | -- | Waste output, by its treatment provider's process id.
+      SelectWaste Text
+    deriving (Eq, Show)
+
+{- | One change to an activity's inventory. Edits apply in the order given, so
+removing a line and then setting its amount is refused — by then it matches
+nothing — rather than quietly reordered into something that works.
+-}
+data ExchangeEdit
+    = RemoveExchange ExchangeSelector
+    | SetAmount ExchangeSelector Double
+    | AddExchange AuthoredExchange
+    deriving (Eq, Show)
+
+{- | An edited activity, and what it took to get there.
+
+'eaMatched' holds one count per edit, in the order the edits were given: a
+selector that named three lines says three, so a caller can tell "removed the
+one I meant" from "removed three". 'Database.Journal' records those counts and
+compares them when replaying the edit, which is what stops a recorded edit
+from landing on a different number of lines than it did the first time.
+-}
+data EditedActivity = EditedActivity
+    { eaActivity :: Activity
+    , eaMatched :: [Int]
+    , eaNewBioFlows :: [BiosphereFlow]
+    , eaWarnings :: [Text]
+    }
+
+{- | Apply edits to one activity's inventory, or report everything wrong with
+them.
+
+Only 'exchanges' changes. Classification, synonyms, parameters, allocation,
+native type, pedigree on the lines left alone — all carried through as they
+were, which is the whole point: an imported activity can be adjusted without
+being re-described as something a description can express.
+
+A selector matching nothing is refused rather than passed off as done. One
+matching several lines applies to all of them and reports how many. Complaints
+accumulate across the whole list, as they do for a written batch.
+-}
+applyExchangeEdits :: AuthorContext -> [ExchangeEdit] -> Activity -> Either [Text] EditedActivity
+applyExchangeEdits ctx edits act = case accErrors final of
+    [] ->
+        Right
+            EditedActivity
+                { eaActivity = act{exchanges = accExchanges final}
+                , eaMatched = accMatched final
+                , eaNewBioFlows = accNewFlows final
+                , eaWarnings = accWarnings final
+                }
+    errs -> Left errs
+  where
+    final = foldl' (applyStep ctx) initial edits
+    initial =
+        EditAcc
+            { accExchanges = exchanges act
+            , accMatched = []
+            , accNewFlows = []
+            , accWarnings = []
+            , accErrors = []
+            }
+
+-- | The inventory as edited so far, and what there is to report about it.
+data EditAcc = EditAcc
+    { accExchanges :: [Exchange]
+    , accMatched :: [Int]
+    , accNewFlows :: [BiosphereFlow]
+    , accWarnings :: [Text]
+    , accErrors :: [Text]
+    }
+
+{- | Fold one edit in. A refused edit leaves the inventory as it was, so the
+edits after it are still judged against something coherent and the author sees
+every complaint in one pass.
+-}
+applyStep :: AuthorContext -> EditAcc -> ExchangeEdit -> EditAcc
+applyStep ctx acc edit = case applyOneEdit ctx (accExchanges acc) edit of
+    Left errs -> acc{accErrors = accErrors acc <> errs}
+    Right step ->
+        acc
+            { accExchanges = esExchanges step
+            , accMatched = accMatched acc <> [esMatched step]
+            , accNewFlows = accNewFlows acc <> esNewFlows step
+            , accWarnings = accWarnings acc <> esWarnings step
+            }
+
+-- | What one applied edit leaves behind.
+data EditStep = EditStep
+    { esExchanges :: [Exchange]
+    , esMatched :: Int
+    , esNewFlows :: [BiosphereFlow]
+    , esWarnings :: [Text]
+    }
+
+applyOneEdit :: AuthorContext -> [Exchange] -> ExchangeEdit -> Either [Text] EditStep
+applyOneEdit ctx current edit = case edit of
+    RemoveExchange sel -> case selectFrom sel current of
+        Left err -> Left [err]
+        Right (matched, isSelected) -> Right (changed (filter (not . isSelected) current) matched)
+    SetAmount sel amount -> case (amountCheck amount, selectFrom sel current) of
+        ([], Right (matched, isSelected)) ->
+            Right (changed (map (restate isSelected amount) current) matched)
+        (errs, Right _) -> Left errs
+        (errs, Left err) -> Left (errs <> [err])
+    -- An added line resolves exactly as a written one does: same provider
+    -- lookup, same unit rules, same new-flow warning.
+    AddExchange authored -> case resolveOne ctx authored of
+        Left errs -> Left (map ((describeExchange authored <> ": ") <>) errs)
+        Right resolved ->
+            Right
+                EditStep
+                    { esExchanges = current <> [reExchange resolved]
+                    , esMatched = 1
+                    , esNewFlows = maybeToList (reNewBioFlow resolved)
+                    , esWarnings = reWarnings resolved
+                    }
+  where
+    changed exchangeList matched =
+        EditStep{esExchanges = exchangeList, esMatched = matched, esNewFlows = [], esWarnings = []}
+    restate isSelected amount ex = if isSelected ex then withAmount amount ex else ex
+
+{- | The lines a selector names, and how many there are. Zero is a refusal: an
+edit that matched nothing did not do what it was asked, and reporting success
+would hide that from the only person who can fix it.
+-}
+selectFrom :: ExchangeSelector -> [Exchange] -> Either Text (Int, Exchange -> Bool)
+selectFrom sel current = do
+    isSelected <- selectorPredicate sel
+    case length (filter isSelected current) of
+        0 -> Left (describeSelector sel <> " matches no exchange of this activity")
+        matched -> Right (matched, isSelected)
+
+{- | Turn a selector into the test it stands for, or say why it cannot be one.
+The product side is out of reach by construction: no branch below answers
+'True' for a reference product, a coproduct, a reference input or a waste
+input.
+-}
+selectorPredicate :: ExchangeSelector -> Either Text (Exchange -> Bool)
+selectorPredicate sel = case sel of
+    SelectBiosphere flowId -> Right (isBiosphereFlow flowId)
+    SelectInput provider -> byProvider provider isInputFrom
+    SelectWaste provider -> byProvider provider isWasteOutputTo
+  where
+    byProvider provider build = case parseProvider provider of
+        Nothing ->
+            Left
+                ( describeSelector sel
+                    <> " is not a process id: expected activityUUID_productUUID, or a bare activity UUID"
+                )
+        Just key -> Right (build key)
+
+isBiosphereFlow :: UUID -> Exchange -> Bool
+isBiosphereFlow flowId = \case
+    BiosphereExchange{bioFlowId = f} -> f == flowId
+    TechnosphereExchange{} -> False
+    WasteExchange{} -> False
+
+isInputFrom :: ProviderKey -> Exchange -> Bool
+isInputFrom key = \case
+    TechnosphereExchange{techRole = Input, techActivityLinkId = a, techFlowId = f} -> matchesProvider key a f
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+    WasteExchange{} -> False
+
+isWasteOutputTo :: ProviderKey -> Exchange -> Bool
+isWasteOutputTo key = \case
+    WasteExchange{waIsInput = False, waActivityLinkId = a, waFlowId = f} -> matchesProvider key a f
+    WasteExchange{} -> False
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+
+{- | A provider named either way the engine accepts one. Matched against the
+link the exchange already carries rather than resolved in the database, so a
+provider living in a dependency — or one that has gone missing since the
+import — is still addressable.
+-}
+data ProviderKey = ProviderPair UUID UUID | ProviderActivity UUID
+
+parseProvider :: Text -> Maybe ProviderKey
+parseProvider provider = case parseUUIDPair provider of
+    Just (activityId, productId) -> Just (ProviderPair activityId productId)
+    Nothing -> ProviderActivity <$> UUID.fromText provider
+
+matchesProvider :: ProviderKey -> UUID -> UUID -> Bool
+matchesProvider key linkedActivity linkedFlow = case key of
+    ProviderPair activityId productId -> activityId == linkedActivity && productId == linkedFlow
+    ProviderActivity activityId -> activityId == linkedActivity
+
+-- | The same exchange, restated. Only the amount moves.
+withAmount :: Double -> Exchange -> Exchange
+withAmount amount ex = case ex of
+    TechnosphereExchange{} -> ex{techAmount = amount}
+    BiosphereExchange{} -> ex{bioAmount = amount}
+    WasteExchange{} -> ex{waAmount = amount}
+
+{- | How a complaint names a selector, phrased like 'describeExchange': the
+author who writes a line and the author who selects one are the same person.
+-}
+describeSelector :: ExchangeSelector -> Text
+describeSelector sel = case sel of
+    SelectInput provider -> "input from \"" <> provider <> "\""
+    SelectWaste provider -> "waste output to \"" <> provider <> "\""
+    SelectBiosphere flowId -> "biosphere flow " <> UUID.toText flowId
+
 -- ---------------------------------------------------------------------------
 -- Exchange resolution
 -- ---------------------------------------------------------------------------
@@ -394,7 +640,7 @@ resolveLinked ::
     (Supplier -> UUID -> Exchange) ->
     Either [Text] ResolvedExchange
 resolveLinked ctx provider amount mUnit build =
-    case (amountCheck, resolveSupplier ctx provider) of
+    case (amountCheck amount, resolveSupplier ctx provider) of
         ([], Right sup) ->
             let stated = fromMaybe (defaultUnit sup) mUnit
              in case lookupUnit ctx stated of
@@ -406,10 +652,6 @@ resolveLinked ctx provider amount mUnit build =
         (errs, Right _) -> Left errs
         (errs, Left err) -> Left (errs <> [err])
   where
-    amountCheck =
-        [ "the amount is " <> T.pack (show amount) <> "; it must be a finite non-zero number"
-        | not (isUsableAmount amount)
-        ]
     defaultUnit sup =
         case (supProducedUnit sup, supAnyRefUnit sup) of
             ("", "") -> ""

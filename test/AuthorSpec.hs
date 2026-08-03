@@ -25,8 +25,12 @@ import Database.Author (
     AuthorContext (..),
     AuthoredActivity (..),
     AuthoredExchange (..),
+    EditedActivity (..),
+    ExchangeEdit (..),
+    ExchangeSelector (..),
     FlowRef (..),
     ResolvedInsert (..),
+    applyExchangeEdits,
     authoredActivityUUID,
     authoredProductUUID,
     validateAuthored,
@@ -40,6 +44,7 @@ import Types (
     Database (..),
     Exchange (..),
     LocationSource (..),
+    Pedigree (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -301,6 +306,99 @@ spec = do
                                 dbActivityCount db'' `shouldBe` dbActivityCount db'
                                 inputAmounts db'' (fst (riKey second)) `shouldBe` [7]
 
+        -- Editing an imported activity is the operation authoring cannot do:
+        -- the row keeps its identity and everything a description would drop.
+        describe "applyExchangeEdits" $ do
+            let editOrFail edits = case applyExchangeEdits (contextOf fixtureDb) edits importedActivity of
+                    Left errs -> fail ("applyExchangeEdits: " <> show errs)
+                    Right edited -> pure edited
+                editRefused needle edits =
+                    case applyExchangeEdits (contextOf fixtureDb) edits importedActivity of
+                        Right _ -> expectationFailure ("expected a refusal mentioning " <> show needle)
+                        Left errs -> errs `shouldSatisfy` any (isInfixOf needle)
+                inputsOf act = [ex | ex@TechnosphereExchange{techRole = Input} <- exchanges act]
+
+            it "keeps every field an edit does not name" $ do
+                -- The reason this operation exists: classification, synonyms,
+                -- parameters and allocation survive an edit, where
+                -- re-describing the activity would silently drop them.
+                edited <-
+                    editOrFail
+                        [ RemoveExchange (SelectBiosphere co2Id)
+                        , SetAmount (SelectInput supplierPid) 3
+                        , AddExchange (wasteOut treatPid 0.1 Nothing)
+                        ]
+                activityFacts (eaActivity edited) `shouldBe` activityFacts importedActivity
+
+            it "keeps the pedigree of the lines it leaves alone" $ do
+                edited <- editOrFail [RemoveExchange (SelectBiosphere co2Id)]
+                map techPedigree (inputsOf (eaActivity edited)) `shouldBe` [Just milkPedigree]
+
+            it "never addresses the product side" $ do
+                -- Both products link to the activity itself, so a selector can
+                -- name their key; neither is an input, so neither is reachable.
+                editRefused "matches no exchange" [RemoveExchange (SelectInput importedPid)]
+                editRefused "matches no exchange" [RemoveExchange (SelectInput coproductPid)]
+
+            it "leaves a waste input where it is" $ do
+                -- Same provider key as the waste output, opposite direction:
+                -- one line matches, the other is not an edit's business.
+                edited <- editOrFail [RemoveExchange (SelectWaste treatPid)]
+                eaMatched edited `shouldBe` [1]
+                [waAmount ex | ex@WasteExchange{waIsInput = True} <- exchanges (eaActivity edited)]
+                    `shouldBe` [0.2]
+
+            it "applies one selector to every line it matches, and says how many" $ do
+                -- Two emissions of one substance, in two compartments.
+                edited <- editOrFail [RemoveExchange (SelectBiosphere co2Id)]
+                eaMatched edited `shouldBe` [2]
+                length (exchanges (eaActivity edited)) `shouldBe` length (exchanges importedActivity) - 2
+
+            it "addresses a provider by bare activity UUID" $ do
+                edited <- editOrFail [RemoveExchange (SelectInput (UUID.toText supplierActId))]
+                eaMatched edited `shouldBe` [1]
+
+            it "sets an amount and leaves the rest of the line alone" $ do
+                edited <- editOrFail [SetAmount (SelectInput supplierPid) 3]
+                map (\ex -> (techAmount ex, techComment ex, techPedigree ex)) (inputsOf (eaActivity edited))
+                    `shouldBe` [(3, Just "milk in", Just milkPedigree)]
+
+            it "adds a line the way authoring resolves one" $ do
+                edited <- editOrFail [AddExchange (bioOf (NewBioFlow "Nitrous oxide" air "kg") 0.5 Nothing)]
+                eaMatched edited `shouldBe` [1]
+                map bfName (eaNewBioFlows edited) `shouldBe` ["Nitrous oxide"]
+                eaWarnings edited `shouldSatisfy` any (isInfixOf "no characterization factor matches it")
+
+            it "refuses a selector that matches nothing" $
+                editRefused "matches no exchange" [RemoveExchange (SelectBiosphere (mkUUID 998))]
+
+            it "refuses a provider that is not a process id" $
+                -- Otherwise "matches nothing" would send the author looking for
+                -- a missing line instead of a mistyped identifier.
+                editRefused "is not a process id" [RemoveExchange (SelectInput "milk production")]
+
+            it "refuses a set on the line the remove before it took away" $
+                -- Edits apply in order; reordering them into something that
+                -- works would not be the edit that was asked for.
+                editRefused
+                    "matches no exchange"
+                    [RemoveExchange (SelectBiosphere co2Id), SetAmount (SelectBiosphere co2Id) 1]
+
+            it "reports every defect of an edit list at once" $
+                case applyExchangeEdits
+                    (contextOf fixtureDb)
+                    [ RemoveExchange (SelectBiosphere (mkUUID 998))
+                    , SetAmount (SelectInput supplierPid) (0 / 0)
+                    , AddExchange (techInput "nope" 1 Nothing)
+                    ]
+                    importedActivity of
+                    Right _ -> expectationFailure "expected the edits to be refused"
+                    Left errs -> do
+                        length errs `shouldBe` 3
+                        errs `shouldSatisfy` any (isInfixOf "matches no exchange")
+                        errs `shouldSatisfy` any (isInfixOf "finite non-zero")
+                        errs `shouldSatisfy` any (isInfixOf "unknown provider")
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -372,6 +470,148 @@ bioOf flow amount unit =
 
 air :: Compartment
 air = Compartment{compartmentName = "air", compartmentSub = Nothing}
+
+-- ---------------------------------------------------------------------------
+-- Fixture: an activity as a database file would have brought it in
+-- ---------------------------------------------------------------------------
+
+{- | Everything about an activity except its inventory. An edit must carry all
+of it through untouched — and it is exactly what a re-description would lose,
+since an authored activity has none of it to state.
+-}
+type ActivityFacts =
+    ( (Text, Text, [Text], Text)
+    , (M.Map Text Text, M.Map Text (S.Set Text))
+    , (M.Map Text Double, M.Map Text Text)
+    , (Maybe Double, Maybe Text)
+    )
+
+activityFacts :: Activity -> ActivityFacts
+activityFacts act =
+    ( (activityName act, activityLocation act, activityDescription act, activityUnit act)
+    , (activityClassification act, activitySynonyms act)
+    , (activityParams act, activityParamExprs act)
+    , (activityAllocationPercent act, activityAllocationFormula act)
+    )
+
+importedActId, importedProdId, coproductId :: UUID
+importedActId = mkUUID 20
+importedProdId = mkUUID 21
+coproductId = mkUUID 22
+
+importedPid, coproductPid :: Text
+importedPid = UUID.toText importedActId <> "_" <> UUID.toText importedProdId
+coproductPid = UUID.toText importedActId <> "_" <> UUID.toText coproductId
+
+milkPedigree :: Pedigree
+milkPedigree =
+    Pedigree
+        { pedReliability = 2
+        , pedCompleteness = 3
+        , pedTemporal = 4
+        , pedGeographical = 5
+        , pedTechnological = 1
+        }
+
+{- | An imported activity, with everything on it that authoring cannot express:
+a coproduct, a classification, synonyms, parameters, an allocation, a pedigree.
+Its inventory holds one line of every addressable kind, plus two emissions of
+one substance (a selector matching more than one line) and a waste input (a
+line no selector reaches).
+-}
+importedActivity :: Activity
+importedActivity =
+    Activity
+        { activityName = "cheese production"
+        , activityDescription = ["Imported from a database file, never authored."]
+        , activitySynonyms = M.singleton "en" (S.fromList ["cheese making"])
+        , activityClassification = M.singleton "ISIC rev.4" "1050:Manufacture of dairy products"
+        , activityLocation = "FR"
+        , activityLocationSource = LocationDeclared
+        , activityUnit = "kg"
+        , exchanges =
+            [ TechnosphereExchange
+                { techFlowId = importedProdId
+                , techAmount = 1.0
+                , techUnitId = kgUnitId
+                , techRole = ReferenceProduct
+                , techActivityLinkId = importedActId
+                , techProcessLinkId = Nothing
+                , techLocation = ""
+                , techComment = Nothing
+                , techPedigree = Nothing
+                }
+            , TechnosphereExchange
+                { techFlowId = coproductId
+                , techAmount = 0.3
+                , techUnitId = kgUnitId
+                , techRole = Coproduct
+                , techActivityLinkId = importedActId
+                , techProcessLinkId = Nothing
+                , techLocation = ""
+                , techComment = Nothing
+                , techPedigree = Nothing
+                }
+            , TechnosphereExchange
+                { techFlowId = supplierProdId
+                , techAmount = 8.0
+                , techUnitId = kgUnitId
+                , techRole = Input
+                , techActivityLinkId = supplierActId
+                , techProcessLinkId = Nothing
+                , techLocation = "FR"
+                , techComment = Just "milk in"
+                , techPedigree = Just milkPedigree
+                }
+            , BiosphereExchange
+                { bioFlowId = co2Id
+                , bioAmount = 1.2
+                , bioUnitId = kgUnitId
+                , bioDirection = Emission
+                , bioLocation = ""
+                , bioComment = Nothing
+                , bioPedigree = Nothing
+                }
+            , BiosphereExchange
+                { bioFlowId = co2Id
+                , bioAmount = 0.4
+                , bioUnitId = kgUnitId
+                , bioDirection = Emission
+                , bioLocation = "FR"
+                , bioComment = Just "second compartment"
+                , bioPedigree = Nothing
+                }
+            , WasteExchange
+                { waFlowId = usedOilId
+                , waAmount = 0.5
+                , waUnitId = kgUnitId
+                , waIsInput = False
+                , waActivityLinkId = treatActId
+                , waProcessLinkId = Nothing
+                , waLocation = ""
+                , waComment = Nothing
+                , waPedigree = Nothing
+                }
+            , WasteExchange
+                { waFlowId = usedOilId
+                , waAmount = 0.2
+                , waUnitId = kgUnitId
+                , waIsInput = True
+                , waActivityLinkId = treatActId
+                , waProcessLinkId = Nothing
+                , waLocation = ""
+                , waComment = Nothing
+                , waPedigree = Nothing
+                }
+            ]
+        , activityParams = M.singleton "yield" 0.85
+        , activityParamExprs = M.singleton "yield" "0.9 * 0.94"
+        , activityAllocationPercent = Just 70
+        , activityAllocationFormula = Just "mass"
+        , activityNativeType = Nothing
+        , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
+        }
 
 -- ---------------------------------------------------------------------------
 -- Fixture: one supplier producing "milk" in kg, emitting CO2
