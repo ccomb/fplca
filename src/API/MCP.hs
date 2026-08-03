@@ -32,14 +32,16 @@ import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConf
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
+import Data.Bifunctor (first)
+import Database.Edit (editExchanges, refusalMessage)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (coverageReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
+import API.DatabaseHandlers (coverageReportToAPI, editReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeEditRequest (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..), toExchangeEdits)
 import Control.Monad (unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
@@ -330,13 +332,21 @@ paramsToSchema ps =
                 )
 
     -- Arrays in the 'Param' schema default to items of type string; the
-    -- exception is the shared @substitutions@ parameter, whose entries are
-    -- @{from, to, consumer?}@ objects. We special-case the name rather than
-    -- extending the 'Param' record to avoid touching every call site.
+    -- exceptions are the parameters whose entries are objects, listed by name
+    -- here rather than by extending the 'Param' record, which would mean
+    -- touching every call site.
     arrayItemsFor p
         | paramType p /= "array" = []
-        | paramName p == "substitutions" = ["items" .= substitutionItemSchema]
-        | otherwise = ["items" .= object ["type" .= ("string" :: Text)]]
+        | otherwise = ["items" .= objectItems (paramName p)]
+
+    objectItems name = case name of
+        "substitutions" -> substitutionItemSchema
+        "remove" -> selectorItemSchema
+        "set_amounts" -> setAmountItemSchema
+        "add_inputs" -> providerLineSchema "Producer of what is consumed"
+        "add_waste_outputs" -> providerLineSchema "Treatment the waste is handed to"
+        "add_biosphere" -> bioLineSchema
+        _ -> object ["type" .= ("string" :: Text)]
 
     substitutionItemSchema =
         object
@@ -349,7 +359,62 @@ paramsToSchema ps =
                     ]
             , "required" .= (["from", "to"] :: [Text])
             ]
+
+    selectorItemSchema =
+        object
+            [ "type" .= ("object" :: Text)
+            , "properties"
+                .= object
+                    [ "kind" .= stringField "input | waste | biosphere"
+                    , "provider" .= stringField "ProcessId of the provider, for kind input or waste"
+                    , "flow" .= stringField "Flow id, for kind biosphere (from get_activity)"
+                    ]
+            , "required" .= (["kind"] :: [Text])
+            ]
+
+    setAmountItemSchema =
+        object
+            [ "type" .= ("object" :: Text)
+            , "properties"
+                .= object
+                    [ "select" .= selectorItemSchema
+                    , "amount" .= numberField "New amount for every line the selector names"
+                    ]
+            , "required" .= (["select", "amount"] :: [Text])
+            ]
+
+    providerLineSchema providerDesc =
+        object
+            [ "type" .= ("object" :: Text)
+            , "properties"
+                .= object
+                    [ "provider" .= stringField providerDesc
+                    , "amount" .= numberField "Amount exchanged"
+                    , "unit" .= stringField "Unit the amount is stated in. Defaults to the provider's own reference unit."
+                    , "comment" .= stringField "Free-text note on this line"
+                    ]
+            , "required" .= (["provider", "amount"] :: [Text])
+            ]
+
+    bioLineSchema =
+        object
+            [ "type" .= ("object" :: Text)
+            , "properties"
+                .= object
+                    [ "direction" .= stringField "resource (taken from the environment) | emission (released into it)"
+                    , "amount" .= numberField "Amount exchanged, in the flow's own unit"
+                    , "flow" .= stringField "Id of a flow the database already has (from get_activity or search_flows)"
+                    , "name" .= stringField "Name of a flow to introduce instead, with compartment and unit"
+                    , "compartment" .= stringField "air | water | soil | natural resource"
+                    , "subCompartment" .= stringField "Sub-compartment of an introduced flow, e.g. \"low population density\""
+                    , "unit" .= stringField "Unit. Part of an introduced flow's identity, so it cannot be omitted there."
+                    , "comment" .= stringField "Free-text note on this line"
+                    ]
+            , "required" .= (["direction", "amount"] :: [Text])
+            ]
+
     stringField desc = object ["type" .= ("string" :: Text), "description" .= (desc :: Text)]
+    numberField desc = object ["type" .= ("number" :: Text), "description" .= (desc :: Text)]
 
 -- ---------------------------------------------------------------------------
 -- tools/call dispatch
@@ -416,6 +481,7 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "get_quality_report" -> callGetQualityReport dbManager rid args
     "get_computed_quality_report" -> callGetComputedQualityReport dbManager rid args
     "get_characterization_coverage" -> callGetCoverageReport dbManager rid args
+    "edit_exchanges" -> callEditExchanges dbManager rid args
     _ -> return $ toolError rid ("Unknown tool: " <> name)
 
 -- Helper: extract database, then run action
@@ -1380,6 +1446,30 @@ callGetGapReport dbManager rid args = runTool rid $ do
     dbName <- except (requireText "database" args)
     report <- ExceptT (DM.databaseGapReport dbManager dbName)
     return $ toolSuccessJson rid (toJSON (gapReportToAPI (intArg "limit" args) report))
+
+{- | The one tool that writes. It assembles the same request the HTTP endpoint
+reads and goes through the same domain call, so what an assistant may change,
+and what it is refused, are exactly what a person is.
+
+Every list defaults to empty: an assistant that only removes a line should not
+have to state four empty arrays to say so. An edit that ends up naming nothing
+is refused by the domain, so the leniency costs no silence.
+-}
+callEditExchanges :: DatabaseManager -> Value -> KeyMap Value -> IO Value
+callEditExchanges dbManager rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    processId <- except (requireText "process_id" args)
+    request <-
+        except $
+            ExchangeEditRequest
+                <$> parseArrayArg "remove" Nothing args
+                <*> parseArrayArg "set_amounts" Nothing args
+                <*> parseArrayArg "add_inputs" Nothing args
+                <*> parseArrayArg "add_biosphere" Nothing args
+                <*> parseArrayArg "add_waste_outputs" Nothing args
+    edits <- except (first (T.intercalate "\n") (toExchangeEdits request))
+    report <- ExceptT (first refusalMessage <$> editExchanges dbManager dbName processId edits)
+    return $ toolSuccessJson rid (toJSON (editReportToAPI report))
 
 {- | Dataset-soundness report: what is malformed in the database itself. Same
 wire shape as the REST endpoint ('qualityReportToAPI'), so both surfaces stay

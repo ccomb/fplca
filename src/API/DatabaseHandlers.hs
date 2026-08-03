@@ -19,6 +19,7 @@ module API.DatabaseHandlers (
     relinkDatabaseHandler,
     gapReportHandler,
     gapReportToAPI,
+    editReportToAPI,
     qualityReportHandler,
     qualityReportToAPI,
     computedQualityReportToAPI,
@@ -611,17 +612,20 @@ editExchangesHandler dbName processId req = do
     dbManager <- asks aeDbManager
     edits <- either (writeErr err400 . T.intercalate "\n") pure (toExchangeEdits req)
     outcome <- liftIO (editExchanges dbManager dbName processId edits)
-    case outcome of
-        Left refusal -> writeErr (statusFor refusal) (refusalMessage refusal)
-        Right report ->
-            pure
-                ExchangeEditResponse
-                    { eepRemoved = erRemoved report
-                    , eepAmountsSet = erAmountsSet report
-                    , eepAdded = erAdded report
-                    , eepTransient = not (erPersisted report)
-                    , eepWarnings = erWarnings report
-                    }
+    either (\refusal -> writeErr (statusFor refusal) (refusalMessage refusal)) (pure . editReportToAPI) outcome
+
+{- | What an edit answers, on every surface that offers one — so an assistant
+and a person reading the API reference are told the same thing.
+-}
+editReportToAPI :: EditReport -> ExchangeEditResponse
+editReportToAPI report =
+    ExchangeEditResponse
+        { eepRemoved = erRemoved report
+        , eepAmountsSet = erAmountsSet report
+        , eepAdded = erAdded report
+        , eepTransient = not (erPersisted report)
+        , eepWarnings = erWarnings report
+        }
 
 -- | One status per refusal, so a client never has to read the message to branch.
 statusFor :: WriteRefusal -> ServerError

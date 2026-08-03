@@ -148,8 +148,8 @@ spec = do
             hostingReadOnly (Just (hosting True)) `shouldBe` ReadOnly True
 
     describe "Resource registry" $
-        it "counts exactly the working-set changes as mutations" $
-            filter resourceMutates allResources `shouldBe` [LoadDatabase, UnloadDatabase]
+        it "counts exactly the operations that change shared state as mutations" $
+            filter resourceMutates allResources `shouldBe` [LoadDatabase, UnloadDatabase, EditExchanges]
 
     describe "REST handlers under read_only" $ do
         it "refuse every mutating endpoint with 403" $ do
