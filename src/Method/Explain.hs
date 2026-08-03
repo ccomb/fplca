@@ -260,7 +260,7 @@ renderResolution Uncharacterized =
 renderResolution (Characterized match bridge) =
     filter (not . T.null) $
         [rungSentence match, provenanceSentence (cmProvenance match), bridgeSentence bridge]
-            ++ [factorSentence match]
+            ++ [factorSentence bridge match]
 renderResolution (ConversionRefused match reason) =
     filter
         (not . T.null)
@@ -314,14 +314,25 @@ provenanceSentence provenance = case bpStrategy provenance of
     NoMatch ->
         "No database flow claimed that line when the method was loaded; it is filed under the name the method itself uses."
 
--- | The factor as applied, so the sentence stands on its own.
-factorSentence :: CFMatch -> Text
-factorSentence (CFMatch _ (CF value (CFUnit unit)) _) =
-    "The factor applied is " <> formatDouble value <> perUnit unit <> "."
+{- | The factor as applied, so the sentence stands on its own. The bridge says
+which side of the factor its unit sits on: usually the unit is the basis the
+factor is per ("per kg"), but under 'NormalizedToBase' it is a result
+expression ("kg CO2 eq") — what the factor yields per base unit — and
+"per kg CO2 eq" would read the factor backwards.
+-}
+factorSentence :: UnitBridge -> CFMatch -> Text
+factorSentence bridge (CFMatch _ (CF value (CFUnit unit)) _) =
+    "The factor applied is " <> formatDouble value <> basis <> "."
   where
-    perUnit u
-        | T.null u = ""
-        | otherwise = " per " <> u
+    basis = case bridge of
+        NormalizedToBase base -> " " <> unit <> " per " <> base
+        UnitsIdentical -> perUnit
+        UnitUnknown _ -> perUnit
+        UnitConverted _ _ -> perUnit
+        EnergyBridged _ _ -> perUnit
+    perUnit
+        | T.null unit = ""
+        | otherwise = " per " <> unit
 
 -- | How the flow's amount was carried onto the factor's basis.
 bridgeSentence :: UnitBridge -> Text

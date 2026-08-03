@@ -119,30 +119,41 @@ spec :: Spec
 spec = do
     describe "renderResolution (every outcome says what it means)" $ do
         let provenance strat = BuildProvenance strat (cfLine "Methane, fossil" "" "kg" 29.8)
-            match rung strat = CFMatch rung (CF 29.8 (CFUnit "kg CO2 eq")) (provenance strat)
+            match rung strat = CFMatch rung (CF 29.8 (CFUnit "kg")) (provenance strat)
+            matchIn unit rung strat = CFMatch rung (CF 29.8 (CFUnit unit)) (provenance strat)
 
         it "a direct name match reads as one" $
             renderResolution (Characterized (match RungExactName ByName) UnitsIdentical)
                 `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
-                           , "The factor applied is 29.8 per kg CO2 eq."
+                           , "The factor applied is 29.8 per kg."
                            ]
 
         it "names the synonym bridge that attached the line" $
             renderResolution (Characterized (match RungExactName BySynonym) UnitsIdentical)
                 `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
                            , "That line was tied to this flow's name through a known synonym when the method was loaded."
-                           , "The factor applied is 29.8 per kg CO2 eq."
+                           , "The factor applied is 29.8 per kg."
                            ]
 
         it "spells out the energy content that bridges the units" $
             renderResolution
                 ( Characterized
-                    (match RungEnergyResource ByName)
+                    (matchIn "MJ" RungEnergyResource ByName)
                     (EnergyBridged (EnergyDensity 18.0 "MJ" "kg") DensityForward)
                 )
                 `shouldBe` [ "No factor carries this flow's name. The flow is an energy resource, so its family's factor per unit of energy, from \"Methane, fossil\", applies."
                            , "This flow holds 18.0 MJ per kg, which carries the amount from kg to MJ."
-                           , "The factor applied is 29.8 per kg CO2 eq."
+                           , "The factor applied is 29.8 per MJ."
+                           ]
+
+        -- A method loaded from ILCD writes its factor in the result expression
+        -- ("kg CO2 eq"): the factor yields that much per base unit, so the
+        -- sentence must not read "per kg CO2 eq" — that is the factor backwards.
+        it "states a result-expression factor on the flow's base unit" $
+            renderResolution (Characterized (matchIn "kg CO2 eq" RungExactName ByName) (NormalizedToBase "kg"))
+                `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
+                           , "The factor is written per kg, so the amount was brought to kg first."
+                           , "The factor applied is 29.8 kg CO2 eq per kg."
                            ]
 
         it "says why a refused conversion scores nothing" $
