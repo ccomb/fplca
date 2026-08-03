@@ -92,6 +92,7 @@ module Database.Manager (
     databaseGapReport,
     databaseQualityReport,
     databaseCoverageReport,
+    explainFlowFactor,
     addDependencyToStaged,
     removeDependencyFromStaged,
     setDataPath,
@@ -156,6 +157,7 @@ import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import qualified Method.Coverage as Coverage
+import qualified Method.Explain as Explain
 import Method.Mapping (
     CF (..),
     CFUnit (..),
@@ -767,7 +769,7 @@ buildMethodTablesFor manager dbName collection db hier method = do
                 <> show (length zeroed)
                 <> " flow(s) matched a CF that cannot be converted from the flow's unit "
                 <> "(no unit-conversion path); their contributions score 0. Samples: "
-                <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u) | (f, CF _ (CFUnit u)) <- zeroed])
+                <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u, show reason) | (f, CF _ (CFUnit u), reason) <- zeroed])
     pure tables
 
 {- | Run @build@ at most once per @key@ across concurrent callers. The first
@@ -2427,6 +2429,30 @@ on top of the per-method table and mapping caches; if it proves slow at
 ecoinvent scale, the upgrade path is a @(db, collection)@-keyed cache beside
 'mapMethodToTablesCached'.
 -}
+
+{- | Replay the CF cascade for one flow under one method, so a caller can say
+why that flow scores with the factor it does.
+
+The flow is looked up in the merged metadata, not the one database, because
+that is what scoring reads: a flow arriving from a dependency is characterized
+by the same tables and must be explainable by them too.
+-}
+explainFlowFactor ::
+    DatabaseManager ->
+    Text ->
+    Text ->
+    Database ->
+    Method ->
+    UUID ->
+    IO (Either Text (BiosphereFlow, Explain.CFExplanation))
+explainFlowFactor manager dbName collection db method fid = do
+    (mFlows, mUnits) <- getMergedFlowMetadata manager
+    unitCfg <- getMergedUnitConfig manager
+    tables <- mapMethodToTablesCached manager dbName collection db method
+    pure $ case M.lookup fid mFlows of
+        Nothing -> Left ("No such flow in " <> dbName <> ": " <> T.pack (show fid))
+        Just flow -> Right (flow, Explain.explainFlowCF unitCfg mUnits tables fid flow)
+
 databaseCoverageReport :: DatabaseManager -> Text -> Maybe Text -> IO (Either Text Coverage.CoverageReport)
 databaseCoverageReport manager dbName mCollection = do
     mLoaded <- getDatabase manager dbName

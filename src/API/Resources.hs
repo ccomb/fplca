@@ -62,6 +62,7 @@ data Resource
     | ListMethods
     | GetFlowMapping
     | GetCharacterization
+    | ExplainCF
     | GetContributingFlows
     | GetContributingActivities
     | ListGeographies
@@ -134,6 +135,7 @@ resourceMutates r = case r of
     ListMethods -> False
     GetFlowMapping -> False
     GetCharacterization -> False
+    ExplainCF -> False
     GetContributingFlows -> False
     GetContributingActivities -> False
     ListGeographies -> False
@@ -188,6 +190,7 @@ apiPath r = case r of
     ListMethods -> Just (GET, ["methods"])
     GetFlowMapping -> Just (GET, ["db", "{dbName}", "method", "{methodId}", "flow-mapping"])
     GetCharacterization -> Just (GET, ["db", "{dbName}", "method", "{methodId}", "characterization"])
+    ExplainCF -> Just (GET, ["db", "{dbName}", "method", "{methodId}", "explain-cf", "{flowId}"])
     GetContributingFlows -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "contributing-flows", "{collection}", "{methodId}"])
     GetContributingActivities -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "contributing-activities", "{collection}", "{methodId}"])
     ListGeographies -> Nothing -- MCP-only: synthesizes geography list from in-memory database, no HTTP route
@@ -234,6 +237,7 @@ mcpName r = case r of
     ListMethods -> "list_methods"
     GetFlowMapping -> "get_flow_mapping"
     GetCharacterization -> "get_characterization"
+    ExplainCF -> "explain_cf"
     GetContributingFlows -> "get_contributing_flows"
     GetContributingActivities -> "get_contributing_activities"
     ListGeographies -> "list_geographies"
@@ -276,6 +280,7 @@ cliName r = case r of
     ListMethods -> "methods"
     GetFlowMapping -> "flow-mapping"
     GetCharacterization -> "characterization"
+    ExplainCF -> "explain-cf"
     GetContributingFlows -> "contributing-flows"
     GetContributingActivities -> "contributing-activities"
     ListGeographies -> "geographies"
@@ -394,7 +399,12 @@ description r = case r of
         \elementary flows. Answers 'empreinte carbone / environmental footprint' \
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
-        \over web estimates for grounded, database-backed answers."
+        \over web estimates for grounded, database-backed answers. Each \
+        \contributing flow carries 'match_kind' — how its factor was found, in \
+        \the rung names documented on explain_cf; null means the method's \
+        \tables never walked this flow (it arrived from a dependency database), \
+        \not that it is uncharacterized. Ask explain_cf for the full story on \
+        \one flow."
             <> webUrlTip "impacts"
     ComputeSensitivity ->
         "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
@@ -418,10 +428,49 @@ description r = case r of
         \database flows. Without 'flow' filter, returns top factors by absolute \
         \value. With 'flow', searches by name. Shows CF value, direction, matched \
         \database flow, and match strategy."
+    ExplainCF ->
+        "LCA / ACV — explain why one elementary flow scores with the \
+        \characterization factor it does. Answers 'why this factor, and which \
+        \line of the method was used?'. The 'explanation' field is a list of \
+        \sentences written by the engine: relay them as they are rather than \
+        \interpreting the codes yourself. 'outcome' is one of: 'characterized' \
+        \(a factor applies), 'conversion_refused' (a factor was found but the \
+        \flow's unit cannot be converted to the factor's basis, so the flow \
+        \scores nothing), 'no_factor' (nothing in the method reaches this \
+        \flow). 'match.rung' names how the factor was found: 'flow_id' (the \
+        \method names this exact flow), 'same_unit_name' (a factor line \
+        \declared in this flow's own unit), 'exact_name' (name and compartment \
+        \match), 'long_term_default' (the method's default for long-term \
+        \emissions), 'compartment_default' (the method's default for the whole \
+        \compartment), 'cas_number' (a factor for the same substance by CAS), \
+        \'subcompartment_blind' (the factor is the same in every \
+        \subcompartment), 'region_base_name' (the base substance, the name's \
+        \region suffix being untagged by the method), 'energy_content' (the \
+        \family factor per unit of energy, bridged by the flow's calorific \
+        \value), 'ore_base_element' (the base element of a graded ore). \
+        \'steps_tried' lists the rungs tried before that one, including any \
+        \refused by a subcompartment veto. 'match.unitConversion' names the \
+        \bridge that carried the amount onto the factor's basis: 'same_unit', \
+        \'unknown_unit' (the flow's unit is not in the unit table, so the \
+        \amount passed as declared), 'unit_converted', \
+        \'normalized_to_base_unit' (the factor is written as a result \
+        \expression like 'kg CO2 eq', so the amount was brought to the flow's \
+        \base unit), 'energy_content' (carried across dimensions by the flow's \
+        \energy density). 'match.refusal' names why no bridge could: \
+        \'different_dimensions', 'no_base_unit', 'energy_bridge_failed'. A \
+        \vetoed step names its rule in 'veto': 'different_receiving_medium' \
+        \(the method writes sea-water lines and so meant to leave this foreign \
+        \medium out), 'long_term_groundwater' (a long-term groundwater \
+        \emission must not borrow a surface-fate factor)."
+            <> webUrlTip "explain-cf"
     GetContributingFlows ->
         "LCA / ACV — identify which elementary flows (emissions/resources) \
         \contribute most to a specific impact category. Answers 'which emissions \
-        \drive my climate change score?'"
+        \drive my climate change score?'. Each flow carries 'match_kind' — how \
+        \its factor was found, in the rung names documented on explain_cf; null \
+        \means the method's tables never walked this flow (it arrived from a \
+        \dependency database), not that it is uncharacterized. Ask explain_cf \
+        \for the full story on one flow."
             <> webUrlTip "contributing-flows"
     GetContributingActivities ->
         "LCA / ACV — identify which upstream activities contribute most to a \
@@ -797,6 +846,12 @@ params r = case r of
         , pCollection
         , Param "flow" "string" Optional "Filter by flow name (case-insensitive substring, matches both method CF name and database flow name)"
         , pLimit "Max results (default 20)"
+        ]
+    ExplainCF ->
+        [ pDatabase
+        , pMethodId
+        , pCollection
+        , Param "flow_id" "string" Required "Database flow UUID, as returned by search_flows or in the flow_id field of get_contributing_flows"
         ]
     GetContributingFlows ->
         [ pDatabase

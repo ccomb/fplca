@@ -36,13 +36,14 @@ import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (coverageReportToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
+import API.DatabaseHandlers (coverageReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..))
 import Control.Monad (unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
+import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
@@ -400,6 +401,7 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_methods" -> callListMethods dbManager rid
     "get_flow_mapping" -> callGetFlowMapping dbManager rid args
     "get_characterization" -> callGetCharacterization dbManager rid args
+    "explain_cf" -> callExplainCF dbManager mBaseUrl rid args
     "get_contributing_flows" -> callGetContributingFlows dbManager mBaseUrl rid args
     "get_contributing_activities" -> callGetContributingActivities dbManager mBaseUrl rid args
     "list_geographies" -> callListGeographies dbManager rid args
@@ -989,6 +991,10 @@ to drift from this one.
 data ImpactsResult = ImpactsResult
     { irOutcome :: !LCIAOutcome
     , irMappingStats :: !MappingStats
+    , irTables :: !Mapping.MethodTables
+    {- ^ The method's tables, for annotating each contributing flow with how
+    its factor was found. Shared with the manager's cache, not a copy.
+    -}
     , irContribs :: ![(BiosphereFlow, Double, Double)]
     -- ^ Sorted descending by absolute contribution.
     , irUnknownUuids :: ![UUID.UUID]
@@ -1066,6 +1072,7 @@ runImpactsRequest dbManager args req = do
         ImpactsResult
             { irOutcome = outcome
             , irMappingStats = stats
+            , irTables = tables
             , irContribs = contribs
             , irUnknownUuids = unknownUuids
             , irRefProductName = prodName
@@ -1139,6 +1146,7 @@ callGetImpacts dbManager mBaseUrl rid args =
                                     , "category" .= bfCompartmentName f
                                     , "compartment" .= bfCompartmentSub f
                                     , "cf_value" .= cfVal
+                                    , "match_kind" .= Explain.flowMatchKind (irTables ir) (bfId f)
                                     , "flow_unit" .= getUnitNameForBioFlow mUnits f
                                     ]
                                | (f, cfVal, c) <- topFlows
@@ -1516,6 +1524,25 @@ buildUnmatchedDbFlows dbManager dbName collection db method args maxN =
                                             opts
                                 pure (map encodeUncharacterized uncharacterized)
 
+{- | Why one flow scores with the factor it does.
+
+Serves exactly what the REST route serves, through the same projection, so the
+web page and an agent cannot describe the same flow differently. The
+'explanation' field is the part meant to be read out; the rest is for a caller
+that wants to compare or link.
+-}
+callExplainCF :: DatabaseManager -> Maybe Text -> Value -> KeyMap Value -> IO Value
+callExplainCF dbManager mBaseUrl rid args = runTool rid $ do
+    (dbName, methodIdText, mCol) <- except $ (,,) <$> requireText "database" args <*> requireText "method_id" args <*> optionalText "collection" args
+    flowIdText <- except (requireText "flow_id" args)
+    ld <- requireDatabase dbManager dbName
+    (collection, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
+    fid <- except $ maybe (Left ("Malformed flow id: " <> flowIdText)) Right (UUID.fromText (T.strip flowIdText))
+    let db = ldDatabase ld
+    (flow, explanation) <- ExceptT (DM.explainFlowFactor dbManager dbName collection db method fid)
+    let deepLink = (<> "/db/" <> dbName <> "/method/" <> methodIdText <> "/flow-mapping") <$> mBaseUrl
+    pure $ toolSuccessJson rid (addWebUrlMaybe deepLink (toJSON (explainCFToAPI db method flow explanation)))
+
 callGetCharacterization :: DatabaseManager -> Value -> KeyMap Value -> IO Value
 callGetCharacterization dbManager rid args = runTool rid $ do
     (dbName, methodIdText, mCol) <- except $ (,,) <$> requireText "database" args <*> requireText "method_id" args <*> optionalText "collection" args
@@ -1813,6 +1840,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
                                 , "category" .= bfCompartmentName f
                                 , "compartment" .= bfCompartmentSub f
                                 , "cf_value" .= cfVal
+                                , "match_kind" .= Explain.flowMatchKind tables (bfId f)
                                 ]
                            | (f, cfVal, c) <- top
                            ]

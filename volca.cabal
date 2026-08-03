@@ -70,6 +70,7 @@ library
                      , Method.ParserNW
                      , Method.Mapping
                      , Method.Coverage
+                     , Method.Explain
                      , Method.Patch
                      , Method.ChemSynonyms
                      , Method.FlowResolver
@@ -258,6 +259,7 @@ test-suite lca-tests
                      , ProjectRegionalSpec
                      , SharedCASCoverageSpec
                      , EnergyDensityCFSpec
+                     , ExplainCFSpec
                      , LongTermExclusionSpec
                      , SharedSolverSpec
                      , CoalescingSolverSpec

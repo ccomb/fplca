@@ -25,7 +25,7 @@ import qualified Data.Vector.Unboxed as U
 import Matrix (accumulateDepDemands, depDemandsToVector)
 import Method.Mapping (CF (..), CFUnit (..), MethodTables (..), inventoryContributions)
 import qualified Method.Mapping as Mapping
-import Method.Types (CFFamily (..))
+import Method.Types (CFFamily (..), FlowDirection (..), MethodCF (..))
 import SharedSolver (
     computeInventoryMatrixBatchCached,
     computeInventoryMatrixBatchWithDepsCached,
@@ -166,12 +166,26 @@ spec = do
             mergedFlowDB = M.fromList [(uuidRoot, flowRoot), (uuidDep, flowDep)]
 
             -- UUID-keyed method table entries for both flows
+            uuidEntry fid name v =
+                Mapping.TableEntry (CF v (CFUnit "kg CO2 eq")) $
+                    Mapping.BuildProvenance
+                        Mapping.ByUUID
+                        MethodCF
+                            { mcfFlowRef = fid
+                            , mcfFlowName = name
+                            , mcfDirection = Output
+                            , mcfValue = v
+                            , mcfCompartment = Nothing
+                            , mcfCAS = Nothing
+                            , mcfUnit = "kg CO2 eq"
+                            , mcfConsumerLocation = Nothing
+                            }
             tables =
                 MethodTables
                     { mtUuidCF =
                         M.fromList
-                            [ (uuidRoot, CF 27.0 (CFUnit "kg CO2 eq"))
-                            , (uuidDep, CF 1.0 (CFUnit "kg CO2 eq"))
+                            [ (uuidRoot, uuidEntry uuidRoot "Methane, biogenic" 27.0)
+                            , (uuidDep, uuidEntry uuidDep "Carbon dioxide, fossil" 1.0)
                             ]
                     , mtUnitVariantCF = M.empty
                     , mtExactCF = M.empty
@@ -185,6 +199,7 @@ spec = do
                     , mtSeaWaterCFs = Mapping.MethodSilentOnSeaWater
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
+                    , mtResolution = M.empty
                     , mtBroadcast = M.empty
                     , mtRegionalActivityWeights = Nothing
                     }

@@ -482,6 +482,7 @@ data FlowContributionEntry = FlowContributionEntry
     , fcoCategory :: Text -- e.g. "air/urban air"
     , fcoCompartment :: Maybe Text -- Sub-compartment (e.g. "urban air")
     , fcoCfValue :: Double -- Raw characterization factor value
+    , fcoMatchKind :: Maybe Text -- How the factor was found ("exact_name", "cas_number", …); absent for a flow the method's tables never walked
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowContributionEntry)
@@ -706,6 +707,61 @@ data CharacterizationEntry = CharacterizationEntry
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped CharacterizationEntry)
+
+{- | Why one flow scores with the factor it does.
+
+Two layers on purpose. 'ecrExplanation' is written by the engine and is what a
+reader should be shown; the structured fields below it are for a consumer that
+wants to compare, filter or link, not for one that wants to restate the
+sentences in its own words.
+-}
+data ExplainCFResult = ExplainCFResult
+    { ecrMethod :: Text
+    , ecrMethodUnit :: Text
+    , ecrFlow :: ExplainedFlowAPI
+    , ecrOutcome :: Text -- "characterized" | "conversion_refused" | "no_factor"
+    , ecrExplanation :: [Text] -- Engine-authored sentences, in reading order
+    , ecrMatch :: Maybe ExplainedMatchAPI -- Absent when nothing reaches the flow
+    , ecrStepsTried :: [ExplainedStepAPI]
+    , ecrRegionalFactorCount :: Int -- Factors this flow holds that vary by the consuming activity's location
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExplainCFResult)
+
+-- | The flow being explained, as the cascade sees it after normalization.
+data ExplainedFlowAPI = ExplainedFlowAPI
+    { eflId :: Text
+    , eflName :: Text
+    , eflUnit :: Text
+    , eflCategory :: Text
+    , eflCompartment :: Maybe Text
+    , eflCas :: Maybe Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExplainedFlowAPI)
+
+-- | The factor that was served, and where it came from.
+data ExplainedMatchAPI = ExplainedMatchAPI
+    { emaRung :: Text -- How it was found: "exact_name", "cas_number", "energy_content", …
+    , emaCfValue :: Double
+    , emaCfUnit :: Text
+    , emaMethodFlowName :: Text -- The method line that authored the factor
+    , emaMethodCas :: Maybe Text
+    , emaMatchStrategy :: Text -- How that line was attached at load time
+    , emaUnitConversion :: Maybe Text -- How the amount reached the factor's basis
+    , emaRefusal :: Maybe Text -- Why it could not, when outcome is conversion_refused
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExplainedMatchAPI)
+
+-- | One rung of the cascade, and what it made of the flow.
+data ExplainedStepAPI = ExplainedStepAPI
+    { estRung :: Text
+    , estResult :: Text -- "hit" | "miss" | "not_applicable" | "vetoed" | "ambiguous"
+    , estVeto :: Maybe Text -- Which rule vetoed, when result is "vetoed"
+    }
+    deriving (Generic)
+    deriving (ToJSON, ToSchema) via (Stripped ExplainedStepAPI)
 
 -- | Database list response
 newtype DatabaseListResponse = DatabaseListResponse
