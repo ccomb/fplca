@@ -68,7 +68,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             -- Pin the consumer to alpha only, with no links yet — relink populates them.
             let consumerDb = consumerDb0{dbDependsOn = ["alpha"], dbCrossDBLinks = []}
 
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             solver <- mkSolver "consumer" consumerDb
             let consumerLoaded =
                     LoadedDatabase
@@ -105,7 +105,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
             let consumerDb = consumerDb0{dbDependsOn = ["alpha", "beta"], dbCrossDBLinks = []}
 
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             consumerSolver <- mkSolver "consumer" consumerDb
             alphaSolver <- mkSolver "alpha" alphaDb
             betaSolver <- mkSolver "beta" betaDb

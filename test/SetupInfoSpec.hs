@@ -154,7 +154,7 @@ installLoaded manager name db = do
 -- | A fresh manager with @db@ installed as a loaded database named "test".
 managerWithLoaded :: Database -> IO DatabaseManager
 managerWithLoaded db = do
-    manager <- initDatabaseManager defaultConfig True Nothing
+    manager <- initDatabaseManager defaultConfig True
     installLoaded manager "test" db
     pure manager
 
@@ -291,7 +291,7 @@ spec = do
                 Right loaded -> dcName (ldConfig loaded) `shouldBe` "test"
 
         it "answers not-loaded for a configured database that was never loaded" $ do
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             let config = stubConfig{dcName = "cfg", dcDisplayName = "cfg"}
             atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert "cfg" config)
             result <- getDatabaseSetupInfo manager "cfg"

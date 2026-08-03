@@ -27,7 +27,7 @@ pattern never forces it.
 -}
 runExport :: Text -> Text -> IO (Either ServerError (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent))
 runExport dbName fmt = do
-    dbm <- initDatabaseManager defaultConfig True Nothing
+    dbm <- initDatabaseManager defaultConfig True
     let env =
             AppEnv
                 { aeDbManager = dbm

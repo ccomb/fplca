@@ -59,7 +59,7 @@ spec :: Spec
 -- directory of its own rather than writing into the tree it was run from.
 spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
     it "registers an independent copy under the new name" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 100 ["p1", "p2"])
         installLoaded manager "source" srcDb
 
@@ -80,7 +80,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
             `shouldBe` V.length (dbActivities srcDb)
 
     it "is a deep, independent value — dropping the copy does not touch the source" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 200 ["p1", "p2", "p3"])
         installLoaded manager "source" srcDb
         _ <- copyDatabase manager "source" "mycopy"
@@ -100,7 +100,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         V.length (dbActivities (ldDatabase (after M.! "source"))) `shouldBe` srcCount
 
     it "is a deep, independent value — dropping the source leaves the copy intact" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 300 ["p1", "p2"])
         installLoaded manager "source" srcDb
         _ <- copyDatabase manager "source" "mycopy"
@@ -116,7 +116,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         V.length (dbActivities (ldDatabase (after M.! "mycopy"))) `shouldBe` srcCount
 
     it "gives the copy its own solver — factorizing the source does not warm the copy's cache" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 700 ["p1", "p2"])
         installLoaded manager "source" srcDb
         _ <- copyDatabase manager "source" "mycopy"
@@ -134,7 +134,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         getFactorization copySolver >>= (`shouldBe` True) . isNothing
 
     it "refuses to overwrite an existing database name" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 400 ["p1"])
         otherDb <- buildOrFail (supplierDB 500 ["q1"])
         installLoaded manager "source" srcDb
@@ -144,7 +144,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         result `shouldBe` Left "Database already exists: taken"
 
     it "fails when the source is not loaded" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         result <- copyDatabase manager "ghost" "mycopy"
         result `shouldBe` Left "Database not loaded: ghost"
 
@@ -152,7 +152,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         -- The copy is registered as an uploaded database and later deleted by
         -- name via removeDirectoryRecursive, so the name must never carry a
         -- path separator or parent ref that could escape the uploads directory.
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 800 ["p1", "p2"])
         installLoaded manager "source" srcDb
         result <- copyDatabase manager "source" "../../etc/passwd"
@@ -163,7 +163,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit copy primitive" $ do
         copyNames `shouldSatisfy` all (\n -> not ("/" `isInfixOf` n) && not (".." `isInfixOf` n))
 
     it "rejects a copy name with no usable characters" $ do
-        manager <- initDatabaseManager defaultConfig True Nothing
+        manager <- initDatabaseManager defaultConfig True
         srcDb <- buildOrFail (supplierDB 900 ["p1", "p2"])
         installLoaded manager "source" srcDb
         result <- copyDatabase manager "source" "///"

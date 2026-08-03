@@ -928,12 +928,8 @@ clearMethodMappingCacheForDb manager dbName = atomically $ do
 Pre-loads databases with load=true at startup
 Also discovers uploaded databases from uploads/ directory
 -}
-initDatabaseManager :: Config -> Bool -> Maybe FilePath -> IO DatabaseManager
-initDatabaseManager rawConfig noCache configPath = do
-    -- Every path the config carries is made config-relative in one place, so
-    -- the rest of this function only ever sees paths it can open.
-    let config = resolveConfigPaths configPath rawConfig
-
+initDatabaseManager :: Config -> Bool -> IO DatabaseManager
+initDatabaseManager config noCache = do
     -- Get configured databases and detect their format
     configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
         resolvedPath <- resolveDataPath (dcPath dbConfig)

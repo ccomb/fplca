@@ -114,7 +114,7 @@ spec = describe "hosting database quotas" $ do
 
     describe "the MCP door" $
         it "refuses load_database by the same budget as REST" $ do
-            manager <- initDatabaseManager defaultConfig True Nothing
+            manager <- initDatabaseManager defaultConfig True
             atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert "mine" (uploadedEntry "mine"))
             resp <-
                 callTool manager [] (Just (plan 1 0)) Nothing Null "load_database" $

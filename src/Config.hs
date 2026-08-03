@@ -480,15 +480,16 @@ loadConfig :: FilePath -> IO (Either Text Config)
 loadConfig = loadConfigOrDefault . Just
 
 {- | Resolve the effective configuration: parse the file when a path is given,
-otherwise fall back to 'defaultConfig'. Both paths honour VOLCA_DATA_DIR and
-run 'validateConfig' by construction — an explicit path that does not exist
+otherwise fall back to 'defaultConfig'. Both paths honour VOLCA_DATA_DIR,
+resolve relative paths against the file ('resolveConfigPaths') and run
+'validateConfig' by construction — an explicit path that does not exist
 still fails loudly, while no path at all means "all defaults, no databases".
 -}
 loadConfigOrDefault :: Maybe FilePath -> IO (Either Text Config)
 loadConfigOrDefault mPath = do
     raw <- maybe (pure (Right defaultConfig)) loadConfigFile mPath
     mDataDir <- lookupEnv "VOLCA_DATA_DIR"
-    pure $ raw >>= validateConfig . applyDataDir mDataDir
+    pure $ raw >>= validateConfig . resolveConfigPaths mPath . applyDataDir mDataDir
 
 {- | Redirect a "data/<rest>" path to "$VOLCA_DATA_DIR/<rest>".
 Returns the input unchanged when the env var is unset, or when the path
@@ -537,8 +538,9 @@ Every path-bearing field is listed here, and nothing resolves paths anywhere
 else: a config whose @[[databases]]@ path followed the file while its
 @[[methods]]@ path followed the process was the bug this replaces.
 
-Runs after 'applyDataDir', which is what recognises a leading @data/@ as the
-shipped bundle - prefixing it with a directory first would hide it.
+'loadConfigOrDefault' composes this after 'applyDataDir', which is what
+recognises a leading @data/@ as the shipped bundle - prefixing it with a
+directory first would hide it.
 -}
 resolveConfigPaths :: Maybe FilePath -> Config -> Config
 resolveConfigPaths mConfigPath cfg =

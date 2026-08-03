@@ -83,7 +83,7 @@ spec :: Spec
 spec = do
     describe "mapMethodToTablesCached (collection-scoped cache)" $ do
         it "returns per-collection CF tables for same-UUID methods (A then B)" $ do
-            mgr <- DM.initDatabaseManager defaultConfig False Nothing
+            mgr <- DM.initDatabaseManager defaultConfig False
             let db = mkDB 0 ["FR"] []
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
@@ -91,7 +91,7 @@ spec = do
             fmap teCF (M.lookup flowUUID (mtUuidCF tablesB)) `shouldBe` Just (CF cfB (CFUnit "MJ"))
 
         it "returns per-collection CF tables for same-UUID methods (B then A)" $ do
-            mgr <- DM.initDatabaseManager defaultConfig False Nothing
+            mgr <- DM.initDatabaseManager defaultConfig False
             let db = mkDB 0 ["FR"] []
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
