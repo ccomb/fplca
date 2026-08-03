@@ -57,6 +57,10 @@
   delete response says so with two fields, `transient` and `warnings`.
 
 ### Fixed
+- An uploaded database whose `meta.toml` recorded a path containing a backslash
+  or a quote came back with that character doubled. The file escapes them as
+  its format requires and nothing undid it on the way back, which on Windows
+  meant a nested data path that resolved to nothing.
 - A regionalized factor now comes from the method's most specific line, not from
   whichever line the file happened to list last. When a method writes both a
   medium-level factor and one naming the flow's own subcompartment, and both
