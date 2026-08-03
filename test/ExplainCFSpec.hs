@@ -242,7 +242,7 @@ spec = do
                         ]
                         [ocean, fresh]
                 explained = explainOf defaultUnitConfig tables ocean
-                vetoed = [rung | (rung, StepVetoed ForeignMediumVeto _) <- resultsFor explained]
+                vetoed = [rung | (rung, StepVetoed ForeignMediumVeto) <- resultsFor explained]
             ceResolution explained `shouldBe` Uncharacterized
             vetoed `shouldContain` [RungMediumDefault]
             vetoed `shouldContain` [RungSubBlind]
@@ -254,7 +254,7 @@ spec = do
                 fresh = flowIn 13 "Water" "water" Nothing
                 tables = tablesFor M.empty [(waterLine "Water" "" 1.0, Just (fresh, ByName))] [ocean, fresh]
                 explained = explainOf defaultUnitConfig tables ocean
-            [rung | (rung, StepVetoed ForeignMediumVeto _) <- resultsFor explained] `shouldBe` []
+            [rung | (rung, StepVetoed ForeignMediumVeto) <- resultsFor explained] `shouldBe` []
             case ceResolution explained of
                 Characterized m _ -> cmRung m `shouldBe` RungMediumDefault
                 other -> expectationFailure ("expected the freshwater factor to apply, got " <> show other)

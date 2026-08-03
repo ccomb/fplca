@@ -2224,12 +2224,11 @@ data RungOutcome
       resource, no unit-suffixed rows in the method): nothing is looked up.
       -}
       RungNotApplicable
-    | {- | A wildcard rung the flow's subcompartment refuses. The second field
-      is deliberately lazy: the score path matches the constructor only, so
-      a vetoed rung costs no lookup — "was there an entry behind the veto"
-      is paid only when an explanation forces it.
+    | {- | A wildcard rung the flow's subcompartment refuses. Whether an entry
+      sat behind the veto is deliberately not recorded: no surface reports
+      it, and not looking is what keeps a vetoed rung free on the score path.
       -}
-      RungVetoed !VetoReason (Maybe TableEntry)
+      RungVetoed !VetoReason
     | {- | Several candidates disagree and the rung refuses to pick one by Map
       order (energy-family disagreement) — the "never guess" rule.
       -}
@@ -2295,7 +2294,7 @@ cascadeTrail tables flowDB fid =
             | otherwise = LongTermUSEtoxVeto
         gated r
             | reachable = plain r
-            | otherwise = RungVetoed veto r
+            | otherwise = RungVetoed veto
 
         -- 'mtUnitVariantCF' is empty for every method whose factor lines
         -- carry no unit suffix — the common case — and 'M.lookup' is strict
@@ -2330,17 +2329,11 @@ cascadeTrail tables flowDB fid =
         -- suffix with this same 'extractLocationSuffix' before looking a density
         -- up: whatever name lends the factor must also lend the density, or the
         -- flow holds a factor it cannot be converted to and scores 0.
-        --
-        -- When vetoed, the suffix parse and the lookup both stay behind the
-        -- lazy field.
         regionOutcome
-            | not reachable = RungVetoed veto regionLookup
+            | not reachable = RungVetoed veto
             | otherwise = case extractLocationSuffix (bfName flow) of
                 (base, Just _) -> plain (regionLookupAt base)
                 (_, Nothing) -> RungNotApplicable
-        regionLookup = case extractLocationSuffix (bfName flow) of
-            (base, Just _) -> regionLookupAt base
-            (_, Nothing) -> Nothing
         regionLookupAt base =
             let bname = SR.NormName (normalizeName base)
              in M.lookup (bname, baseMed, normSub) (mtExactCF tables)

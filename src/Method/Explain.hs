@@ -51,7 +51,6 @@ module Method.Explain (
 ) where
 
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -111,11 +110,8 @@ data StepResult
       density suffix, not a long-term emission, not a graded ore).
       -}
       StepNotApplicable
-    | {- | A wildcard rung the flow's subcompartment refuses. The flag says
-      whether an entry sat behind the veto, i.e. whether the veto changed
-      the answer or merely confirmed a miss.
-      -}
-      StepVetoed !VetoReason !Bool
+    | -- | A wildcard rung the flow's subcompartment refuses.
+      StepVetoed !VetoReason
     | -- | Candidates disagreed and the rung refused to pick one.
       StepAmbiguous
     deriving (Eq, Show)
@@ -162,13 +158,13 @@ explainFlowCF unitCfg unitDB tables fid flow =
     isHit (RungHit _) = True
     isHit RungMiss = False
     isHit RungNotApplicable = False
-    isHit (RungVetoed _ _) = False
+    isHit (RungVetoed _) = False
     isHit RungAmbiguous = False
 
     stepResult (RungHit _) = StepHit
     stepResult RungMiss = StepMiss
     stepResult RungNotApplicable = StepNotApplicable
-    stepResult (RungVetoed reason behind) = StepVetoed reason (isJust behind)
+    stepResult (RungVetoed reason) = StepVetoed reason
     stepResult RungAmbiguous = StepAmbiguous
 
     resolution = case [(rung, entry) | (rung, RungHit entry) <- walked] of
@@ -227,7 +223,7 @@ stepName :: StepResult -> Text
 stepName StepHit = "hit"
 stepName StepMiss = "miss"
 stepName StepNotApplicable = "not_applicable"
-stepName (StepVetoed _ _) = "vetoed"
+stepName (StepVetoed _) = "vetoed"
 stepName StepAmbiguous = "ambiguous"
 
 {- | Stable name for how the amount reached the factor's basis. The numbers
