@@ -60,7 +60,7 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 
 ## Where to start
 
-- **A new MCP tool or REST endpoint** → `API.Resources` holds the resource registry that drives REST, MCP and OpenAPI; add one `Resource` there (a drift test enforces the wiring), not in N places.
+- **A new MCP tool or REST endpoint** → `API.Resources` holds the resource registry that drives REST, MCP and OpenAPI; add one `Resource` there, not in N places.
 - **A new database format** → a new namespace with its `Parser` / `Writer` pair (e.g. `Foo.Parser`, `Foo.Writer`), wired into `Database.Loader` and `Database.Export`.
 - **Wrong or empty LCI numbers** → `Database.MatrixBuild` plus `Matrix` / `SharedSolver`; check supplier resolution in `Database.CrossLinking`.
 - **Characterization mismatches** → `Method.Mapping` (the UUID→name→synonym→CAS cascade) and `Method.FlowResolver`.
