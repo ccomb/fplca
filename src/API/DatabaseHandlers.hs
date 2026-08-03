@@ -19,6 +19,7 @@ module API.DatabaseHandlers (
     relinkDatabaseHandler,
     gapReportHandler,
     gapReportToAPI,
+    editReportToAPI,
     qualityReportHandler,
     qualityReportToAPI,
     computedQualityReportToAPI,
@@ -30,6 +31,7 @@ module API.DatabaseHandlers (
     deleteActivitiesHandler,
     createActivitiesHandler,
     replaceActivityHandler,
+    editExchangesHandler,
     exportDatabaseHandler,
     exportMethodHandler,
     uploadDatabaseHandler,
@@ -113,6 +115,8 @@ import API.Types (
     DeleteClassFilter (..),
     DeleteSelectionRequest (..),
     DeleteSelectionResponse (..),
+    ExchangeEditRequest (..),
+    ExchangeEditResponse (..),
     ExplainCFResult (..),
     ExplainedFlowAPI (..),
     ExplainedMatchAPI (..),
@@ -133,6 +137,7 @@ import API.Types (
     UploadChunk (..),
     UploadResponse (..),
     toAuthoredActivities,
+    toExchangeEdits,
  )
 import App.Env (AppEnv (..), AppM)
 import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusal)
@@ -147,11 +152,13 @@ import qualified Data.Vector as V
 import Database.Edit (
     DeleteOutcome (..),
     DeleteRequest (..),
+    EditReport (..),
     WriteRefusal (..),
     WriteReport (..),
     WriteVerb (..),
     copyDatabase,
     deleteActivitiesInDB,
+    editExchanges,
     refusalMessage,
     writeActivities,
  )
@@ -591,6 +598,34 @@ runWrite dbName verb inputs = do
                     , awpTransient = not (wrPersisted report)
                     , awpWarnings = wrWarnings report
                     }
+
+{- | Change the inventory of one activity the database already holds.
+
+The operation a PUT cannot do: the activity keeps its identity and everything
+a description would not carry, and only the lines the edit names change. An
+activity the database does not hold is a 404; a selector that reaches nothing
+is a 400, listing every complaint at once.
+-}
+editExchangesHandler :: Text -> Text -> ExchangeEditRequest -> AppM ExchangeEditResponse
+editExchangesHandler dbName processId req = do
+    guardMutation
+    dbManager <- asks aeDbManager
+    edits <- either (writeErr err400 . T.intercalate "\n") pure (toExchangeEdits req)
+    outcome <- liftIO (editExchanges dbManager dbName processId edits)
+    either (\refusal -> writeErr (statusFor refusal) (refusalMessage refusal)) (pure . editReportToAPI) outcome
+
+{- | What an edit answers, on every surface that offers one — so an assistant
+and a person reading the API reference are told the same thing.
+-}
+editReportToAPI :: EditReport -> ExchangeEditResponse
+editReportToAPI report =
+    ExchangeEditResponse
+        { eepRemoved = erRemoved report
+        , eepAmountsSet = erAmountsSet report
+        , eepAdded = erAdded report
+        , eepTransient = not (erPersisted report)
+        , eepWarnings = erWarnings report
+        }
 
 -- | One status per refusal, so a client never has to read the message to branch.
 statusFor :: WriteRefusal -> ServerError

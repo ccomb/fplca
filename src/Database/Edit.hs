@@ -40,6 +40,8 @@ module Database.Edit (
     WriteRefusal (..),
     WriteReport (..),
     writeActivities,
+    EditReport (..),
+    editExchanges,
     refusalMessage,
 ) where
 
@@ -63,7 +65,10 @@ import Database (applyStructuredFilters, findActivitiesByFields)
 import Database.Author (
     AuthorContext (..),
     AuthoredActivity,
+    EditedActivity (..),
+    ExchangeEdit (..),
     ResolvedInsert (..),
+    applyExchangeEdits,
     validateAuthored,
  )
 import Database.CrossLinking (buildIndexedDatabaseFromDB)
@@ -98,6 +103,7 @@ import Types (
     ProcessId,
     SparseTriple (..),
     findProcessIdByActivityUUID,
+    getActivity,
     initializeRuntimeFields,
     parseUUIDPair,
  )
@@ -339,6 +345,72 @@ writeActivities manager dbName verb authored =
                         { wrWritten = map (renderKey . riKey) resolved
                         , wrPersisted = moPersisted done
                         , wrWarnings = warnings <> moWarnings done
+                        }
+
+-- | What an inventory edit produced, counted the way the request stated it.
+data EditReport = EditReport
+    { erRemoved :: [Int]
+    , erAmountsSet :: [Int]
+    , erAdded :: Int
+    , erPersisted :: Bool
+    , erWarnings :: [Text]
+    }
+
+{- | Change the inventory of one activity a loaded database already holds.
+
+The sibling of 'writeActivities', and refused for the same reasons in the same
+order — but not a third 'WriteVerb': a write states a whole activity, an edit
+states changes to one, and folding them into one verb would mean a payload
+that is half ignored either way.
+
+What it exists for is the activity a write cannot reach: one that came in from
+a database file, whose identity no description mints. Here the identity is the
+caller's target, never re-derived, and everything the edits do not name stays
+as it is.
+-}
+editExchanges ::
+    DatabaseManager ->
+    Text ->
+    Text ->
+    [ExchangeEdit] ->
+    IO (Either WriteRefusal EditReport)
+editExchanges _ _ _ [] =
+    -- Committing re-serializes the database and rebuilds its solver; an empty
+    -- edit would pay all of that to change nothing.
+    pure (Left (Malformed ["There is nothing to change: the edit names no exchange."]))
+editExchanges manager dbName target edits =
+    getDatabase manager dbName >>= \case
+        Nothing -> pure (Left (NotLoaded dbName))
+        Just loaded
+            | not (dcIsUploaded (ldConfig loaded)) -> pure (Left (NotWritable dbName))
+            | otherwise -> case addressed (ldDatabase loaded) of
+                Nothing -> pure (Left (NotPresent [target]))
+                Just (key, activity) -> do
+                    ctx <- authorContext manager (ldDatabase loaded)
+                    case applyExchangeEdits ctx edits activity of
+                        Left errs -> pure (Left (Malformed errs))
+                        Right edited -> commit key (eaMatched edited) (eaWarnings edited)
+  where
+    -- The identity is recorded canonically even when the caller addressed the
+    -- activity by its bare UUID, so the journal keeps naming the same process
+    -- if that activity ever gains a second product.
+    addressed db = do
+        pid <- either (const Nothing) Just (resolveProcess db target)
+        key <- either (const Nothing) Just (processKey db pid)
+        activity <- getActivity db pid
+        pure (renderKey key, activity)
+    commit key matched warnings = do
+        outcome <- mutateUploadedDatabase manager dbName (Edited key (zip edits matched))
+        pure $ case outcome of
+            Left err -> Left (WriteFailed err)
+            Right done ->
+                Right
+                    EditReport
+                        { erRemoved = [n | (RemoveExchange _, n) <- zip edits matched]
+                        , erAmountsSet = [n | (SetAmount _ _, n) <- zip edits matched]
+                        , erAdded = length [() | AddExchange _ <- edits]
+                        , erPersisted = moPersisted done
+                        , erWarnings = warnings <> moWarnings done
                         }
 
 {- | The two refusals only a verb can name: creating over a process that is

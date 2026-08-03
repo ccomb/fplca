@@ -28,7 +28,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.1** speaks wire formats **2 to 6** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.1** speaks wire formats **2 to 7** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 
@@ -523,6 +523,32 @@ Delete a reference-data set of ``kind`` and remove its staged file.
 Download a flow-synonyms set as its raw CSV bytes.
 
 Raises VoLCAError on an HTTP error (e.g. the set does not exist).
+
+##### `Client.edit_exchanges(process_id: str, *, remove: Sequence[ExchangeSelector] = (), set_amounts: Sequence[SetAmount] = (), add_inputs: Sequence[TechInput] = (), add_biosphere: Sequence[BioExchange] = (), add_waste_outputs: Sequence[WasteOutput] = (), db_name: str | None = None) -> dict`
+
+Change what one activity consumes and emits, keeping the activity.
+
+This reaches what :meth:`replace_activity` cannot: an activity that came
+in from a database file. Its identity was minted by whichever parser
+read it, so no description addresses it — and a description could not
+carry back its classification, synonyms, parameters, pedigree or
+coproducts anyway. Here you name only the lines that change, and
+everything else stays as it was.
+
+Only the inventory side is addressable. The reference product and any
+coproduct carry the activity's identity and its allocation, so no
+selector reaches them.
+
+A selector that names nothing is refused rather than treated as done.
+One that names several lines applies to all of them, and the counts come
+back per selector, in the order you stated them::
+
+    {"removed": [2], "amountsSet": [], "added": 1,
+     "transient": False, "warnings": [...]}
+
+Only a database of your own accepts edits — copy a configured one first.
+
+Needs an engine speaking wire revision 7.
 
 ##### `Client.ensure_database(source: str | Path | bytes, name: str | None = None) -> str`
 
@@ -1592,6 +1618,25 @@ endpoint. Derived from the engine's declared topology, not runtime state.
 | `format` | `str \| None` | None |
 | `depends_on` | `list[str]` | list() |
 
+### `ExchangeSelector`
+
+Which lines of an inventory an edit is about.
+
+``kind`` is ``"input"``, ``"waste"`` or ``"biosphere"``. The first two name
+their provider by process id; the third names its flow by identity. There
+is no kind for the reference product or a coproduct: changing those changes
+what the activity *is*, which is not what an inventory edit does.
+
+A selector may name several lines, and then it applies to all of them —
+:meth:`Client.edit_exchanges` reports how many. Naming none is refused by
+the engine rather than passed off as done.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `kind` | `str` | — |
+| `provider` | `str \| None` | None |
+| `flow` | `str \| None` | None |
+
 ### `ExplainCFResult`
 
 Result of :meth:`Client.explain_cf`.
@@ -2101,6 +2146,15 @@ None for engines that predate it (everything up to v0.7.x).
 | `git_tag` | `str \| None` | — |
 | `build_target` | `str` | — |
 | `wire_version` | `int \| None` | None |
+
+### `SetAmount`
+
+The lines to restate, and what to restate them to.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `select` | `ExchangeSelector` | — |
+| `amount` | `float` | — |
 
 ### `Substitution`
 

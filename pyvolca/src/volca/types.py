@@ -2087,6 +2087,69 @@ class ActivityInput:
         }
 
 
+@dataclass(frozen=True)
+class ExchangeSelector:
+    """Which lines of an inventory an edit is about.
+
+    ``kind`` is ``"input"``, ``"waste"`` or ``"biosphere"``. The first two name
+    their provider by process id; the third names its flow by identity. There
+    is no kind for the reference product or a coproduct: changing those changes
+    what the activity *is*, which is not what an inventory edit does.
+
+    A selector may name several lines, and then it applies to all of them —
+    :meth:`Client.edit_exchanges` reports how many. Naming none is refused by
+    the engine rather than passed off as done.
+    """
+
+    kind: str
+    provider: str | None = None
+    flow: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("input", "waste", "biosphere"):
+            raise ValueError(
+                f"unknown selector kind {self.kind!r} (expected input, waste or biosphere)"
+            )
+        if self.kind == "biosphere":
+            if self.flow is None or self.provider is not None:
+                raise ValueError(
+                    "a biosphere selector names its flow (flow=...), and nothing else"
+                )
+        elif self.provider is None or self.flow is not None:
+            raise ValueError(
+                f"a selector of kind {self.kind} names its provider (provider=...), and nothing else"
+            )
+
+    @classmethod
+    def input_from(cls, provider: str) -> "ExchangeSelector":
+        """A technosphere input, by the process id of what supplies it."""
+        return cls(kind="input", provider=provider)
+
+    @classmethod
+    def waste_to(cls, provider: str) -> "ExchangeSelector":
+        """A waste output, by the process id of the treatment it goes to."""
+        return cls(kind="waste", provider=provider)
+
+    @classmethod
+    def biosphere_flow(cls, flow: str) -> "ExchangeSelector":
+        """A biosphere exchange, by flow id."""
+        return cls(kind="biosphere", flow=flow)
+
+    def to_wire(self) -> dict:
+        return _drop_none({"kind": self.kind, "provider": self.provider, "flow": self.flow})
+
+
+@dataclass(frozen=True)
+class SetAmount:
+    """The lines to restate, and what to restate them to."""
+
+    select: ExchangeSelector
+    amount: float
+
+    def to_wire(self) -> dict:
+        return {"select": self.select.to_wire(), "amount": self.amount}
+
+
 def _drop_none(d: dict) -> dict:
     """Omit absent optional fields rather than sending explicit nulls."""
     return {k: v for k, v in d.items() if v is not None}

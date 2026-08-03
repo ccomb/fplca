@@ -124,6 +124,7 @@ databaseParser =
                     <> OA.command "export" (info (DbExport <$> exportArgsParser <**> helper) (progDesc "Export a loaded database to a file"))
                     <> OA.command "create-activities" (info (DbCreateActivities <$> writeArgsParser <**> helper) (progDesc "Write new activities into a database from a JSON file"))
                     <> OA.command "replace-activity" (info (DbReplaceActivity <$> replaceArgsParser <**> helper) (progDesc "Rewrite one activity of a database from a JSON file"))
+                    <> OA.command "edit-exchanges" (info (DbEditExchanges <$> editArgsParser <**> helper) (progDesc "Change one activity's inventory from a JSON file, keeping the rest of the activity"))
                 )
             )
 
@@ -167,12 +168,23 @@ writeArgsParser =
 {- | Replace parser: as 'writeArgsParser', plus the identity being rewritten.
 The file holds one activity rather than a batch.
 -}
-replaceArgsParser :: Parser DbReplaceArgs
+replaceArgsParser :: Parser DbActivityArgs
 replaceArgsParser =
-    DbReplaceArgs
+    DbActivityArgs
         <$> textArg "DB" "Name of the loaded database holding the activity"
         <*> textOpt "process-id" Nothing "PID" "Identity of the activity to rewrite (activityUUID_productUUID)"
         <*> strOpt "from" Nothing "FILE" "JSON file holding the activity"
+
+{- | Exchange-edit parser: the activity addressed, and the file stating what
+changes about its inventory. This one reaches activities a rewrite cannot —
+the ones a database file brought in, whose identity no description mints.
+-}
+editArgsParser :: Parser DbActivityArgs
+editArgsParser =
+    DbActivityArgs
+        <$> textArg "DB" "Name of the loaded database holding the activity"
+        <*> textOpt "process-id" Nothing "PID" "Identity of the activity to edit (activityUUID_productUUID)"
+        <*> strOpt "from" Nothing "FILE" "JSON file holding the edits (remove, setAmounts, addInputs, addBiosphere, addWasteOutputs)"
 
 {- | Method-export parser: positional collection name, @--format@ keyword,
 @--out@ file path. Mirrors @method export <name> --format <fmt> --out <file>@.

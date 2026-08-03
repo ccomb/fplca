@@ -13,9 +13,7 @@ The Haskell call sites use 'Resource' PascalCase constructors directly.
 
 Adding a new operation means extending the 'Resource' ADT and adding one
 equation to each projection function. The compiler catches missing cases
-for 'mcpName'/'cliName'/'description'/'params'. A separate drift test
-(ResourcesDriftSpec) enforces that each 'Resource' corresponds to an
-actual Servant route in 'API.Routes.LCAAPI'.
+for 'mcpName'/'cliName'/'description'/'params'.
 -}
 module API.Resources (
     Resource (..),
@@ -39,12 +37,17 @@ import Network.HTTP.Types.Method (StdMethod (..))
 
 {- | Every operation VoLCA exposes through its user-facing surfaces.
 
-This covers the analyst-facing operations. Loading and unloading a database
-belong here too: they change which databases are in the working set, not the
-(read-only) data itself, so they are a legitimate analyst action and are
-exposed on every surface. Genuinely state-mutating or infrastructure endpoints
-(method-collection management, upload/delete/relink/copy, auth, version) stay
-in Routes.hs only — they have no analyst-facing equivalent across all surfaces.
+What belongs here is what an analyst does. That covers the analysis operations,
+and loading or unloading a database: those change which databases are in the
+working set rather than the data itself. It also covers editing the inventory
+of an activity — adjusting an imported dataset to the study at hand is analysis
+work, done on a database of one's own, and the engine refuses it on the
+background data it reads from its configuration.
+
+Infrastructure stays in Routes.hs only: method-collection management,
+upload, delete, relink, copy, auth, version. Those administer the installation
+rather than answer a question about it, and have no analyst-facing equivalent
+across every surface.
 -}
 data Resource
     = ListDatabases
@@ -77,6 +80,7 @@ data Resource
     | GetQualityReport
     | GetComputedQualityReport
     | GetCoverageReport
+    | EditExchanges
     deriving (Eq, Ord, Show, Bounded, Enum)
 
 -- | Whether a parameter must be supplied by the caller.
@@ -150,6 +154,7 @@ resourceMutates r = case r of
     GetQualityReport -> False
     GetComputedQualityReport -> False
     GetCoverageReport -> False
+    EditExchanges -> True
 
 -- ---------------------------------------------------------------------------
 -- Projection: canonical HTTP route (primary GET)
@@ -170,8 +175,7 @@ primary GET. The runtime dispatcher in pyvolca upgrades to POST when a
 
 The 'API.OpenApi' enrichment step uses this to stamp @operationId@,
 @summary@, and parameter descriptions onto the auto-generated OpenAPI
-spec. A build-time drift test (ResourcesDriftSpec) asserts that every
-'Just' result matches a real Servant route in 'API.Routes.LCAAPI'.
+spec.
 -}
 apiPath :: Resource -> Maybe (StdMethod, [Text])
 apiPath r = case r of
@@ -205,6 +209,7 @@ apiPath r = case r of
     GetQualityReport -> Just (GET, ["db", "{dbName}", "quality-report"])
     GetComputedQualityReport -> Just (GET, ["db", "{dbName}", "computed-quality-report"])
     GetCoverageReport -> Just (GET, ["db", "{dbName}", "characterization-coverage"])
+    EditExchanges -> Just (POST, ["db", "{dbName}", "activity", "{processId}", "exchanges"])
 
 {- | The full OpenAPI path template for a resource, e.g.
 @"/api/v1/db/{dbName}/activity/{processId}/impacts/{collection}/{methodId}"@.
@@ -252,6 +257,7 @@ mcpName r = case r of
     GetQualityReport -> "get_quality_report"
     GetComputedQualityReport -> "get_computed_quality_report"
     GetCoverageReport -> "get_characterization_coverage"
+    EditExchanges -> "edit_exchanges"
 
 -- ---------------------------------------------------------------------------
 -- Projection: CLI subcommand names (kebab-case)
@@ -295,6 +301,7 @@ cliName r = case r of
     GetQualityReport -> "quality-report"
     GetComputedQualityReport -> "computed-quality-report"
     GetCoverageReport -> "characterization-coverage"
+    EditExchanges -> "edit-exchanges"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
@@ -615,6 +622,24 @@ description r = case r of
         \can be compared side by side. Optionally filtered to a single \
         \collection. Answers 'which of this database's flow names would an \
         \exact-name tool fail to characterize?'"
+    EditExchanges ->
+        "LCA / ACV — change what one activity consumes and emits, keeping the \
+        \activity itself. The only tool that writes data. Use it to adjust an \
+        \imported dataset to the study at hand: drop a substance the scope \
+        \excludes, correct an amount, add a supplier the dataset is missing. \
+        \Everything the edit does not name stays as it is — classification, \
+        \synonyms, parameters, pedigree, coproducts — which is why this exists \
+        \rather than rewriting the activity. Only the inventory side is \
+        \addressable: an input by its provider's process_id, a waste output by \
+        \its treatment's process_id, a biosphere line by its flow id (from \
+        \get_activity). The reference product and any coproduct are not \
+        \reachable, because changing those changes what the activity IS. A \
+        \selector that matches nothing is refused rather than silently doing \
+        \nothing, and one that matches several lines edits all of them and says \
+        \how many. Refused outright on a database the engine reads from its \
+        \configuration: copy it first (that background data is shared with \
+        \everyone). If the answer says transient, the edit is in memory only \
+        \and an unload undoes it."
 
 -- ---------------------------------------------------------------------------
 -- Projection: parameter schema
@@ -943,4 +968,13 @@ params r = case r of
         [ pDatabase
         , Param "collection" "string" Optional "Restrict the report to one loaded method collection (from list_methods). If omitted, every loaded collection is reported, so two method versions can be compared side by side."
         , pLimit "Max bridge groups to return per collection (default: all). Each collection's bridgeGroupCount always covers its full list, so a truncated list stays countable."
+        ]
+    EditExchanges ->
+        [ pDatabase
+        , pProcessId
+        , Param "remove" "array" Optional "Lines to drop. Each is {kind, provider|flow}: kind \"input\" or \"waste\" with the provider's process_id, or kind \"biosphere\" with the flow id."
+        , Param "set_amounts" "array" Optional "Lines to restate. Each is {select: {kind, provider|flow}, amount}."
+        , Param "add_inputs" "array" Optional "Technosphere inputs to add. Each is {provider, amount} plus optional unit and comment. The flow follows from the provider."
+        , Param "add_biosphere" "array" Optional "Biosphere lines to add. Each is {direction, amount} plus either flow (an existing flow id) or name + compartment + unit to introduce a new one."
+        , Param "add_waste_outputs" "array" Optional "Waste outputs to add. Each is {provider, amount} plus optional unit and comment, where the provider is the treatment process."
         ]

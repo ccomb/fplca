@@ -28,6 +28,8 @@ import Database.Author (
     AuthorContext (..),
     AuthoredActivity (..),
     AuthoredExchange (..),
+    ExchangeEdit (..),
+    ExchangeSelector (..),
     FlowRef (..),
     ResolvedInsert (..),
     validateAuthored,
@@ -69,6 +71,10 @@ spec = do
             -- happens to serialize an object in.
             Just (toJSON (event (Created [cheese] ["a_b"])))
                 `shouldBe` (decodeStrict expectedCreateJSON :: Maybe Value)
+
+        it "writes the shape an inventory edit documents" $
+            Just (toJSON (event editedInventory))
+                `shouldBe` (decodeStrict expectedEditJSON :: Maybe Value)
 
         it "reads back every event it writes" $
             -- One event per operation, and one exchange per kind, so a field
@@ -150,6 +156,28 @@ spec = do
             replayOutcome ctx [event (Replaced supplierPid cheese)]
                 `shouldSatisfy` failsWith "now mints"
 
+        it "edits an inventory in place, leaving the activity's identity alone" $
+            case replayJournal ctx [event (Edited supplierPid [(SetAmount (SelectBiosphere co2Id) 3, 1)])] of
+                Left err -> expectationFailure ("replay: " <> show err)
+                Right db -> do
+                    processKeys db `shouldBe` processKeys fixture
+                    emissionsOf db `shouldBe` [3]
+
+        it "brings along the flow an added line introduces" $
+            case replayJournal ctx [event (Edited supplierPid [(AddExchange methane, 1)])] of
+                Left err -> expectationFailure ("replay: " <> show err)
+                Right db -> map bfName (M.elems (dbBioFlows db)) `shouldSatisfy` elem "Methane"
+
+        it "refuses an edit whose selectors no longer match what they matched" $
+            -- The guard that makes a recorded edit safe to replay: the
+            -- inventory it was made against must still be the one it named.
+            replayOutcome ctx [event (Edited supplierPid [(RemoveExchange (SelectBiosphere co2Id), 2)])]
+                `shouldSatisfy` failsWith "now match"
+
+        it "refuses an edit of an activity the database does not have" $
+            replayOutcome ctx [event (Edited cheeseKey [(RemoveExchange (SelectBiosphere co2Id), 1)])]
+                `shouldSatisfy` failsWith "Unknown process id"
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -198,6 +226,14 @@ mintedKey db activity = case validateAuthored ctx [activity] of
 processKeys :: Database -> S.Set Text
 processKeys = S.fromList . map renderKey . V.toList . dbProcessIdTable
 
+-- | Every biosphere amount in the database, so an edit's effect is visible.
+emissionsOf :: Database -> [Double]
+emissionsOf db =
+    [ bioAmount ex
+    | act <- V.toList (dbActivities db)
+    , ex@BiosphereExchange{} <- exchanges act
+    ]
+
 -- ---------------------------------------------------------------------------
 -- What the journal carries
 -- ---------------------------------------------------------------------------
@@ -240,16 +276,45 @@ cheese =
             ]
         }
 
+-- | A biosphere line introducing a flow the fixture does not have.
+methane :: AuthoredExchange
+methane =
+    AuthoredBio
+        { abFlow =
+            NewBioFlow
+                "Methane"
+                Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
+                "kg"
+        , abDirection = Emission
+        , abAmount = 0.01
+        , abUnit = Just "kg"
+        , abComment = Nothing
+        }
+
+usedOilOut :: AuthoredExchange
+usedOilOut =
+    AuthoredWasteOutput{awProvider = supplierPid, awAmount = 0.2, awUnit = Nothing, awComment = Nothing}
+
+{- | One edit of every kind an inventory edit records, each with the number of
+exchanges it matched — including a selector that named more than one line.
+-}
+editedInventory :: JournalOp
+editedInventory =
+    Edited
+        supplierPid
+        [ (RemoveExchange (SelectBiosphere co2Id), 2)
+        , (RemoveExchange (SelectWaste supplierPid), 1)
+        , (SetAmount (SelectInput supplierPid) 4, 1)
+        , (AddExchange usedOilOut, 1)
+        ]
+
 richEvents :: [JournalEvent]
 richEvents =
     [ event (Created [cheese] ["a_b"])
     , event (Replaced "a_b" cheese)
     , event (Deleted ["a_b", "c_d"])
-    , event
-        ( Created
-            [cheese{aaExchanges = [AuthoredWasteOutput{awProvider = supplierPid, awAmount = 0.2, awUnit = Nothing, awComment = Nothing}]}]
-            ["a_b"]
-        )
+    , event (Created [cheese{aaExchanges = [usedOilOut]}] ["a_b"])
+    , event editedInventory
     ]
 
 expectedCreateJSON :: BS.ByteString
@@ -269,6 +334,32 @@ expectedCreateJSON =
            \{\"kind\":\"biosphere\",\"flow\":{\"name\":\"Methane\",\"compartment\":\"air\",\
            \\"sub_compartment\":\"low population density\",\"unit\":\"kg\"},\
            \\"direction\":\"emission\",\"amount\":0.01,\"unit\":\"kg\"}]}]}"
+
+{- | An inventory edit as it lands on disk. A selector's flow is a bare
+identifier where a written biosphere line nests an object, because a selector
+names a flow that exists and never introduces one.
+-}
+expectedEditJSON :: BS.ByteString
+expectedEditJSON =
+    "{\"v\":1,\"at\":\"2026-08-03T09:12:41Z\",\"op\":\"edit\",\"target\":\""
+        <> ascii supplierPid
+        <> "\",\"edits\":[\
+           \{\"matched\":2,\"edit\":\"remove\",\
+           \\"select\":{\"kind\":\"biosphere\",\"flow\":\""
+        <> ascii (UUID.toText co2Id)
+        <> "\"}},\
+           \{\"matched\":1,\"edit\":\"remove\",\
+           \\"select\":{\"kind\":\"waste\",\"provider\":\""
+        <> ascii supplierPid
+        <> "\"}},\
+           \{\"matched\":1,\"edit\":\"set\",\
+           \\"select\":{\"kind\":\"input\",\"provider\":\""
+        <> ascii supplierPid
+        <> "\"},\"amount\":4},\
+           \{\"matched\":1,\"edit\":\"add\",\
+           \\"exchange\":{\"kind\":\"waste\",\"provider\":\""
+        <> ascii supplierPid
+        <> "\",\"amount\":0.2}}]}"
 
 -- ---------------------------------------------------------------------------
 -- Fixture: one supplier producing milk in kg, emitting CO2

@@ -9,11 +9,12 @@ module MCPDispatchSpec (spec) where
 
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), decodeStrict)
-import Data.Aeson.Key (fromText)
+import Data.Aeson.Key (fromText, toText)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
+import Data.List (sort)
 import qualified Data.Map as M
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
@@ -82,6 +83,38 @@ call name = do
     manager <- initDatabaseManager defaultConfig True Nothing
     callTool manager [] Nothing Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
+{- | Call the edit tool with one line named. An edit that names nothing is
+refused before the database is even looked up, which would mask the refusal a
+test is actually about.
+-}
+callEdit :: IO Value
+callEdit = do
+    manager <- initDatabaseManager defaultConfig True Nothing
+    callTool manager [] Nothing Nothing Null "edit_exchanges" $
+        KM.fromList
+            [ ("database", String "no-such-db")
+            , ("process_id", String "a_b")
+            , ("remove", oneRemoval)
+            ]
+  where
+    oneRemoval =
+        fromMaybe Null $
+            decodeStrict "[{\"kind\":\"biosphere\",\"flow\":\"00000000-0000-0000-0000-000000000003\"}]"
+
+-- | For every array parameter a tool declares, the @type@ its items promise.
+itemTypesOf :: Text -> [(Text, Text)]
+itemTypesOf name =
+    sort
+        [ (toText key, itemType)
+        | Just (Object o) <- [toolByName name]
+        , Just (Object schema) <- [KM.lookup "inputSchema" o]
+        , Just (Object props) <- [KM.lookup "properties" schema]
+        , (key, Object prop) <- KM.toList props
+        , KM.lookup "type" prop == Just (String "array")
+        , Just (Object items) <- [KM.lookup "items" prop]
+        , Just (String itemType) <- [KM.lookup "type" items]
+        ]
+
 spec :: Spec
 spec = describe "MCP database load/unload tools" $ do
     it "are advertised with a required 'database' parameter" $ do
@@ -111,6 +144,30 @@ spec = describe "MCP database load/unload tools" $ do
             resp <- call "get_gap_report"
             isError resp `shouldBe` True
             resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+    describe "exchange-edit tool" $ do
+        it "is advertised with the database and the activity it edits" $
+            fmap requiredOf (toolByName "edit_exchanges") `shouldBe` Just ["database", "process_id"]
+
+        it "is routed by callTool (no 'Unknown tool' gap)" $ do
+            resp <- callEdit
+            resultText resp `shouldSatisfy` maybe False (not . T.isPrefixOf "Unknown tool:")
+
+        it "surfaces the engine error for an unknown database" $ do
+            resp <- callEdit
+            isError resp `shouldBe` True
+            resultText resp `shouldSatisfy` maybe False ("Database not loaded:" `T.isInfixOf`)
+
+        it "describes each of its lists as holding objects" $
+            -- A list left declaring string items would tell the assistant to
+            -- send five arrays of text, every one of which is refused.
+            itemTypesOf "edit_exchanges"
+                `shouldBe` [ ("add_biosphere", "object")
+                           , ("add_inputs", "object")
+                           , ("add_waste_outputs", "object")
+                           , ("remove", "object")
+                           , ("set_amounts", "object")
+                           ]
 
     describe "quality-report tool" $ do
         it "is advertised with a required 'database' parameter" $

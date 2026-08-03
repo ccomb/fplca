@@ -112,19 +112,24 @@ import Database.Author (
     AuthorContext (..),
     AuthoredActivity (..),
     AuthoredExchange (..),
+    EditedActivity (..),
+    ExchangeEdit (..),
+    ExchangeSelector (..),
     FlowRef (..),
     ResolvedInsert (..),
+    applyExchangeEdits,
     validateAuthored,
  )
 import Database.Rebuild (
     deleteActivitiesWith,
     insertActivities,
+    processKey,
     renderKey,
     replaceActivities,
     resolveProcess,
  )
 import Progress (ProgressLevel (..), reportProgress)
-import Types (BioDirection (..), Compartment (..), Database)
+import Types (BioDirection (..), Compartment (..), Database, getActivity)
 
 -- ---------------------------------------------------------------------------
 -- What a journal records
@@ -139,8 +144,10 @@ data JournalEvent = JournalEvent
     }
     deriving (Eq, Show)
 
-{- | The three ways a database changes. Each carries the identity the edit
-produced, so a replay can check that it still produces it.
+{- | The ways a database changes. Each carries what the edit produced, so a
+replay can check that it still produces it: an identity for the operations
+that mint one, and the number of lines each selector matched for the one that
+edits an inventory in place.
 -}
 data JournalOp
     = -- | Activities added, and the process ids they minted.
@@ -151,6 +158,10 @@ data JournalOp
       Replaced Text AuthoredActivity
     | -- | The process ids removed.
       Deleted [Text]
+    | {- | The process whose inventory was edited, and the edits made to it,
+      each with the number of exchanges it matched at the time.
+      -}
+      Edited Text [(ExchangeEdit, Int)]
     deriving (Eq, Show)
 
 -- | The version this engine writes, and the only one it reads.
@@ -386,6 +397,27 @@ applyOp ctx = \case
     Deleted targets -> do
         pids <- traverse (resolveProcess (acDb ctx)) targets
         deleteActivitiesWith (acUnitConfig ctx) pids (acDb ctx)
+    -- An edit is replayed through the very function that made it, so there is
+    -- one implementation of what an edit means, not a live one and a
+    -- reconstructed one that could disagree.
+    Edited target edits -> do
+        pid <- resolveProcess (acDb ctx) target
+        key <- processKey (acDb ctx) pid
+        act <- maybe (Left ("Unknown process id: " <> target)) Right (getActivity (acDb ctx) pid)
+        edited <- first (T.intercalate "; ") (applyExchangeEdits ctx (map fst edits) act)
+        if eaMatched edited == map snd edits
+            then
+                replaceActivities
+                    (acUnitConfig ctx)
+                    [ ResolvedInsert
+                        { riKey = key
+                        , riActivity = eaActivity edited
+                        , riNewTechFlows = []
+                        , riNewBioFlows = eaNewBioFlows edited
+                        }
+                    ]
+                    (acDb ctx)
+            else Left (matchDrift (map snd edits) (eaMatched edited))
   where
     resolve = bimap (T.intercalate "; ") fst . validateAuthored ctx
 
@@ -406,11 +438,28 @@ drift recorded minted =
     render [] = "nothing"
     render keys = T.intercalate ", " keys
 
+{- | The other way a database can move underneath its journal: an edit whose
+selectors no longer name the same lines. Applying it anyway would change a
+different number of exchanges than the author saw, quietly, so it stops.
+-}
+matchDrift :: [Int] -> [Int] -> Text
+matchDrift recorded matched =
+    "recorded as matching "
+        <> render recorded
+        <> " exchanges but the same selectors now match "
+        <> render matched
+        <> ". The inventory has changed since the edit was made, so replaying it\
+           \ would not be the edit that was made."
+  where
+    render [] = "nothing"
+    render counts = T.intercalate ", " (map (T.pack . show) counts)
+
 opName :: JournalOp -> Text
 opName = \case
     Created _ _ -> "create"
     Replaced _ _ -> "replace"
     Deleted _ -> "delete"
+    Edited _ _ -> "edit"
 
 -- ---------------------------------------------------------------------------
 -- Codec
@@ -447,6 +496,8 @@ opFields = \case
         ["op" .= ("replace" :: Text), "target" .= target, "activity" .= activityJSON activity]
     Deleted targets ->
         ["op" .= ("delete" :: Text), "targets" .= targets]
+    Edited target edits ->
+        ["op" .= ("edit" :: Text), "target" .= target, "edits" .= map editJSON edits]
 
 parseOp :: Object -> Parser JournalOp
 parseOp o =
@@ -457,7 +508,59 @@ parseOp o =
             Replaced <$> o .: "target" <*> (o .: "activity" >>= parseActivity)
         "delete" ->
             Deleted <$> o .: "targets"
+        "edit" ->
+            Edited <$> o .: "target" <*> (o .: "edits" >>= traverse parseEdit)
         other -> fail ("unknown journal operation: " <> T.unpack other)
+
+{- | One edit, with the number of exchanges it matched when it was made. That
+count is what makes the edit checkable on replay: without it, a selector that
+has come to name three lines instead of one would apply to all three in
+silence.
+-}
+editJSON :: (ExchangeEdit, Int) -> Value
+editJSON (edit, matched) = object (("matched" .= matched) : fields edit)
+  where
+    fields = \case
+        RemoveExchange selector ->
+            ["edit" .= ("remove" :: Text), "select" .= selectorJSON selector]
+        SetAmount selector amount ->
+            ["edit" .= ("set" :: Text), "select" .= selectorJSON selector, "amount" .= amount]
+        AddExchange authored ->
+            ["edit" .= ("add" :: Text), "exchange" .= exchangeJSON authored]
+
+parseEdit :: Value -> Parser (ExchangeEdit, Int)
+parseEdit = withObject "exchange edit" $ \o -> do
+    matched <- o .: "matched"
+    edit <-
+        o .: "edit" >>= \case
+            ("remove" :: Text) -> RemoveExchange <$> (o .: "select" >>= parseSelector)
+            "set" -> SetAmount <$> (o .: "select" >>= parseSelector) <*> o .: "amount"
+            "add" -> AddExchange <$> (o .: "exchange" >>= parseExchange)
+            other -> fail ("unknown exchange edit: " <> T.unpack other)
+    pure (edit, matched)
+
+{- | A selector speaks the same vocabulary a written exchange does
+('exchangeJSON'): the same three kinds, providers by process id, flows by
+identity. It differs in one way, and only one: a selector's flow is a bare
+identifier, because a selector names a line that exists and never introduces
+a flow.
+-}
+selectorJSON :: ExchangeSelector -> Value
+selectorJSON = \case
+    SelectInput provider -> object ["kind" .= ("input" :: Text), "provider" .= provider]
+    SelectWaste provider -> object ["kind" .= ("waste" :: Text), "provider" .= provider]
+    SelectBiosphere flowId -> object ["kind" .= ("biosphere" :: Text), "flow" .= UUID.toText flowId]
+
+parseSelector :: Value -> Parser ExchangeSelector
+parseSelector = withObject "exchange selector" $ \o ->
+    o .: "kind" >>= \case
+        ("input" :: Text) -> SelectInput <$> o .: "provider"
+        "waste" -> SelectWaste <$> o .: "provider"
+        "biosphere" -> do
+            raw <- o .: "flow"
+            maybe (fail ("not a flow identifier: " <> T.unpack raw)) (pure . SelectBiosphere) $
+                UUID.fromText raw
+        other -> fail ("unknown selector kind: " <> T.unpack other)
 
 activityJSON :: AuthoredActivity -> Value
 activityJSON a =

@@ -82,7 +82,11 @@ data DatabaseAction
     | -- | Write new activities read from a JSON file: @db@, @--from file@.
       DbCreateActivities DbWriteArgs
     | -- | Rewrite one activity: @db@, @--process-id pid@, @--from file@.
-      DbReplaceActivity DbReplaceArgs
+      DbReplaceActivity DbActivityArgs
+    | {- | Change one activity's inventory, keeping the rest of it: @db@,
+      @--process-id pid@, @--from file@.
+      -}
+      DbEditExchanges DbActivityArgs
     deriving (Eq, Show, Generic)
 
 -- | Arguments for @database export@.
@@ -108,17 +112,19 @@ data DbWriteArgs = DbWriteArgs
     }
     deriving (Eq, Show, Generic)
 
-{- | Arguments for @database replace-activity@: as 'DbWriteArgs', plus the
-process id being rewritten. The file holds one activity object rather than a
-batch.
+{- | Arguments for the commands that address one activity by identity:
+@database replace-activity@ and @database edit-exchanges@. As 'DbWriteArgs',
+plus the process id, and a file holding one document rather than a batch —
+which document depends on the command, and each reads the same JSON its HTTP
+endpoint does.
 -}
-data DbReplaceArgs = DbReplaceArgs
-    { drpDb :: Text
+data DbActivityArgs = DbActivityArgs
+    { daDb :: Text
     -- ^ Database holding the activity (@--db@)
-    , drpProcessId :: Text
-    -- ^ Identity of the activity to rewrite (@--process-id@)
-    , drpFile :: FilePath
-    -- ^ JSON file holding the activity (@--from@)
+    , daProcessId :: Text
+    -- ^ Identity of the activity addressed (@--process-id@)
+    , daFile :: FilePath
+    -- ^ JSON file holding the request body (@--from@)
     }
     deriving (Eq, Show, Generic)
 

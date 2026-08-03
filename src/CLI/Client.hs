@@ -137,8 +137,16 @@ executeRemoteCommand mgr rc globalOpts cmd = do
                 rc
                 fmt
                 jp
-                ("/api/v1/db/" ++ T.unpack (drpDb args) ++ "/activity/" ++ T.unpack (drpProcessId args))
-                (drpFile args)
+                ("/api/v1/db/" ++ T.unpack (daDb args) ++ "/activity/" ++ T.unpack (daProcessId args))
+                (daFile args)
+        Database (DbEditExchanges args) ->
+            postJsonFile
+                mgr
+                rc
+                fmt
+                jp
+                ("/api/v1/db/" ++ T.unpack (daDb args) ++ "/activity/" ++ T.unpack (daProcessId args) ++ "/exchanges")
+                (daFile args)
         Method McList ->
             apiGet mgr rc "/api/v1/method-collections" >>= output fmt jp
         Method (McUpload args) ->

@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (explainCFToAPI, simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExchangeEditRequest (..), ExchangeEditResponse (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -144,6 +144,10 @@ type LCAAPI =
                 -- quietly becoming a duplicate of the row it meant to correct.
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> ReqBody '[JSON] ActivityWriteRequest :> Post '[JSON] ActivityWriteResponse
                 :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> ReqBody '[JSON] ActivityInput :> Put '[JSON] ActivityWriteResponse
+                -- Change the inventory of one activity, keeping everything else it
+                -- carries — the operation a PUT cannot do for a row that came in
+                -- from a database file rather than from a description
+                :<|> "db" :> Capture "dbName" Text :> "activity" :> Capture "processId" Text :> "exchanges" :> ReqBody '[JSON] ExchangeEditRequest :> Post '[JSON] ExchangeEditResponse
                 -- Export a loaded database as raw bytes in the requested format;
                 -- approximation warnings travel percent-encoded in a response header
                 :<|> "db" :> Capture "dbName" Text :> "export" :> ReqBody '[JSON] ExportRequest :> Post '[OctetStream] (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
@@ -1224,7 +1228,8 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 6: the explain-cf route, and the @match_kind@ field flow
+(revision 7: editing the exchanges of an activity the database already holds;
+revision 6: the explain-cf route, and the @match_kind@ field flow
 contributions gained alongside it; revision 5: writing activities, and the
 @transient@ / @warnings@ fields the
 delete response gained alongside it; revision 4: the quality-report,
@@ -1234,7 +1239,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 6
+currentWireVersion = 7
 
 getVersion :: AppM Value
 getVersion =
@@ -2160,6 +2165,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> DBHandlers.deleteActivitiesHandler
             :<|> DBHandlers.createActivitiesHandler
             :<|> DBHandlers.replaceActivityHandler
+            :<|> DBHandlers.editExchangesHandler
             :<|> DBHandlers.exportDatabaseHandler
             :<|> DBHandlers.uploadDatabaseHandler
             :<|> DBHandlers.getDatabaseSetupHandler
