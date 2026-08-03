@@ -22,6 +22,7 @@ import API.DatabaseHandlers (
     createActivitiesHandler,
     deleteActivitiesHandler,
     deleteDatabaseHandler,
+    editExchangesHandler,
     finalizeDatabaseHandler,
     getDatabases,
     loadDatabaseHandler,
@@ -33,7 +34,13 @@ import API.DatabaseHandlers (
  )
 import API.MCP (callTool, toolDefinitions)
 import API.Resources (Resource (..), allResources, resourceMutates)
-import API.Types (ActivityInput (..), ActivityWriteRequest (..), DeleteSelectionRequest (..), RelinkRequest (..))
+import API.Types (
+    ActivityInput (..),
+    ActivityWriteRequest (..),
+    DeleteSelectionRequest (..),
+    ExchangeEditRequest (..),
+    RelinkRequest (..),
+ )
 import App.Env (AppEnv (..), runApp)
 import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly)
 import Database.Manager (initDatabaseManager)
@@ -89,9 +96,18 @@ mutatingHandlers =
     , ("upload", run (uploadDatabaseHandler (Just "nope") Nothing (source [])))
     , ("create-activities", run (createActivitiesHandler "nope" (ActivityWriteRequest [])))
     , ("replace-activity", run (replaceActivityHandler "nope" "id" nothingInParticular))
+    , ("edit-exchanges", run (editExchangesHandler "nope" "id" noEdits))
     ]
   where
     run h env = statusOf <$> runHandler (runApp env h)
+    noEdits =
+        ExchangeEditRequest
+            { eerRemove = []
+            , eerSetAmounts = []
+            , eerAddInputs = []
+            , eerAddBiosphere = []
+            , eerAddWasteOutputs = []
+            }
     nothingInParticular =
         ActivityInput
             { aiName = ""

@@ -28,6 +28,8 @@ import qualified Data.UUID as UUID
 import Database.Author (
     AuthoredActivity (..),
     AuthoredExchange (..),
+    ExchangeEdit (..),
+    ExchangeSelector (..),
     FlowRef (..),
  )
 import GHC.Generics
@@ -1125,6 +1127,71 @@ data ActivityWriteResponse = ActivityWriteResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityWriteResponse)
 
+{- | Which lines of an inventory an edit addresses.
+
+@esKind@ is @input@, @waste@ or @biosphere@: the first two name their provider
+by process id, the third names its flow by identity. The product side — the
+reference product, coproducts, a treatment's reference input — has no kind
+here, because changing those changes what the activity /is/, not what it
+consumes.
+
+A selector naming several lines applies to all of them, and the answer says
+how many. Naming none is refused: an edit that quietly did nothing reads
+exactly like one that worked.
+-}
+data ExchangeSelectorAPI = ExchangeSelectorAPI
+    { esKind :: Text
+    , esProvider :: Maybe Text
+    , esFlow :: Maybe Text
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeSelectorAPI)
+
+-- | The lines to restate, and the amount to restate them to.
+data SetAmountAPI = SetAmountAPI
+    { saSelect :: ExchangeSelectorAPI
+    , saAmount :: Double
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SetAmountAPI)
+
+{- | Changes to one activity's inventory: lines to drop, lines to restate,
+lines to add.
+
+Five lists rather than one tagged list, for the reason 'ActivityInput' has
+three: what makes sense on an addition cannot be sent on a removal and back
+again. They apply in the order they are listed here, so an edit that drops one
+supplier and adds another is never ambiguous about which happened first.
+
+Added lines are resolved exactly as written ones are — same provider lookup,
+same unit rules — because an inventory should not be able to tell how a line
+got there.
+-}
+data ExchangeEditRequest = ExchangeEditRequest
+    { eerRemove :: [ExchangeSelectorAPI]
+    , eerSetAmounts :: [SetAmountAPI]
+    , eerAddInputs :: [TechInputAPI]
+    , eerAddBiosphere :: [BioExchangeAPI]
+    , eerAddWasteOutputs :: [WasteOutputAPI]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeEditRequest)
+
+{- | What an inventory edit produced: one count per selector, in the order the
+selectors were stated. A caller that meant to drop one line and reads three
+learns it here, rather than from a score that moved more than it should have.
+-}
+data ExchangeEditResponse = ExchangeEditResponse
+    { eepRemoved :: [Int]
+    , eepAmountsSet :: [Int]
+    , eepAdded :: Int
+    , eepTransient :: Bool
+    -- ^ True when the edit lives in memory only and an unload would undo it.
+    , eepWarnings :: [Text]
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeEditResponse)
+
 data DeleteSelectionRequest = DeleteSelectionRequest
     { dsqName :: Maybe Text -- Filter by activity name
     , dsqLocation :: Maybe Text -- Filter by location
@@ -1746,33 +1813,81 @@ toAuthoredActivity ai = case partitionEithers (map toBio (aiBiosphere ai)) of
                 }
   where
     here msg = aiName ai <> " {" <> aiLocation ai <> "}: " <> msg
-    toTechInput ti =
-        AuthoredTechInput
-            { atiProvider = tiProvider ti
-            , atiAmount = tiAmount ti
-            , atiUnit = tiUnit ti
-            , atiComment = tiComment ti
-            }
-    toWasteOutput wo =
-        AuthoredWasteOutput
-            { awProvider = woProvider wo
-            , awAmount = woAmount wo
-            , awUnit = woUnit wo
-            , awComment = woComment wo
-            }
-    -- One bad line can be bad both ways at once; both complaints travel.
-    toBio be = case (bioFlowRef be, bioDirection (beDirection be)) of
-        (Right flow, Right direction) ->
-            Right
-                AuthoredBio
-                    { abFlow = flow
-                    , abDirection = direction
-                    , abAmount = beAmount be
-                    , abUnit = beUnit be
-                    , abComment = beComment be
-                    }
-        (flow, direction) -> Left (leftList flow <> leftList direction)
+
+toTechInput :: TechInputAPI -> AuthoredExchange
+toTechInput ti =
+    AuthoredTechInput
+        { atiProvider = tiProvider ti
+        , atiAmount = tiAmount ti
+        , atiUnit = tiUnit ti
+        , atiComment = tiComment ti
+        }
+
+toWasteOutput :: WasteOutputAPI -> AuthoredExchange
+toWasteOutput wo =
+    AuthoredWasteOutput
+        { awProvider = woProvider wo
+        , awAmount = woAmount wo
+        , awUnit = woUnit wo
+        , awComment = woComment wo
+        }
+
+-- | One bad line can be bad both ways at once; both complaints travel.
+toBio :: BioExchangeAPI -> Either [Text] AuthoredExchange
+toBio be = case (bioFlowRef be, bioDirection (beDirection be)) of
+    (Right flow, Right direction) ->
+        Right
+            AuthoredBio
+                { abFlow = flow
+                , abDirection = direction
+                , abAmount = beAmount be
+                , abUnit = beUnit be
+                , abComment = beComment be
+                }
+    (flow, direction) -> Left (leftList flow <> leftList direction)
+  where
     leftList = either pure (const [])
+
+{- | Translate an edit request into the changes the domain applies, in the
+order the request lists them. Shared by the HTTP endpoint, the command line and
+the assistant tool, which all read the same document.
+
+What can fail here is only shape — a selector naming its provider where its
+kind names a flow, a kind that is none of the three. Whether a selector reaches
+anything is the domain's to judge, and its complaints accumulate the same way,
+so a request is fixed in one round trip whichever layer refused it.
+-}
+toExchangeEdits :: ExchangeEditRequest -> Either [Text] [ExchangeEdit]
+toExchangeEdits req = case partitionEithers stated of
+    ([], edits) -> Right edits
+    (errs, _) -> Left (concat errs)
+  where
+    stated =
+        map (fmap RemoveExchange . toSelector) (eerRemove req)
+            <> map toSetAmount (eerSetAmounts req)
+            <> map (Right . AddExchange . toTechInput) (eerAddInputs req)
+            <> map (fmap AddExchange . toBio) (eerAddBiosphere req)
+            <> map (Right . AddExchange . toWasteOutput) (eerAddWasteOutputs req)
+    toSetAmount sa = flip SetAmount (saAmount sa) <$> toSelector (saSelect sa)
+
+{- | A selector names a provider or a flow, according to its kind. Sending the
+other one, or both, is refused rather than resolved by precedence: a caller who
+meant a flow and typed a provider would otherwise edit whatever the provider
+happened to name.
+-}
+toSelector :: ExchangeSelectorAPI -> Either [Text] ExchangeSelector
+toSelector es = case (T.toLower (T.strip (esKind es)), esProvider es, esFlow es) of
+    ("input", Just provider, Nothing) -> Right (SelectInput provider)
+    ("waste", Just provider, Nothing) -> Right (SelectWaste provider)
+    ("biosphere", Nothing, Just flowId) ->
+        maybe (Left ["not a flow identifier: " <> flowId]) (Right . SelectBiosphere) (UUID.fromText flowId)
+    (kind, _, _)
+        | kind `elem` ["input", "waste"] ->
+            Left ["an " <> kind <> " selector names its provider, and nothing else"]
+        | kind == "biosphere" ->
+            Left ["a biosphere selector names its flow, and nothing else"]
+        | otherwise ->
+            Left ["unknown selector kind: " <> kind <> " (expected input|waste|biosphere)"]
 
 {- | A biosphere line names an existing flow by identifier, or introduces one
 by name and compartment. Both at once is ambiguous and neither says nothing,

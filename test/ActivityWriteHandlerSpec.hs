@@ -1,15 +1,16 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Tests for the activity-write endpoints
-('API.DatabaseHandlers.createActivitiesHandler' and
-'API.DatabaseHandlers.replaceActivityHandler').
+{- | Tests for the endpoints that change a database's activities
+('API.DatabaseHandlers.createActivitiesHandler',
+'API.DatabaseHandlers.replaceActivityHandler' and
+'API.DatabaseHandlers.editExchangesHandler').
 
 What the HTTP layer owns, and what these pin, is the mapping from a refusal to
-a status a client can act on: a batch a caller can fix is a 400 carrying every
-complaint at once, writing over a row that exists is a 409, rewriting one that
-does not is a 404, and a database the engine only reads is refused outright.
-The validation itself is "AuthorSpec"'s subject, not this file's.
+a status a client can act on: a request a caller can fix is a 400 carrying
+every complaint at once, writing over a row that exists is a 409, addressing
+one that does not is a 404, and a database the engine only reads is refused
+outright. The validation itself is "AuthorSpec"'s subject, not this file's.
 -}
 module ActivityWriteHandlerSpec (spec) where
 
@@ -28,10 +29,20 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import API.DatabaseHandlers (createActivitiesHandler, replaceActivityHandler)
+import API.DatabaseHandlers (createActivitiesHandler, editExchangesHandler, replaceActivityHandler)
 import Database.Author (authoredActivityUUID, authoredProductUUID)
 
-import API.Types (ActivityInput (..), ActivityWriteRequest (..), ActivityWriteResponse (..), BioExchangeAPI (..), TechInputAPI (..))
+import API.Types (
+    ActivityInput (..),
+    ActivityWriteRequest (..),
+    ActivityWriteResponse (..),
+    BioExchangeAPI (..),
+    ExchangeEditRequest (..),
+    ExchangeEditResponse (..),
+    ExchangeSelectorAPI (..),
+    SetAmountAPI (..),
+    TechInputAPI (..),
+ )
 import App.Env (AppEnv (..), runApp)
 import Config (DatabaseConfig (..), defaultConfig)
 import Control.Exception (bracket_)
@@ -57,7 +68,12 @@ import Types (
 import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
-spec = describe "writing activities over HTTP" $ do
+spec = do
+    writingSpec
+    editingSpec
+
+writingSpec :: Spec
+writingSpec = describe "writing activities over HTTP" $ do
     it "writes a batch and answers with the process ids it can now be asked for" $
         withWritableDb $ \env -> do
             res <- create env "authored" [cheese]
@@ -202,6 +218,85 @@ spec = describe "writing activities over HTTP" $ do
             res <- create env "authored" [cheese{aiBiosphere = [emission{beName = Just "Dust", beUnit = Nothing}]}]
             void res `shouldSatisfy` refusedWith "\"Dust\" needs a unit"
 
+editingSpec :: Spec
+editingSpec = describe "editing an activity's exchanges over HTTP" $ do
+    -- The fixture's milk activity is an imported row: no description mints its
+    -- identity, so a PUT cannot address it and only this endpoint can change it.
+    it "changes the inventory of an activity the database already holds" $
+        withWritableDb $ \env -> do
+            res <- edit env "authored" supplierPid noEdits{eerRemove = [bioSelector co2Id]}
+            case res of
+                Left err -> expectationFailure ("expected the edit to land: " <> showErr err)
+                Right report -> do
+                    eepRemoved report `shouldBe` [1]
+                    eepAdded report `shouldBe` 0
+                    eepTransient report `shouldBe` False
+
+    it "reports each part of an edit separately" $
+        withWritableDb $ \env -> do
+            let addMilk = TechInputAPI{tiProvider = supplierPid, tiAmount = 2, tiUnit = Nothing, tiComment = Nothing}
+            res <-
+                edit env "authored" supplierPid $
+                    noEdits
+                        { eerSetAmounts = [SetAmountAPI{saSelect = bioSelector co2Id, saAmount = 3}]
+                        , eerAddInputs = [addMilk]
+                        }
+            case res of
+                Left err -> expectationFailure ("expected the edit to land: " <> showErr err)
+                Right report -> do
+                    eepRemoved report `shouldBe` []
+                    eepAmountsSet report `shouldBe` [1]
+                    eepAdded report `shouldBe` 1
+
+    it "accepts the bare activity UUID as the address, like every read does" $
+        withWritableDb $ \env -> do
+            res <- edit env "authored" (UUID.toText supplierActId) noEdits{eerRemove = [bioSelector co2Id]}
+            case res of
+                Left err -> expectationFailure ("expected the edit to land: " <> showErr err)
+                Right report -> eepRemoved report `shouldBe` [1]
+
+    it "answers 404 for an activity the database does not hold" $
+        withWritableDb $ \env -> do
+            res <- edit env "authored" (keyOf cheese) noEdits{eerRemove = [bioSelector co2Id]}
+            case res of
+                Right _ -> expectationFailure "expected the edit to find nothing"
+                Left err -> errHTTPCode err `shouldBe` 404
+
+    it "answers 400 when a selector reaches no exchange" $
+        -- Never a no-op: an edit that changed nothing reads exactly like one
+        -- that worked, and only the caller can tell the two apart.
+        withWritableDb $ \env -> do
+            res <- edit env "authored" supplierPid noEdits{eerRemove = [bioSelector (mkUUID 998)]}
+            case res of
+                Right _ -> expectationFailure "expected the selector to be refused"
+                Left err -> do
+                    errHTTPCode err `shouldBe` 400
+                    bodyOf err `shouldSatisfy` isInfixOf "matches no exchange"
+
+    it "refuses a selector whose kind and key disagree" $
+        withWritableDb $ \env -> do
+            let confused = (bioSelector co2Id){esKind = "input"}
+            res <- edit env "authored" supplierPid noEdits{eerRemove = [confused]}
+            void res `shouldSatisfy` refusedWith "names its provider"
+
+    it "refuses to edit a database the engine only reads" $
+        withDb (\name dataDir -> (uploadedConfig name dataDir){dcIsUploaded = False}) $ \env -> do
+            res <- edit env "authored" supplierPid noEdits{eerRemove = [bioSelector co2Id]}
+            case res of
+                Right _ -> expectationFailure "expected editing a configured database to be refused"
+                Left err -> do
+                    errHTTPCode err `shouldBe` 400
+                    bodyOf err `shouldSatisfy` isInfixOf "reads from its configuration"
+
+    it "refuses an edit that names nothing instead of rebuilding for nothing" $
+        withWritableDb $ \env -> do
+            res <- edit env "authored" supplierPid noEdits
+            case res of
+                Right _ -> expectationFailure "expected the empty edit to be refused"
+                Left err -> do
+                    errHTTPCode err `shouldBe` 400
+                    bodyOf err `shouldSatisfy` isInfixOf "nothing to change"
+
 -- ---------------------------------------------------------------------------
 -- Driving the handlers
 -- ---------------------------------------------------------------------------
@@ -213,6 +308,25 @@ create env dbName activities =
 replace :: AppEnv -> Text -> Text -> ActivityInput -> IO (Either ServerError ActivityWriteResponse)
 replace env dbName processId body =
     runHandler (runApp env (replaceActivityHandler dbName processId body))
+
+edit :: AppEnv -> Text -> Text -> ExchangeEditRequest -> IO (Either ServerError ExchangeEditResponse)
+edit env dbName processId body =
+    runHandler (runApp env (editExchangesHandler dbName processId body))
+
+-- | An edit that names nothing, for a test to fill in the one part it is about.
+noEdits :: ExchangeEditRequest
+noEdits =
+    ExchangeEditRequest
+        { eerRemove = []
+        , eerSetAmounts = []
+        , eerAddInputs = []
+        , eerAddBiosphere = []
+        , eerAddWasteOutputs = []
+        }
+
+bioSelector :: UUID -> ExchangeSelectorAPI
+bioSelector flowId =
+    ExchangeSelectorAPI{esKind = "biosphere", esProvider = Nothing, esFlow = Just (UUID.toText flowId)}
 
 refusedWith :: String -> Either ServerError () -> Bool
 refusedWith needle = either ((needle `isInfixOf`) . bodyOf) (const False)
