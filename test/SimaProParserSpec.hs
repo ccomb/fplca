@@ -477,8 +477,9 @@ not that two libm implementations agree on its last bit.
 -}
 shouldEvalTo :: (HasCallStack) => Either String Double -> Double -> Expectation
 shouldEvalTo (Left err) _ = expectationFailure ("evaluation failed: " <> err)
-shouldEvalTo (Right got) want =
-    got `shouldSatisfy` \v -> abs (v - want) <= 1e-12 * abs want
+shouldEvalTo (Right got) want
+    | abs (got - want) <= 1e-12 * abs want = pure ()
+    | otherwise = expectationFailure (show got <> " is not within a relative 1e-12 of " <> show want)
 
 spec :: Spec
 spec = do
