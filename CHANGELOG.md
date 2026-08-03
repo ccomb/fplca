@@ -61,6 +61,14 @@
   or a quote came back with that character doubled. The file escapes them as
   its format requires and nothing undid it on the way back, which on Windows
   meant a nested data path that resolved to nothing.
+- An amount written as a signed power of ten is read instead of refused.
+  SimaPro writes a scale factor that way — `1*10^-3*50` — and the engine
+  understood `10^3` but not `10^-6`: the exponent was read by the
+  exponentiation rule itself, which knows numbers but not signs, so the minus
+  failed the whole expression and the amount fell back to whatever the cell
+  began with. The exponent now goes through the same rule as any other signed
+  operand. Exponentiation stays right-associative and still binds tighter than
+  multiplication, so `2^3^2` is 512 and `-2^2` is −4.
 - A regionalized factor now comes from the method's most specific line, not from
   whichever line the file happened to list last. When a method writes both a
   medium-level factor and one naming the flow's own subcompartment, and both

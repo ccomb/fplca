@@ -9,7 +9,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import Database.Loader (getReferenceProductUUID)
 import Database.MatrixBuild (InterningTables (..), buildInterningTables)
-import Expr (evaluate, normalizeExpr)
+import Expr (evaluate, isExpression, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
     Located (..),
@@ -467,6 +467,20 @@ findByName name acts = case [a | a <- acts, activityName a == name] of
     [] -> error $ "findByName: no activity named " <> show name
     _ -> error $ "findByName: more than one activity named " <> show name
 
+{- | An evaluation that reached a value, to within a relative ulp or so.
+
+For everything but exponentiation the evaluator is exact and 'shouldBe' says
+so. @**@ is not: it goes through the platform's @pow@, and Windows answers
+@1.0000000000000006e-6@ where Linux answers @1.0e-6@ for the same @10^-6@. The
+property under test is that the expression parses and reaches the right number,
+not that two libm implementations agree on its last bit.
+-}
+shouldEvalTo :: (HasCallStack) => Either String Double -> Double -> Expectation
+shouldEvalTo (Left err) _ = expectationFailure ("evaluation failed: " <> err)
+shouldEvalTo (Right got) want
+    | abs (got - want) <= 1e-12 * abs want = pure ()
+    | otherwise = expectationFailure (show got <> " is not within a relative 1e-12 of " <> show want)
+
 spec :: Spec
 spec = do
     describe "SimaPro expression evaluator" $ do
@@ -507,6 +521,31 @@ spec = do
         it "evaluates power operator" $ do
             evaluate M.empty "2^3" `shouldBe` Right 8.0
             evaluate M.empty "3^2" `shouldBe` Right 9.0
+
+        -- Regression: SimaPro writes a scale factor as a signed power of ten.
+        -- The exponent used to be parsed by the power rule itself, which knows
+        -- numbers but not signs, so the '-' failed the whole expression and the
+        -- amount fell back to something else entirely.
+        it "evaluates a signed exponent" $ do
+            evaluate M.empty "10^-6" `shouldEvalTo` 1.0e-6
+            evaluate M.empty "10^+3" `shouldEvalTo` 1000.0
+            evaluate M.empty "1*10^-3*50" `shouldEvalTo` 0.05
+            evaluate M.empty "2^-2" `shouldEvalTo` 0.25
+
+        it "keeps exponentiation right-associative and below unary minus" $ do
+            -- Reading the exponent through the unary rule must not flatten the
+            -- tower nor take the sign away from the operand in front of it.
+            -- 512 rather than 64 is the whole point: a flattened tower would be
+            -- (2^3)^2, and no rounding tolerance can hide that difference.
+            evaluate M.empty "2^3^2" `shouldEvalTo` 512.0
+            evaluate M.empty "-2^2" `shouldEvalTo` (-4.0)
+            evaluate M.empty "2^-3^2" `shouldEvalTo` (2 ** (-9))
+
+        it "accepts a signed exponent as syntax, not only as a value" $ do
+            -- `isExpression` runs a parallel parser that takes no environment,
+            -- so it has to learn the same shape or the cell reads as prose.
+            isExpression ',' "10^-6" `shouldBe` True
+            isExpression ',' "(38-15)*4185*30/0,9*10^-6" `shouldBe` True
 
         it "evaluates unary minus" $ do
             evaluate M.empty "-5" `shouldBe` Right (-5.0)
