@@ -15,7 +15,14 @@ import urllib.parse
 import pytest
 
 from volca.client import Client, VoLCAError
-from volca.types import ActivityInput, BioDirection, BioExchange, TechInput
+from volca.types import (
+    ActivityInput,
+    BioDirection,
+    BioExchange,
+    ExchangeSelector,
+    SetAmount,
+    TechInput,
+)
 
 
 def _ok(session, json_body: dict) -> None:
@@ -454,3 +461,61 @@ class TestAuthoringInputTypes:
         exchange = BioExchange.introducing("Nitrous oxide", "air", "emission", 0.5, "kg")
         assert exchange.direction is BioDirection.EMISSION
         assert exchange.to_wire()["direction"] == "Emission"
+
+
+class TestEditExchanges:
+    def test_body_and_url_shape(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=7)
+        _ok(
+            session,
+            {"removed": [2], "amountsSet": [], "added": 1, "transient": False, "warnings": []},
+        )
+        result = client.edit_exchanges(
+            "a_b",
+            remove=[ExchangeSelector.biosphere_flow("f-1")],
+            add_inputs=[TechInput(provider="c_d", amount=2.5)],
+        )
+        assert result["removed"] == [2]
+        url = session.post.call_args[0][0]
+        assert url.endswith("/api/v1/db/testdb/activity/a_b/exchanges")
+        body = session.post.call_args[1]["json"]
+        assert body["remove"] == [{"kind": "biosphere", "flow": "f-1"}]
+        assert body["addInputs"] == [{"provider": "c_d", "amount": 2.5}]
+        # All five lists travel even when empty: the engine's decoder requires
+        # every key, and a missing one turns the whole edit into a 400.
+        assert body["setAmounts"] == []
+        assert body["addBiosphere"] == []
+        assert body["addWasteOutputs"] == []
+
+    def test_an_amount_change_nests_its_selector(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=7)
+        _ok(
+            session,
+            {"removed": [], "amountsSet": [1], "added": 0, "transient": True, "warnings": []},
+        )
+        client.edit_exchanges(
+            "a_b",
+            set_amounts=[SetAmount(ExchangeSelector.input_from("c_d"), 4.0)],
+        )
+        body = session.post.call_args[1]["json"]
+        assert body["setAmounts"] == [
+            {"select": {"kind": "input", "provider": "c_d"}, "amount": 4.0}
+        ]
+
+    def test_never_sent_to_an_engine_that_has_no_such_route(self, mocked_client):
+        client, session = mocked_client
+        _version_ok(session, wire=6)
+        with pytest.raises(VoLCAError, match="wire revision >= 7"):
+            client.edit_exchanges("a_b", remove=[ExchangeSelector.biosphere_flow("f-1")])
+        session.post.assert_not_called()
+
+    def test_a_selector_names_the_key_its_kind_calls_for(self):
+        # Caught before the round trip: the engine refuses the same shapes.
+        with pytest.raises(ValueError, match="names its provider"):
+            ExchangeSelector(kind="input", flow="f-1")
+        with pytest.raises(ValueError, match="names its flow"):
+            ExchangeSelector(kind="biosphere", provider="c_d")
+        with pytest.raises(ValueError, match="unknown selector kind"):
+            ExchangeSelector(kind="product", provider="c_d")

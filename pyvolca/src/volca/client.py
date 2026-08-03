@@ -44,7 +44,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable, Literal, get_args
+from typing import Any, Iterable, Literal, Sequence, get_args
 
 import requests
 
@@ -56,6 +56,7 @@ from .types import (
     AggregateResult,
     AggregateScope,
     BatchScores,
+    BioExchange,
     CharacterizationResult,
     ClassificationFilter,
     ClassificationSystem,
@@ -67,6 +68,7 @@ from .types import (
     DatabaseInfo,
     DatabaseStatus,
     Exchange,
+    ExchangeSelector,
     ExplainCFResult,
     Flow,
     FlowDetail,
@@ -85,8 +87,11 @@ from .types import (
     SearchResults,
     SensitivityResult,
     ServerVersion,
+    SetAmount,
     Substitution,
     SupplyChain,
+    TechInput,
+    WasteOutput,
     parse_exchange_detail,
 )
 from . import _compat
@@ -932,6 +937,56 @@ class Client:
             self._session.put(
                 f"{self.base_url}/api/v1/db/{target}/activity/{process_id}",
                 json=activity.to_wire(),
+            )
+        )
+
+    def edit_exchanges(
+        self,
+        process_id: str,
+        *,
+        remove: Sequence[ExchangeSelector] = (),
+        set_amounts: Sequence[SetAmount] = (),
+        add_inputs: Sequence[TechInput] = (),
+        add_biosphere: Sequence[BioExchange] = (),
+        add_waste_outputs: Sequence[WasteOutput] = (),
+        db_name: str | None = None,
+    ) -> dict:
+        """Change what one activity consumes and emits, keeping the activity.
+
+        This reaches what :meth:`replace_activity` cannot: an activity that came
+        in from a database file. Its identity was minted by whichever parser
+        read it, so no description addresses it — and a description could not
+        carry back its classification, synonyms, parameters, pedigree or
+        coproducts anyway. Here you name only the lines that change, and
+        everything else stays as it was.
+
+        Only the inventory side is addressable. The reference product and any
+        coproduct carry the activity's identity and its allocation, so no
+        selector reaches them.
+
+        A selector that names nothing is refused rather than treated as done.
+        One that names several lines applies to all of them, and the counts come
+        back per selector, in the order you stated them::
+
+            {"removed": [2], "amountsSet": [], "added": 1,
+             "transient": False, "warnings": [...]}
+
+        Only a database of your own accepts edits — copy a configured one first.
+
+        Needs an engine speaking wire revision 7.
+        """
+        self._require_wire(7, "edit_exchanges", engine_hint="0.9.5")
+        target = self._db(db_name)
+        return self._json(
+            self._session.post(
+                f"{self.base_url}/api/v1/db/{target}/activity/{process_id}/exchanges",
+                json={
+                    "remove": [s.to_wire() for s in remove],
+                    "setAmounts": [s.to_wire() for s in set_amounts],
+                    "addInputs": [i.to_wire() for i in add_inputs],
+                    "addBiosphere": [b.to_wire() for b in add_biosphere],
+                    "addWasteOutputs": [w.to_wire() for w in add_waste_outputs],
+                },
             )
         )
 
