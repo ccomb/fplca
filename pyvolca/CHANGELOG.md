@@ -18,7 +18,35 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
-## [Unreleased]
+## [0.9.2] - 2026-08-04
+
+### Added
+
+- `Client.create_activities` and `Client.replace_activity` write activities
+  into a database you uploaded or copied, reading the same document the HTTP
+  API and the command line take. You never supply a process id: it is derived
+  from the description, so writing the same description twice corrects one
+  activity rather than making two. Needs an engine >= v0.9.5.
+- `Client.edit_exchanges` adjusts what one activity consumes and emits
+  without re-describing it: lines to remove, amounts to restate, lines to
+  add, each named the way you already read it — an input by its provider, a
+  waste output by its treatment, an emission by its flow. Everything the edit
+  does not name stays as it is. Needs an engine >= v0.9.5.
+- `Client.explain_cf` replays the factor lookup for one flow and returns the
+  engine's own sentences: which rung of the cascade found the factor, which
+  line of the method it came from, and how the amount was carried onto the
+  factor's basis. Needs an engine >= v0.9.5.
+- The PyPI listing carries keywords (`lca`, `life-cycle-assessment`,
+  `life-cycle-inventory`, `lcia`, `environmental-data`) and the classifiers
+  that place it: research audience, OS independent, and the Python versions it
+  supports. Searching PyPI for "life cycle assessment" found nothing
+  before this.
+
+### Changed
+
+- Flow search results carry a `compartment` field next to `category`, which
+  has always held the medium alone, so same-named flows — Agribalyse carries
+  seven `Deltamethrin` — can be told apart.
 
 ### Fixed
 
@@ -26,14 +54,6 @@ Then paste the rendered block at the top of this file and tighten wording.
   exist and answered 404. It now points at <https://volca.run/docs/python/>,
   where the guide has been all along. The same dead address was in the
   package's own module docstring, so `help(volca)` sent people there too.
-
-### Added
-
-- The PyPI listing carries keywords (`lca`, `life-cycle-assessment`,
-  `life-cycle-inventory`, `lcia`, `environmental-data`) and the classifiers
-  that place it: research audience, OS independent, and the Python versions it
-  supports. Searching PyPI for "life cycle assessment" found nothing
-  before this.
 
 ## [0.9.1] - 2026-08-01
 
