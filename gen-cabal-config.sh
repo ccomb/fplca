@@ -104,16 +104,48 @@ EOF
         # macOS arm64: locally-built MUMPS (.a only) + Homebrew openblas + Homebrew gcc gfortran/quadmath.
         # ld64 picks .a from extra-lib-dirs when no .dylib is present, so no GNU -Bstatic/-Bdynamic.
         # Accelerate.framework is rejected: its LAPACK ABI does not match what build-mumps.sh emits.
+        #
+        # BLAS and the Fortran runtime are linked from their .a by absolute path, never
+        # via -l: Homebrew ships both .a and .dylib, ld64 has no -Bstatic to express the
+        # preference, and it picks the .dylib. That produced a binary whose LC_LOAD_DYLIB
+        # entries point into the build machine's Homebrew prefix, so the shipped tarball
+        # aborted at dyld ("Library not loaded: .../libopenblas.0.dylib") on any Mac
+        # without those formulas. Linux already links these statically (musl mode); this
+        # gives macOS the same standalone binary.
         BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
         OPENBLAS_PREFIX=$(brew --prefix openblas 2>/dev/null || echo "${BREW_PREFIX}/opt/openblas")
         # Homebrew gcc lays out libgfortran/libquadmath under lib/gcc/<major>/
         GFORTRAN_LIB_DIR=$(ls -d "${BREW_PREFIX}/Cellar/gcc/"*/lib/gcc/*/ 2>/dev/null | sort -V | tail -1)
         : "${GFORTRAN_LIB_DIR:?Could not locate Homebrew gcc libgfortran — install with: brew install gcc}"
+        GFORTRAN_LIB_DIR="${GFORTRAN_LIB_DIR%/}"
         DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set (source versions.env)}"
+        # Ordered dependent-before-dependency: openblas calls into libgfortran, which
+        # calls into libquadmath. libgcc.a comes last and is located by asking the
+        # compiler driver rather than guessing its Cellar layout — gcc keeps it under
+        # lib/gcc/<major>/gcc/<triple>/<major>/, not next to libgfortran.a. It resolves
+        # the emutls/soft-arithmetic symbols libgfortran.a leaves undefined.
+        DARWIN_STATIC_LIBS=(
+            "${OPENBLAS_PREFIX}/lib/libopenblas.a"
+            "${GFORTRAN_LIB_DIR}/libgfortran.a"
+            "${GFORTRAN_LIB_DIR}/libquadmath.a"
+        )
+        GCC_A=$("${BREW_PREFIX}/bin/gfortran" -print-libgcc-file-name 2>/dev/null || true)
+        if [[ -n "$GCC_A" ]]; then
+            DARWIN_STATIC_LIBS+=("$GCC_A")
+        fi
+        DARWIN_STATIC_FLAGS=""
+        for lib in "${DARWIN_STATIC_LIBS[@]}"; do
+            if [[ ! -f "$lib" ]]; then
+                echo "ERROR: static library not found: $lib" >&2
+                echo "       The shipped binary must not depend on Homebrew dylibs. Install with: brew install gcc openblas" >&2
+                exit 1
+            fi
+            DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl$lib"
+        done
         # -Wl,-dead_strip and -Wl,-dead_strip_dylibs let ld64 prune unreferenced
         # sections and unused dylib load commands. Pairs with `split-sections: True`
         # below for a meaningful (5–15 %) size win before strip even runs.
-        DARWIN_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq -optl-L${OPENBLAS_PREFIX}/lib -optl-lopenblas -optl-L${GFORTRAN_LIB_DIR} -optl-lgfortran -optl-lquadmath -optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip -optl-Wl,-dead_strip_dylibs"
+        DARWIN_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq$DARWIN_STATIC_FLAGS -optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip -optl-Wl,-dead_strip_dylibs"
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
