@@ -112,8 +112,14 @@ EOF
         # aborted at dyld ("Library not loaded: .../libopenblas.0.dylib") on any Mac
         # without those formulas. Linux already links these statically (musl mode); this
         # gives macOS the same standalone binary.
+        #
+        # OpenBLAS comes from the same source build musl mode uses, not from Homebrew:
+        # the bottled libopenblas.a is the OpenMP variant, whose __kmpc_* / omp_*
+        # references only the dylib resolved on its own. Building it with USE_OPENMP=0
+        # settles that instead of adding libomp — one more Homebrew dependency to keep
+        # out of the shipped binary.
+        : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR is required for darwin mode (path to a libopenblas.a built with USE_OPENMP=0 — see .github/actions/setup-haskell-env)}"
         BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-        OPENBLAS_PREFIX=$(brew --prefix openblas 2>/dev/null || echo "${BREW_PREFIX}/opt/openblas")
         # Homebrew gcc lays out libgfortran/libquadmath under lib/gcc/<major>/
         GFORTRAN_LIB_DIR=$(ls -d "${BREW_PREFIX}/Cellar/gcc/"*/lib/gcc/*/ 2>/dev/null | sort -V | tail -1)
         : "${GFORTRAN_LIB_DIR:?Could not locate Homebrew gcc libgfortran — install with: brew install gcc}"
@@ -125,7 +131,7 @@ EOF
         # lib/gcc/<major>/gcc/<triple>/<major>/, not next to libgfortran.a. It resolves
         # the emutls/soft-arithmetic symbols libgfortran.a leaves undefined.
         DARWIN_STATIC_LIBS=(
-            "${OPENBLAS_PREFIX}/lib/libopenblas.a"
+            "${OPENBLAS_LIB_DIR}/libopenblas.a"
             "${GFORTRAN_LIB_DIR}/libgfortran.a"
             "${GFORTRAN_LIB_DIR}/libquadmath.a"
         )
@@ -137,7 +143,9 @@ EOF
         for lib in "${DARWIN_STATIC_LIBS[@]}"; do
             if [[ ! -f "$lib" ]]; then
                 echo "ERROR: static library not found: $lib" >&2
-                echo "       The shipped binary must not depend on Homebrew dylibs. Install with: brew install gcc openblas" >&2
+                echo "       The shipped binary must not depend on Homebrew dylibs." >&2
+                echo "       Fortran runtime: brew install gcc. OpenBLAS: build it with" >&2
+                echo "       NO_SHARED=1 USE_OPENMP=0 (see .github/actions/setup-haskell-env)." >&2
                 exit 1
             fi
             DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl$lib"
