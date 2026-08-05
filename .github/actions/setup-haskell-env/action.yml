@@ -113,14 +113,17 @@ runs:
     #
     # Cached on (matrix-name, OPENBLAS_VERSION) so an unchanged version
     # reuses the previous build in ~5 s instead of compiling for ~8 min.
-    # Cache invalidates automatically on every versions.env edit.
+    # Cache invalidates automatically on every versions.env edit, and on every
+    # edit to this file - the make flags below decide what is in the archive,
+    # so a recipe change that kept the old key would restore a library built
+    # under the previous one and quietly test nothing.
     - name: Restore OpenBLAS build
       if: (inputs.matrix-os == 'linux' || inputs.matrix-os == 'macos') && inputs.ghc-version != ''
       id: cache-openblas
       uses: actions/cache@v4
       with:
         path: deps/openblas
-        key: openblas-${{ inputs.matrix-name }}-${{ hashFiles('versions.env') }}-v1
+        key: openblas-${{ inputs.matrix-name }}-${{ hashFiles('versions.env', '.github/actions/setup-haskell-env/action.yml') }}-v1
 
     - name: Build OpenBLAS
       if: (inputs.matrix-os == 'linux' || inputs.matrix-os == 'macos') && inputs.ghc-version != '' && steps.cache-openblas.outputs.cache-hit != 'true'
@@ -141,17 +144,19 @@ runs:
           LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LIBRARY_PATH
         fi
-        # LAPACK is compiled -frecursive, which puts its working arrays on the
-        # stack, and the widest kernels size theirs for AVX-512. Linux buys the
-        # room with -Wl,-z,stack-size=8388608 (see gen-cabal-config.sh's musl
-        # mode); ld64 has no equivalent, and a macOS pthread gets 512 KB, so the
-        # first BLAS3 call inside a MUMPS solve died on SIGSEGV. Dropping the
-        # AVX-512 targets keeps every kernel inside that budget. Their absence
-        # costs nothing on the Macs this has to run on: macOS 13 requires a 2017
-        # or later machine, and those top out at AVX2.
+        # SMALL_MATRIX_OPT is on by default on x86_64 and does not exist on
+        # arm64. It routes small matrices through kernels that keep their
+        # working arrays on the stack, and OpenBLAS's own pthreads get macOS's
+        # 512 KB default - so the first MUMPS solve, on a 3-activity matrix,
+        # died on SIGSEGV. That one flag explains every observation: x86_64
+        # only, small matrix only, and fine everywhere the stack is bigger
+        # (Linux buys 8 MB with -Wl,-z,stack-size, which ld64 has no equivalent
+        # for; the Homebrew build threads through libomp, whose threads start
+        # far larger). Turning it off costs the small-matrix shortcut on Intel
+        # Macs; the general path computes the same answers.
         case "$RUNNER_OS-$(uname -m)" in
-          macOS-x86_64) WIDTH_LIMIT=NO_AVX512=1 ;;
-          *)            WIDTH_LIMIT= ;;
+          macOS-x86_64) STACK_SAFE=SMALL_MATRIX_OPT=0 ;;
+          *)            STACK_SAFE= ;;
         esac
         # getconf rather than nproc: BusyBox Alpine and macOS both answer it.
         make -j"$(getconf _NPROCESSORS_ONLN)" \
@@ -159,7 +164,7 @@ runs:
           USE_THREAD=1 USE_OPENMP=0 \
           DYNAMIC_ARCH=1 \
           TARGET=GENERIC \
-          $WIDTH_LIMIT
+          $STACK_SAFE
         make PREFIX="$GITHUB_WORKSPACE/deps/openblas" NO_SHARED=1 install
         rm -rf "$SRC"
 
