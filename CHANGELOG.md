@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Fixed
+- The macOS download now runs on a Mac that has no developer tools. It was
+  built against the build machine's Homebrew copies of OpenBLAS and the Fortran
+  runtime and looked for them at the same paths on yours, so it stopped at
+  startup with `Library not loaded: .../libopenblas.0.dylib` unless you
+  happened to have Homebrew and those exact formulas. Both are now built into
+  the binary, as they already were on Linux.
+- The Windows download now carries the runtime libraries the program loads.
+  Only `volca.exe` was in the zip, so it stopped with `libgfortran-5.dll
+  introuvable` on a machine without MSYS2.
 - A database read from a SimaPro export can be written back out as one. Long
   descriptions run to several paragraphs, and the export held them on a single
   line with SimaPro's own in-cell line break. Reading one turned that break
@@ -14,6 +23,9 @@
   apart on re-import.
 
 ### Changed
+- Every download now includes `THIRD-PARTY-LICENSES.md`, naming the numerical
+  libraries built into the program and their terms. The Windows zip also
+  carries the full licence texts of the runtime libraries beside it.
 - Assistant answers now carry their `web_url` deep links when the engine runs
   behind a reverse proxy that serves the web interface upstream. The proxy
   declares itself with the standard `X-Forwarded-Prefix` header; the links then
