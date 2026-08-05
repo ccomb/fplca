@@ -56,7 +56,10 @@ databases imported from /other/ formats are dropped — always score-preserving
     emissions are unaffected;
   * multi-paragraph descriptions are joined into the single physical @Comment@
     line with @\\x7f@ separators, so the re-parse reads one description entry
-    holding the paragraph breaks rather than the original list.
+    holding the paragraph breaks rather than the original list. A description
+    that already /contains/ a literal @\\x7f@ re-parses with that character read
+    as a line break, since the format reserves it for exactly that; no SimaPro
+    parse can produce one, so this only reaches a cross-format import.
 
 Anything the format /cannot/ represent without silently corrupting the data on
 re-import (non-finite amounts, a zero allocation, a missing unit, newlines in an
