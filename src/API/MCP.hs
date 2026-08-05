@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import Data.IORef
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -135,14 +135,19 @@ Two ways a frontend can exist: bundled with this process, answering on the
 request's own host; or upstream, behind a reverse proxy that says so by
 setting @X-Forwarded-Prefix@ - the prefix it serves this engine under, which
 then belongs in every link, along with the forwarded protocol.
+
+The header's presence is the declaration, not its value: a proxy serving the
+routes at the root says @X-Forwarded-Prefix: /@. Trailing slashes are dropped
+because every link path starts with its own.
 -}
 webUrlBase :: Bool -> RequestHeaders -> Maybe Text
 webUrlBase hasFrontend hdrs
-    | hasFrontend || prefix /= "" = Just (proto <> "://" <> host <> prefix)
+    | hasFrontend || isJust mPrefix = Just (proto <> "://" <> host <> prefix)
     | otherwise = Nothing
   where
     header n = maybe "" TE.decodeUtf8Lenient (lookup n hdrs)
-    prefix = header "X-Forwarded-Prefix"
+    mPrefix = TE.decodeUtf8Lenient <$> lookup "X-Forwarded-Prefix" hdrs
+    prefix = maybe "" (T.dropWhileEnd (== '/')) mPrefix
     proto = case header "X-Forwarded-Proto" of
         "" -> "http"
         p -> p

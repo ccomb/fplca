@@ -301,6 +301,18 @@ spec = describe "MCP database load/unload tools" $ do
             webUrlBase True [("Host", "example.org"), ("X-Forwarded-Prefix", "/@ada/lab")]
                 `shouldBe` Just "http://example.org/@ada/lab"
 
+        it "reads a root prefix as an upstream frontend with no prefix to carry" $
+            webUrlBase False [("Host", "example.org"), ("X-Forwarded-Prefix", "/"), ("X-Forwarded-Proto", "https")]
+                `shouldBe` Just "https://example.org"
+
+        it "drops a trailing slash so link paths supply their own" $
+            webUrlBase False [("Host", "example.org"), ("X-Forwarded-Prefix", "/@ada/lab/")]
+                `shouldBe` Just "http://example.org/@ada/lab"
+
+        it "honours the forwarded protocol for a bundled frontend too" $
+            webUrlBase True [("Host", "example.org"), ("X-Forwarded-Proto", "https")]
+                `shouldBe` Just "https://example.org"
+
     -- A client may hold several VoLCA servers at once, one per instance. The
     -- name is the only thing that tells them apart, and it has to reach the
     -- assistant, not just the client's server list.
