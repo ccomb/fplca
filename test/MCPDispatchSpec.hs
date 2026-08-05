@@ -20,7 +20,7 @@ import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Test.Hspec
 
-import API.MCP (RpcRequest (..), callTool, handleInitialize, mcpCountsAsActivity, toolDefinitions)
+import API.MCP (RpcRequest (..), callTool, handleInitialize, mcpCountsAsActivity, toolDefinitions, webUrlBase)
 import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), ServerName (..), defaultConfig)
 import Database.Manager (addDatabase, initDatabaseManager, loadDatabase)
 import Types (GeographyPolicy (..))
@@ -282,6 +282,24 @@ spec = describe "MCP database load/unload tools" $ do
 
         it "refuses an unknown method" $
             mcpCountsAsActivity "no/such/method" `shouldBe` False
+
+    -- web_url deep links must point where a frontend actually answers: on
+    -- this host when one is bundled, behind the reverse proxy's declared
+    -- prefix when one serves the routes upstream, nowhere otherwise.
+    describe "webUrlBase" $ do
+        it "stays silent with no frontend and no proxy" $
+            webUrlBase False [("Host", "box:8080")] `shouldBe` Nothing
+
+        it "answers on the request's own host when a frontend is bundled" $
+            webUrlBase True [("Host", "box:8080")] `shouldBe` Just "http://box:8080"
+
+        it "reads X-Forwarded-Prefix as proof of an upstream frontend" $
+            webUrlBase False [("Host", "example.org"), ("X-Forwarded-Prefix", "/@ada/lab"), ("X-Forwarded-Proto", "https")]
+                `shouldBe` Just "https://example.org/@ada/lab"
+
+        it "carries the prefix even when a frontend is also bundled" $
+            webUrlBase True [("Host", "example.org"), ("X-Forwarded-Prefix", "/@ada/lab")]
+                `shouldBe` Just "http://example.org/@ada/lab"
 
     -- A client may hold several VoLCA servers at once, one per instance. The
     -- name is the only thing that tells them apart, and it has to reach the

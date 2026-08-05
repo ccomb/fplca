@@ -5,7 +5,7 @@ Implements Streamable HTTP transport (MCP spec 2025-03-26).
 POST /mcp handles initialize, tools/list, tools/call (JSON or SSE response).
 GET  /mcp opens an SSE stream for server-initiated messages (stateless: closes immediately).
 -}
-module API.MCP (mcpApp, mcpCountsAsActivity, toolDefinitions, callTool, selectMethod, handleInitialize, RpcRequest (..)) where
+module API.MCP (mcpApp, mcpCountsAsActivity, toolDefinitions, callTool, selectMethod, handleInitialize, webUrlBase, RpcRequest (..)) where
 
 import Control.Concurrent.STM (readTVarIO)
 import Data.Aeson
@@ -49,7 +49,7 @@ import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
-import Network.HTTP.Types.Header (hAccept, hHost)
+import Network.HTTP.Types.Header (RequestHeaders, hAccept, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
@@ -128,6 +128,28 @@ not anyone is working. Only @tools\/call@ is someone asking a question.
 mcpCountsAsActivity :: Text -> Bool
 mcpCountsAsActivity = (== "tools/call")
 
+{- | The absolute base for @web_url@ deep links, or 'Nothing' when no
+frontend serves those routes and the links would point at a 404.
+
+Two ways a frontend can exist: bundled with this process, answering on the
+request's own host; or upstream, behind a reverse proxy that says so by
+setting @X-Forwarded-Prefix@ - the prefix it serves this engine under, which
+then belongs in every link, along with the forwarded protocol.
+-}
+webUrlBase :: Bool -> RequestHeaders -> Maybe Text
+webUrlBase hasFrontend hdrs
+    | hasFrontend || prefix /= "" = Just (proto <> "://" <> host <> prefix)
+    | otherwise = Nothing
+  where
+    header n = maybe "" TE.decodeUtf8Lenient (lookup n hdrs)
+    prefix = header "X-Forwarded-Prefix"
+    proto = case header "X-Forwarded-Proto" of
+        "" -> "http"
+        p -> p
+    host = case header hHost of
+        "" -> "localhost"
+        h -> h
+
 {- | Build the @\/mcp@ endpoint.
 
 @markActivity@ is called for every request that 'mcpCountsAsActivity' accepts.
@@ -143,13 +165,7 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
     return $ \req respond -> do
         let method = requestMethod req
             hdrs = requestHeaders req
-            hostHeader = fromMaybe "localhost" $ lookup hHost hdrs
-            -- Only emit 'web_url' when the SPA is bundled to serve those
-            -- routes; otherwise the link would point at a 404.
-            mBaseUrl =
-                if hasFrontend
-                    then Just ("http://" <> TE.decodeUtf8 hostHeader)
-                    else Nothing
+            mBaseUrl = webUrlBase hasFrontend hdrs
             acceptHdr = fromMaybe "" $ lookup hAccept hdrs
             wantsSse = "text/event-stream" `BS.isInfixOf` acceptHdr
         st <- readIORef stateRef

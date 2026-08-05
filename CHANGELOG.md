@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- Assistant answers now carry their `web_url` deep links when the engine runs
+  behind a reverse proxy that serves the web interface upstream. The proxy
+  declares itself with the standard `X-Forwarded-Prefix` header; the links then
+  carry that prefix and the forwarded protocol. Before, an engine running
+  without a bundled frontend emitted no links at all, even when a proxy in
+  front of it served those very pages.
+
 ## [0.9.5] - 2026-08-04
 
 ### Added
