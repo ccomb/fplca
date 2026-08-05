@@ -427,6 +427,15 @@ jobs:
             ./build.sh --test --werror
           fi
 
+      - name: Show the test suite log
+        # cabal prints "Test suite lca-tests: FAIL" and points at a log file
+        # that stays on the runner, so a platform-only failure is otherwise
+        # diagnosed by guesswork. Anything the suite wrote after the last
+        # streamed line - an assertion, an RTS message, a signal - is in there.
+        if: failure() && needs.preflight.outputs.skip != 'true'
+        run: |
+          find dist-newstyle -name '*lca-tests.log' -print -exec tail -n 100 {} \; || true
+
       - name: Verify the Windows zip's ingredients are on the runner
         # The packaging step runs only under `release: true`, so without this
         # every PR would leave the Windows zip's contents untested and a broken
