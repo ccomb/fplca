@@ -14,8 +14,10 @@ lives in that script.
 <https://github.com/OpenMathLib/OpenBLAS>. Full text below.
 
 **GCC runtime** (libgfortran, libquadmath, libgcc) - GPLv3 with the GCC Runtime
-Library Exception. Linking this runtime into a binary compiled by GCC is exactly
-what the Exception permits, so the binary imposes no further obligation.
+Library Exception. The Exception covers this binary: its Fortran parts are
+compiled by GCC, and the rest is compiled by GHC and clang, which are not works
+based on GCC - either branch of the Exception's definition of an Eligible
+Compilation Process. Nothing further is owed.
 Texts: <https://gcc.gnu.org/onlinedocs/gcc/Copying.html> and
 <https://www.gnu.org/licenses/gcc-exception-3.1.html>.
 
@@ -23,8 +25,10 @@ Texts: <https://gcc.gnu.org/onlinedocs/gcc/Copying.html> and
 
 The Windows zip carries the MSYS2 ucrt64 runtime DLLs the binary loads
 (`libgfortran-5`, `libquadmath-0`, `libgcc_s_seh-1`, `libstdc++-6`, `libgomp-1`,
-`libwinpthread-1`, `libopenblas`). Their complete licence texts, as installed by
-MSYS2, travel in the `licenses/` directory of that zip.
+`libwinpthread-1`, `libopenblas`). Its `licenses/` directory is MSYS2's own
+`share/licenses` copied whole, so it holds the texts for those DLLs and for the
+rest of the toolchain installed alongside them. Copied rather than curated: the
+DLLs' terms are certainly in there, and no list here can go stale.
 
 ## OpenBLAS licence
 

@@ -119,6 +119,14 @@ jobs:
             os: macos
     env:
       MACOSX_DEPLOYMENT_TARGET: ${{ needs.versions.outputs.macos_target }}
+      # The MSYS2 ucrt64 runtime volca.exe loads. Named once because two steps
+      # need the same list: the per-PR check that they exist, and the release
+      # packaging that copies them into the zip. A rename upstream (a gcc major
+      # bump moving libgcc_s_seh-1, say) then fails on the PR that first sees
+      # it, not at tag time.
+      WINDOWS_RUNTIME_DLLS: >-
+        libgfortran-5.dll libquadmath-0.dll libgcc_s_seh-1.dll
+        libwinpthread-1.dll libstdc++-6.dll libgomp-1.dll libopenblas.dll
       # Skip the brew formula refresh and post-install cleanup on every
       # invocation — the runner image is ephemeral, the disk savings
       # do not matter, and the refresh alone can add 30-60s.
@@ -423,16 +431,24 @@ jobs:
         # The packaging step runs only under `release: true`, so without this
         # every PR would leave the Windows zip's contents untested and a broken
         # assumption would surface at tag time, blocking a release. Check here
-        # what packaging will reach for. The DLL list itself is not re-checked:
-        # packaging fails hard on a missing one, and the same list has shipped
-        # in the desktop bundle for a while.
+        # everything packaging will reach for.
         if: needs.preflight.outputs.skip != 'true' && matrix.os == 'windows'
         run: |
+          missing=""
+          for dll in $WINDOWS_RUNTIME_DLLS; do
+            if [[ ! -f "/ucrt64/bin/$dll" ]]; then
+              missing="$missing $dll"
+            fi
+          done
+          if [[ -n "$missing" ]]; then
+            echo "::error::MSYS2 no longer ships:$missing — the release zip would be missing runtime the binary loads."
+            exit 1
+          fi
           if [[ ! -d /ucrt64/share/licenses ]]; then
             echo "::error::/ucrt64/share/licenses missing — the release zip cannot carry the runtime DLLs' licence texts."
             exit 1
           fi
-          echo "OK: $(find /ucrt64/share/licenses -type f | wc -l) licence file(s) available to ship."
+          echo "OK: every runtime DLL present, and $(find /ucrt64/share/licenses -type f | wc -l) licence file(s) available to ship."
 
       - name: Verify static MUMPS link (Linux)
         # Regression guard: the shipped tarball must not depend on
@@ -577,9 +593,9 @@ jobs:
             # windows mode). Those DLLs sit on the build machine's PATH but nowhere on a
             # user's, so a zip holding only volca.exe fails at load with
             # "libgfortran-5.dll introuvable". Ship them beside the binary — Windows
-            # searches the .exe's own directory first. Same list the desktop bundle has
-            # carried since it hit this; a missing one is a hard error, never a silent
-            # partial zip.
+            # searches the .exe's own directory first. The per-PR check above has
+            # already confirmed each one exists; re-checked here so an absence can
+            # never turn into a silent partial zip.
             UCRT_BIN=""
             for candidate in /ucrt64/bin /c/msys64/ucrt64/bin; do
               if [[ -d "$candidate" ]]; then
@@ -591,8 +607,7 @@ jobs:
               echo "::error::MSYS2 ucrt64 not found — cannot bundle the runtime DLLs the binary needs."
               exit 1
             fi
-            for dll in libgfortran-5.dll libquadmath-0.dll libgcc_s_seh-1.dll \
-                       libwinpthread-1.dll libstdc++-6.dll libgomp-1.dll libopenblas.dll; do
+            for dll in $WINDOWS_RUNTIME_DLLS; do
               if [[ ! -f "$UCRT_BIN/$dll" ]]; then
                 echo "::error::Required runtime DLL not found: $UCRT_BIN/$dll"
                 exit 1

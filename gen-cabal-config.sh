@@ -135,10 +135,11 @@ EOF
             "${GFORTRAN_LIB_DIR}/libgfortran.a"
             "${GFORTRAN_LIB_DIR}/libquadmath.a"
         )
+        # An unanswered driver would drop libgcc.a from the link and surface as an
+        # undefined ___emutls_get_address far from its cause, so an empty answer is
+        # an error like a missing archive - the loop below reports it either way.
         GCC_A=$("${BREW_PREFIX}/bin/gfortran" -print-libgcc-file-name 2>/dev/null || true)
-        if [[ -n "$GCC_A" ]]; then
-            DARWIN_STATIC_LIBS+=("$GCC_A")
-        fi
+        DARWIN_STATIC_LIBS+=("${GCC_A:-<gfortran -print-libgcc-file-name answered nothing>}")
         DARWIN_STATIC_FLAGS=""
         for lib in "${DARWIN_STATIC_LIBS[@]}"; do
             if [[ ! -f "$lib" ]]; then

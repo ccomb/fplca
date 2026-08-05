@@ -90,6 +90,11 @@ runs:
     # Ordering invariant, the macOS mirror of the Alpine one above: this brings
     # in gfortran, which the OpenBLAS source build below needs to compile
     # LAPACK. Do not move it after that step.
+    #
+    # The openblas formula is not what the engine links against - that is the
+    # source build below. It is still needed for the MUMPS source-build
+    # fallback, which build.sh points at the Homebrew copy when no prebuilt
+    # MUMPS archive is available.
     - name: Install build dependencies (macOS)
       if: inputs.matrix-os == 'macos'
       shell: bash
@@ -126,6 +131,16 @@ runs:
         curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" \
           | tar -xz -C /tmp
         cd "$SRC"
+        # OpenBLAS's default target builds its own test suite, which links
+        # -lgfortran. On macOS that lives in the Homebrew gcc prefix, which
+        # clang does not search, so the tests fail to link even though the
+        # library built fine. Ask the driver where it is rather than guessing
+        # the Cellar layout. Keeping the tests is worth the one line: they
+        # exercise the very archive we ship.
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          export LIBRARY_PATH
+        fi
         # getconf rather than nproc: BusyBox Alpine and macOS both answer it.
         make -j"$(getconf _NPROCESSORS_ONLN)" \
           NO_SHARED=1 \
