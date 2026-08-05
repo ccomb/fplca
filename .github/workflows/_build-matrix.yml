@@ -435,6 +435,18 @@ jobs:
         if: failure() && needs.preflight.outputs.skip != 'true'
         run: |
           find dist-newstyle -name '*lca-tests.log' -print -exec tail -n 100 {} \; || true
+          # A suite that dies on a signal writes nothing at all, so the log
+          # above ends mid-sentence and names no cause. Re-run the binary to
+          # read the exit status (128+signal), and on macOS print the crash
+          # report, which carries the faulting thread's backtrace.
+          BIN=$(cabal list-bin lca-tests 2>/dev/null || true)
+          if [[ -n "$BIN" && -x "$BIN" ]]; then
+            "$BIN" >/dev/null 2>&1 || echo "test binary exit status: $?"
+          fi
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            find ~/Library/Logs/DiagnosticReports -name 'lca-tests*' -print \
+              -exec head -n 60 {} \; 2>/dev/null || true
+          fi
 
       - name: Verify the Windows zip's ingredients are on the runner
         # The packaging step runs only under `release: true`, so without this
