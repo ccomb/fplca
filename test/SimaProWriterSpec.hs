@@ -76,6 +76,11 @@ fixtureCSV =
         , "Geography"
         , "FR"
         , ""
+        , "Comment"
+        , -- Multi-line free text the way SimaPro writes it: one physical line,
+          -- \x7f standing in for the newline.
+          "Churned in a batch churn.\x7f\&Milk comes from the same farm."
+        , ""
         , "Products"
         , "Butter;kg;1;100;not defined;material;(2,1,1,1,1),churned on site\x7f\&from pasture milk"
         , ""
@@ -404,6 +409,11 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- writer's \n → \x7f re-encoding as well.
         map exchangeComment origExchanges `shouldSatisfy` elem (Just "churned on site\nfrom pasture milk")
         map exchangePedigree origExchanges `shouldSatisfy` elem (Just (Pedigree 2 1 1 1 1))
+        -- Same again for the activity description, the other multi-line free
+        -- text field. It reaches the writer holding a \n, and only survives
+        -- because the Comment metadata line is \x7f-encoded on the way out.
+        map activityDescription (activitiesOf original)
+            `shouldSatisfy` elem ["Churned in a batch churn.\nMilk comes from the same farm."]
 
     it "(c) score-equivalence: same inventory for a sample activity within tolerance" $ do
         original <- parseBytes fixtureCSV
@@ -519,6 +529,17 @@ spec = describe "SimaPro.Writer round-trip" $ do
             -- (it is derived from the same 'activityMetaLines' as the emitter).
             checkSimaProExportable (guardDb Nothing (Just (SimaProProcessType "Unit\nprocess")) [refProd])
                 `shouldSatisfy` isLeft
+
+        it "accepts a multi-paragraph description and encodes it as \\x7f" $ do
+            -- Free text is not an identity field: a line break there carries
+            -- meaning, and SimaPro's own convention holds it on one physical
+            -- line as \x7f. Refusing it would make every database that came
+            -- from a SimaPro export inexportable, since the parser decodes
+            -- \x7f to \n on the way in.
+            let db = describedDb ["First paragraph.\nStill the first.", "Second paragraph."]
+            checkSimaProExportable db `shouldBe` Right ()
+            out <- serBytes db
+            out `shouldSatisfy` BS.isInfixOf "First paragraph.\x7fStill the first.\x7fSecond paragraph."
 
         it "rejects an activity with no reference product" $
             -- An empty Products section makes the parser discard the whole block.
@@ -830,3 +851,9 @@ guardDb alloc ntype exs =
   where
     act =
         Activity "guard maker" [] M.empty M.empty "GLO" LocationDeclared "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing
+
+-- | The baseline guard fixture, carrying the given description paragraphs.
+describedDb :: [Text] -> SimpleDatabase
+describedDb paragraphs =
+    let db = guardDb Nothing Nothing [refProd]
+     in db{sdbActivities = M.map (\a -> a{activityDescription = paragraphs}) (sdbActivities db)}

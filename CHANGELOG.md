@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+- A database read from a SimaPro export can be written back out as one. Long
+  descriptions run to several paragraphs, and the export held them on a single
+  line with SimaPro's own in-cell line break. Reading one turned that break
+  back into a real newline, and the writer then refused the whole database
+  because of it, so no such database could be exported at all. Descriptions are
+  now written the way SimaPro writes them, and the paragraph breaks survive the
+  round trip instead of being flattened to spaces. A line break in a name or a
+  geography is still refused: there it means nothing and would tear the row
+  apart on re-import.
+
 ### Changed
 - Assistant answers now carry their `web_url` deep links when the engine runs
   behind a reverse proxy that serves the web interface upstream. The proxy
