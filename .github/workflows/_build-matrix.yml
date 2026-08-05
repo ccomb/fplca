@@ -419,6 +419,21 @@ jobs:
             ./build.sh --test --werror
           fi
 
+      - name: Verify the Windows zip's ingredients are on the runner
+        # The packaging step runs only under `release: true`, so without this
+        # every PR would leave the Windows zip's contents untested and a broken
+        # assumption would surface at tag time, blocking a release. Check here
+        # what packaging will reach for. The DLL list itself is not re-checked:
+        # packaging fails hard on a missing one, and the same list has shipped
+        # in the desktop bundle for a while.
+        if: needs.preflight.outputs.skip != 'true' && matrix.os == 'windows'
+        run: |
+          if [[ ! -d /ucrt64/share/licenses ]]; then
+            echo "::error::/ucrt64/share/licenses missing — the release zip cannot carry the runtime DLLs' licence texts."
+            exit 1
+          fi
+          echo "OK: $(find /ucrt64/share/licenses -type f | wc -l) licence file(s) available to ship."
+
       - name: Verify static MUMPS link (Linux)
         # Regression guard: the shipped tarball must not depend on
         # libdmumps_seq.so / libmumps_common_seq.so / libpord_seq.so /
