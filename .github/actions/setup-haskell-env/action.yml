@@ -141,12 +141,25 @@ runs:
           LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LIBRARY_PATH
         fi
+        # LAPACK is compiled -frecursive, which puts its working arrays on the
+        # stack, and the widest kernels size theirs for AVX-512. Linux buys the
+        # room with -Wl,-z,stack-size=8388608 (see gen-cabal-config.sh's musl
+        # mode); ld64 has no equivalent, and a macOS pthread gets 512 KB, so the
+        # first BLAS3 call inside a MUMPS solve died on SIGSEGV. Dropping the
+        # AVX-512 targets keeps every kernel inside that budget. Their absence
+        # costs nothing on the Macs this has to run on: macOS 13 requires a 2017
+        # or later machine, and those top out at AVX2.
+        case "$RUNNER_OS-$(uname -m)" in
+          macOS-x86_64) WIDTH_LIMIT=NO_AVX512=1 ;;
+          *)            WIDTH_LIMIT= ;;
+        esac
         # getconf rather than nproc: BusyBox Alpine and macOS both answer it.
         make -j"$(getconf _NPROCESSORS_ONLN)" \
           NO_SHARED=1 \
           USE_THREAD=1 USE_OPENMP=0 \
           DYNAMIC_ARCH=1 \
-          TARGET=GENERIC
+          TARGET=GENERIC \
+          $WIDTH_LIMIT
         make PREFIX="$GITHUB_WORKSPACE/deps/openblas" NO_SHARED=1 install
         rm -rf "$SRC"
 
