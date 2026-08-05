@@ -54,13 +54,15 @@ databases imported from /other/ formats are dropped — always score-preserving
     generated UUID), so it is the one lossy case that can affect characterisation
     for a cross-format export; air/water/soil media and all SimaPro-origin
     emissions are unaffected;
-  * multi-paragraph descriptions are joined into the single-line @Comment@ field.
+  * multi-paragraph descriptions are joined into the single physical @Comment@
+    line with @\\x7f@ separators, so the re-parse reads one description entry
+    holding the paragraph breaks rather than the original list.
 
 Anything the format /cannot/ represent without silently corrupting the data on
-re-import (non-finite amounts, a zero allocation, a missing unit, newlines in a
-field, a pedigree-shaped comment, a metadata-key collision, an activity without
-exactly one reference product) is rejected outright by 'checkSimaProExportable'
-rather than written lossily.
+re-import (non-finite amounts, a zero allocation, a missing unit, newlines in an
+identity field, a pedigree-shaped comment, a metadata-key collision, an activity
+without exactly one reference product) is rejected outright by
+'checkSimaProExportable' rather than written lossily.
 -}
 module SimaPro.Writer (
     WriterConfig (..),
@@ -128,13 +130,16 @@ Amounts must also be finite: a NaN or ±Infinity has no parseable literal, so
 inventory. Report it here instead. This is the export-boundary check;
 'serializeSimaProCSV' itself stays pure and total.
 
-Names and metadata values must also be free of newline characters.
-'escapeField' RFC-4180-quotes them, but the parser splits the file on physical
-lines ('BS8.lines') /before/ CSV parsing, so an embedded @\\n@ or @\\r@ tears
-the row apart and corrupts or drops it. Reject such fields rather than emit a
-row the parser cannot read back. Exchange comments are the exception:
-'renderComment' encodes their line breaks as @\\x7f@, SimaPro's in-cell
-newline, so they round-trip instead of being rejected.
+Identity fields must also be free of newline characters. 'escapeField'
+RFC-4180-quotes them, but the parser splits the file on physical lines
+('BS8.lines') /before/ CSV parsing, so an embedded @\\n@ or @\\r@ tears the row
+apart and corrupts or drops it. Reject such fields rather than emit a row the
+parser cannot read back. Free text is the exception, and never reaches this
+guard: 'encodeNewlines' turns its line breaks into @\\x7f@, SimaPro's in-cell
+newline, before they are written, so descriptions and exchange comments
+round-trip instead of being rejected. That distinction is the whole rule: a line
+break carries meaning in prose and none in a name, and a @\\x7f@ in a name would
+poison the matching a re-import does on it.
 
 Two more round-trip hazards are specific to SimaPro's textual layout, and bite
 only for databases imported from other formats (a SimaPro parse can't produce
@@ -308,10 +313,10 @@ checkSimaProExportable db =
     -- Every text field that lands in the output verbatim: the bare metadata
     -- value lines (so a newline in any of them — the Type label included — is
     -- caught), the "Category" product-column value, and all flow names.
-    -- Exchange comments are exempt: 'renderComment' encodes their newlines as
-    -- \x7f, SimaPro's in-cell line break. The line-based parser splits on
-    -- physical newlines /before/ CSV parsing, so even a quoted newline tears
-    -- a row apart; reject upstream.
+    -- Free text never offends: 'activityMetaLines' and 'renderComment' both
+    -- run 'encodeNewlines' over it first, so what this sees is already
+    -- \x7f-encoded. The line-based parser splits on physical newlines /before/
+    -- CSV parsing, so even a quoted newline tears a row apart; reject upstream.
     activityTexts act =
         map snd (activityMetaLines act)
             ++ M.elems (activityClassification act)
@@ -449,12 +454,12 @@ values are dropped on emission by 'serializeActivity'’s @meta@, but kept here 
 the guards still inspect exactly what /would/ be written.
 
 The "Category" classification value is intentionally absent: it rides the
-@Products@ row's category column, not a bare metadata line. Multi-paragraph
-descriptions are flattened to one space-joined "Comment" line; the re-parse
-reads them back as a single description entry, losing the paragraph boundaries —
-an accepted limitation of SimaPro's single-line "Comment" field. A missing
-native type yields an empty "Type" value, so @meta@ omits the line and a
-re-parse yields 'Nothing' again rather than drifting to "Unit process".
+@Products@ row's category column, not a bare metadata line. The description is
+joined and 'encodeNewlines'-encoded, so paragraph breaks survive as @\\x7f@ on
+the one physical "Comment" line the format allows; the re-parse decodes them
+back into a single description entry carrying the breaks. A missing native type
+yields an empty "Type" value, so @meta@ omits the line and a re-parse yields
+'Nothing' again rather than drifting to "Unit process".
 -}
 activityMetaLines :: Activity -> [(Text, Text)]
 activityMetaLines Activity{..} =
@@ -462,18 +467,29 @@ activityMetaLines Activity{..} =
     , ("Process name", activityName)
     , ("Type", typeLabelOf activityNativeType)
     , ("Geography", activityLocation)
-    , ("Comment", T.intercalate " " activityDescription)
+    , ("Comment", encodeNewlines (T.intercalate "\n" activityDescription))
     ]
 
+{- | Encode line breaks as @\\x7f@ (DEL), SimaPro's in-cell newline, after
+normalising CRLF and lone CR to LF. This is how the format itself carries
+multi-line free text: the row stays one physical line, and the parser decodes
+@\\x7f@ back to a newline ('SimaPro.Parser.nonEmptyText'), so the text
+round-trips instead of tearing the row apart.
+
+Every free-text field the writer emits goes through this. Identity fields
+(names, geography, type, classification) do not: a line break there is rejected
+by 'checkSimaProExportable' rather than encoded, because it carries no meaning
+worth keeping and a @\\x7f@ would poison the name a re-import matches on.
+-}
+encodeNewlines :: Text -> Text
+encodeNewlines = T.replace "\n" "\x7f" . T.replace "\r" "\n" . T.replace "\r\n" "\n"
+
 {- | Render the comment column, re-attaching a pedigree prefix when present.
-Line breaks are encoded as @\\x7f@ (DEL), SimaPro's in-cell newline — the
-line-based format cannot hold a literal newline (see 'checkSimaProExportable'),
-and the parser decodes @\\x7f@ back, so multi-line comments round-trip.
+Line breaks are 'encodeNewlines'-encoded, so multi-line comments round-trip.
 -}
 renderComment :: Maybe Pedigree -> Maybe Text -> Text
 renderComment ped cmt =
     let pedTxt = maybe "" renderPedigree ped
-        encodeNewlines = T.replace "\n" "\x7f" . T.replace "\r" "\n" . T.replace "\r\n" "\n"
         cmtTxt = encodeNewlines (fromMaybe "" cmt)
      in case (pedTxt, cmtTxt) of
             ("", c) -> c
