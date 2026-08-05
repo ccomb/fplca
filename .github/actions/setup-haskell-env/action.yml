@@ -144,27 +144,12 @@ runs:
           LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LIBRARY_PATH
         fi
-        # SMALL_MATRIX_OPT is on by default on x86_64 and does not exist on
-        # arm64. It routes small matrices through kernels that keep their
-        # working arrays on the stack, and OpenBLAS's own pthreads get macOS's
-        # 512 KB default - so the first MUMPS solve, on a 3-activity matrix,
-        # died on SIGSEGV. That one flag explains every observation: x86_64
-        # only, small matrix only, and fine everywhere the stack is bigger
-        # (Linux buys 8 MB with -Wl,-z,stack-size, which ld64 has no equivalent
-        # for; the Homebrew build threads through libomp, whose threads start
-        # far larger). Turning it off costs the small-matrix shortcut on Intel
-        # Macs; the general path computes the same answers.
-        case "$RUNNER_OS-$(uname -m)" in
-          macOS-x86_64) STACK_SAFE=SMALL_MATRIX_OPT=0 ;;
-          *)            STACK_SAFE= ;;
-        esac
         # getconf rather than nproc: BusyBox Alpine and macOS both answer it.
         make -j"$(getconf _NPROCESSORS_ONLN)" \
           NO_SHARED=1 \
           USE_THREAD=1 USE_OPENMP=0 \
           DYNAMIC_ARCH=1 \
-          TARGET=GENERIC \
-          $STACK_SAFE
+          TARGET=GENERIC
         make PREFIX="$GITHUB_WORKSPACE/deps/openblas" NO_SHARED=1 install
         rm -rf "$SRC"
 
