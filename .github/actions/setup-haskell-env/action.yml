@@ -144,14 +144,10 @@ runs:
           LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LIBRARY_PATH
         fi
-        # DYNAMIC_ARCH ships every kernel set and picks one at startup through a
-        # table of function pointers. That works when the library is a shared
-        # object, and on Linux where the archive keeps its initialiser; linked
-        # statically by ld64, which also runs -dead_strip (gen-cabal-config.sh's
-        # darwin flags), the dispatch never took effect and the first BLAS call
-        # jumped into the middle of a kernel: EXC_BAD_ACCESS on an address of
-        # 0xffffffffffffff8e, inside an assembler label, on a stack lldb could
-        # not unwind. So on macOS x86_64 name the kernel set at build time.
+        # Name the kernel set at build time on macOS x86_64 rather than ship
+        # DYNAMIC_ARCH's startup dispatch through a table of function pointers:
+        # in a statically linked binary that table is one more thing deciding at
+        # runtime, and nothing here needs a build that runs on any CPU.
         #
         # HASWELL is the floor the deployment target already implies: macOS 13
         # runs on 2017-or-later Macs, which are Kaby Lake or newer and all have
