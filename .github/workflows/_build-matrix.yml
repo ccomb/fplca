@@ -446,7 +446,16 @@ jobs:
           # A signal names the kind of death, not the culprit. Run it under the
           # debugger and print every thread's stack from where it stopped.
           if [[ "$RUNNER_OS" == "macOS" && -n "$BIN" && -x "$BIN" ]] && command -v lldb >/dev/null; then
-            lldb --batch -o run -o 'thread backtrace all' -o quit -- "$BIN" 2>&1 | tail -n 120
+            # `image lookup` on the faulting address names the object file the
+            # code came from, which is what says whether this is OpenBLAS,
+            # MUMPS or our own code. The backtrace alone only gives a local
+            # assembler label, which belongs to no library in particular.
+            lldb --batch -o run \
+                 -o 'thread backtrace all' \
+                 -o 'image lookup --address $pc --verbose' \
+                 -o 'register read rax rbx rcx rdx rsi rdi rsp rbp' \
+                 -o 'disassemble --start-address $pc-64 --count 24' \
+                 -o quit -- "$BIN" 2>&1 | tail -n 160
           fi
 
       - name: Verify the Windows zip's ingredients are on the runner
