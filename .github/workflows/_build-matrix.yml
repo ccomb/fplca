@@ -450,12 +450,14 @@ jobs:
             # code came from, which is what says whether this is OpenBLAS,
             # MUMPS or our own code. The backtrace alone only gives a local
             # assembler label, which belongs to no library in particular.
+            # -k, not -o: in batch mode the -o list stops at the signal and
+            # only the -k commands run once the process has crashed. Passing
+            # these as -o printed nothing but the stop message.
             lldb --batch -o run \
-                 -o 'thread backtrace all' \
-                 -o 'image lookup --address $pc --verbose' \
-                 -o 'register read rax rbx rcx rdx rsi rdi rsp rbp' \
-                 -o 'disassemble --start-address $pc-64 --count 24' \
-                 -o quit -- "$BIN" 2>&1 | tail -n 160
+                 -k 'thread backtrace all' \
+                 -k 'image lookup --address $pc --verbose' \
+                 -k 'register read' \
+                 -k quit -- "$BIN" 2>&1 | tail -n 160
           fi
 
       - name: Verify the Windows zip's ingredients are on the runner
