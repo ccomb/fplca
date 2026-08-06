@@ -119,6 +119,14 @@ jobs:
             os: macos
     env:
       MACOSX_DEPLOYMENT_TARGET: ${{ needs.versions.outputs.macos_target }}
+      # The MSYS2 ucrt64 runtime volca.exe loads. Named once because two steps
+      # need the same list: the per-PR check that they exist, and the release
+      # packaging that copies them into the zip. A rename upstream (a gcc major
+      # bump moving libgcc_s_seh-1, say) then fails on the PR that first sees
+      # it, not at tag time.
+      WINDOWS_RUNTIME_DLLS: >-
+        libgfortran-5.dll libquadmath-0.dll libgcc_s_seh-1.dll
+        libwinpthread-1.dll libstdc++-6.dll libgomp-1.dll libopenblas.dll
       # Skip the brew formula refresh and post-install cleanup on every
       # invocation — the runner image is ephemeral, the disk savings
       # do not matter, and the refresh alone can add 30-60s.
@@ -419,6 +427,67 @@ jobs:
             ./build.sh --test --werror
           fi
 
+      - name: Show the test suite log
+        # cabal prints "Test suite lca-tests: FAIL" and points at a log file
+        # that stays on the runner, so a platform-only failure is otherwise
+        # diagnosed by guesswork. Anything the suite wrote after the last
+        # streamed line - an assertion, an RTS message, a signal - is in there.
+        if: failure() && needs.preflight.outputs.skip != 'true'
+        run: |
+          # The link flags actually in force, not the ones the script meant to
+          # write. Successive link changes produced byte-identical crash
+          # addresses, which says the flags never reached the linker.
+          echo "=== cabal.project.local ==="
+          cat cabal.project.local || true
+          find dist-newstyle -name '*lca-tests.log' -print -exec tail -n 100 {} \; || true
+          # A suite that dies on a signal writes nothing at all, so the log
+          # above ends mid-sentence and names no cause. Re-run the binary for
+          # its exit status: 128+signal says which one, and 139 (SIGSEGV) in
+          # particular is what a stack overrun in a BLAS kernel looks like.
+          BIN=$(cabal list-bin lca-tests 2>/dev/null || true)
+          if [[ -n "$BIN" && -x "$BIN" ]]; then
+            "$BIN" >/dev/null 2>&1 || echo "test binary exit status: $?"
+          fi
+          # A signal names the kind of death, not the culprit. Run it under the
+          # debugger and print every thread's stack from where it stopped.
+          if [[ "$RUNNER_OS" == "macOS" && -n "$BIN" && -x "$BIN" ]] && command -v lldb >/dev/null; then
+            # `image lookup` on the faulting address names the object file the
+            # code came from, which is what says whether this is OpenBLAS,
+            # MUMPS or our own code. The backtrace alone only gives a local
+            # assembler label, which belongs to no library in particular.
+            # -k, not -o: in batch mode the -o list stops at the signal and
+            # only the -k commands run once the process has crashed. Passing
+            # these as -o printed nothing but the stop message.
+            lldb --batch -o run \
+                 -k 'thread backtrace all' \
+                 -k 'image lookup --address $pc --verbose' \
+                 -k 'register read' \
+                 -k quit -- "$BIN" 2>&1 | tail -n 160
+          fi
+
+      - name: Verify the Windows zip's ingredients are on the runner
+        # The packaging step runs only under `release: true`, so without this
+        # every PR would leave the Windows zip's contents untested and a broken
+        # assumption would surface at tag time, blocking a release. Check here
+        # everything packaging will reach for.
+        if: needs.preflight.outputs.skip != 'true' && matrix.os == 'windows'
+        run: |
+          missing=""
+          for dll in $WINDOWS_RUNTIME_DLLS; do
+            if [[ ! -f "/ucrt64/bin/$dll" ]]; then
+              missing="$missing $dll"
+            fi
+          done
+          if [[ -n "$missing" ]]; then
+            echo "::error::MSYS2 no longer ships:$missing — the release zip would be missing runtime the binary loads."
+            exit 1
+          fi
+          if [[ ! -d /ucrt64/share/licenses ]]; then
+            echo "::error::/ucrt64/share/licenses missing — the release zip cannot carry the runtime DLLs' licence texts."
+            exit 1
+          fi
+          echo "OK: every runtime DLL present, and $(find /ucrt64/share/licenses -type f | wc -l) licence file(s) available to ship."
+
       - name: Verify static MUMPS link (Linux)
         # Regression guard: the shipped tarball must not depend on
         # libdmumps_seq.so / libmumps_common_seq.so / libpord_seq.so /
@@ -457,6 +526,33 @@ jobs:
           VOLCA_BIN=$(cabal list-bin exe:volca)
           "$VOLCA_BIN" --version
           ls -lh "$VOLCA_BIN"
+
+      - name: Verify standalone macOS binary
+        # Regression guard, the macOS counterpart of the Linux ldd check above:
+        # the shipped tarball must load on a Mac with no Homebrew. A binary
+        # linked against /opt/homebrew (or /usr/local on Intel) aborts at dyld
+        # with "Library not loaded", which `--version` on this runner cannot
+        # catch — the build machine has the formulas installed.
+        #
+        # Only /usr/lib and /System/Library are guaranteed present on a stock
+        # macOS, so anything else in LC_LOAD_DYLIB is a dependency the user
+        # does not have.
+        # arm64 only: macOS x86_64 still links OpenBLAS dynamically, so it would
+        # fail this check by design. See the OpenBLAS step in
+        # .github/actions/setup-haskell-env for why no recipe works there.
+        if: needs.preflight.outputs.skip != 'true' && matrix.name == 'macos-arm64'
+        run: |
+          VOLCA_BIN=$(cabal list-bin exe:volca)
+          # otool's first line is the binary's own path; drop it, keep the
+          # indented load commands, and read the path before the ` (compat…`.
+          foreign=$(otool -L "$VOLCA_BIN" | tail -n +2 | awk '{print $1}' \
+            | grep -vE '^(/usr/lib/|/System/Library/)' || true)
+          if [[ -n "$foreign" ]]; then
+            echo "::error::Binary depends on dylibs absent from a stock macOS — static link regressed:"
+            echo "$foreign"
+            exit 1
+          fi
+          echo "OK: no non-system dylib dependencies in the shipped binary."
 
       - name: Save MUMPS local build
         # Only save when build.sh actually ran a source build (i.e. neither
@@ -528,16 +624,54 @@ jobs:
           NAME='${{ matrix.name }}'
           mkdir staging
           cp "$VOLCA_BIN" staging/
+          # OpenBLAS is BSD-3, whose binary-redistribution clause asks for the
+          # copyright notice to travel with the artifact — true on every platform,
+          # statically linked or not. On Windows the file also covers the GCC
+          # runtime DLLs copied below.
+          cp THIRD-PARTY-LICENSES.md staging/
           if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # volca.exe links the MSYS2 ucrt64 runtime dynamically (gen-cabal-config.sh's
+            # windows mode). Those DLLs sit on the build machine's PATH but nowhere on a
+            # user's, so a zip holding only volca.exe fails at load with
+            # "libgfortran-5.dll introuvable". Ship them beside the binary — Windows
+            # searches the .exe's own directory first. The per-PR check above has
+            # already confirmed each one exists; re-checked here so an absence can
+            # never turn into a silent partial zip.
+            UCRT_BIN=""
+            for candidate in /ucrt64/bin /c/msys64/ucrt64/bin; do
+              if [[ -d "$candidate" ]]; then
+                UCRT_BIN="$candidate"
+                break
+              fi
+            done
+            if [[ -z "$UCRT_BIN" ]]; then
+              echo "::error::MSYS2 ucrt64 not found — cannot bundle the runtime DLLs the binary needs."
+              exit 1
+            fi
+            for dll in $WINDOWS_RUNTIME_DLLS; do
+              if [[ ! -f "$UCRT_BIN/$dll" ]]; then
+                echo "::error::Required runtime DLL not found: $UCRT_BIN/$dll"
+                exit 1
+              fi
+              cp "$UCRT_BIN/$dll" staging/
+            done
+            # GPLv3 asks for the licence text to travel with the binaries. MSYS2
+            # installs each package's own texts under share/licenses, so copy those
+            # rather than transcribing them into the repo and letting them rot.
+            if [[ ! -d "$UCRT_BIN/../share/licenses" ]]; then
+              echo "::error::$UCRT_BIN/../share/licenses missing — cannot ship the DLLs' licence texts."
+              exit 1
+            fi
+            cp -r "$UCRT_BIN/../share/licenses" staging/licenses
             ARTIFACT="volca-${VERSION}-${NAME}.zip"
             # 7z is preinstalled on the Windows runner image but lives at
             # C:\Program Files\7-Zip\, which is on Windows' PATH but not on
             # MSYS2 bash's PATH (the shell this step runs under). Use the
             # absolute path explicitly.
-            (cd staging && "/c/Program Files/7-Zip/7z.exe" a "../${ARTIFACT}" volca.exe)
+            (cd staging && "/c/Program Files/7-Zip/7z.exe" a "../${ARTIFACT}" .)
           else
             ARTIFACT="volca-${VERSION}-${NAME}.tar.gz"
-            tar -czf "${ARTIFACT}" -C staging volca
+            tar -czf "${ARTIFACT}" -C staging .
           fi
           echo "ARTIFACT_PATH=${ARTIFACT}" >> "$GITHUB_ENV"
 
