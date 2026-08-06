@@ -101,78 +101,88 @@ EOF
         ;;
 
     darwin)
-        # macOS arm64: locally-built MUMPS (.a only) + Homebrew openblas + Homebrew gcc gfortran/quadmath.
+        # macOS: locally-built MUMPS (.a only) + Homebrew gcc gfortran/quadmath.
         # ld64 picks .a from extra-lib-dirs when no .dylib is present, so no GNU -Bstatic/-Bdynamic.
         # Accelerate.framework is rejected: its LAPACK ABI does not match what build-mumps.sh emits.
         #
-        # BLAS and the Fortran runtime are linked from their .a by absolute path, never
-        # via -l: Homebrew ships both .a and .dylib, ld64 has no -Bstatic to express the
-        # preference, and it picks the .dylib. That produced a binary whose LC_LOAD_DYLIB
-        # entries point into the build machine's Homebrew prefix, so the shipped tarball
-        # aborted at dyld ("Library not loaded: .../libopenblas.0.dylib") on any Mac
-        # without those formulas. Linux already links these statically (musl mode); this
-        # gives macOS the same standalone binary.
+        # arm64 links BLAS and the Fortran runtime from their .a by absolute path,
+        # never via -l: Homebrew ships both .a and .dylib, ld64 has no -Bstatic to
+        # express the preference, and it picks the .dylib. That produced a binary whose
+        # LC_LOAD_DYLIB entries point into the build machine's Homebrew prefix, so the
+        # shipped tarball aborted at dyld ("Library not loaded: .../libopenblas.0.dylib")
+        # on any Mac without those formulas. Linux already links these statically (musl
+        # mode); this gives macOS arm64 the same standalone binary.
         #
         # OpenBLAS comes from the same source build musl mode uses, not from Homebrew:
         # the bottled libopenblas.a is the OpenMP variant, whose __kmpc_* / omp_*
         # references only the dylib resolved on its own. Building it with USE_OPENMP=0
         # settles that instead of adding libomp — one more Homebrew dependency to keep
         # out of the shipped binary.
-        : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR is required for darwin mode (path to a libopenblas.a built with USE_OPENMP=0 — see .github/actions/setup-haskell-env)}"
+        #
+        # x86_64 keeps the dynamic link, and the Homebrew dependency with it, because
+        # no OpenBLAS build works there: DYNAMIC_ARCH pulls in older kernels that
+        # hard-code `.align 32768`, which Mach-O caps at 4 KB and ld64 silently reduces
+        # (SIGBUS on the first call), while naming one TARGET yields a library whose own
+        # unit tests return denormals for min(). Both are upstream ground.
         BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
         # Homebrew gcc lays out libgfortran/libquadmath under lib/gcc/<major>/
         GFORTRAN_LIB_DIR=$(ls -d "${BREW_PREFIX}/Cellar/gcc/"*/lib/gcc/*/ 2>/dev/null | sort -V | tail -1)
         : "${GFORTRAN_LIB_DIR:?Could not locate Homebrew gcc libgfortran — install with: brew install gcc}"
         GFORTRAN_LIB_DIR="${GFORTRAN_LIB_DIR%/}"
         DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:?MACOSX_DEPLOYMENT_TARGET must be set (source versions.env)}"
-        # Ordered dependent-before-dependency: openblas calls into libgfortran, which
-        # calls into libquadmath. libgcc.a comes last and is located by asking the
-        # compiler driver rather than guessing its Cellar layout — gcc keeps it under
-        # lib/gcc/<major>/gcc/<triple>/<major>/, not next to libgfortran.a. It resolves
-        # the emutls/soft-arithmetic symbols libgfortran.a leaves undefined.
-        DARWIN_STATIC_LIBS=(
-            "${OPENBLAS_LIB_DIR}/libopenblas.a"
-            "${GFORTRAN_LIB_DIR}/libgfortran.a"
-            "${GFORTRAN_LIB_DIR}/libquadmath.a"
-        )
-        # An unanswered driver would drop libgcc.a from the link and surface as an
-        # undefined ___emutls_get_address far from its cause, so an empty answer is
-        # an error like a missing archive - the loop below reports it either way.
-        GCC_A=$("${BREW_PREFIX}/bin/gfortran" -print-libgcc-file-name 2>/dev/null || true)
-        DARWIN_STATIC_LIBS+=("${GCC_A:-<gfortran -print-libgcc-file-name answered nothing>}")
-        DARWIN_STATIC_FLAGS=""
-        for lib in "${DARWIN_STATIC_LIBS[@]}"; do
-            if [[ ! -f "$lib" ]]; then
-                echo "ERROR: static library not found: $lib" >&2
-                echo "       The shipped binary must not depend on Homebrew dylibs." >&2
-                echo "       Fortran runtime: brew install gcc. OpenBLAS: build it with" >&2
-                echo "       NO_SHARED=1 USE_OPENMP=0 (see .github/actions/setup-haskell-env)." >&2
-                exit 1
-            fi
-            # OpenBLAS goes in whole, the rest on demand. ld64 pulls members out
-            # of an archive in one pass, driven by symbols undefined so far, and
-            # OpenBLAS reaches its kernels through tables of function pointers -
-            # a reference no symbol resolution can see. The member holding the
-            # kernel was therefore never pulled in, the pointer stayed zero, and
-            # dgemm_ jumped into a run of zero bytes on the first factorization:
-            # EXC_BAD_ACCESS at 0x0, one frame below MUMPS. musl mode has the
-            # same need and meets it with -Wl,--start-group; ld64's answer is to
-            # force the whole archive.
-            case "$lib" in
-                *libopenblas.a) DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl-Wl,-force_load,$lib" ;;
-                *)              DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl$lib" ;;
-            esac
-        done
+        # MUMPS arrives as .a either way; only how BLAS and the Fortran runtime
+        # arrive differs between the two architectures.
+        DARWIN_MUMPS_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq"
         # -dead_strip_dylibs only drops load commands for dylibs nothing needs,
-        # which is safe. Plain -dead_strip is not, now that OpenBLAS is linked
+        # which is safe. Plain -dead_strip is not, once OpenBLAS is linked
         # statically: ld64 splits sections into atoms at symbol boundaries, and
         # a local assembler label like .L2_0 is not a symbol, so hand-written
         # kernel code reached by a jump from a neighbouring atom can be dropped,
         # leaving a hole that faults when execution lands in it. Nothing here
-        # proves that has happened; the few kilobytes are not worth the risk,
-        # and it could not happen while OpenBLAS arrived as a dylib, whose
-        # contents -dead_strip never touched.
-        DARWIN_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq$DARWIN_STATIC_FLAGS -optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip_dylibs"
+        # proves that has happened; the few kilobytes are not worth the risk.
+        DARWIN_TAIL_FLAGS="-optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip_dylibs"
+
+        if [[ "$(uname -m)" == "arm64" ]]; then
+            : "${OPENBLAS_LIB_DIR:?OPENBLAS_LIB_DIR is required for darwin arm64 (path to a libopenblas.a built with USE_OPENMP=0 — see .github/actions/setup-haskell-env)}"
+            # Ordered dependent-before-dependency: openblas calls into libgfortran, which
+            # calls into libquadmath. libgcc.a comes last and is located by asking the
+            # compiler driver rather than guessing its Cellar layout — gcc keeps it under
+            # lib/gcc/<major>/gcc/<triple>/<major>/, not next to libgfortran.a. It resolves
+            # the emutls/soft-arithmetic symbols libgfortran.a leaves undefined.
+            DARWIN_STATIC_LIBS=(
+                "${OPENBLAS_LIB_DIR}/libopenblas.a"
+                "${GFORTRAN_LIB_DIR}/libgfortran.a"
+                "${GFORTRAN_LIB_DIR}/libquadmath.a"
+            )
+            # An unanswered driver would drop libgcc.a from the link and surface as an
+            # undefined ___emutls_get_address far from its cause, so an empty answer is
+            # an error like a missing archive - the loop below reports it either way.
+            GCC_A=$("${BREW_PREFIX}/bin/gfortran" -print-libgcc-file-name 2>/dev/null || true)
+            DARWIN_STATIC_LIBS+=("${GCC_A:-<gfortran -print-libgcc-file-name answered nothing>}")
+            DARWIN_NUMERIC_FLAGS=""
+            for lib in "${DARWIN_STATIC_LIBS[@]}"; do
+                if [[ ! -f "$lib" ]]; then
+                    echo "ERROR: static library not found: $lib" >&2
+                    echo "       The shipped binary must not depend on Homebrew dylibs." >&2
+                    echo "       Fortran runtime: brew install gcc. OpenBLAS: build it with" >&2
+                    echo "       NO_SHARED=1 USE_OPENMP=0 (see .github/actions/setup-haskell-env)." >&2
+                    exit 1
+                fi
+                # OpenBLAS goes in whole, the rest on demand. ld64 pulls members out
+                # of an archive in one pass, driven by symbols undefined so far, and
+                # OpenBLAS reaches its kernels through tables of function pointers -
+                # a reference no symbol resolution can see, so the member holding a
+                # kernel can go unpulled and leave its pointer zero.
+                case "$lib" in
+                    *libopenblas.a) DARWIN_NUMERIC_FLAGS="$DARWIN_NUMERIC_FLAGS -optl-Wl,-force_load,$lib" ;;
+                    *)              DARWIN_NUMERIC_FLAGS="$DARWIN_NUMERIC_FLAGS -optl$lib" ;;
+                esac
+            done
+        else
+            OPENBLAS_PREFIX=$(brew --prefix openblas 2>/dev/null || echo "${BREW_PREFIX}/opt/openblas")
+            DARWIN_NUMERIC_FLAGS=" -optl-L${OPENBLAS_PREFIX}/lib -optl-lopenblas -optl-L${GFORTRAN_LIB_DIR} -optl-lgfortran -optl-lquadmath"
+        fi
+        DARWIN_LINK_FLAGS="$DARWIN_MUMPS_FLAGS$DARWIN_NUMERIC_FLAGS $DARWIN_TAIL_FLAGS"
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True

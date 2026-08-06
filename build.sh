@@ -462,9 +462,8 @@ if [[ "$OS" == "windows" ]]; then
     # gen-cabal-config.sh's windows branch.
 elif [[ "$OS" == "macos" ]] && [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; then
     # Darwin's ld64 doesn't support GNU -Wl,-Bstatic / -Bdynamic, so the static
-    # mode below can't be used as-is. Use a Darwin-specific mode that picks .a
-    # libs from extra-lib-dirs (ld64's natural fallback) and pulls Fortran
-    # runtime + openblas via -L/-l flags.
+    # mode below can't be used as-is. The darwin branch of gen-cabal-config.sh
+    # says the rest, including why arm64 and x86_64 differ there.
     LINK_MODE="darwin"
 elif [[ -f /etc/alpine-release ]] && { [[ "$STATIC_BUILD" == "true" ]] || [[ "$MUMPS_BUILT_LOCALLY" == "true" ]]; }; then
     # Alpine host (musl libc): fully-static binary linked against musl +

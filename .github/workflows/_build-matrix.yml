@@ -537,7 +537,10 @@ jobs:
         # Only /usr/lib and /System/Library are guaranteed present on a stock
         # macOS, so anything else in LC_LOAD_DYLIB is a dependency the user
         # does not have.
-        if: needs.preflight.outputs.skip != 'true' && matrix.os == 'macos'
+        # arm64 only: macOS x86_64 still links OpenBLAS dynamically, so it would
+        # fail this check by design. See the OpenBLAS step in
+        # .github/actions/setup-haskell-env for why no recipe works there.
+        if: needs.preflight.outputs.skip != 'true' && matrix.name == 'macos-arm64'
         run: |
           VOLCA_BIN=$(cabal list-bin exe:volca)
           # otool's first line is the binary's own path; drop it, keep the

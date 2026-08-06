@@ -3,12 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
-- The macOS download now runs on a Mac that has no developer tools. It was
-  built against the build machine's Homebrew copies of OpenBLAS and the Fortran
-  runtime and looked for them at the same paths on yours, so it stopped at
-  startup with `Library not loaded: .../libopenblas.0.dylib` unless you
-  happened to have Homebrew and those exact formulas. Both are now built into
-  the binary, as they already were on Linux.
+- The macOS download for Apple Silicon now runs on a Mac that has no developer
+  tools. It was built against the build machine's Homebrew copies of OpenBLAS
+  and the Fortran runtime and looked for them at the same paths on yours, so it
+  stopped at startup with `Library not loaded: .../libopenblas.0.dylib` unless
+  you happened to have Homebrew and those exact formulas. Both are now built
+  into the binary, as they already were on Linux. The Intel download still
+  needs Homebrew: no way of building OpenBLAS into it produces a library that
+  computes correctly there, and the cause sits upstream.
 - The Windows download now carries the runtime libraries the program loads.
   Only `volca.exe` was in the zip, so it stopped with `libgfortran-5.dll
   introuvable` on a machine without MSYS2.

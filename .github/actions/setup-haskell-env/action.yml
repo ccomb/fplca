@@ -100,7 +100,17 @@ runs:
       shell: bash
       run: brew install gcc openblas ${{ inputs.install-upx == 'true' && 'upx' || '' }}
 
-    # OpenBLAS source-build, Linux and macOS alike. Both need it, for reasons
+    # Not on macOS x86_64, where neither recipe produces a working library and
+    # the leg keeps its dynamic link to Homebrew. DYNAMIC_ARCH pulls in the
+    # older x86_64 kernels, 18 of which hard-code `.align 32768`; Mach-O caps
+    # section alignment at 4 KB, so ld64 quietly reduces it and the first BLAS
+    # call takes SIGBUS. Naming one TARGET drops those kernels and the warning
+    # with them, but then OpenBLAS's own unit tests return denormals for
+    # `min()`, which is a defect we have not explained. Both are upstream
+    # ground. Linux links the same DYNAMIC_ARCH archive without complaint - ELF
+    # honours the alignment Mach-O refuses.
+    #
+    # OpenBLAS source-build, Linux and macOS arm64 alike. Both need it, for reasons
     # that meet in the same place: Alpine's lapack-dev / blas-dev ship .so only,
     # so a static link can't resolve -llapack / -lblas; and Homebrew's
     # libopenblas.a is the OpenMP variant, which leaves __kmpc_* / omp_*
@@ -118,7 +128,7 @@ runs:
     # so a recipe change that kept the old key would restore a library built
     # under the previous one and quietly test nothing.
     - name: Restore OpenBLAS build
-      if: (inputs.matrix-os == 'linux' || inputs.matrix-os == 'macos') && inputs.ghc-version != ''
+      if: (inputs.matrix-os == 'linux' || inputs.matrix-name == 'macos-arm64') && inputs.ghc-version != ''
       id: cache-openblas
       uses: actions/cache@v4
       with:
@@ -126,7 +136,7 @@ runs:
         key: openblas-${{ inputs.matrix-name }}-${{ hashFiles('versions.env', '.github/actions/setup-haskell-env/action.yml') }}-v1
 
     - name: Build OpenBLAS
-      if: (inputs.matrix-os == 'linux' || inputs.matrix-os == 'macos') && inputs.ghc-version != '' && steps.cache-openblas.outputs.cache-hit != 'true'
+      if: (inputs.matrix-os == 'linux' || inputs.matrix-name == 'macos-arm64') && inputs.ghc-version != '' && steps.cache-openblas.outputs.cache-hit != 'true'
       shell: bash
       run: |
         source versions.env
@@ -157,7 +167,7 @@ runs:
         rm -rf "$SRC"
 
     - name: Export OpenBLAS paths
-      if: (inputs.matrix-os == 'linux' || inputs.matrix-os == 'macos') && inputs.ghc-version != ''
+      if: (inputs.matrix-os == 'linux' || inputs.matrix-name == 'macos-arm64') && inputs.ghc-version != ''
       shell: sh
       run: |
         echo "OPENBLAS_LIB_DIR=$GITHUB_WORKSPACE/deps/openblas/lib" >> "$GITHUB_ENV"
