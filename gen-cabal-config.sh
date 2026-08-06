@@ -167,10 +167,11 @@ EOF
         # which is safe. Plain -dead_strip is not, now that OpenBLAS is linked
         # statically: ld64 splits sections into atoms at symbol boundaries, and
         # a local assembler label like .L2_0 is not a symbol, so hand-written
-        # kernel code reached by a jump from a neighbouring atom can be dropped.
-        # The hole reads back as zero bytes, which decode as `addb %al,(%rax)`
-        # and fault the moment execution lands there. Invisible while OpenBLAS
-        # arrived as a dylib, whose contents -dead_strip never touched.
+        # kernel code reached by a jump from a neighbouring atom can be dropped,
+        # leaving a hole that faults when execution lands in it. Nothing here
+        # proves that has happened; the few kilobytes are not worth the risk,
+        # and it could not happen while OpenBLAS arrived as a dylib, whose
+        # contents -dead_strip never touched.
         DARWIN_LINK_FLAGS="-optl-L$MUMPS_LIB_DIR -optl-ldmumps_seq -optl-lmumps_common_seq -optl-lpord_seq -optl-lmpiseq_seq$DARWIN_STATIC_FLAGS -optl-lpthread -optl-lm -optl-mmacosx-version-min=${DEPLOYMENT_TARGET} -optl-Wl,-dead_strip_dylibs"
         cat >> "$OUTPUT" << EOF
 optimization: 2
