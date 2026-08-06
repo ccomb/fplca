@@ -144,24 +144,15 @@ runs:
           LIBRARY_PATH="$(dirname "$(gfortran -print-file-name=libgfortran.dylib)")${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LIBRARY_PATH
         fi
-        # Name the kernel set at build time on macOS x86_64 rather than ship
-        # DYNAMIC_ARCH's startup dispatch through a table of function pointers:
-        # in a statically linked binary that table is one more thing deciding at
-        # runtime, and nothing here needs a build that runs on any CPU.
+        # DYNAMIC_ARCH ships every kernel set and picks one for the CPU it finds,
+        # which is what a downloaded binary needs: one build has to run on every
+        # machine, not on the one that built it.
         #
-        # HASWELL is the floor the deployment target already implies: macOS 13
-        # runs on 2017-or-later Macs, which are Kaby Lake or newer and all have
-        # AVX2. arm64 has one kernel set anyway; Linux keeps DYNAMIC_ARCH, where
-        # it is the reason one binary runs well on any CPU.
-        case "$RUNNER_OS-$(uname -m)" in
-          macOS-x86_64) ARCH_FLAGS="DYNAMIC_ARCH=0 TARGET=HASWELL" ;;
-          *)            ARCH_FLAGS="DYNAMIC_ARCH=1 TARGET=GENERIC" ;;
-        esac
         # getconf rather than nproc: BusyBox Alpine and macOS both answer it.
         make -j"$(getconf _NPROCESSORS_ONLN)" \
           NO_SHARED=1 \
           USE_THREAD=1 USE_OPENMP=0 \
-          $ARCH_FLAGS
+          DYNAMIC_ARCH=1 TARGET=GENERIC
         make PREFIX="$GITHUB_WORKSPACE/deps/openblas" NO_SHARED=1 install
         rm -rf "$SRC"
 
