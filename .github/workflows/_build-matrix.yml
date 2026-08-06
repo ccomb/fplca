@@ -434,6 +434,11 @@ jobs:
         # streamed line - an assertion, an RTS message, a signal - is in there.
         if: failure() && needs.preflight.outputs.skip != 'true'
         run: |
+          # The link flags actually in force, not the ones the script meant to
+          # write. Successive link changes produced byte-identical crash
+          # addresses, which says the flags never reached the linker.
+          echo "=== cabal.project.local ==="
+          cat cabal.project.local || true
           find dist-newstyle -name '*lca-tests.log' -print -exec tail -n 100 {} \; || true
           # A suite that dies on a signal writes nothing at all, so the log
           # above ends mid-sentence and names no cause. Re-run the binary for
