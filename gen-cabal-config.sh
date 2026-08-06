@@ -149,7 +149,19 @@ EOF
                 echo "       NO_SHARED=1 USE_OPENMP=0 (see .github/actions/setup-haskell-env)." >&2
                 exit 1
             fi
-            DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl$lib"
+            # OpenBLAS goes in whole, the rest on demand. ld64 pulls members out
+            # of an archive in one pass, driven by symbols undefined so far, and
+            # OpenBLAS reaches its kernels through tables of function pointers -
+            # a reference no symbol resolution can see. The member holding the
+            # kernel was therefore never pulled in, the pointer stayed zero, and
+            # dgemm_ jumped into a run of zero bytes on the first factorization:
+            # EXC_BAD_ACCESS at 0x0, one frame below MUMPS. musl mode has the
+            # same need and meets it with -Wl,--start-group; ld64's answer is to
+            # force the whole archive.
+            case "$lib" in
+                *libopenblas.a) DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl-Wl,-force_load,$lib" ;;
+                *)              DARWIN_STATIC_FLAGS="$DARWIN_STATIC_FLAGS -optl$lib" ;;
+            esac
         done
         # -dead_strip_dylibs only drops load commands for dylibs nothing needs,
         # which is safe. Plain -dead_strip is not, now that OpenBLAS is linked
