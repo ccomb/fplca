@@ -798,6 +798,40 @@ data ActivateResponse = ActivateResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivateResponse)
 
+{- | What @GET /api/v1/hosting@ answers: the hosting limits a client may want
+to explain before running into them. One type rather than an inline object so
+the wire shape has a name a golden test can pin. Keys are written by hand
+because this endpoint's wire is snake_case.
+-}
+data HostingInfo = HostingInfo
+    { hiIsHosted :: Bool
+    , hiMaxUploads :: Int
+    , hiMaxUploadMb :: Int
+    , hiMaxLoadedUploads :: Int
+    , hiApiAccess :: Bool
+    , hiReadOnly :: Bool
+    , hiReadOnlyMessage :: Text
+    , hiUpgradeUpload :: Text
+    , hiUpgradeApi :: Text
+    , hiUpgradeVmSize :: Text
+    }
+    deriving (Show, Eq, Generic)
+
+instance ToJSON HostingInfo where
+    toJSON hi =
+        object
+            [ "is_hosted" .= hiIsHosted hi
+            , "max_uploads" .= hiMaxUploads hi
+            , "max_upload_mb" .= hiMaxUploadMb hi
+            , "max_loaded_uploads" .= hiMaxLoadedUploads hi
+            , "api_access" .= hiApiAccess hi
+            , "read_only" .= hiReadOnly hi
+            , "read_only_message" .= hiReadOnlyMessage hi
+            , "upgrade_upload" .= hiUpgradeUpload hi
+            , "upgrade_api" .= hiUpgradeApi hi
+            , "upgrade_vm_size" .= hiUpgradeVmSize hi
+            ]
+
 {- | Response for the re-link endpoint: fresh cross-DB link stats after a
 second-pass linking against the currently-loaded databases.
 -}
