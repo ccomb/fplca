@@ -140,7 +140,7 @@ import API.Types (
     toExchangeEdits,
  )
 import App.Env (AppEnv (..), AppM)
-import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusalFor)
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, messageOr, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
@@ -706,8 +706,7 @@ hostingQuotaRefusal limitOf messageOf fallback current mHosting = case mHosting 
     Just hc
         | limitOf hc < 0 -> Nothing
         | current < limitOf hc -> Nothing
-        | T.null (messageOf hc) -> Just fallback
-        | otherwise -> Just (messageOf hc)
+        | otherwise -> Just (messageOr fallback (messageOf hc))
 
 -- | Refuse a new upload once the plan's stored-database budget is used up.
 uploadRefusal :: [Text] -> Maybe HostingConfig -> Maybe Text

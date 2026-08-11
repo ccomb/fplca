@@ -17,6 +17,7 @@ module Config (
     HostingConfig (..),
     ReadOnly (..),
     hostingReadOnly,
+    messageOr,
     readOnlyRefusal,
     readOnlyRefusalFor,
     ClassificationPreset (..),
@@ -151,15 +152,21 @@ the lifetime middleware cannot drift into three different explanations.
 readOnlyRefusal :: Text
 readOnlyRefusal = "This engine is configured read-only: it answers queries but changes nothing."
 
+{- | The operator's own words when they wrote any, the given default
+otherwise. One rule for every refusal an operator may reword, so "unset"
+cannot mean different things on different surfaces - and a message that is
+only whitespace counts as unset rather than refusing with a blank sentence.
+-}
+messageOr :: Text -> Text -> Text
+messageOr fallback msg
+    | T.null (T.strip msg) = fallback
+    | otherwise = msg
+
 {- | The sentence a refusal actually carries: the operator's own words when
 @read_only_message@ is configured, the default above otherwise.
 -}
 readOnlyRefusalFor :: Maybe HostingConfig -> Text
-readOnlyRefusalFor = maybe readOnlyRefusal message
-  where
-    message hc
-        | T.null (hcReadOnlyMessage hc) = readOnlyRefusal
-        | otherwise = hcReadOnlyMessage hc
+readOnlyRefusalFor = maybe readOnlyRefusal (messageOr readOnlyRefusal . hcReadOnlyMessage)
 
 {- | How this instance introduces itself. A client may hold several VoLCA
 servers at once; the name is what tells them apart.
