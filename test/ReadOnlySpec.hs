@@ -19,6 +19,7 @@ import Test.Hspec
 
 import API.DatabaseHandlers (
     addDependencyHandler,
+    copyDatabaseHandler,
     createActivitiesHandler,
     deleteActivitiesHandler,
     deleteDatabaseHandler,
@@ -88,6 +89,7 @@ mutatingHandlers =
     [ ("load", run (loadDatabaseHandler "nope"))
     , ("unload", run (unloadDatabaseHandler "nope"))
     , ("delete", run (deleteDatabaseHandler "nope"))
+    , ("copy", run (copyDatabaseHandler "nope" "nope-copy"))
     , ("relink", run (relinkDatabaseHandler "nope" (RelinkRequest Nothing Nothing)))
     , ("delete-selection", run (deleteActivitiesHandler "nope" everything))
     , ("add-dependency", run (addDependencyHandler "nope" "dep"))
