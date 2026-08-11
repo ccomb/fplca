@@ -1264,7 +1264,11 @@ getHosting = do
                 , "max_loaded_uploads" .= Config.hcMaxLoadedUploads hc
                 , "api_access" .= Config.hcApiAccess hc
                 , "read_only" .= Config.hcReadOnly hc
-                , "read_only_message" .= Config.hcReadOnlyMessage hc
+                , -- The sentence a refusal will actually carry (operator's words or
+                  -- the default), not the raw config value: a client explaining the
+                  -- situation up front must show what a refusal would have said.
+                  "read_only_message"
+                    .= (if Config.hcReadOnly hc then Config.readOnlyRefusalFor (Just hc) else "")
                 , "upgrade_upload" .= Config.hcUpgradeUpload hc
                 , "upgrade_api" .= Config.hcUpgradeApi hc
                 , "upgrade_vm_size" .= Config.hcUpgradeVmSize hc
