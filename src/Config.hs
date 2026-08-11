@@ -28,6 +28,7 @@ module Config (
     loadConfig,
     loadConfigFile,
     loadConfigOrDefault,
+    validateConfig,
 
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
@@ -589,6 +590,18 @@ validateConfig cfg = do
     unless (null duplicates) $
         Left $
             "Duplicate database names: " <> T.intercalate ", " duplicates
+
+    -- A duplicate name would silently shadow one of its bearers everywhere the
+    -- name is the key (preset expansion, method lookup), so refuse it up front.
+    let presetDupes = findDuplicates (map cpName (cfgClassificationPresets cfg))
+    unless (null presetDupes) $
+        Left $
+            "Duplicate classification preset names: " <> T.intercalate ", " presetDupes
+
+    let methodDupes = findDuplicates (map mcName (cfgMethods cfg))
+    unless (null methodDupes) $
+        Left $
+            "Duplicate method collection names: " <> T.intercalate ", " methodDupes
 
     -- Check that at most one database is marked as default
     let defaultDbs = filter dcDefault (cfgDatabases cfg)

@@ -20,7 +20,9 @@ import Config (
     loadConfigOrDefault,
     redirectIntoDataDir,
     resolveConfigPaths,
+    validateConfig,
  )
+import Data.Either (isRight)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -85,6 +87,45 @@ spec = do
             case decodeHosting "read_only = true\n" of
                 Right hc -> hcReadOnlyMessage hc `shouldBe` ""
                 Left e -> expectationFailure (show e)
+
+    describe "validateConfig" $ do
+        let preset name =
+                ClassificationPreset
+                    { cpName = name
+                    , cpLabel = name
+                    , cpDescription = Nothing
+                    , cpFilters = []
+                    }
+            decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
+
+        -- Presets and methods are looked up by name, so a duplicate would
+        -- silently shadow one of its bearers; startup refuses it instead.
+        it "refuses two classification presets sharing a name" $
+            case validateConfig defaultConfig{cfgClassificationPresets = [preset "raw", preset "raw"]} of
+                Right _ -> expectationFailure "expected a refusal"
+                Left err -> do
+                    err `shouldSatisfy` T.isInfixOf "Duplicate classification preset"
+                    err `shouldSatisfy` T.isInfixOf "raw"
+
+        it "refuses two method collections sharing a name" $
+            case decodeMethod "name = \"EF\"\npath = \"x.zip\"\n" of
+                Left e -> expectationFailure (show e)
+                Right mc -> case validateConfig defaultConfig{cfgMethods = [mc, mc]} of
+                    Right _ -> expectationFailure "expected a refusal"
+                    Left err -> do
+                        err `shouldSatisfy` T.isInfixOf "Duplicate method collection"
+                        err `shouldSatisfy` T.isInfixOf "EF"
+
+        it "accepts distinct names" $
+            case decodeMethod "name = \"EF\"\npath = \"x.zip\"\n" of
+                Left e -> expectationFailure (show e)
+                Right mc ->
+                    validateConfig
+                        defaultConfig
+                            { cfgClassificationPresets = [preset "raw", preset "transformed"]
+                            , cfgMethods = [mc]
+                            }
+                        `shouldSatisfy` isRight
 
     describe "MethodConfig global-methods" $ do
         let decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
