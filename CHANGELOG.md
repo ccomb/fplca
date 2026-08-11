@@ -8,6 +8,8 @@
   sentence on every surface (the REST API, the MCP tools, and the shutdown
   endpoint). `GET /api/v1/hosting` reports the message alongside `read_only`,
   so a client can explain the situation before a change is even attempted.
+  The default sentence now opens with "This engine is configured read-only"
+  instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
