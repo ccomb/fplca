@@ -210,6 +210,8 @@ WORKDIR /app
 # auto-populates empty named volumes with whatever the image holds at the
 # volume path). Standalone `docker run volca` reads these directly; bind
 # mounts hide them and the caller is expected to provide their own data.
+# The default config below names each of these files, so a bind mount that
+# lacks one logs a load failure at startup; the server keeps running.
 #
 # Config paths like `path = "data/flows.csv"` resolve to /data/flows.csv via
 # Config.redirectIntoDataDir (strip leading `data/`, prepend VOLCA_DATA_DIR).
@@ -242,17 +244,21 @@ name = "Default units"
 path = "data/units.csv"
 active = true
 
-# Activates the density bridge (kg -> MJ for fossil CFs, kg -> m3 for water
-# CFs). Without it, per-MJ and per-m3 CFs meet mass flows cross-dimensionally
-# and the fossils / water-use categories silently score zero or x1000.
+# Activates the density bridge, so characterization factors counted per MJ
+# or per m3 can meet flows measured by mass or volume. Without it the match
+# is cross-dimensional and the energy and water categories silently report
+# zero contributions.
 [[energy-densities]]
 name = "Default energy densities"
 path = "data/energy_density.csv"
 active = true
 
+# Method paths are user content that VOLCA_DATA_DIR does not rewrite, so the
+# shipped method needs the absolute path; a relative one would resolve under
+# /app and the image would start with no method at all.
 [[methods]]
 name = "plain-indicators"
-path = "data/methods/plain-indicators.csv"
+path = "/data/methods/plain-indicators.csv"
 active = true
 description = "Raw physical quantities counted through the supply chain (CF=1.0)"
 EOF
