@@ -28,7 +28,7 @@ import qualified Version
 
 import API.Resources (Param (..), ParamKind (..), Resource)
 import qualified API.Resources as R
-import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), ServerName, expandClassificationPreset, hostingReadOnly, readOnlyRefusal, unServerName)
+import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), HostingConfig, ReadOnly (..), ServerName, expandClassificationPreset, hostingReadOnly, readOnlyRefusalFor, unServerName)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
@@ -466,7 +466,7 @@ newly added mutating tool is covered here without touching this function.
 callTool :: DatabaseManager -> [ClassificationPreset] -> Maybe HostingConfig -> Maybe Text -> Value -> Text -> KeyMap Value -> IO Value
 callTool _ _ mHosting _ rid name _
     | isReadOnly (hostingReadOnly mHosting) && mutatingTool name =
-        return $ toolError rid readOnlyRefusal
+        return $ toolError rid (readOnlyRefusalFor mHosting)
 -- A preset the instance does not carry is refused here rather than in each
 -- handler, so no tool can answer as if the caller had asked for no filter.
 callTool _ presets _ _ rid _ args

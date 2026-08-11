@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- A hosted server can refuse changes in its operator's own words:
+  `read_only_message` under `[hosting]` replaces the default read-only
+  sentence on every surface (the REST API, the MCP tools, and the shutdown
+  endpoint). `GET /api/v1/hosting` reports the message alongside `read_only`,
+  so a client can explain the situation before a change is even attempted.
+
 ### Fixed
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
   tools. It was built against the build machine's Homebrew copies of OpenBLAS

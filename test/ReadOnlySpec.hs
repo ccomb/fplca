@@ -43,7 +43,7 @@ import API.Types (
     RelinkRequest (..),
  )
 import App.Env (AppEnv (..), runApp)
-import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly)
+import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly, readOnlyRefusal, readOnlyRefusalFor)
 import Database.Manager (initDatabaseManager)
 import Servant (ServerError (..), runHandler)
 import Servant.Types.SourceT (source)
@@ -57,6 +57,7 @@ hosting ro =
         , hcMaxLoadedUploads = -1
         , hcApiAccess = True
         , hcReadOnly = ro
+        , hcReadOnlyMessage = ""
         , hcUpgradeUpload = ""
         , hcUpgradeApi = ""
         , hcUpgradeVmSize = ""
@@ -143,11 +144,17 @@ isToolError _ = False
 
 spec :: Spec
 spec = do
-    describe "Config" $
+    describe "Config" $ do
         it "an instance is writable unless hosting says otherwise" $ do
             hostingReadOnly Nothing `shouldBe` ReadOnly False
             hostingReadOnly (Just (hosting False)) `shouldBe` ReadOnly False
             hostingReadOnly (Just (hosting True)) `shouldBe` ReadOnly True
+
+        it "refuses with the operator's words when configured, the default otherwise" $ do
+            readOnlyRefusalFor Nothing `shouldBe` readOnlyRefusal
+            readOnlyRefusalFor (Just (hosting True)) `shouldBe` readOnlyRefusal
+            readOnlyRefusalFor (Just ((hosting True){hcReadOnlyMessage = "Ask the operator."}))
+                `shouldBe` "Ask the operator."
 
     describe "Resource registry" $
         it "counts exactly the operations that change shared state as mutations" $
@@ -158,6 +165,13 @@ spec = do
             env <- envWith (Just (hosting True))
             results <- mapM (\(name, run) -> (,) name <$> run env) mutatingHandlers
             results `shouldBe` [(name, Just 403) | (name, _) <- mutatingHandlers]
+
+        it "carry the operator's message in the refusal body when configured" $ do
+            env <- envWith (Just ((hosting True){hcReadOnlyMessage = "Ask the operator."}))
+            result <- runHandler (runApp env (loadDatabaseHandler "nope"))
+            case result of
+                Left err -> errBody err `shouldBe` "Ask the operator."
+                Right _ -> expectationFailure "the mutation was not refused"
 
         it "still answer a read-only endpoint" $ do
             env <- envWith (Just (hosting True))

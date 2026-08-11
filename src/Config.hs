@@ -18,6 +18,7 @@ module Config (
     ReadOnly (..),
     hostingReadOnly,
     readOnlyRefusal,
+    readOnlyRefusalFor,
     ClassificationPreset (..),
     ClassificationEntry (..),
     expandClassificationPreset,
@@ -119,6 +120,7 @@ data HostingConfig = HostingConfig
     , hcMaxLoadedUploads :: !Int -- Max uploaded databases held in memory at once (-1 = unlimited)
     , hcApiAccess :: !Bool -- Programmatic API access allowed
     , hcReadOnly :: !Bool -- Refuse every state-changing operation
+    , hcReadOnlyMessage :: !Text -- Operator's own refusal sentence ("" = default)
     , hcUpgradeUpload :: !Text -- Upgrade message when upload restricted
     , hcUpgradeApi :: !Text -- Upgrade message when API restricted
     , hcUpgradeVmSize :: !Text -- Upgrade message when memory is high
@@ -143,11 +145,21 @@ newtype ReadOnly = ReadOnly {isReadOnly :: Bool}
 hostingReadOnly :: Maybe HostingConfig -> ReadOnly
 hostingReadOnly = ReadOnly . maybe False hcReadOnly
 
-{- | The one sentence every surface refuses with. Shared so REST, MCP and the
-lifetime middleware cannot drift into three different explanations.
+{- | The default sentence every surface refuses with. Shared so REST, MCP and
+the lifetime middleware cannot drift into three different explanations.
 -}
 readOnlyRefusal :: Text
-readOnlyRefusal = "This instance is read-only: it answers queries but changes nothing."
+readOnlyRefusal = "This engine is configured read-only: it answers queries but changes nothing."
+
+{- | The sentence a refusal actually carries: the operator's own words when
+@read_only_message@ is configured, the default above otherwise.
+-}
+readOnlyRefusalFor :: Maybe HostingConfig -> Text
+readOnlyRefusalFor = maybe readOnlyRefusal message
+  where
+    message hc
+        | T.null (hcReadOnlyMessage hc) = readOnlyRefusal
+        | otherwise = hcReadOnlyMessage hc
 
 {- | How this instance introduces itself. A client may hold several VoLCA
 servers at once; the name is what tells them apart.
@@ -438,6 +450,7 @@ instance DecodeTOML HostingConfig where
         hcMaxLoadedUploads <- fromMaybe (-1) <$> getFieldOpt "max_loaded_uploads"
         hcApiAccess <- fromMaybe True <$> getFieldOpt "api_access"
         hcReadOnly <- fromMaybe False <$> getFieldOpt "read_only"
+        hcReadOnlyMessage <- fromMaybe "" <$> getFieldOpt "read_only_message"
         hcUpgradeUpload <- fromMaybe "" <$> getFieldOpt "upgrade_upload"
         hcUpgradeApi <- fromMaybe "" <$> getFieldOpt "upgrade_api"
         hcUpgradeVmSize <- fromMaybe "" <$> getFieldOpt "upgrade_vm_size"

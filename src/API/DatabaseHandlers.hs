@@ -140,7 +140,7 @@ import API.Types (
     toExchangeEdits,
  )
 import App.Env (AppEnv (..), AppM)
-import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusal)
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
@@ -1163,9 +1163,9 @@ tell the difference between "done" and "not allowed here".
 -}
 guardMutation :: AppM ()
 guardMutation = do
-    readOnly <- asks (hostingReadOnly . aeHostingConfig)
-    when (isReadOnly readOnly) $
-        throwError err403{errBody = BSL.fromStrict (T.encodeUtf8 readOnlyRefusal)}
+    hosting <- asks aeHostingConfig
+    when (isReadOnly (hostingReadOnly hosting)) $
+        throwError err403{errBody = BSL.fromStrict (T.encodeUtf8 (readOnlyRefusalFor hosting))}
 
 {- | Common pattern: run an IO action that returns Either Text (), map to ActivateResponse.
 
