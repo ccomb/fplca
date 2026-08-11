@@ -12,6 +12,17 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- The Docker image's default configuration now loads everything it ships.
+  `geographies` was declared below `[server]`, where it parsed as
+  `server.geographies` and was silently dropped, so a standalone container
+  scored regionalized characterization factors with no geography hierarchy at
+  all while its own CSV sat unused. Energy densities were not declared, so
+  factors counted per MJ or per m3 could never meet a flow measured by mass
+  or volume and their categories silently scored zero. And the built-in
+  method's path resolved under `/app` instead of `/data`, so the image
+  started with no method at all. One caveat for named volumes created by an
+  older image: Docker never repopulates a non-empty volume, so copy
+  `energy_density.csv` into it or recreate it.
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
   tools. It was built against the build machine's Homebrew copies of OpenBLAS
   and the Fortran runtime and looked for them at the same paths on yours, so it

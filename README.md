@@ -103,6 +103,13 @@ volca --config volca.toml repl
 A TOML config file enables multi-database setups, method collections, and reference data:
 
 ```toml
+# Single-path reference data (all optional). Top-level keys stay above the
+# first [section] header: below one they parse as members of that section
+# and are silently dropped.
+# geographies = "data/geographies.csv"         # code,display_name,parents
+# chem-synonyms = "data/chem_synonyms.csv"     # PubChem snapshot for the suggester
+# substance-edges = "data/substance_edges.csv" # typed flow-correspondence edges
+
 [server]
 port = 8080
 host = "127.0.0.1"
@@ -182,18 +189,13 @@ active = true
 
 [[energy-densities]]
 name = "Default energy densities"
-path = "data/energy_densities.csv"
+path = "data/energy_density.csv"
 active = true
 
 [[classification-presets]]     # named filter bundles for classifications
 name = "agriculture"
 label = "Agriculture"
 filters = [{ system = "ISIC", value = "01", mode = "contains" }]  # mode: exact | contains
-
-# Single-path reference data (all optional):
-# geographies = "data/geographies.csv"        # code,display_name,parents
-# chem-synonyms = "data/chem_synonyms.csv"    # PubChem snapshot for the suggester
-# substance-edges = "data/substance_edges.csv" # typed flow-correspondence edges
 
 # [hosting] tunes upload/API limits when the engine runs behind a manager:
 # max_uploads, max_upload_mb, max_loaded_uploads, api_access,
