@@ -10,7 +10,7 @@ module API.Routes where
 import API.DatabaseHandlers (explainCFToAPI, simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
-import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExchangeEditRequest (..), ExchangeEditResponse (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
+import API.Types (ActivateResponse (..), ActivityContribution (..), ActivityInfo (..), ActivityInput (..), ActivitySummary (..), ActivityWriteRequest (..), ActivityWriteResponse (..), Aggregation (..), BatchImpactsEntry (..), BatchImpactsRequest (..), BatchImpactsResponse (..), BinaryContent (..), CharacterizationEntry (..), CharacterizationResult (..), ClassificationEntryInfo (..), ClassificationPresetInfo (..), ClassificationSystem (..), CollectionCoverage (..), ComputedQualityReportAPI (..), ConsumersResponse (..), ContributingActivitiesResult (..), ContributingFlowsResult (..), CoverageReportAPI (..), CutoffWasteFlow (..), DatabaseListResponse (..), DeleteSelectionRequest (..), DeleteSelectionResponse (..), ExchangeDetail (..), ExchangeEditRequest (..), ExchangeEditResponse (..), ExplainCFResult (..), ExportRequest (..), FlowCFEntry (..), FlowCFMapping (..), FlowContributionEntry (..), FlowDetail (..), FlowSearchResult (..), FlowSummary (..), GapReportAPI (..), GraphExport (..), HostingInfo (..), InventoryExport (..), LCIABatchResult (..), LCIAResult (..), LoadDatabaseResponse (..), MappingStatus (..), MethodCollectionListResponse (..), MethodCollectionStatusAPI (..), MethodDetail (..), MethodFactorAPI (..), MethodSummary (..), PerturbedEntry (..), QualityReportAPI (..), RefDataListResponse (..), RelinkRequest (..), RelinkResponse (..), ScoringIndicator (..), SearchResults (..), SensitivityRequest (..), SensitivityResponse (..), SubstitutionRequest (..), SupplyChainResponse (..), SynonymGroupsResponse (..), TreeExport (..), UnmappedFlowAPI (..), UploadChunk (..), UploadResponse (..), apiFlowOfKind)
 import App.Env (AppEnv (..), AppM, runApp)
 import qualified Config
 import Control.Concurrent.Async (mapConcurrently)
@@ -1253,33 +1253,42 @@ getVersion =
             ]
 
 getHosting :: AppM Value
-getHosting = do
-    hostingConfig <- asks aeHostingConfig
-    return $ case hostingConfig of
-        Just hc ->
-            object
-                [ "is_hosted" .= True
-                , "max_uploads" .= Config.hcMaxUploads hc
-                , "max_upload_mb" .= Config.hcMaxUploadMb hc
-                , "max_loaded_uploads" .= Config.hcMaxLoadedUploads hc
-                , "api_access" .= Config.hcApiAccess hc
-                , "read_only" .= Config.hcReadOnly hc
-                , "upgrade_upload" .= Config.hcUpgradeUpload hc
-                , "upgrade_api" .= Config.hcUpgradeApi hc
-                , "upgrade_vm_size" .= Config.hcUpgradeVmSize hc
-                ]
-        Nothing ->
-            object
-                [ "is_hosted" .= False
-                , "max_uploads" .= (-1 :: Int)
-                , "max_upload_mb" .= (-1 :: Int)
-                , "max_loaded_uploads" .= (-1 :: Int)
-                , "api_access" .= True
-                , "read_only" .= False
-                , "upgrade_upload" .= ("" :: Text)
-                , "upgrade_api" .= ("" :: Text)
-                , "upgrade_vm_size" .= ("" :: Text)
-                ]
+getHosting = asks (toJSON . hostingInfo . aeHostingConfig)
+
+{- | The wire answer for a hosting config; no section means an unmanaged,
+unrestricted instance (local, CLI, desktop).
+-}
+hostingInfo :: Maybe Config.HostingConfig -> HostingInfo
+hostingInfo hostingConfig = case hostingConfig of
+    Just hc ->
+        HostingInfo
+            { hiIsHosted = True
+            , hiMaxUploads = Config.hcMaxUploads hc
+            , hiMaxUploadMb = Config.hcMaxUploadMb hc
+            , hiMaxLoadedUploads = Config.hcMaxLoadedUploads hc
+            , hiApiAccess = Config.hcApiAccess hc
+            , -- The sentence a refusal will actually carry (operator's words or
+              -- the default), not the raw config value: a client explaining the
+              -- situation up front must show what a refusal would have said.
+              hiReadOnly = Config.hcReadOnly hc
+            , hiReadOnlyMessage = if Config.hcReadOnly hc then Config.readOnlyRefusalFor (Just hc) else ""
+            , hiUpgradeUpload = Config.hcUpgradeUpload hc
+            , hiUpgradeApi = Config.hcUpgradeApi hc
+            , hiUpgradeVmSize = Config.hcUpgradeVmSize hc
+            }
+    Nothing ->
+        HostingInfo
+            { hiIsHosted = False
+            , hiMaxUploads = -1
+            , hiMaxUploadMb = -1
+            , hiMaxLoadedUploads = -1
+            , hiApiAccess = True
+            , hiReadOnly = False
+            , hiReadOnlyMessage = ""
+            , hiUpgradeUpload = ""
+            , hiUpgradeApi = ""
+            , hiUpgradeVmSize = ""
+            }
 
 getStats :: AppM Value
 getStats = liftIO $ do

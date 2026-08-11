@@ -34,6 +34,7 @@ plan stored loaded =
         , hcMaxLoadedUploads = loaded
         , hcApiAccess = True
         , hcReadOnly = False
+        , hcReadOnlyMessage = ""
         , hcUpgradeUpload = ""
         , hcUpgradeApi = ""
         , hcUpgradeVmSize = ""

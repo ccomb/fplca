@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), ServerName, hostingReadOnly, loadConfigOrDefault, readOnlyRefusal)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), ServerName, hostingReadOnly, loadConfigOrDefault, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -219,11 +219,11 @@ setupIdleTimeout serverOpts = do
     pure (lastRequestRef, idleActiveRef)
 
 -- | Stack idle-tracking, shutdown-endpoint and (optionally) auth middleware.
-wrapWithMiddleware :: Maybe String -> ReadOnly -> IORef UTCTime -> IORef Bool -> Application -> Application
-wrapWithMiddleware password readOnly lastRequestRef idleActiveRef baseApp =
+wrapWithMiddleware :: Maybe String -> Maybe HostingConfig -> IORef UTCTime -> IORef Bool -> Application -> Application
+wrapWithMiddleware password mHosting lastRequestRef idleActiveRef baseApp =
     let withIdleAndShutdown =
             idleTrackingMiddleware lastRequestRef $
-                shutdownEndpoint readOnly lastRequestRef idleActiveRef baseApp
+                shutdownEndpoint mHosting lastRequestRef idleActiveRef baseApp
      in case password of
             Just pwd -> authMiddleware (C8.pack pwd) withIdleAndShutdown
             Nothing -> withIdleAndShutdown
@@ -265,7 +265,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             (getCurrentTime >>= writeIORef lastRequestRef)
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
-                wrapWithMiddleware password (hostingReadOnly (cfgHosting config)) lastRequestRef idleActiveRef baseApp
+                wrapWithMiddleware password (cfgHosting config) lastRequestRef idleActiveRef baseApp
         settings = setTimeout 600 defaultSettings
     if port == 0
         then do
@@ -455,8 +455,8 @@ Both endpoints decide the lifetime of the whole process, so a read-only
 instance refuses them: on a server answering many unrelated callers, one of
 them must not be able to shut it down under the others.
 -}
-shutdownEndpoint :: ReadOnly -> IORef UTCTime -> IORef Bool -> Application -> Application
-shutdownEndpoint readOnly lastRequestRef idleActiveRef app req respond =
+shutdownEndpoint :: Maybe HostingConfig -> IORef UTCTime -> IORef Bool -> Application -> Application
+shutdownEndpoint mHosting lastRequestRef idleActiveRef app req respond =
     case (requestMethod req, BS.stripPrefix "/api/v1/idle-timeout/" path, path) of
         ("POST", _, "/api/v1/shutdown")
             | isReadOnly readOnly -> refuse
@@ -484,13 +484,14 @@ shutdownEndpoint readOnly lastRequestRef idleActiveRef app req respond =
         (_, _, _) -> app req respond
   where
     path = rawPathInfo req
+    readOnly = hostingReadOnly mHosting
     ok = respond $ responseLBS status200 [(hContentType, "application/json")] "{\"ok\":true}"
     refuse =
         respond $
             responseLBS
                 status403
                 [(hContentType, "application/json")]
-                (encode (object ["error" .= readOnlyRefusal]))
+                (encode (object ["error" .= readOnlyRefusalFor mHosting]))
 
 {- | Background thread that exits the server after the idle timeout (seconds).
 

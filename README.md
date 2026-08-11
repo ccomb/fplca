@@ -197,7 +197,7 @@ filters = [{ system = "ISIC", value = "01", mode = "contains" }]  # mode: exact 
 
 # [hosting] tunes upload/API limits when the engine runs behind a manager:
 # max_uploads, max_upload_mb, max_loaded_uploads, api_access,
-# upgrade_upload, upgrade_api, upgrade_vm_size, read_only
+# upgrade_upload, upgrade_api, upgrade_vm_size, read_only, read_only_message
 ```
 
 `max_uploads` bounds how many databases of their own a caller may keep, and
@@ -213,7 +213,10 @@ dependency edits — and `POST /api/v1/shutdown` and `/api/v1/idle-timeout/{n}`,
 which decide how long the process lives. Refusals are `403` on REST and tool
 errors on MCP; nothing is silently ignored. This is what makes a single
 instance safe to put in front of many unrelated callers, none of whom should be
-able to change the working set or end the server for the others.
+able to change the working set or end the server for the others. Every refusal
+carries one sentence explaining the stance; `read_only_message` replaces it
+with the operator's own words, and `GET /api/v1/hosting` reports both flags so
+a client can say so before attempting a change.
 
 The `depends` field ensures dependency databases load first and their flows are available for cross-database linking. Setting `load = true` on a database transitively loads all its dependencies.
 
