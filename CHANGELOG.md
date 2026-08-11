@@ -12,6 +12,13 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- The Docker image's default configuration now loads the geography hierarchy
+  and the energy densities it ships. `geographies` was declared below
+  `[server]`, where it parsed as `server.geographies` and was silently
+  dropped, so a standalone container ran on the built-in hierarchy while its
+  own CSV sat unused; energy densities were not declared at all, and without
+  the density bridge the fossil and water-use categories meet mass flows
+  cross-dimensionally and silently score zero or a thousand times off.
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
   tools. It was built against the build machine's Homebrew copies of OpenBLAS
   and the Fortran runtime and looked for them at the same paths on yours, so it

@@ -219,11 +219,13 @@ ENV VOLCA_DATA_DIR=/data
 VOLUME /data
 
 RUN cat > /app/volca.toml <<'EOF'
+# Top-level keys must stay above the first [section] header: below one they
+# parse as members of that section and are silently dropped.
+geographies = "data/geographies.csv"
+
 [server]
 port = 8080
 host = "0.0.0.0"
-
-geographies = "data/geographies.csv"
 
 [[flow-synonyms]]
 name = "Default flow synonyms"
@@ -238,6 +240,14 @@ active = true
 [[units]]
 name = "Default units"
 path = "data/units.csv"
+active = true
+
+# Activates the density bridge (kg -> MJ for fossil CFs, kg -> m3 for water
+# CFs). Without it, per-MJ and per-m3 CFs meet mass flows cross-dimensionally
+# and the fossils / water-use categories silently score zero or x1000.
+[[energy-densities]]
+name = "Default energy densities"
+path = "data/energy_density.csv"
 active = true
 
 [[methods]]
