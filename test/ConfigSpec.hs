@@ -8,6 +8,7 @@ import Config (
     ClassificationPreset (..),
     Config (..),
     DatabaseConfig (..),
+    HostingConfig (..),
     MethodConfig (..),
     MethodPatch (..),
     MethodPatchMatch (..),
@@ -71,6 +72,19 @@ spec = do
             case expandClassificationPreset [] (Just "raw") of
                 Right filters -> expectationFailure ("expected a refusal, got " <> show filters)
                 Left err -> err `shouldSatisfy` T.isInfixOf "no classification presets"
+
+    describe "HostingConfig" $ do
+        -- The [hosting] fragment is the one interface the operator actually
+        -- touches; a typo in a key name here would silently drop their words.
+        let decodeHosting t = TOML.decode t :: Either TOML.TOMLError HostingConfig
+        it "parses read_only_message" $
+            case decodeHosting "read_only = true\nread_only_message = \"Ask the operator.\"\n" of
+                Right hc -> hcReadOnlyMessage hc `shouldBe` "Ask the operator."
+                Left e -> expectationFailure (show e)
+        it "defaults read_only_message to unset when the key is absent" $
+            case decodeHosting "read_only = true\n" of
+                Right hc -> hcReadOnlyMessage hc `shouldBe` ""
+                Left e -> expectationFailure (show e)
 
     describe "MethodConfig global-methods" $ do
         let decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig

@@ -5,9 +5,13 @@ module ServerSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, bracket, try)
+import qualified Data.ByteString.Lazy as BSL
 import Data.Char (isSpace)
 import Data.List (dropWhileEnd)
-import Network.HTTP.Client (Manager, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestHeaders, responseStatus)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Network.HTTP.Client (Manager, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestHeaders, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import System.Directory (doesFileExist, getTemporaryDirectory, removeFile)
 import System.Environment (lookupEnv)
@@ -55,7 +59,9 @@ withMinimalConfig action = do
     removeFile cfgPath
     return result
 
-{- | The same minimal config, declared read-only.
+{- | The same minimal config, declared read-only, with the operator's own
+refusal message - so the specs below also prove that message crosses the
+whole stack, TOML file to HTTP response.
 
 A read-only instance is one many unrelated callers share, so none of them may
 end it: both lifetime endpoints must refuse rather than obey.
@@ -64,10 +70,18 @@ withReadOnlyConfig :: (FilePath -> IO a) -> IO a
 withReadOnlyConfig action = do
     tmpDir <- getTemporaryDirectory
     let cfgPath = tmpDir </> "volca-test-server-readonly.toml"
-    writeFile cfgPath "[server]\nport = 18199\nhost = \"127.0.0.1\"\n\n[hosting]\nread_only = true\n"
+    writeFile cfgPath $
+        "[server]\nport = 18199\nhost = \"127.0.0.1\"\n\n"
+            ++ "[hosting]\nread_only = true\nread_only_message = \""
+            ++ T.unpack operatorMessage
+            ++ "\"\n"
     result <- action cfgPath
     removeFile cfgPath
     return result
+
+-- | The sentence the operator configured in 'withReadOnlyConfig'.
+operatorMessage :: Text
+operatorMessage = "Ask the operator."
 
 -- | Start the server, run action, ensure cleanup
 withServer :: FilePath -> (ProcessHandle -> Manager -> IO a) -> IO a
@@ -145,11 +159,15 @@ isAlive mgr = do
 
 -- | POST to a server endpoint
 postEndpoint :: Manager -> String -> IO Int
-postEndpoint mgr path = do
+postEndpoint mgr path = fst <$> postEndpointWithBody mgr path
+
+-- | POST to a server endpoint, returning the status and the body text
+postEndpointWithBody :: Manager -> String -> IO (Int, Text)
+postEndpointWithBody mgr path = do
     req0 <- parseRequest $ "http://127.0.0.1:" ++ show testPort ++ path
     let req = req0{method = "POST", requestHeaders = [("Content-Type", "application/json")]}
     resp <- httpLbs req mgr
-    return $ statusCode (responseStatus resp)
+    return (statusCode (responseStatus resp), TE.decodeUtf8Lenient (BSL.toStrict (responseBody resp)))
 
 {- | These specs spawn volca as a subprocess and tear it down with
 interruptProcessGroupOf + waitForProcess. On Windows the terminate
@@ -182,8 +200,9 @@ serverSpecs = do
         it "refuses to be shut down, and survives the attempt" $ do
             withReadOnlyConfig $ \cfgPath ->
                 withServer cfgPath $ \ph mgr -> do
-                    code <- postEndpoint mgr "/api/v1/shutdown"
+                    (code, body) <- postEndpointWithBody mgr "/api/v1/shutdown"
                     code `shouldBe` 403
+                    body `shouldSatisfy` T.isInfixOf operatorMessage
                     -- Give a shutdown that wrongly went through time to land.
                     waitForExit ph 10 `shouldReturn` Nothing
                     isAlive mgr `shouldReturn` True
