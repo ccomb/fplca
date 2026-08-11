@@ -34,6 +34,11 @@
   apart on re-import.
 
 ### Changed
+- Startup now refuses a configuration in which two classification presets or
+  two method collections share a name, the same way it already refused two
+  databases sharing one. Both are looked up by name, so the duplicate would
+  have silently shadowed one of its bearers; the error names the offenders
+  instead.
 - Every download now includes `THIRD-PARTY-LICENSES.md`, naming the numerical
   libraries built into the program and their terms. The Windows zip also
   carries the full licence texts of the runtime libraries beside it.
