@@ -42,6 +42,7 @@ module Method.Types (
     EnergyDensityMap,
     buildEnergyDensityMapFromCSV,
     energyDensityMapSize,
+    expandEnergyDensitiesBySynonym,
     parseEnergyDensitySuffix,
     lookupEnergyDensity,
 
@@ -55,7 +56,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.Csv (HasHeader (..), decode)
-import Data.List (sortOn)
+import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Maybe
 import Data.Store (Store)
@@ -65,7 +66,7 @@ import Data.UUID (UUID)
 import qualified Data.Vector as V
 import qualified Expr
 import GHC.Generics (Generic)
-import SynonymDB (normalizeName)
+import SynonymDB (SynonymDB, getSynonyms, lookupSynonymGroup, normalizeName)
 import Text.Read (readMaybe)
 
 -- | Direction of a biosphere flow (input from or output to environment)
@@ -449,6 +450,43 @@ buildEnergyDensityMapFromCSV csvData =
 -- | Number of entries in the energy-density map.
 energyDensityMapSize :: EnergyDensityMap -> Int
 energyDensityMapSize = M.size
+
+{- | Widen a density map along the same synonym groups the CF matching travels.
+
+The curated rows carry short substance names (@"Coal, hard"@), while a
+database spells the same substance out (@"Coal, hard, unspecified, in
+ground"@). The factor for that flow arrives through the synonym fan-out (see
+'Method.Mapping.expandSynonymMappings'), so it is written per MJ; without the
+same fan-out here there is nothing to carry the flow's kilograms onto it, and
+the category scores zero without saying so.
+
+A name that already has a density of its own keeps it, and so does a name that
+states one: the curated table holds @"Coal, hard"@ in the same group as
+@"Coal, 26.4 MJ per kg"@ and @"Coal, 29.3 MJ per kg"@, and those two say what
+they are worth more precisely than the group does.
+
+A name that two curated densities reach through their groups, with different
+values, is left without one and returned instead: choosing between them
+silently would hand brown coal the calorific value of hard coal.
+-}
+expandEnergyDensitiesBySynonym :: SynonymDB -> EnergyDensityMap -> (EnergyDensityMap, [Text])
+expandEnergyDensitiesBySynonym synDB densities =
+    (M.union densities (M.mapMaybe single reached), M.keys (M.filter ambiguous fresh))
+  where
+    reached =
+        M.fromListWith
+            (<>)
+            [ (normalizeName sibling, [density])
+            | (name, density) <- M.toList densities
+            , Just group <- [lookupSynonymGroup synDB name]
+            , sibling <- Data.Maybe.fromMaybe [] (getSynonyms synDB group)
+            , Data.Maybe.isNothing (parseEnergyDensitySuffix sibling)
+            ]
+    fresh = M.difference reached densities
+    single ds = case nub ds of
+        [d] -> Just d
+        _ -> Nothing
+    ambiguous ds = length (nub ds) > 1
 
 {- | Parse a flow name that encodes an energy density as a suffix —
 @"Coal, 18 MJ per kg"@, @"Gas, natural, 35 MJ per m3"@, @"Uranium, 2291 GJ per

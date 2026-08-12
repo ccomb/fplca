@@ -12,6 +12,18 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- An energy density now reaches a flow under every name the curated synonym
+  table gives that substance, so the fossil-resource categories stop reporting
+  zero for a database that spells its resources out. The densities ship under
+  short names ("Coal, hard"), while ecoinvent 3.8 and the exports made from it
+  call the same resource "Coal, hard, unspecified, in ground". The
+  characterization factor already travelled the synonym table to reach that
+  flow and arrived counted per MJ; the density did not, so there was nothing to
+  carry the flow's kilograms onto the factor and the category scored zero
+  without saying why. A flow that states its own calorific value in its name
+  ("Coal, brown, 10 MJ per kg") keeps that value rather than the group's, and a
+  name two curated densities reach with different values is left without one
+  and reported, instead of being handed whichever came last.
 - The Docker image's default configuration now loads everything it ships.
   `geographies` was declared below `[server]`, where it parsed as
   `server.geographies` and was silently dropped, so a standalone container

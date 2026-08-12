@@ -203,6 +203,7 @@ import Method.Types (
     cfFamily,
     compartmentMapSize,
     energyDensityMapSize,
+    expandEnergyDensitiesBySynonym,
  )
 import Progress (ProgressLevel (..), reportError, reportProgress, reportProgressWithTiming, withLogScope)
 import qualified Search.BM25 as BM25
@@ -700,7 +701,21 @@ buildMethodTablesFor manager dbName collection db hier method = do
                 <> "(direction metadata may be missing from the method). Samples: "
                 <> show (take 3 (map mcfFlowName dirExcluded))
     cmap <- getMergedCompartmentMap manager
-    energyDensities <- getMergedEnergyDensities manager
+    curatedDensities <- getMergedEnergyDensities manager
+    -- The densities travel the same synonym groups the CFs travelled to reach
+    -- these flows, using the same frozen table, or a flow lent a per-MJ factor
+    -- under a name it does not carry itself would have nothing to bridge its
+    -- mass onto.
+    let (energyDensities, ambiguousDensities) =
+            expandEnergyDensitiesBySynonym (fromMaybe emptySynonymDB (dbSynonymDB db)) curatedDensities
+    unless (null ambiguousDensities) $
+        reportProgress Warning $
+            "[LCIA "
+                <> T.unpack (methodName method)
+                <> "] "
+                <> show (length ambiguousDensities)
+                <> " flow name(s) reached by two curated densities of different value, left without one: "
+                <> show (take 3 ambiguousDensities)
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager
     -- A method listed in its collection's 'global-methods' is scored without

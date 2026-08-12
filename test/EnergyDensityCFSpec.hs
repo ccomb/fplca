@@ -34,8 +34,9 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping
-import Method.Types (Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), buildEnergyDensityMapFromCSV)
+import Method.Types (Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), buildEnergyDensityMapFromCSV, expandEnergyDensitiesBySynonym, lookupEnergyDensity)
 import SynonymDB (normalizeName)
+import qualified SynonymDB
 import Types (BiosphereFlow (..), Unit (..), UnitDB)
 import qualified Types as VT
 import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
@@ -301,3 +302,50 @@ spec = do
         it "rejects a missing native unit" $
             buildEnergyDensityMapFromCSV (BLC.pack "flow_name,value,target_unit,native_unit\nPeat,9.76,MJ,\n")
                 `shouldSatisfy` isLeft
+
+    -- The curated rows are short substance names; a database spells the same
+    -- substance out. The CF reaches the long name through the synonym fan-out,
+    -- so the density has to travel the same way or the flow holds a per-MJ
+    -- factor with nothing to carry its kilograms onto.
+    describe "expandEnergyDensitiesBySynonym" $ do
+        let synonyms = SynonymDB.buildFromPairs
+            curated rows = M.fromList [(normalizeName n, EnergyDensity v "MJ" "kg") | (n, v) <- rows]
+            expanded pairs rows = expandEnergyDensitiesBySynonym (synonyms pairs) (curated rows)
+
+        -- The name is ecoinvent 3.8's, and the curated table really does hold
+        -- it in the same group as the short name the density row carries.
+        -- Stripping ", in ground" leaves "coal hard unspecified", which is not
+        -- the density's key, so nothing else in the cascade reaches it.
+        it "lends a density to the spelled-out name of the same substance" $ do
+            let curatedOnly = curated [("Coal, hard", 18.01)]
+                (m, _) = expanded [("Coal, hard", "Coal, hard, unspecified, in ground")] [("Coal, hard", 18.01)]
+            lookupEnergyDensity curatedOnly "Coal, hard, unspecified, in ground" `shouldBe` Nothing
+            lookupEnergyDensity m "Coal, hard, unspecified, in ground"
+                `shouldBe` Just (EnergyDensity 18.01 "MJ" "kg")
+
+        it "leaves a name that states its own calorific value alone" $ do
+            -- The shipped table really does hold these three in one group, and
+            -- 26.4 MJ/kg is not 18.01.
+            let (m, _) =
+                    expanded
+                        [ ("Coal, hard", "Coal, 26.4 MJ per kg")
+                        , ("Coal, hard", "Coal, 29.3 MJ per kg")
+                        ]
+                        [("Coal, hard", 18.01)]
+            M.lookup (normalizeName "Coal, 26.4 MJ per kg") m `shouldBe` Nothing
+            fmap edValue (lookupEnergyDensity m "Coal, 26.4 MJ per kg") `shouldBe` Just 26.4
+
+        it "refuses to choose when two curated densities reach one name" $ do
+            let (m, ambiguous) =
+                    expanded
+                        [("Coal, hard", "coal in ground"), ("Coal, brown", "coal in ground")]
+                        [("Coal, hard", 18.01), ("Coal, brown", 9.41)]
+            M.lookup (normalizeName "coal in ground") m `shouldBe` Nothing
+            ambiguous `shouldBe` [normalizeName "coal in ground"]
+
+        it "never displaces a density written under the name itself" $ do
+            let (m, _) =
+                    expanded
+                        [("Coal, hard", "Coal, brown")]
+                        [("Coal, hard", 18.01), ("Coal, brown", 9.41)]
+            fmap edValue (lookupEnergyDensity m "Coal, brown") `shouldBe` Just 9.41
