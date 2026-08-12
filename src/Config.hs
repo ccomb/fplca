@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -30,6 +31,13 @@ module Config (
     loadConfigOrDefault,
     validateConfig,
 
+    -- * Listening address
+    Listen (..),
+    HostPreference,
+    listenOn,
+    freePortHost,
+    renderHost,
+
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
     applyDataDir,
@@ -50,6 +58,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Set as S
+import Data.Streaming.Network.Internal (HostPreference (..))
+import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Upload (DatabaseFormat (..))
@@ -316,6 +326,44 @@ defaultServerConfig =
         , scPassword = Nothing
         , scName = Nothing
         }
+
+{- | The address the server listens on.
+
+@--port 0@ asks the operating system for a free port. The only way to learn
+which one it picked is to bind the socket first, and that path binds loopback,
+so a configured host cannot be honoured there. Naming the case keeps it from
+reading as an oversight where the server starts.
+-}
+data Listen
+    = ListenOn HostPreference Int
+    | ListenOnFreeLoopbackPort
+    deriving (Show, Eq)
+
+{- | Resolve where to listen: @--port@ overrides @[server] port@, and
+@[server] host@ decides the interface. Its default keeps a server reachable
+from the machine it runs on and from nowhere else, which is what a password
+left unset assumes.
+-}
+listenOn :: Maybe Int -> ServerConfig -> Listen
+listenOn mPort sc = case fromMaybe (scPort sc) mPort of
+    0 -> ListenOnFreeLoopbackPort
+    port -> ListenOn (fromString (T.unpack (scHost sc))) port
+
+{- | What 'ListenOnFreeLoopbackPort' ends up bound to, so the address the
+server announces is the one it is actually reachable at.
+-}
+freePortHost :: HostPreference
+freePortHost = Host "127.0.0.1"
+
+-- | An address written the way it is written in the configuration file.
+renderHost :: HostPreference -> String
+renderHost = \case
+    Host h -> h
+    HostAny -> "*"
+    HostIPv4 -> "*4"
+    HostIPv4Only -> "!4"
+    HostIPv6 -> "*6"
+    HostIPv6Only -> "!6"
 
 -- | Default config (empty databases)
 defaultConfig :: Config

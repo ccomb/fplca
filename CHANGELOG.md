@@ -12,6 +12,16 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- The server now listens on the address `[server] host` names. That setting
+  had never reached the socket: whatever it said, the server answered on every
+  IPv4 interface, so a configuration written to keep an engine on its own
+  machine did not, and the password is off by default. The documented default,
+  `127.0.0.1`, is now real, so a server that used to be reachable from the
+  network stops being reachable unless its configuration says so - set
+  `host = "0.0.0.0"` to keep answering the network over IPv4, or `"*"` to
+  answer it over IPv4 and IPv6. The startup banner names the address it bound,
+  so the case `--port 0` cannot honour (it takes a free port on loopback) is
+  visible rather than silent.
 - The Docker image's default configuration now loads everything it ships.
   `geographies` was declared below `[server]`, where it parsed as
   `server.geographies` and was silently dropped, so a standalone container

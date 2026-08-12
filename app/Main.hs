@@ -28,7 +28,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), ReadOnly (..), ServerConfig (..), ServerName, hostingReadOnly, loadConfigOrDefault, readOnlyRefusalFor)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostPreference, HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, freePortHost, hostingReadOnly, listenOn, loadConfigOrDefault, readOnlyRefusalFor, renderHost)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -52,7 +52,7 @@ import Network.HTTP.Types (status200, status403)
 import Network.HTTP.Types.Header (hCacheControl, hContentType, hPragma)
 import Network.Wai (Application, Middleware, Request (..), Response, ResponseReceived, mapResponseHeaders, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod, responseLBS, responseStream)
 import Network.Wai.Application.Static (StaticSettings, defaultWebAppSettings, ssIndices, staticApp)
-import Network.Wai.Handler.Warp (defaultSettings, openFreePort, runSettings, runSettingsSocket, setPort, setTimeout)
+import Network.Wai.Handler.Warp (defaultSettings, openFreePort, runSettings, runSettingsSocket, setHost, setPort, setTimeout)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
@@ -187,15 +187,18 @@ resolvePassword globalOpts serverCfg = case CLI.Types.serverPassword globalOpts 
         Nothing -> lookupEnv "VOLCA_PASSWORD"
 
 {- | In desktop mode, print a machine-readable port line for the launcher
-to capture and stay quiet. Otherwise emit the human-facing startup banner.
+to capture and stay quiet. Otherwise emit the human-facing startup banner,
+naming the interface as well as the port: a configuration asking for one the
+server cannot bind - @0.0.0.0@ under @--port 0@ - shows up here rather than
+being discovered from a connection that never arrives.
 -}
-logServerStartup :: ServerOptions -> Int -> Maybe String -> IO ()
-logServerStartup serverOpts port password
+logServerStartup :: ServerOptions -> HostPreference -> Int -> Maybe String -> IO ()
+logServerStartup serverOpts host port password
     | serverDesktopMode serverOpts = do
         putStrLn ("VOLCA_PORT=" ++ show port)
         hFlush stdout
     | otherwise = do
-        reportProgress Info ("Starting API server on port " ++ show port)
+        reportProgress Info ("Starting API server on " ++ renderHost host ++ " port " ++ show port)
         reportProgress Info ("Tree depth: " ++ show (serverTreeDepth serverOpts))
         reportProgress Info $ case password of
             Just _ -> "Authentication: ENABLED"
@@ -248,8 +251,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
     reportProgress Info "Initializing database manager..."
     dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
     logLoadedDatabases dbManager
-    let port = fromMaybe (scPort (cfgServer config)) (serverPort serverOpts)
-        staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
+    let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
     (lastRequestRef, idleActiveRef) <- setupIdleTimeout serverOpts
     baseApp <-
@@ -267,14 +269,14 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             uploadSizeLimitMiddleware (cfgHosting config) $
                 wrapWithMiddleware password (cfgHosting config) lastRequestRef idleActiveRef baseApp
         settings = setTimeout 600 defaultSettings
-    if port == 0
-        then do
+    case listenOn (serverPort serverOpts) (cfgServer config) of
+        ListenOnFreeLoopbackPort -> do
             (boundPort, socket) <- openFreePort
-            logServerStartup serverOpts boundPort password
+            logServerStartup serverOpts freePortHost boundPort password
             runSettingsSocket settings socket finalApp
-        else do
-            logServerStartup serverOpts port password
-            runSettings (setPort port settings) finalApp
+        ListenOn host port -> do
+            logServerStartup serverOpts host port password
+            runSettings (setHost host (setPort port settings)) finalApp
 
 {- | Run config load-only mode (load all databases from config and exit)
 Useful for cache generation, validation, and benchmarking

@@ -9,26 +9,40 @@ import Config (
     Config (..),
     DatabaseConfig (..),
     HostingConfig (..),
+    Listen (..),
     MethodConfig (..),
     MethodPatch (..),
     MethodPatchMatch (..),
     RefDataConfig (..),
     ScoringSetConfig (..),
+    ServerConfig (..),
     applyDataDir,
     defaultConfig,
     expandClassificationPreset,
+    listenOn,
     loadConfigOrDefault,
     redirectIntoDataDir,
+    renderHost,
     resolveConfigPaths,
     validateConfig,
  )
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
+import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.FilePath (normalise)
 import qualified TOML
 import Test.Hspec
+
+serverOn :: Text -> ServerConfig
+serverOn host =
+    ServerConfig
+        { scPort = 8080
+        , scHost = host
+        , scPassword = Nothing
+        , scName = Nothing
+        }
 
 mkRef :: FilePath -> RefDataConfig
 mkRef p =
@@ -43,6 +57,28 @@ mkRef p =
 
 spec :: Spec
 spec = do
+    describe "listenOn" $ do
+        it "listens on the interface the configuration names" $
+            listenOn Nothing (serverOn "0.0.0.0") `shouldBe` ListenOn (fromString "0.0.0.0") 8080
+
+        -- The default is what a password left unset assumes: reachable from
+        -- this machine and from nowhere else.
+        it "keeps a configuration that names no host on loopback" $
+            listenOn Nothing (serverOn "127.0.0.1") `shouldBe` ListenOn (fromString "127.0.0.1") 8080
+
+        it "lets --port override the configured port without moving the interface" $
+            listenOn (Just 9000) (serverOn "0.0.0.0") `shouldBe` ListenOn (fromString "0.0.0.0") 9000
+
+        -- --port 0 goes through the free-port path, which binds loopback and
+        -- takes no host, so the configured one cannot be honoured there.
+        it "asks for a free loopback port whatever host the configuration names" $
+            listenOn (Just 0) (serverOn "0.0.0.0") `shouldBe` ListenOnFreeLoopbackPort
+
+    describe "renderHost" $
+        it "writes an address back the way a configuration file writes it" $ do
+            let written = ["127.0.0.1", "0.0.0.0", "example.internal", "*", "*4", "!4", "*6", "!6"]
+            map (renderHost . fromString) written `shouldBe` written
+
     describe "expandClassificationPreset" $ do
         let raw =
                 ClassificationPreset
