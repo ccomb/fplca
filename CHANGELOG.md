@@ -45,6 +45,11 @@
   apart on re-import.
 
 ### Changed
+- The location hierarchy the regionalized scoring path uses is built once at
+  startup instead of being rebuilt from the geographies file on every call.
+  It was two full passes over the file for each scoring request, and each
+  method of a panel paid it again, even when the characterization tables
+  themselves came back from their cache.
 - Startup now refuses a configuration in which two classification presets or
   two method collections share a name, the same way it already refused two
   databases sharing one. Both are looked up by name, so the duplicate would

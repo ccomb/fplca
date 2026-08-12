@@ -542,6 +542,13 @@ data DatabaseManager = DatabaseManager
     , dmLoadedEnergyDensities :: !(TVar (Map Text EnergyDensityMap))
     , dmNoCache :: !Bool -- Caching disabled flag
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
+    , dmLocationHierarchy :: !(Map Location [Location])
+    {- ^ 'dmGeographies' in the shape the regionalized scoring path wants, built
+    once beside it. Both are immutable for the manager's lifetime, so deriving
+    one from the other on every call was two full traversals of the geography
+    file per scoring request, paid even when the method tables came back from
+    their cache.
+    -}
     , dmMethodMappingCache :: !(TVar (Map (Text, Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
     {- ^ Cached flow mappings: (dbName, collection, methodId) → mappings.
     The collection is part of the key because a method UUID is a UUIDv5 of the
@@ -1047,6 +1054,7 @@ initDatabaseManager config noCache = do
                 , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
                 , dmNoCache = noCache
                 , dmGeographies = geographies
+                , dmLocationHierarchy = M.map (map Location . snd) (M.mapKeysMonotonic Location geographies)
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
                 , dmMethodTablesInflight = methodTablesInflightVar
@@ -3550,7 +3558,7 @@ getLocationHierarchy = pure . locationHierarchyOf
 
 -- | Pure form of 'getLocationHierarchy', shared by the loading paths.
 locationHierarchyOf :: DatabaseManager -> M.Map Location [Location]
-locationHierarchyOf manager = M.map (map Location . snd) (M.mapKeysMonotonic Location (dmGeographies manager))
+locationHierarchyOf = dmLocationHierarchy
 
 {- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
 flows are not merged here because characterization (the only consumer of
