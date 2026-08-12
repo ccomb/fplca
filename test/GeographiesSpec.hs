@@ -12,7 +12,7 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.CrossLinking (acceptableLocation)
-import Database.Manager (parseGeographiesCSV)
+import Database.Manager (hierarchyFromGeographies, parseGeographiesCSV)
 import Method.Types (Location (..))
 import Test.Hspec
 import Types (GeographyPolicy (..), LocationKind (..))
@@ -24,9 +24,11 @@ table = do
         Right geos -> pure geos
         Left err -> fail (T.unpack err)
 
--- | The table in the shape the matcher reads it: codes wrapped, parents wrapped.
+{- | The table in the shape the matcher reads it, through the engine's own
+derivation rather than a copy of it.
+-}
 hierarchy :: IO (M.Map Location [Location])
-hierarchy = M.map (map Location . snd) . M.mapKeysMonotonic Location <$> table
+hierarchy = hierarchyFromGeographies <$> table
 
 spec :: Spec
 spec = do

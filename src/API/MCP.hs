@@ -1272,7 +1272,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
-        hier <- liftIO $ DM.getLocationHierarchy dbManager
+        let hier = DM.dmLocationHierarchy dbManager
         eRes <-
             liftIO $
                 Service.computeSensitivities db (ldSharedSolver ld) (raPid ra) perts

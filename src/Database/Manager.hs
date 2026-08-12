@@ -84,7 +84,7 @@ module Database.Manager (
     getMergedEnergyDensities,
     getMergedUnitConfig,
     getMergedFlowMetadata,
-    getLocationHierarchy,
+    hierarchyFromGeographies,
 
     -- * Staged Database Operations
     getStagedDatabase,
@@ -543,11 +543,9 @@ data DatabaseManager = DatabaseManager
     , dmNoCache :: !Bool -- Caching disabled flag
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
     , dmLocationHierarchy :: !(Map Location [Location])
-    {- ^ 'dmGeographies' in the shape the regionalized scoring path wants, built
-    once beside it. Both are immutable for the manager's lifetime, so deriving
-    one from the other on every call was two full traversals of the geography
-    file per scoring request, paid even when the method tables came back from
-    their cache.
+    {- ^ 'dmGeographies' in the shape the regionalized scoring path and the
+    linking paths read it, derived once beside it. Sourced from the configured
+    geographies file, empty when none is configured or it fails to parse.
     -}
     , dmMethodMappingCache :: !(TVar (Map (Text, Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
     {- ^ Cached flow mappings: (dbName, collection, methodId) → mappings.
@@ -651,22 +649,6 @@ effectiveMethodMappings manager dbName collection db method = do
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
 mapMethodToTablesCached manager dbName collection db method = do
-    hier <- getLocationHierarchy manager
-    mapMethodToTablesCachedWithHier manager dbName collection db hier method
-
-{- | Variant of 'mapMethodToTablesCached' that takes the location hierarchy as
-an argument. Lets 'mapMethodSetToTablesCached' fetch it once per request
-instead of once per method in the concurrent fan-out.
--}
-mapMethodToTablesCachedWithHier ::
-    DatabaseManager ->
-    Text ->
-    Text ->
-    Database ->
-    M.Map Location [Location] ->
-    Method ->
-    IO MethodTables
-mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
     let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodTablesCache manager)
     case M.lookup key cache of
@@ -678,7 +660,7 @@ mapMethodToTablesCachedWithHier manager dbName collection db hier method = do
                 (dmMethodTablesInflight manager)
                 key
                 (modifyTVar' (dmMethodTablesCache manager) . M.insert key)
-                (buildMethodTablesFor manager dbName collection db hier method)
+                (buildMethodTablesFor manager dbName collection db method)
 
 {- | Build the LCIA lookup tables for one method against a database: resolve the
 CF→flow mappings, stack them into the broadcast/CAS/regional tables, and
@@ -687,8 +669,9 @@ coverage gaps are surfaced once here, at build time, rather than per-pid on the
 scoring path. Caching and single-flighting are the caller's responsibility.
 -}
 buildMethodTablesFor ::
-    DatabaseManager -> Text -> Text -> Database -> M.Map Location [Location] -> Method -> IO MethodTables
-buildMethodTablesFor manager dbName collection db hier method = do
+    DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
+buildMethodTablesFor manager dbName collection db method = do
+    let hier = dmLocationHierarchy manager
     expanded <- effectiveMethodMappings manager dbName collection db method
     -- A CF matchable through the union synonym tables but not through its own
     -- direction's view was excluded by the direction restriction alone — the
@@ -870,10 +853,6 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
     case M.lookup key cache of
         Just mst -> pure mst
         Nothing -> do
-            -- Fetch the location hierarchy once for the whole fan-out so the
-            -- concurrent workers don't each rebuild the typed hierarchy
-            -- under 'getLocationHierarchy'.
-            hier <- getLocationHierarchy manager
             -- mapConcurrently here parallelizes the per-method 'MethodTables'
             -- build across the whole collection. On first request for a
             -- method set, this concretely parallelizes the expensive
@@ -883,7 +862,7 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
             -- for a ~25-30s parallel one. Concurrent cache writes on the
             -- per-method cache are idempotent under STM (last write wins,
             -- same value).
-            tables <- mapConcurrently (mapMethodToTablesCachedWithHier manager dbName collection db hier) sortedMethods
+            tables <- mapConcurrently (mapMethodToTablesCached manager dbName collection db) sortedMethods
             let !mst = buildMethodSetTables (zip sortedMethods tables)
             atomically $ modifyTVar' (dmMethodSetTablesCache manager) (M.insert key mst)
             pure mst
@@ -1054,7 +1033,7 @@ initDatabaseManager config noCache = do
                 , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
                 , dmNoCache = noCache
                 , dmGeographies = geographies
-                , dmLocationHierarchy = M.map (map Location . snd) (M.mapKeysMonotonic Location geographies)
+                , dmLocationHierarchy = hierarchyFromGeographies geographies
                 , dmMethodMappingCache = methodMappingCacheVar
                 , dmMethodTablesCache = methodTablesCacheVar
                 , dmMethodTablesInflight = methodTablesInflightVar
@@ -1170,7 +1149,7 @@ loadOneDatabase ::
 loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = withLogScope (dcName dbConfig) $ do
     dbStart <- getCurrentTime
     reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (locationHierarchyOf manager)
+    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (dmLocationHierarchy manager)
     case result of
         Right (loaded0, _fromCache) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
@@ -1783,7 +1762,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 unitConfig
                                 (dmNoCache manager || journalAhead)
                                 otherIndexes
-                                (locationHierarchyOf manager)
+                                (dmLocationHierarchy manager)
                     replayResult <- case eitherResult of
                         Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
                         Right (Left err) -> pure (Left err)
@@ -2044,7 +2023,7 @@ relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ do
                                 selectedIndexes
                                 synonymDB
                                 unitConfig
-                                (locationHierarchyOf manager)
+                                (dmLocationHierarchy manager)
                                 (dcGeographyPolicy (sdConfig staged))
                                 aliases
                                 (sdSimpleDB staged)
@@ -2118,7 +2097,7 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
                         , lcSynonymDB = synonymDB
                         , lcUnitConfig = unitConfig
                         , lcThreshold = defaultLinkingThreshold
-                        , lcLocationHierarchy = locationHierarchyOf manager
+                        , lcLocationHierarchy = dmLocationHierarchy manager
                         , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
                         , lcSupplierAliases = aliases
                         }
@@ -2340,7 +2319,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                     otherIndexes
                     synonymDB
                     unitConfig
-                    (locationHierarchyOf manager)
+                    (dmLocationHierarchy manager)
                     (dcGeographyPolicy dbConfig)
                     loadPath
 
@@ -2371,7 +2350,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                                         restrictedIndexes
                                         synonymDB
                                         unitConfig
-                                        (locationHierarchyOf manager)
+                                        (dmLocationHierarchy manager)
                                         (dcGeographyPolicy dbConfig)
                                         simpleDb
                                 return (stats', simpleDb')
@@ -2594,8 +2573,7 @@ databaseCoverageReport manager dbName mCollection = do
             case collectionsToReport mCollection loadedMethods of
                 Left err -> pure (Left err)
                 Right cols -> do
-                    hier <- getLocationHierarchy manager
-                    bridges <- mapM (collectionBridgesFor db hier) cols
+                    bridges <- mapM (collectionBridgesFor db) cols
                     pure (Right (Coverage.CoverageReport dbName bridges))
   where
     -- The named collection (must be loaded) or every loaded one, by name.
@@ -2604,9 +2582,9 @@ databaseCoverageReport manager dbName mCollection = do
             Just mc -> Right [(name, mc)]
             Nothing -> Left ("Method collection not loaded: " <> name)
         Nothing -> Right (M.toList loaded)
-    collectionBridgesFor db hier (collName, mc) = do
+    collectionBridgesFor db (collName, mc) = do
         let methods = mcMethods mc
-        tables <- mapM (mapMethodToTablesCachedWithHier manager dbName collName db hier) methods
+        tables <- mapM (mapMethodToTablesCached manager dbName collName db) methods
         mappings <- mapM (effectiveMethodMappings manager dbName collName db) methods
         let characterized = S.size (S.unions (map (`characterizedFlowIds` dbBioFlows db) tables))
             total = fromIntegral (dbBiosphereCount db)
@@ -3030,7 +3008,7 @@ addDependencyToStaged manager dbName depName = do
                         selectedIndexes
                         synonymDB
                         unitConfig
-                        (locationHierarchyOf manager)
+                        (dmLocationHierarchy manager)
                         (dcGeographyPolicy (sdConfig staged))
                         (sdSimpleDB staged)
 
@@ -3070,7 +3048,7 @@ removeDependencyFromStaged manager dbName depName = do
                     remainingIndexes
                     synonymDB
                     unitConfig
-                    (locationHierarchyOf manager)
+                    (dmLocationHierarchy manager)
                     (dcGeographyPolicy (sdConfig staged))
                     (sdSimpleDB staged)
 
@@ -3549,16 +3527,14 @@ collisions should never happen (same UUID ⇒ same flow by construction),
 but if data drift produces them, surface via log rather than hide.
 -}
 
-{- | Location hierarchy as a 'Map ChildLocation [ParentLocation]', sourced from
-'data/geographies.csv' (or the hardcoded fallback). Reused across the LCIA
-regionalized scoring path (see 'Method.Mapping.computeRegionalizedLCIAScore').
+{- | The parsed geographies in the shape every consumer reads them: a
+@Map ChildLocation [ParentLocation]@, walked by the LCIA regionalized scoring
+path (see 'Method.Mapping.computeRegionalizedLCIAScore') and by supplier
+resolution. Fills 'dmLocationHierarchy'; the spec reads it too, so the shape
+under test is the shape the matcher gets.
 -}
-getLocationHierarchy :: DatabaseManager -> IO (M.Map Location [Location])
-getLocationHierarchy = pure . locationHierarchyOf
-
--- | Pure form of 'getLocationHierarchy', shared by the loading paths.
-locationHierarchyOf :: DatabaseManager -> M.Map Location [Location]
-locationHierarchyOf = dmLocationHierarchy
+hierarchyFromGeographies :: M.Map Text (Text, [Text]) -> M.Map Location [Location]
+hierarchyFromGeographies = M.map (map Location . snd) . M.mapKeysMonotonic Location
 
 {- | Merged biosphere flow metadata + units across all loaded DBs. Technosphere
 flows are not merged here because characterization (the only consumer of
