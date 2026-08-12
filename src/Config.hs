@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -36,6 +37,11 @@ module Config (
     freePortHost,
     clientHost,
 
+    -- * Keys nothing reads
+    KeySpec (..),
+    configKeys,
+    unknownKeys,
+
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
     applyDataDir,
@@ -58,12 +64,14 @@ import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Database.Upload (DatabaseFormat (..))
 import GHC.Generics (Generic)
+import Progress (ProgressLevel (..), reportProgress)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, normalise, takeDirectory, takeFileName, (</>))
-import TOML (DecodeTOML (..), Decoder, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
+import TOML (DecodeTOML (..), Decoder, TOMLError, Table, Value (..), decode, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
 import Types (GeographyPolicy (..))
 
 -- | A single classification filter entry (system + value)
@@ -533,10 +541,133 @@ loadConfigFile path = do
     if not exists
         then pure $ Left $ "Config file not found: " <> T.pack path
         else do
-            result <- decodeFile path
-            case result of
-                Right cfg -> pure $ Right cfg
+            text <- TIO.readFile path
+            case decode text of
                 Left err -> pure $ Left $ "TOML parse error: " <> T.pack (show err)
+                Right cfg -> do
+                    mapM_ (reportProgress Warning . T.unpack) (unreadKeyWarnings path text)
+                    pure $ Right cfg
+
+{- | One line per key of the file no decoder reads.
+
+A warning, not a refusal: a key from a later release should not stop an older
+engine. But saying nothing is worse than either, because the ways a key goes
+unread are all invisible - written under the wrong section header, spelled
+with the wrong separator, or named the way an older release named it.
+-}
+unreadKeyWarnings :: FilePath -> Text -> [Text]
+unreadKeyWarnings path text = map complain (either (const []) (unknownKeys configKeys) parsed)
+  where
+    parsed = decode text :: Either TOMLError Table
+    complain key = T.pack path <> ": nothing reads " <> key <> maybe "" hint (lookup key renamedKeys)
+    hint replacement = " (renamed to " <> replacement <> ")"
+
+{- | Keys an earlier release read, and what replaced them, so a configuration
+written against one says why it stopped working rather than only that a key is
+unread. Keyed by the path 'unknownKeys' reports, with any array index dropped.
+-}
+renamedKeys :: [(Text, Text)]
+renamedKeys = [("databases[].active", "load")]
+
+{- | What one part of the configuration accepts: keys read for their value,
+and the parts nested under it.
+-}
+data KeySpec
+    = Accepts [Text] [(Text, KeySpec)]
+    | {- | The caller names the keys, so none of them can be unknown: a scoring
+      set's variables, a database's location aliases.
+      -}
+      AcceptsAnything
+    deriving (Show, Eq)
+
+{- | Every key the decoders in this module read, in the shape a file has them.
+
+Kept beside the decoders because it is only worth having while it matches
+them: a decoder gaining a field and this not is a key reported unread that is
+read perfectly well.
+-}
+configKeys :: KeySpec
+configKeys =
+    Accepts
+        ["geographies", "chem-synonyms", "substance-edges"]
+        [ ("server", Accepts ["port", "host", "password", "name"] [])
+        , ("hosting", Accepts hostingKeys [])
+        ,
+            ( "databases"
+            , Accepts
+                ["name", "displayName", "path", "description", "load", "default", "depends", "deletable", "geography_policy"]
+                [("locationAliases", AcceptsAnything)]
+            )
+        ,
+            ( "methods"
+            , Accepts
+                ["name", "path", "active", "description", "global-methods"]
+                [("scoring", scoringSet), ("patches", patch)]
+            )
+        , ("flow-synonyms", refData)
+        , ("compartment-mappings", refData)
+        , ("units", refData)
+        , ("energy-densities", refData)
+        ,
+            ( "classification-presets"
+            , Accepts ["name", "label", "description"] [("filters", Accepts ["system", "value", "mode"] [])]
+            )
+        ]
+  where
+    hostingKeys =
+        [ "max_uploads"
+        , "max_upload_mb"
+        , "max_loaded_uploads"
+        , "api_access"
+        , "read_only"
+        , "read_only_message"
+        , "upgrade_upload"
+        , "upgrade_api"
+        , "upgrade_vm_size"
+        ]
+    refData = Accepts ["path", "name", "active", "description"] []
+    scoringSet =
+        Accepts
+            ["name", "unit", "displayMultiplier"]
+            [(k, AcceptsAnything) | k <- ["variables", "computed", "labels", "normalization", "weighting", "scores"]]
+    patch =
+        Accepts
+            ["description", "scale", "set-value"]
+            [("match", Accepts ["category", "flow-name", "flow-name-prefix", "cas", "subcompartment-contains"] [])]
+
+{- | The dotted path of every key of a parsed document that the given shape
+does not name, an array written @name[]@ because the complaint is about the
+key rather than about one of its occurrences. Sorted and without repeats, so
+a file listing twenty databases with the same stale key says it once.
+-}
+unknownKeys :: KeySpec -> Table -> [Text]
+unknownKeys spec = S.toAscList . S.fromList . walk [] spec
+  where
+    walk _ AcceptsAnything _ = []
+    walk here (Accepts keys sections) table = concatMap (judge here keys sections) (M.toList table)
+
+    judge here keys sections (key, value) = case lookup key sections of
+        Just nested -> let (segment, tables) = sectionUnder key value in concatMap (walk (here <> [segment]) nested) tables
+        Nothing
+            | key `elem` keys -> []
+            | otherwise -> [T.intercalate "." (here <> [key])]
+
+    -- How a section is written in a path, and the tables it holds. A section
+    -- is a table or an array of tables wherever a decoder reads one, and a
+    -- value of any other shape has already failed to decode, so there is
+    -- nothing under it left to judge.
+    sectionUnder :: Text -> Value -> (Text, [Table])
+    sectionUnder key = \case
+        Table t -> (key, [t])
+        Array vs -> (key <> "[]", concatMap (snd . sectionUnder key) vs)
+        String{} -> (key, [])
+        Integer{} -> (key, [])
+        Float{} -> (key, [])
+        Boolean{} -> (key, [])
+        OffsetDateTime{} -> (key, [])
+        LocalDateTime{} -> (key, [])
+        LocalDate{} -> (key, [])
+        LocalTime{} -> (key, [])
 
 {- | Load configuration, with validation. Honours VOLCA_DATA_DIR: when set,
 any reference-data path beginning with "data/" (e.g. "data/flows.csv")
