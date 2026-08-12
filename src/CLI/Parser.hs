@@ -113,11 +113,11 @@ databaseParser =
     Database . fromMaybe DbList
         <$> optional
             ( subparser
-                ( OA.command "list" (info (pure DbList) (progDesc "List databases"))
+                ( OA.command "list" (info (pure DbList <**> helper) (progDesc "List databases"))
                     <> OA.command "load" (info (DbLoad <$> textArg "DB" "Name of the configured database to load" <**> helper) (progDesc "Load a configured database into memory"))
                     <> OA.command "unload" (info (DbUnload <$> textArg "DB" "Name of the loaded database to unload" <**> helper) (progDesc "Unload a database from memory"))
-                    <> OA.command "upload" (info (DbUpload <$> uploadArgsParser) (progDesc "Upload a database from a local file"))
-                    <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
+                    <> OA.command "upload" (info (DbUpload <$> uploadArgsParser <**> helper) (progDesc "Upload a database from a local file"))
+                    <> OA.command "delete" (info (DbDelete <$> deleteNameParser <**> helper) (progDesc "Delete a database"))
                     <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
                     <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
                     <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a supplier alias CSV (source/target names, optional locations)"))
@@ -219,9 +219,9 @@ methodParser =
     Method . fromMaybe McList
         <$> optional
             ( subparser
-                ( OA.command "list" (info (pure McList) (progDesc "List method collections"))
-                    <> OA.command "upload" (info (McUpload <$> uploadArgsParser) (progDesc "Upload a method collection from a local file"))
-                    <> OA.command "delete" (info (McDelete <$> deleteNameParser) (progDesc "Delete a method collection"))
+                ( OA.command "list" (info (pure McList <**> helper) (progDesc "List method collections"))
+                    <> OA.command "upload" (info (McUpload <$> uploadArgsParser <**> helper) (progDesc "Upload a method collection from a local file"))
+                    <> OA.command "delete" (info (McDelete <$> deleteNameParser <**> helper) (progDesc "Delete a method collection"))
                     <> OA.command "export" (info (McExport <$> mcExportArgsParser <**> helper) (progDesc "Export a loaded method collection to a file (SimaPro CSV, columnar CSV, openLCA JSON-LD, or ILCD method package)"))
                 )
             )
@@ -281,7 +281,7 @@ flowParser = do
 flowSubCommandParser :: Parser FlowSubCommand
 flowSubCommandParser =
     subparser
-        (OA.command "activities" (info (pure FlowActivities) (progDesc "List activities using this flow")))
+        (OA.command "activities" (info (pure FlowActivities <**> helper) (progDesc "List activities using this flow")))
 
 -- | Search activities parser (now top-level)
 searchActivitiesParser :: Parser Command

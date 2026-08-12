@@ -12,6 +12,12 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- `--help` now works on every subcommand. Seven of them answered
+  ``Invalid option `--help'`` and exited with an error instead of describing
+  themselves: `database list`, `database upload`, `database delete`,
+  `method list`, `method upload`, `method delete` and `flow activities`. The
+  usage text was printed, but to the error stream and behind a failure, so
+  anything reading the help of `volca database upload` got nothing at all.
 - The Docker image's default configuration now loads everything it ships.
   `geographies` was declared below `[server]`, where it parsed as
   `server.geographies` and was silently dropped, so a standalone container
