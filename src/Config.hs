@@ -30,6 +30,12 @@ module Config (
     loadConfigOrDefault,
     validateConfig,
 
+    -- * Listening address
+    Listen (..),
+    listenOn,
+    freePortHost,
+    clientHost,
+
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
     applyDataDir,
@@ -316,6 +322,47 @@ defaultServerConfig =
         , scPassword = Nothing
         , scName = Nothing
         }
+
+{- | The address the server listens on.
+
+@--port 0@ asks the operating system for a free port. The only way to learn
+which one it picked is to bind the socket first, and that path binds loopback,
+so a configured host cannot be honoured there. Naming the case keeps it from
+reading as an oversight where the server starts.
+-}
+data Listen
+    = ListenOn Text Int
+    | ListenOnFreeLoopbackPort
+    deriving (Show, Eq)
+
+{- | Resolve where to listen: @--port@ overrides @[server] port@, and
+@[server] host@ decides the interface. Its default keeps a server reachable
+from the machine it runs on and from nowhere else, which is what a password
+left unset assumes.
+-}
+listenOn :: Maybe Int -> ServerConfig -> Listen
+listenOn mPort sc = case fromMaybe (scPort sc) mPort of
+    0 -> ListenOnFreeLoopbackPort
+    port -> ListenOn (scHost sc) port
+
+{- | What 'ListenOnFreeLoopbackPort' ends up bound to, so the address the
+server announces is the one it is actually reachable at.
+-}
+freePortHost :: Text
+freePortHost = "127.0.0.1"
+
+{- | The host a client dials to reach a server told to listen on this one.
+
+A listening address names interfaces to accept on; it is not a destination.
+@0.0.0.0@ and warp\'s wildcards mean "every interface", which nothing can
+connect to - on Windows @http:\/\/0.0.0.0@ fails outright, and @*@ is not
+even a valid URL host. A server accepting on all of them accepts on this
+machine too, so that is where a client on this machine goes.
+-}
+clientHost :: Text -> Text
+clientHost host
+    | host `elem` ["0.0.0.0", "::", "*", "*4", "!4", "*6", "!6"] = "localhost"
+    | otherwise = host
 
 -- | Default config (empty databases)
 defaultConfig :: Config

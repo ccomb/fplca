@@ -17,7 +17,11 @@ geographies = "data/geographies.csv"
 
 [server]
 port = 8080                     # HTTP port
-host = "127.0.0.1"             # Bind address ("0.0.0.0" for all interfaces)
+# The interface to listen on. The default answers this machine and nothing
+# else, which is what leaving the password unset assumes. Use "0.0.0.0" to
+# answer the network over IPv4, "::" over IPv6, or name one interface's own
+# address to answer on that one alone.
+host = "127.0.0.1"
 # password = "changeme"        # Optional HTTP Basic Auth password
 
 # ── Databases ────────────────────────────────────────────────────────

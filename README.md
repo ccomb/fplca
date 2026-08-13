@@ -112,7 +112,8 @@ A TOML config file enables multi-database setups, method collections, and refere
 
 [server]
 port = 8080
-host = "127.0.0.1"
+host = "127.0.0.1"             # interface to listen on; "0.0.0.0" answers the
+                               # network over IPv4, "::" over IPv6
 password = "mysecret"          # optional — omit to disable auth
 name = "lab-archive"           # optional — how this server introduces itself over MCP
 

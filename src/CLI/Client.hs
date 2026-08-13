@@ -13,7 +13,7 @@ module CLI.Client (
 ) where
 
 import CLI.Types
-import Config (Config (..), ServerConfig (..))
+import Config (Config (..), ServerConfig (..), clientHost)
 import Control.Exception (IOException, try)
 import Data.Aeson (FromJSON, Value (..), decode, eitherDecode, encode, object, (.:), (.=))
 import Data.Aeson.Encode.Pretty (encodePretty)
@@ -70,7 +70,10 @@ resolveRemoteConfig globalOpts mbConfig = do
             case envUrl of
                 Just u -> return u
                 Nothing -> case cfgServer <$> mbConfig of
-                    Just sc -> return $ "http://" ++ T.unpack (scHost sc) ++ ":" ++ show (scPort sc)
+                    -- clientHost, not scHost: that setting names the
+                    -- interfaces to accept on, and "every interface" is not
+                    -- somewhere a client can connect to.
+                    Just sc -> return $ "http://" ++ T.unpack (clientHost (scHost sc)) ++ ":" ++ show (scPort sc)
                     Nothing -> do
                         reportError "No server URL: use --config, --url, or VOLCA_URL"
                         exitFailure

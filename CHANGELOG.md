@@ -45,6 +45,17 @@
   apart on re-import.
 
 ### Changed
+- **The server now listens on the address `[server] host` names, and stops
+  answering the network unless it is told to.** That setting had never reached
+  the socket: whatever it said, the server accepted on every IPv4 interface, so
+  a configuration written to keep an engine on its own machine did not, while
+  the password is off by default. The documented default, `127.0.0.1`, is now
+  real. A deployment that relied on the old reach without asking for it has to
+  ask: `host = "0.0.0.0"` answers the network over IPv4, `"::"` over IPv6. The
+  startup banner names the address it bound, so the one case that cannot be
+  honoured - `--port 0` takes a free port on loopback - is visible rather than
+  silent. The command line reaches such a server at this machine rather than at
+  the wildcard, which is not an address anything can connect to.
 - The location hierarchy the regionalized scoring path uses is built once at
   startup instead of being rebuilt from the geography table on every call.
   It was two full passes over that table for each scoring request, and each
