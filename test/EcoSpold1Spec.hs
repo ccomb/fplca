@@ -264,20 +264,24 @@ spec :: Spec
 spec = do
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
-            generateFlowUUID 1 "CO2" "air" ""
-                `shouldBe` read "7906e0fa-adbb-55e4-a9f2-dbdb43f90121"
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldBe` read "10615fc0-b605-52fc-86d4-273d5523c752"
 
         it "differs when exchange number changes" $
-            generateFlowUUID 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 2 "CO2" "air" ""
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldNotBe` generateFlowUUID 2 "CO2" "air" "" "kg"
 
         it "differs when flow name changes" $
-            generateFlowUUID 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 1 "methane" "air" ""
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldNotBe` generateFlowUUID 1 "methane" "air" "" "kg"
 
         it "differs when subcategory changes (river vs groundwater must not collapse)" $
-            generateFlowUUID 1 "Hydrogen sulfide" "water" "river"
-                `shouldNotBe` generateFlowUUID 1 "Hydrogen sulfide" "water" "groundwater, long-term"
+            generateFlowUUID 1 "Hydrogen sulfide" "water" "river" "kg"
+                `shouldNotBe` generateFlowUUID 1 "Hydrogen sulfide" "water" "groundwater, long-term" "kg"
+
+        it "differs when the unit changes (MJ must not be summed into kWh)" $
+            generateFlowUUID 1 "Heat, waste" "air" "unspecified" "MJ"
+                `shouldNotBe` generateFlowUUID 1 "Heat, waste" "air" "unspecified" "kWh"
 
     describe "flow identity across datasets" $ do
         it "gives one substance one flow id in every dataset that draws it" $
@@ -290,6 +294,7 @@ spec = do
             case parseWithXeno otherAuthorXml of
                 Right (_, _, _, _, _, dsNum, _) -> dsNum `shouldBe` 43
                 Left err -> expectationFailure err
+
 
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $

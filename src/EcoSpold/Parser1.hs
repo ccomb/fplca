@@ -42,21 +42,28 @@ Using UUID v5 (SHA1-based) with a custom namespace
 ecospold1Namespace :: UUID
 ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "ecospold1.ecoinvent.org")
 
-{- | Generate deterministic UUID from the exchange number and the full
-compartment (category + subCategory).
+{- | Generate deterministic UUID from the exchange number, the full compartment
+(category + subCategory) and the unit.
 
 The exchange number is already the identity EcoSpold1 gives a flow across the
 whole export: an elementary flow carries its substance number (@Water, fossil@
 is 62793 in every dataset that draws it), and a technosphere input carries the
 number of the dataset producing it, the same number that dataset stamps on its
-own reference product. So the four fields below name one flow, once, for the
-whole database.
+own reference product (true of all 11947 datasets of the export measured here).
+So the fields below name one flow, once, for the whole database.
+
+The unit is in the key because a matrix row is summed without conversion. Real
+exports record one substance in two units: the measured one writes @Heat,
+waste@ in MJ in some datasets and in kWh in others, and @Natural gas, at
+production@ in m3 and Nm3, 193 such flows in all. Merging those onto one row
+would add MJ to kWh and report the total under whichever unit won the merge.
+The SimaPro parser keys on the unit for the same reason.
 
 The dataset a flow was *read from* is deliberately not part of the key. Keying
-on it splintered every shared substance into one flow per dataset — the ecoinvent
-EcoSpold1 export of a Swiss database carried 27935 biosphere flows for 2515
-substances, and a single inventory listed @Carbon dioxide, fossil@ four times
-because its supply chain crossed four datasets.
+on it splintered every shared substance into one flow per dataset: the export
+measured here carried 27935 biosphere flows for 2515 substances, and a single
+inventory of it listed @Lead@ 150 times, once per dataset its supply chain
+crossed that emits lead.
 
 The subCategory is part of the key because it is part of a flow's identity: an
 emission of one substance to two subcompartments (e.g. a leachate to both
@@ -68,8 +75,8 @@ silently scoring gated groundwater/ocean mass at a surface-freshwater CF (or the
 reverse). Keying on the full compartment keeps each subcompartment a separate row
 scored at its own CF.
 -}
-generateFlowUUID :: Int -> Text -> Text -> Text -> UUID
-generateFlowUUID exchangeNumber flowName category subCategory =
+generateFlowUUID :: Int -> Text -> Text -> Text -> Text -> UUID
+generateFlowUUID exchangeNumber flowName category subCategory unitName =
     let key =
             T.intercalate
                 ":"
@@ -77,6 +84,7 @@ generateFlowUUID exchangeNumber flowName category subCategory =
                 , flowName
                 , category
                 , subCategory
+                , unitName
                 ]
      in UUID5.generateNamed ecospold1Namespace (BS.unpack $ TE.encodeUtf8 key)
 
@@ -386,7 +394,7 @@ buildExchange activityLoc edata
     | isBiosphere = (bioEx, ParsedBio bioFlow, unit)
     | otherwise = (techEx, ParsedTech techFlow, unit)
   where
-    flowId = generateFlowUUID (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata)
+    flowId = generateFlowUUID (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata) (exUnit edata)
     unitId = generateUnitUUID (exUnit edata)
     unit = Unit unitId (exUnit edata) (exUnit edata) ""
 
