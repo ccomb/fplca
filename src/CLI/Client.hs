@@ -233,8 +233,10 @@ executeRemoteCommand mgr rc globalOpts cmd = do
         DebugMatrices{} -> reportError "debug-matrices is local-only" >> exitFailure
         ExportMatrices{} -> reportError "export-matrices is local-only" >> exitFailure
         Repl -> reportError "repl should be handled in Main" >> exitFailure
-        DumpOpenApi -> reportError "dump-openapi should be handled in Main" >> exitFailure
-        DumpMcpTools -> reportError "dump-mcp-tools should be handled in Main" >> exitFailure
+        -- Answered before a server is contacted, so reaching here means the
+        -- REPL, where the line is simply not one of its commands. Saying so
+        -- and carrying on, rather than ending the session over it.
+        Dump _ -> reportError "A dump command writes to stdout; run it outside the REPL."
 
 -- | Look up the collection name for a given method UUID via /api/v1/methods
 lookupMethodCollection :: Manager -> RemoteConfig -> Text -> IO (Maybe Text)

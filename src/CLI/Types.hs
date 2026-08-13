@@ -53,9 +53,18 @@ data Command
     | FlowMapping MappingOptions -- Flow mapping coverage analysis
     | Stop -- Stop running server
     | Repl -- Interactive REPL over HTTP
-    -- Hidden tooling commands (not shown in --help)
-    | DumpOpenApi -- Dump OpenAPI spec as JSON to stdout
-    | DumpMcpTools -- Dump MCP tool definitions as JSON to stdout
+    | Dump DumpTarget -- Hidden tooling: write a machine-readable document to stdout
+    deriving (Eq, Show, Generic)
+
+{- | What a hidden @dump-*@ command writes out. One constructor for all of
+them, because each is answered in exactly one place, before any configuration
+is read, and every other dispatch only has to know that it is not its
+business.
+-}
+data DumpTarget
+    = DumpOpenApi -- OpenAPI specification
+    | DumpMcpTools -- MCP tool definitions
+    | DumpConfigSchema -- Names of the keys a configuration file may carry
     deriving (Eq, Show, Generic)
 
 -- | Database management actions

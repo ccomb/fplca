@@ -182,12 +182,7 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
         Repl -> do
             reportError "Repl command should be handled in Main.hs"
             exitFailure
-        DumpOpenApi -> do
-            reportError "DumpOpenApi should be handled in Main.hs"
-            exitFailure
-        DumpMcpTools -> do
-            reportError "DumpMcpTools should be handled in Main.hs"
-            exitFailure
+        Dump _ -> reportError "A dump command is answered before a database is loaded."
 
 -- | Execute commands that require a loaded database
 executeDbCommand :: OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
@@ -221,8 +216,7 @@ executeDbCommand fmt _globalOpts database = \case
     FlowMapping _ -> pure ()
     Stop -> pure ()
     Repl -> pure ()
-    DumpOpenApi -> pure ()
-    DumpMcpTools -> pure ()
+    Dump _ -> pure ()
 
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()

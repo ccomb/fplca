@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- `volca dump-config-schema` prints the keys a configuration file may carry, by
+  name, as JSON, the way `dump-mcp-tools` prints the assistant tools. Writing
+  about this file has meant reading the decoders, so anything written about it
+  drifts quietly; now there is a list to check a text against.
 - A hosted server can refuse changes in its operator's own words:
   `read_only_message` under `[hosting]` replaces the default read-only
   sentence on every surface (the REST API, the MCP tools, and the shutdown
