@@ -350,6 +350,35 @@ The width that word-by-word matching brings is paid for by
 flowMatchesQuery :: Text -> FlowKind -> Bool
 flowMatchesQuery query = Normalize.matchesEveryWord query . flowSearchFields
 
+{- | What a name filter keeps of the candidates it was given, each described
+by its searchable fields, its own name first ('flowSearchFields' already
+orders them that way).
+
+A filter is not a search, and differs on two points. A query naming no word
+at all — blank, or punctuation only — filters nothing, where a search for
+nothing finds nothing: an argument that names nothing must not empty the
+answer. And of everything the query matched, only the closest tier is kept
+('flowNameRelevance'): a search relegates a lookalike to a later page, a
+filter has no later page, so keeping every tier would mix
+@Carbon dioxide, fossil@ and @Carbon dioxide, non-fossil@ into one answer and
+leave the caller to notice. Asking for the flow as it is written therefore
+returns exactly it, and dropping its punctuation returns the tier that
+carries all its words.
+-}
+filterByName :: Text -> (a -> [Text]) -> [a] -> [a]
+filterByName query fields xs
+    | null (Normalize.queryWords query) = xs
+    | otherwise = [x | (x, tier) <- ranked, tier == closest]
+  where
+    matches = Normalize.matchesEveryWord query
+    ranked = [(x, flowNameRelevance query (nameOf (fields x))) | x <- xs, matches (fields x)]
+    closest = case map snd ranked of
+        [] -> 0 -- nothing matched, so the comprehension above is empty too
+        tier : tiers -> foldr min tier tiers
+    nameOf fs = case fs of
+        [] -> ""
+        name : _ -> name
+
 {- | How closely a flow's name answers the query, smallest first: it carries
 the query as it was typed, or it carries every word, or it does neither and
 was reached some other way (through a synonym, or with the words scattered

@@ -33,10 +33,21 @@
   filters, and the `--flow-filter` of the debug matrix export, now read a query
   the way the search does: every word, in any order, punctuation optional, and
   synonyms count wherever the flow behind the line is known.
-  The characterization factor list keeps matching the whole string for now: it
-  shows the twenty largest factors of a method out of several thousand, so
-  widening what matches without ranking it would push the flow asked about off
-  the page.
+  A filter keeps only the closest match, which a search does not have to do: it
+  ranks a lookalike onto a later page, while a filter has no later page. So
+  asking for `Carbon dioxide, fossil` as it is written returns exactly it, not
+  it plus `Carbon dioxide, non-fossil`; dropping the punctuation returns
+  everything the words reach, both of them, each under its own name. And a
+  filter naming no word at all (blank, or punctuation only) now filters
+  nothing, where it used to answer with an empty inventory.
+  `get_inventory` also reports `matched_flows` next to `total_flows` and
+  `shown_flows`, so a filter matching three hundred rows and showing fifty says
+  so instead of looking like fifty matches.
+  Two filters still match the whole query as one string. The characterization
+  factor list shows the twenty largest factors of a method out of several
+  thousand, so widening what matches without ranking it would push the flow
+  asked about off the page. `aggregate`'s `filter_name` also feeds an exclusion
+  list and activity names, which need their own answer.
 - Searching flows now finds a flow whose name you didn't punctuate exactly.
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the

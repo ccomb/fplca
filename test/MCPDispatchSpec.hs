@@ -128,6 +128,13 @@ callOnSampleWith name extraArgs = do
     callTool manager [] Nothing Nothing Null name $
         KM.fromList (("database", String "sample") : extraArgs)
 
+-- | The flow names of the exchanges a get_activity reply carries.
+exchangeFlowNames :: Value -> [Text]
+exchangeFlowNames resp = fromMaybe [] $ do
+    Object activity <- jsonField "activity" resp
+    Array exchanges <- KM.lookup "exchanges" activity
+    pure [name | Object x <- toList exchanges, Just (String name) <- [KM.lookup "flowName" x]]
+
 positiveNumber :: Maybe Value -> Bool
 positiveNumber v = case v of
     Just (Number n) -> n > 0
@@ -302,13 +309,28 @@ spec = describe "MCP database load/unload tools" $ do
 
         it "keeps its exchange in get_activity under that same query" $ do
             resp <- callOnSampleWith "get_activity" [("process_id", emitter), ("flow", unpunctuated)]
-            resultText resp `shouldSatisfy` carriesTheFlow
+            -- The named exchange and nothing else: the activity also has its
+            -- reference product, which an ignored filter would leave in.
+            exchangeFlowNames resp `shouldBe` ["Carbon dioxide, fossil"]
 
         -- Reading the words is not the same as dropping the filter: a query
         -- naming a flow the activity does not carry must still empty the list.
         it "drops what the query does not name" $ do
             resp <- callOnSampleWith "get_inventory" [("process_id", emitter), ("flow", String "sulphur dioxide")]
             jsonField "shown_flows" resp `shouldBe` Just (Number 0)
+
+        it "counts what the filter matched, apart from what it shows" $ do
+            resp <- callOnSampleWith "get_inventory" [("process_id", emitter), ("flow", unpunctuated)]
+            jsonField "matched_flows" resp `shouldSatisfy` positiveNumber
+
+        -- A filter naming nothing is not a search for nothing: the words of
+        -- a blank query are none, and dropping every row on that would read
+        -- as an activity exchanging nothing.
+        it "filters nothing when the argument names no word" $ do
+            inventory <- callOnSampleWith "get_inventory" [("process_id", emitter), ("flow", String "")]
+            jsonField "shown_flows" inventory `shouldSatisfy` positiveNumber
+            activity <- callOnSampleWith "get_activity" [("process_id", emitter), ("flow", String " ")]
+            exchangeFlowNames activity `shouldSatisfy` ((> 1) . length)
 
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for
