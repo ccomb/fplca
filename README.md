@@ -104,8 +104,8 @@ A TOML config file enables multi-database setups, method collections, and refere
 
 ```toml
 # Single-path reference data (all optional). Top-level keys stay above the
-# first [section] header: below one they parse as members of that section
-# and are silently dropped.
+# first [section] header: below one they parse as members of that section,
+# which startup reports by name.
 # geographies = "data/geographies.csv"         # code,display_name,parents
 # chem-synonyms = "data/chem_synonyms.csv"     # PubChem snapshot for the suggester
 # substance-edges = "data/substance_edges.csv" # typed flow-correspondence edges

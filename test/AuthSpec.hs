@@ -83,6 +83,20 @@ spec = do
             called `shouldBe` False
             code `shouldBe` 401
 
+    describe "the assistant protocol is guarded too" $ do
+        -- /mcp reaches the same operations as the REST API, so a password that
+        -- closed one and left the other open would read as protection and be
+        -- none: an unauthenticated caller could load, upload and delete.
+        it "rejects POST /mcp without credentials" $ do
+            (called, code) <- runAuth "POST" "/mcp" []
+            called `shouldBe` False
+            code `shouldBe` 401
+
+        it "lets POST /mcp through with the password" $ do
+            (called, code) <- runAuth "POST" "/mcp" (bearerHeader password)
+            called `shouldBe` True
+            code `shouldBe` 200
+
     describe "protected /api/ routes — no credentials" $ do
         it "rejects with 401 when Authorization and Cookie are absent" $ do
             (called, code) <- runAuth "GET" "/api/v1/db" []
