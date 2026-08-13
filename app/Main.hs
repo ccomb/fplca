@@ -29,7 +29,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, freePortHost, hostingReadOnly, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -81,6 +81,7 @@ main = do
     case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
         (Just DumpOpenApi, _) -> BSL.putStrLn (encode volcaOpenApi)
         (Just DumpMcpTools, _) -> BSL.putStrLn (encode (toolDefinitions (ReadOnly False)))
+        (Just DumpConfigSchema, _) -> BSL.putStrLn (encode (keyPaths configKeys))
         (Just (Server serverOpts), mCfgFile) -> runServerWithConfig cliConfig serverOpts mCfgFile
         (Just Repl, Just cfgFile) -> runReplMode cliConfig cfgFile
         (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile

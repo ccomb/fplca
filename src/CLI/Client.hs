@@ -235,6 +235,7 @@ executeRemoteCommand mgr rc globalOpts cmd = do
         Repl -> reportError "repl should be handled in Main" >> exitFailure
         DumpOpenApi -> reportError "dump-openapi should be handled in Main" >> exitFailure
         DumpMcpTools -> reportError "dump-mcp-tools should be handled in Main" >> exitFailure
+        DumpConfigSchema -> reportError "dump-config-schema should be handled in Main" >> exitFailure
 
 -- | Look up the collection name for a given method UUID via /api/v1/methods
 lookupMethodCollection :: Manager -> RemoteConfig -> Text -> IO (Maybe Text)

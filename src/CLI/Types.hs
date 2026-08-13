@@ -56,6 +56,7 @@ data Command
     -- Hidden tooling commands (not shown in --help)
     | DumpOpenApi -- Dump OpenAPI spec as JSON to stdout
     | DumpMcpTools -- Dump MCP tool definitions as JSON to stdout
+    | DumpConfigSchema -- Dump the configuration file's key names as JSON to stdout
     deriving (Eq, Show, Generic)
 
 -- | Database management actions

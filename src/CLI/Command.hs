@@ -188,6 +188,9 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
         DumpMcpTools -> do
             reportError "DumpMcpTools should be handled in Main.hs"
             exitFailure
+        DumpConfigSchema -> do
+            reportError "DumpConfigSchema should be handled in Main.hs"
+            exitFailure
 
 -- | Execute commands that require a loaded database
 executeDbCommand :: OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
@@ -223,6 +226,7 @@ executeDbCommand fmt _globalOpts database = \case
     Repl -> pure ()
     DumpOpenApi -> pure ()
     DumpMcpTools -> pure ()
+    DumpConfigSchema -> pure ()
 
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()

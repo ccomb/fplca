@@ -115,6 +115,7 @@ commandParser =
         <|> subparser
             ( cmd "dump-openapi" (pure DumpOpenApi) "Dump OpenAPI spec as JSON to stdout"
                 <> cmd "dump-mcp-tools" (pure DumpMcpTools) "Dump MCP tool definitions as JSON to stdout"
+                <> cmd "dump-config-schema" (pure DumpConfigSchema) "Dump the configuration file's key names as JSON to stdout"
                 <> internal
             )
 

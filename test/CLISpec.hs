@@ -80,6 +80,7 @@ spec = do
                 , ["repl"]
                 , ["dump-openapi"]
                 , ["dump-mcp-tools"]
+                , ["dump-config-schema"]
                 ]
         mapM_
             (\argv -> it (unwords argv <> " --help describes itself") $ answersHelp argv `shouldBe` True)
