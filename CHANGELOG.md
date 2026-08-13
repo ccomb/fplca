@@ -23,6 +23,17 @@
   started with no method at all. One caveat for named volumes created by an
   older image: Docker never repopulates a non-empty volume, so copy
   `energy_density.csv` into it or recreate it.
+- A database read from an EcoSpold 1 export now has one flow per substance.
+  Each flow used to carry the dataset it happened to be read from, so the same
+  substance became a separate flow in every dataset that mentions it: searching
+  a 12 000 dataset export for `Water, fossil` returned eight identical lines,
+  and one inventory of that export listed `Lead` 150 times. It held 27 935
+  biosphere flows for 2 515 real substances. Totals stayed right, but nothing
+  that groups by flow was readable. Two things follow on upgrade. The process
+  id of an EcoSpold 1 activity changes, because its second half is the identity
+  of its reference product, so anything holding one has to look it up again.
+  And the cache of every database, whatever its format, is rebuilt from its
+  source once, because one version number covers them all.
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
   tools. It was built against the build machine's Homebrew copies of OpenBLAS
   and the Fortran runtime and looked for them at the same paths on yours, so it

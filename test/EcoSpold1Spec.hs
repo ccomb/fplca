@@ -115,6 +115,46 @@ minimalXml =
         , "</ecoSpold>"
         ]
 
+{- | The same two elementary flows as 'minimalXml', in another dataset written
+by another author. The @<person number>@ sits where EcoSpold1 metadata really
+carries one: under @<dataset>@, after the dataset's own number.
+-}
+otherAuthorXml :: BC.ByteString
+otherAuthorXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"43\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"heat production\" category=\"Energy\""
+        , "                           subCategory=\"Heat\" unit=\"MJ\"/>"
+        , "        <geography location=\"FR\" />"
+        , "      </processInformation>"
+        , "      <administrativeInformation>"
+        , "        <dataGeneratorAndPublication person=\"777\" />"
+        , "        <person number=\"777\" name=\"Doe\" />"
+        , "      </administrativeInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"5\" name=\"heat, district network\" category=\"Energy\""
+        , "                subCategory=\"Heat\" unit=\"MJ\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"2\" name=\"Carbon dioxide, fossil\" category=\"air\""
+        , "                subCategory=\"low population density\" unit=\"kg\" meanValue=\"0.08\""
+        , "                CASNumber=\"124-38-9\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"3\" name=\"natural gas\" category=\"resource\""
+        , "                subCategory=\"in ground\" unit=\"MJ\" meanValue=\"14.0\">"
+        , "        <inputGroup>4</inputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 {- | Fixture exercising per-exchange `generalComment` attribute.
 Exchange #1 (reference) carries a comment, #2 has none. The
 referenceFunction also carries an activity-level generalComment to
@@ -224,24 +264,27 @@ spec :: Spec
 spec = do
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
-            generateFlowUUID 42 1 "CO2" "air" ""
-                `shouldBe` read "64b107af-792c-5a2a-874f-2a3323510af7"
-
-        it "differs when dataset number changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 2 1 "CO2" "air" ""
+            generateFlowUUID 1 "CO2" "air" ""
+                `shouldBe` read "7906e0fa-adbb-55e4-a9f2-dbdb43f90121"
 
         it "differs when exchange number changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 1 2 "CO2" "air" ""
+            generateFlowUUID 1 "CO2" "air" ""
+                `shouldNotBe` generateFlowUUID 2 "CO2" "air" ""
 
         it "differs when flow name changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 1 1 "methane" "air" ""
+            generateFlowUUID 1 "CO2" "air" ""
+                `shouldNotBe` generateFlowUUID 1 "methane" "air" ""
 
         it "differs when subcategory changes (river vs groundwater must not collapse)" $
-            generateFlowUUID 1 1 "Hydrogen sulfide" "water" "river"
-                `shouldNotBe` generateFlowUUID 1 1 "Hydrogen sulfide" "water" "groundwater, long-term"
+            generateFlowUUID 1 "Hydrogen sulfide" "water" "river"
+                `shouldNotBe` generateFlowUUID 1 "Hydrogen sulfide" "water" "groundwater, long-term"
+
+    describe "flow identity across datasets" $ do
+        it "gives one substance one flow id in every dataset that draws it" $
+            case (parseWithXeno minimalXml, parseWithXeno otherAuthorXml) of
+                (Right (_, _, bios1, _, _, _, _), Right (_, _, bios2, _, _, _, _)) ->
+                    map bfId bios1 `shouldBe` map bfId bios2
+                _ -> expectationFailure "both fixtures should parse"
 
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $

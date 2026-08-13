@@ -42,8 +42,21 @@ Using UUID v5 (SHA1-based) with a custom namespace
 ecospold1Namespace :: UUID
 ecospold1Namespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "ecospold1.ecoinvent.org")
 
-{- | Generate deterministic UUID from dataset number, exchange number, and the
-full compartment (category + subCategory).
+{- | Generate deterministic UUID from the exchange number and the full
+compartment (category + subCategory).
+
+The exchange number is already the identity EcoSpold1 gives a flow across the
+whole export: an elementary flow carries its substance number (@Water, fossil@
+is 62793 in every dataset that draws it), and a technosphere input carries the
+number of the dataset producing it, the same number that dataset stamps on its
+own reference product. So the four fields below name one flow, once, for the
+whole database.
+
+The dataset a flow was *read from* is deliberately not part of the key. Keying
+on it splintered every shared substance into one flow per dataset — the ecoinvent
+EcoSpold1 export of a Swiss database carried 27935 biosphere flows for 2515
+substances, and a single inventory listed @Carbon dioxide, fossil@ four times
+because its supply chain crossed four datasets.
 
 The subCategory is part of the key because it is part of a flow's identity: an
 emission of one substance to two subcompartments (e.g. a leachate to both
@@ -55,13 +68,12 @@ silently scoring gated groundwater/ocean mass at a surface-freshwater CF (or the
 reverse). Keying on the full compartment keeps each subcompartment a separate row
 scored at its own CF.
 -}
-generateFlowUUID :: Int -> Int -> Text -> Text -> Text -> UUID
-generateFlowUUID datasetNumber exchangeNumber flowName category subCategory =
+generateFlowUUID :: Int -> Text -> Text -> Text -> UUID
+generateFlowUUID exchangeNumber flowName category subCategory =
     let key =
             T.intercalate
                 ":"
-                [ T.pack (show datasetNumber)
-                , T.pack (show exchangeNumber)
+                [ T.pack (show exchangeNumber)
                 , flowName
                 , category
                 , subCategory
@@ -298,7 +310,7 @@ record the supplier link for technosphere inputs.
 closeExchange :: ParseState -> ParseState
 closeExchange state = case psContext state of
     InExchange edata ->
-        let (exchange, parsedFlow, unit) = buildExchange (psDatasetNumber state) (psLocation state) edata
+        let (exchange, parsedFlow, unit) = buildExchange (psLocation state) edata
             !supplierLinks = case exchange of
                 TechnosphereExchange{techRole = Input}
                     | exNumber edata /= 0 ->
@@ -363,13 +375,13 @@ EcoSpold1 groups:
   Input:  1-3 = technosphere, 4 = resource (biosphere)
   Output: 0 = reference product, 1-3 = byproduct/co-product, 4 = emission (biosphere)
 -}
-buildExchange :: Int -> Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
-buildExchange datasetNum activityLoc edata
+buildExchange :: Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
+buildExchange activityLoc edata
     | isWasteFlow = (wasteEx, ParsedWaste wasteFlow, unit)
     | isBiosphere = (bioEx, ParsedBio bioFlow, unit)
     | otherwise = (techEx, ParsedTech techFlow, unit)
   where
-    flowId = generateFlowUUID datasetNum (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata)
+    flowId = generateFlowUUID (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata)
     unitId = generateUnitUUID (exUnit edata)
     unit = Unit unitId (exUnit edata) (exUnit edata) ""
 
