@@ -12,6 +12,12 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
+- Searching flows now finds a flow whose name you didn't punctuate exactly.
+  `water fossil` returned nothing at all while `water, fossil` returned eight
+  results, because the whole query was looked up as one piece of text and the
+  comma is part of the name. Every word of the query is now looked for on its
+  own, in any order, so `fossil water` finds it too. Searching by fragment is
+  unchanged: `chlor` still reaches `Trichloroethane`.
 - `--help` now describes every subcommand, including inside the REPL. Nine
   answered something else. `database upload`, `database delete`,
   `method upload` and `method delete` printed ``Invalid option `--help'`` and

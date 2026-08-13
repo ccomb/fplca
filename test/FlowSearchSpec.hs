@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Flow search results must tell homonyms apart.
+{- | What a flow search matches, and how it orders what it found.
 
 Agribalyse 3.2 carries seven @Deltamethrin@ flows differing only by
 compartment. A result that drops the sub-compartment, or an order that
@@ -10,14 +10,53 @@ module FlowSearchSpec (spec) where
 
 import API.Types (FlowSearchResult (..))
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.UUID as UUID
+import Database (flowMatchesQuery)
 import Service (FlowFilter (..), flowSearchResults)
 import Test.Hspec
 import Types (BiosphereFlow (..), Compartment (..), FlowKind (..), UUID)
 
 spec :: Spec
-spec = describe "Service.flowSearchResults" $ do
+spec = do
+    matchSpec
+    orderSpec
+
+matchSpec :: Spec
+matchSpec = describe "Database.flowMatchesQuery" $ do
+    it "finds a name whose words the query didn't punctuate" $
+        flowMatchesQuery "water fossil" waterFossil `shouldBe` True
+
+    it "finds it whatever order the words come in" $
+        flowMatchesQuery "fossil water" waterFossil `shouldBe` True
+
+    it "still finds it when the query does punctuate" $
+        flowMatchesQuery "water, fossil" waterFossil `shouldBe` True
+
+    it "requires every word, not just one" $
+        flowMatchesQuery "water fossil" (namedFlow "Water, lake" []) `shouldBe` False
+
+    it "keeps matching inside a word, which is how chemicals are searched" $
+        flowMatchesQuery "chlor" (namedFlow "Trichloroethane" []) `shouldBe` True
+
+    it "reads the name and the synonyms as one text" $
+        flowMatchesQuery "laughing dinitrogen" laughingGas `shouldBe` True
+
+    it "matches nothing when the query holds no word at all" $
+        flowMatchesQuery ", " waterFossil `shouldBe` False
+
+waterFossil :: FlowKind
+waterFossil = namedFlow "Water, fossil" []
+
+laughingGas :: FlowKind
+laughingGas = namedFlow "Dinitrogen monoxide" ["laughing gas", "nitrous oxide"]
+
+namedFlow :: Text -> [Text] -> FlowKind
+namedFlow name syns = BioKind (biosphere 0 name syns)
+
+orderSpec :: Spec
+orderSpec = describe "Service.flowSearchResults" $ do
     it "carries the sub-compartment that tells two same-medium flows apart" $
         map (\r -> (fsrCategory r, fsrCompartment r)) (search sortByName deltamethrins)
             `shouldContain` [("soil", Just "agricultural"), ("soil", Just "forestry")]
@@ -77,16 +116,19 @@ deltamethrins =
 
 bioFlow :: Int -> Text -> Maybe Text -> FlowKind
 bioFlow n medium sub =
-    BioKind
-        BiosphereFlow
-            { bfId = mkUUID n
-            , bfName = "Deltamethrin"
-            , bfUnitId = mkUUID 0
-            , bfSynonyms = M.empty
-            , bfCAS = Just "52918-63-5"
-            , bfSubstanceId = Nothing
-            , bfCompartment = Just (Compartment medium sub)
-            }
+    BioKind (biosphere n "Deltamethrin" []){bfCompartment = Just (Compartment medium sub)}
+
+biosphere :: Int -> Text -> [Text] -> BiosphereFlow
+biosphere n name syns =
+    BiosphereFlow
+        { bfId = mkUUID n
+        , bfName = name
+        , bfUnitId = mkUUID 0
+        , bfSynonyms = M.singleton "en" (S.fromList syns)
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Nothing
+        }
 
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0

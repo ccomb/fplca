@@ -4,6 +4,7 @@
 
 module Database where
 
+import Data.Char (isAlphaNum)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -323,13 +324,33 @@ appropriate shape via the 'flowKind*' projections in "API.Types".
 -}
 findFlowsBySynonym :: Database -> Text -> [FlowKind]
 findFlowsBySynonym db query =
-    let queryLower = T.toLower query
-        matches name syns =
-            T.isInfixOf queryLower (T.toLower name)
-                || any (any (T.isInfixOf queryLower . T.toLower) . S.toList) (M.elems syns)
-        matchesTech f = matches (tfName f) (tfSynonyms f)
-        matchesBio f = matches (bfName f) (bfSynonyms f)
-        matchesWaste f = matches (wfName f) (wfSynonyms f)
-     in [TechKind f | f <- M.elems (dbTechFlows db), matchesTech f]
-            ++ [BioKind f | f <- M.elems (dbBioFlows db), matchesBio f]
-            ++ [WasteKind f | f <- M.elems (dbWasteFlows db), matchesWaste f]
+    filter (flowMatchesQuery query) $
+        map TechKind (M.elems (dbTechFlows db))
+            ++ map BioKind (M.elems (dbBioFlows db))
+            ++ map WasteKind (M.elems (dbWasteFlows db))
+
+{- | A flow matches when every word of the query appears in its name or one
+of its synonyms, case-blind and in any order.
+
+Matching the query as a single string instead made @water fossil@ miss the
+flow named @Water, fossil@: the comma belongs to the name, so the user had
+to punctuate exactly, and @fossil water@ found nothing either.
+
+Words stay substrings rather than whole tokens, because flows are searched
+by fragment: @chlor@ must keep reaching @Trichloroethane@, which no
+tokenizer would return. A query holding no word at all (pure punctuation)
+matches nothing rather than everything.
+-}
+flowMatchesQuery :: Text -> FlowKind -> Bool
+flowMatchesQuery query = case map T.toCaseFold (queryWords query) of
+    [] -> const False
+    ws -> \flow -> all (`T.isInfixOf` T.toCaseFold (searchableText flow)) ws
+  where
+    searchableText flow =
+        T.unwords (flowKindName flow : concatMap S.toList (M.elems (flowKindSynonyms flow)))
+
+{- | Split a query into the words it searches for. Anything not alphanumeric
+separates, so the punctuation a flow name carries never has to be retyped.
+-}
+queryWords :: Text -> [Text]
+queryWords = filter (not . T.null) . T.split (not . isAlphaNum)
