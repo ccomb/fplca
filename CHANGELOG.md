@@ -11,6 +11,18 @@
   The default sentence now opens with "This engine is configured read-only"
   instead of "This instance is read-only", naming who to talk to about it.
 
+### Changed
+- Startup now says which keys of the configuration file nothing reads. A
+  configuration is a list of things the engine looks for, so anything it does
+  not look for was dropped without a word, however it got that way: written
+  under the wrong section header (`geographies` below `[server]` becomes
+  `server.geographies`), spelled with the wrong separator, or named the way an
+  older release named it. Each unread key gets a line naming its path, and
+  `[[databases]] active` is named as having become `load`, which is why a
+  configuration written before that rename started up loading nothing at all.
+  A warning rather than a refusal: a key from a later release should not stop
+  an older engine.
+
 ### Fixed
 - `--help` now describes every subcommand, including inside the REPL. Nine
   answered something else. `database upload`, `database delete`,

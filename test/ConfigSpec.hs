@@ -18,18 +18,23 @@ import Config (
     ServerConfig (..),
     applyDataDir,
     clientHost,
+    configKeys,
     defaultConfig,
+    documentKeyPaths,
     expandClassificationPreset,
+    keyPaths,
     listenOn,
     loadConfigOrDefault,
     redirectIntoDataDir,
     resolveConfigPaths,
+    unknownKeys,
     validateConfig,
  )
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import System.FilePath (normalise)
 import qualified TOML
 import Test.Hspec
@@ -87,6 +92,67 @@ spec = do
         it "leaves an address that names one interface alone" $
             map clientHost ["127.0.0.1", "::1", "192.168.1.10", "engine.internal"]
                 `shouldBe` ["127.0.0.1", "::1", "192.168.1.10", "engine.internal"]
+
+    describe "unknownKeys" $ do
+        let unread t = case TOML.decode t :: Either TOML.TOMLError TOML.Table of
+                Left err -> ["did not parse: " <> T.pack (show err)]
+                Right doc -> unknownKeys configKeys doc
+
+        -- The one that matters: a key wrongly reported unread is a warning on
+        -- a file that is perfectly good, which teaches the reader to ignore
+        -- warnings. The shipped configuration exercises about a quarter of the
+        -- schema, so the fixture below names the rest.
+        it "reads every key of the configuration this repository ships" $ do
+            shipped <- TIO.readFile "volca.toml"
+            unread shipped `shouldBe` []
+
+        it "reads every key a document can name" $ do
+            everyKey <- TIO.readFile "test/data/every-config-key.toml"
+            unread everyKey `shouldBe` []
+
+        -- The other direction, so the fixture cannot quietly stop covering
+        -- what it claims to: whatever the schema names, the fixture spells
+        -- out. Without this, a key dropped from configKeys would go on being
+        -- reported unread on every valid file and no test would notice.
+        it "leaves no key of the schema unexercised" $ do
+            everyKey <- TIO.readFile "test/data/every-config-key.toml"
+            case TOML.decode everyKey :: Either TOML.TOMLError TOML.Table of
+                Left err -> expectationFailure (show err)
+                Right doc ->
+                    -- Compared without the [] an array carries in a path: the
+                    -- schema names keys, not how many of each a file holds.
+                    let named = map (T.replace "[]" "") (documentKeyPaths doc)
+                     in filter (`notElem` named) (keyPaths configKeys) `shouldBe` []
+
+        -- How geographies went missing from the Docker image's own config: a
+        -- top-level key written below a header belongs to that header.
+        it "names a top-level key written under a section" $
+            unread "[server]\nport = 8080\ngeographies = \"data/geographies.csv\"\n"
+                `shouldBe` ["server.geographies"]
+
+        it "names a key an array of tables does not carry" $
+            unread "[[databases]]\nname = \"a\"\npath = \"a.zip\"\nactive = true\n"
+                `shouldBe` ["databases[].active"]
+
+        it "says once what twenty entries get wrong" $
+            unread "[[databases]]\nname=\"a\"\npath=\"a\"\nactive=true\n[[databases]]\nname=\"b\"\npath=\"b\"\nactive=true\n"
+                `shouldBe` ["databases[].active"]
+
+        -- Scoring variables, computed formulas and location aliases are named
+        -- by whoever writes the file, so no name there can be unknown.
+        it "leaves the keys the file's author invents alone" $
+            unread
+                "[[methods]]\nname=\"EF\"\npath=\"x.zip\"\n\
+                \[[methods.scoring]]\nname=\"ECS\"\n\
+                \[methods.scoring.variables]\ncch = \"Climate change\"\n\
+                \[methods.scoring.weighting]\ncch = 0.21\n"
+                `shouldBe` []
+
+        it "reaches a section nested two deep" $
+            unread
+                "[[methods]]\nname=\"EF\"\npath=\"x.zip\"\n\
+                \[[methods.patches]]\nscale = 0.6\nmatch = { flow-name = \"Uranium\", flavour = \"x\" }\n"
+                `shouldBe` ["methods[].patches[].match.flavour"]
 
     describe "expandClassificationPreset" $ do
         let raw =
