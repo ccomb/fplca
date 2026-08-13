@@ -24,6 +24,13 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Changed
+- The shipped `volca.toml` names the settings it never mentioned: `[hosting]`
+  and its nine limits, `chem-synonyms`, `substance-edges`, `[server] name`,
+  and the three method fields that carry a single score (`scoring`, `patches`,
+  `global-methods`). It also stops promising more than the engine does:
+  `VOLCA_PASSWORD` is read only when neither `--password` nor the file sets
+  one, so it cannot rotate a password written there, and `api_access` is
+  reported for whatever fronts the server rather than enforced by it.
 - Startup now says which keys of the configuration file nothing reads. A
   configuration is a list of things the engine looks for, so anything it does
   not look for was dropped without a word, however it got that way: written
@@ -60,6 +67,17 @@
   thousand, so widening what matches without ranking it would push the flow
   asked about off the page. `aggregate`'s `filter_name` also feeds an exclusion
   list and activity names, which need their own answer.
+- A password now guards the assistant protocol as well as the REST API.
+  `authMiddleware` only ever protected `/api/`, so a server started with
+  `password` set answered `/mcp` to anyone who asked - and `/mcp` reaches the
+  same operations, including loading, uploading and deleting on a writable
+  server. A password that closes one and leaves the other open reads as
+  protection and is none. Static files and the login page stay public, so a
+  browser can still reach the login screen.
+- The Docker image's default configuration declares the chemical synonyms it
+  ships. The file was copied into the image and named by nothing, so the
+  flow-mapping suggester ran on an empty table, the same way `geographies` did
+  before 0.9.6.
 - The command line can again find the loaded database on its own, so `--db`
   is only needed when several are loaded. It was reading the database list
   under names the engine stopped using, and reported "No databases loaded on

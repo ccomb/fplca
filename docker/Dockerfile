@@ -222,8 +222,9 @@ VOLUME /data
 
 RUN cat > /app/volca.toml <<'EOF'
 # Top-level keys must stay above the first [section] header: below one they
-# parse as members of that section and are silently dropped.
+# parse as members of that section, which startup reports by name.
 geographies = "data/geographies.csv"
+chem-synonyms = "data/chem_synonyms.csv"
 
 [server]
 port = 8080
