@@ -97,9 +97,14 @@ does, which the parser is entitled to produce from a database that holds them.
 -}
 namedLikeAFormula :: QualityReportAPI
 namedLikeAFormula =
-    let one = finding "plain"
-        offender o = o{qoaActivityName = "=trouble", qoaProductName = Just "+additive"}
-     in (oneFinding "plain"){qraReferenceProduct = one{qcaOffenders = map offender (qcaOffenders one)}}
+    let offender o =
+            o
+                { qoaActivityName = "=trouble"
+                , qoaLocation = "-1"
+                , qoaProductName = Just "+additive"
+                }
+        check = finding "plain"
+     in (oneFinding "plain"){qraReferenceProduct = check{qcaOffenders = map offender (qcaOffenders check)}}
 
 computed :: ComputedQualityReportAPI
 computed =
@@ -166,9 +171,9 @@ spec = describe "Quality report CSV" $ do
         drop 1 (rows (qualityReportCsv (oneFinding "-1.5 kg where a product is expected")))
             `shouldBe` ["reference_product,warning,wheat production,FR,wheat grain, -1.5 kg where a product is expected,act_prod"]
 
-    it "guards the activity and product cells the same way as the detail" $
+    it "guards every cell carrying database content, location included" $
         drop 1 (rows (qualityReportCsv namedLikeAFormula))
-            `shouldBe` ["reference_product,warning, =trouble,FR, +additive,plain,act_prod"]
+            `shouldBe` ["reference_product,warning, =trouble, -1, +additive,plain,act_prod"]
 
     it "renders the computed report with the same columns and its own checks" $
         checkColumn (computedQualityReportCsv computed)

@@ -23,7 +23,7 @@ import Control.Monad.Reader (asks)
 import Data.Aeson
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
-import Data.Char (isAlphaNum)
+import Data.Char (isAscii, isControl)
 import Data.Foldable (asum)
 import Data.List (intercalate, sortOn)
 import qualified Data.List.NonEmpty as NE
@@ -1046,8 +1046,12 @@ computedQualityReportH dbName mCollection mLimit = do
 
 {- | The same two reports as a downloadable file. They answer the question the
 JSON answers, in the shape the person asking it works in: a spreadsheet, or a
-shell. The rendering itself lives in 'API.Csv', which the web UI's download
-button reaches through this route rather than reimplementing.
+shell. The rendering lives in 'API.Csv', so every client that hands the report
+over as a file fetches it rather than reimplementing the columns.
+
+These are a second representation of an operation 'API.Resources' already
+names, not operations of their own, so they get no registry entry: one there
+would mint a second MCP tool and a second CLI name for the same question.
 -}
 qualityReportCsvH :: Text -> Maybe Int -> AppM (Headers '[Header "Content-Disposition" Text] QualityReportAPI)
 qualityReportCsvH dbName mLimit =
@@ -1058,15 +1062,20 @@ computedQualityReportCsvH dbName mCollection mLimit =
     addHeader (attachment dbName "computed-quality-report") <$> computedQualityReportH dbName mCollection mLimit
 
 {- | @Content-Disposition@ naming the downloaded file after the database it
-describes, so two reports don't collide in a download folder. The database
-name is filtered to word characters: it reaches a quoted header field, where
-a quote of its own would end the field early.
+describes, so two reports don't collide in a download folder. The name keeps
+every printable ASCII character but the two a quoted header field cannot
+carry, since dropping more would make distinct databases share a filename.
+Non-ASCII goes too: a header field is ASCII, and raw UTF-8 there reaches the
+client as mojibake or is refused outright. A name left with nothing at all
+names the report alone rather than a file opening with a dash.
 -}
 attachment :: Text -> Text -> Text
 attachment dbName report =
-    "attachment; filename=\"" <> T.filter wordChar dbName <> "-" <> report <> ".csv\""
+    "attachment; filename=\"" <> prefix <> report <> ".csv\""
   where
-    wordChar c = isAlphaNum c || c == '-' || c == '_'
+    prefix = if T.null kept then "" else kept <> "-"
+    kept = T.filter headerSafe dbName
+    headerSafe c = isAscii c && not (isControl c) && c /= '"' && c /= '\\'
 
 {- | Batch size of the catalogue-wide solve: bounds the dense right-hand-side
 block of one multi-RHS solve while every chunk still reuses the one cached

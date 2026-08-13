@@ -276,6 +276,38 @@ data CLIConfig = CLIConfig
     }
     deriving (Eq, Show, Generic)
 
+{- | Whether the engine answers this command in CSV itself. The generic
+@--format csv@ flattens whichever JSON array @--jsonpath@ names; these fetch a
+file that is already a table, so the option has nothing left to name.
+
+It lives beside 'Command' and matches every constructor on purpose: a command
+added without deciding this would silently inherit the generic treatment, and
+be refused for want of a @--jsonpath@ that does not apply to it.
+-}
+rendersOwnCsv :: Command -> Bool
+rendersOwnCsv cmd = case cmd of
+    QualityReport _ -> True
+    ComputedQualityReport _ -> True
+    Server _ -> False
+    Activity _ -> False
+    Flow _ _ -> False
+    Inventory _ -> False
+    SearchActivities _ -> False
+    SearchFlows _ -> False
+    Impacts _ _ -> False
+    DebugMatrices _ _ -> False
+    ExportMatrices _ -> False
+    Database _ -> False
+    Method _ -> False
+    Methods -> False
+    Synonyms -> False
+    CompartmentMappings -> False
+    Units -> False
+    FlowMapping _ -> False
+    Stop -> False
+    Repl -> False
+    Dump _ -> False
+
 -- | Helper function to parse OutputFormat from string
 parseOutputFormat :: String -> Maybe OutputFormat
 parseOutputFormat s = case map toLower s of

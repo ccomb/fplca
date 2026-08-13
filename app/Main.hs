@@ -455,15 +455,6 @@ validateCLIConfig (CLIConfig globalOpts mCmd) =
   where
     ownCsv = maybe False rendersOwnCsv mCmd
 
-{- | Commands the engine answers in CSV itself. The generic @--format csv@
-flattens whichever JSON array @--jsonpath@ names; these fetch a file that is
-already a table, so the option has nothing left to name.
--}
-rendersOwnCsv :: Command -> Bool
-rendersOwnCsv (QualityReport _) = True
-rendersOwnCsv (ComputedQualityReport _) = True
-rendersOwnCsv _ = False
-
 {- | WAI middleware that updates the last-request timestamp on every request.
 
 @\/mcp@ is exempt: a connected assistant polls it on its own initiative, so

@@ -454,18 +454,18 @@ volca --db agribalyse mapping METHOD_UUID --matched --format json
 ### Quality Reports
 
 The engine renders these two reports as CSV itself, so `--format csv` writes a
-file rather than a JSON dump, and the columns are the ones the web interface
-downloads. Load a database in one command, take its report in the next:
+file rather than a JSON dump. Load a database in one command, take its report
+in the next:
 
 ```bash
 volca --config volca.toml database load agribalyse
 volca --config volca.toml --db agribalyse --format csv quality-report > quality.csv
 
 # What the database computes, judged against its own norms (needs a method collection)
-volca --db agribalyse --format csv computed-quality-report --collection EF31 > computed.csv
+volca --config volca.toml --db agribalyse --format csv computed-quality-report --collection EF31 > computed.csv
 
 # Worst findings only, as JSON
-volca --db agribalyse quality-report --limit 20
+volca --config volca.toml --db agribalyse quality-report --limit 20
 ```
 
 The same file over plain HTTP, named after the database it describes:

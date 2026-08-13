@@ -4,10 +4,9 @@
 {- | The @text/csv@ representation of the quality reports.
 
 One report, two representations: the JSON route answers a program, this one
-answers a spreadsheet. Every surface that offers the report as a file - the
-web UI's download button, the CLI's @quality-report@ command, a plain @curl@ -
-reads this module, so the columns and the quoting have one definition instead
-of one per client.
+answers a spreadsheet. Every surface that hands the report over as a file
+reads this module, so the columns and the quoting have one definition rather
+than one per client.
 
 The two reports share a row shape, so they share an encoder: one row per
 finding, the name of the check that raised it in the first column.
@@ -41,8 +40,10 @@ instance MimeRender CSV ComputedQualityReportAPI where
     mimeRender _ = computedQualityReportCsv
 
 {- | The structural report as CSV, one row per finding, checks in report order.
-A check is named by its own field name, so a row says which check raised it in
-the same word the JSON uses.
+The check names are snake_case where the JSON's keys are camelCase
+(@reference_product@ against @referenceProduct@): a spreadsheet column heading
+is read by a person, and these names are the ones the reports have been
+downloaded under since they existed.
 -}
 qualityReportCsv :: QualityReportAPI -> BL.ByteString
 qualityReportCsv r =
@@ -88,18 +89,19 @@ checksCsv namedChecks =
         [ name
         , severityCode (qoaSeverity o)
         , spreadsheetSafe (qoaActivityName o)
-        , qoaLocation o
+        , spreadsheetSafe (qoaLocation o)
         , spreadsheetSafe (fromMaybe "" (qoaProductName o))
         , spreadsheetSafe (qoaDetail o)
         , qoaProcessId o
         ]
 
-{- | A cell opening with @=@, @+@, @-@ or @\@@ is read as a formula by
+{- | A cell opening with @=@, @+@, @-@, @\@@ or a tab is read as a formula by
 spreadsheets, and an allocation detail legitimately opens with a minus sign.
-A leading space keeps it text. Applied to the cells carrying database content,
-never to the whole row: quoting must not alter data.
+A leading space keeps it text. Applied to every cell carrying database
+content - a location is as free-form as a name once a parser has read it -
+and to no other, because quoting must not alter data the caller chose.
 -}
 spreadsheetSafe :: Text -> Text
 spreadsheetSafe t
-    | any (`T.isPrefixOf` t) ["=", "+", "-", "@"] = T.cons ' ' t
+    | any (`T.isPrefixOf` t) ["=", "+", "-", "@", "\t", "\r"] = T.cons ' ' t
     | otherwise = t
