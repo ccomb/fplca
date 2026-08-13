@@ -15,8 +15,10 @@
 # Geographies are required for regionalized LCIA cascade lookups. The other two
 # widen how flows are recognised across databases and methods; both optional.
 geographies = "data/geographies.csv"
-# chem-synonyms = "data/chem_synonyms.csv"      # PubChem snapshot for the mapping suggester
-# substance-edges = "data/substance_edges.csv"  # typed correspondences between substances
+# chem-synonyms = "data/chem_synonyms.csv"      # PubChem snapshot, shipped here
+# Typed correspondences between substances. No file ships for this one: the
+# format is your own to write, eight columns, see src/SubstanceRegistry.hs.
+# substance-edges = "data/substance_edges.csv"
 
 # ── Server ───────────────────────────────────────────────────────────
 
@@ -27,8 +29,11 @@ port = 8080                     # HTTP port
 # answer the network over IPv4, "::" over IPv6, or name one interface's own
 # address to answer on that one alone.
 host = "127.0.0.1"
-# A request must carry this: Authorization: Bearer <it>, HTTP Basic, or the
-# session cookie the login page sets. --password and VOLCA_PASSWORD override it.
+# Set it and every request to /api/ and /mcp must carry it: Authorization:
+# Bearer <it>, HTTP Basic, or the session cookie the login page sets. Static
+# files and the login page stay public. --password wins over this line; the
+# VOLCA_PASSWORD environment variable is only read when neither is set, so it
+# cannot be used to rotate a password written here.
 # password = "changeme"
 # How this server introduces itself over MCP, so someone holding several can
 # tell which one answered.
@@ -44,13 +49,20 @@ host = "127.0.0.1"
 # [hosting]
 # read_only = true                  # refuse every change; queries still answer
 # read_only_message = "Ask the operator to load it for you."
-# max_uploads = 2                   # -1 unlimited, 0 disables uploading
-# max_upload_mb = 100               # per upload; -1 unlimited, 0 disables
-# max_loaded_uploads = 1            # how many uploads may sit in memory at once
-# api_access = true                 # false refuses programmatic access
-# upgrade_upload = ""               # what to say instead of a bare refusal
-# upgrade_api = ""
-# upgrade_vm_size = ""
+# max_uploads = 2                   # default -1 (unlimited); 0 disables uploading
+# max_upload_mb = 100               # per upload, and this IS the default even
+#                                   # with no [hosting] at all; -1 unlimited
+# max_loaded_uploads = 1            # default -1; how many uploads may sit in
+#                                   # memory at once
+# api_access = true                 # default true. Reported by GET
+#                                   # /api/v1/hosting for whatever fronts this
+#                                   # server to enforce; the server itself does
+#                                   # not refuse on it
+# upgrade_upload = ""               # shown instead of a bare refusal when the
+#                                   # upload count or size limit is hit
+# upgrade_vm_size = ""              # shown when max_loaded_uploads is hit
+# upgrade_api = ""                  # reported by GET /api/v1/hosting, for
+#                                   # whoever refuses programmatic access
 
 # ── Databases ────────────────────────────────────────────────────────
 #

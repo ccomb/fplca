@@ -20,11 +20,15 @@ Returns plain 401 with JSON body (no WWW-Authenticate header, so no browser dial
 authMiddleware :: ByteString -> Middleware
 authMiddleware expectedPassword app req respond =
     let path = rawPathInfo req
-        isApiRoute = "/api/" `BS.isPrefixOf` path
+        -- @/mcp@ reaches the same operations as the REST API, and on a
+        -- writable server that includes loading, uploading and deleting. It is
+        -- guarded with it: a password that closed one and not the other would
+        -- read as protection and be none.
+        isProtected = "/api/" `BS.isPrefixOf` path || path == "/mcp" || "/mcp/" `BS.isPrefixOf` path
         isLoginEndpoint = requestMethod req == "POST" && path == "/api/v1/auth"
-     in -- Only protect /api/ routes; static files and SPA index are public
-        -- (so the browser can load the login page)
-        if not isApiRoute || isLoginEndpoint || isAuthenticated expectedPassword req
+     in -- Static files and the SPA index stay public, so the browser can load
+        -- the login page at all.
+        if not isProtected || isLoginEndpoint || isAuthenticated expectedPassword req
             then app req respond
             else respond unauthorized
   where
