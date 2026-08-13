@@ -4,7 +4,6 @@
 
 module Database where
 
-import Data.Char (isAlphaNum)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -324,13 +323,19 @@ appropriate shape via the 'flowKind*' projections in "API.Types".
 -}
 findFlowsBySynonym :: Database -> Text -> [FlowKind]
 findFlowsBySynonym db query =
-    filter (flowMatchesQuery query) $
-        map TechKind (M.elems (dbTechFlows db))
-            ++ map BioKind (M.elems (dbBioFlows db))
-            ++ map WasteKind (M.elems (dbWasteFlows db))
+    filter (flowMatchesQuery query) (allFlows (dbTechFlows db) (dbBioFlows db) (dbWasteFlows db))
 
-{- | A flow matches when every word of the query appears in its name or one
-of its synonyms, case-blind and in any order.
+-- | Every flow the three maps hold, each tagged with the kind it came from.
+allFlows :: TechFlowDB -> BioFlowDB -> WasteFlowDB -> [FlowKind]
+allFlows tech bio waste =
+    map TechKind (M.elems tech)
+        ++ map BioKind (M.elems bio)
+        ++ map WasteKind (M.elems waste)
+
+{- | A flow matches when every word of the query appears in its name or in
+one of its synonyms, case-blind and in any order. Different words may land
+in different fields: a chemical is often searched by its trade name and its
+compartment at once.
 
 Matching the query as a single string instead made @water fossil@ miss the
 flow named @Water, fossil@: the comma belongs to the name, so the user had
@@ -338,19 +343,34 @@ to punctuate exactly, and @fossil water@ found nothing either.
 
 Words stay substrings rather than whole tokens, because flows are searched
 by fragment: @chlor@ must keep reaching @Trichloroethane@, which no
-tokenizer would return. A query holding no word at all (pure punctuation)
-matches nothing rather than everything.
+tokenizer would return. That width is paid for by 'flowNameRelevance',
+which puts the flow the user actually typed at the top. A query holding no
+word at all (pure punctuation) matches nothing rather than everything.
 -}
 flowMatchesQuery :: Text -> FlowKind -> Bool
-flowMatchesQuery query = case map T.toCaseFold (queryWords query) of
+flowMatchesQuery query = case map T.toCaseFold (Normalize.queryWords query) of
     [] -> const False
-    ws -> \flow -> all (`T.isInfixOf` T.toCaseFold (searchableText flow)) ws
+    ws -> \flow -> all (\w -> any (T.isInfixOf w) (searchableFields flow)) ws
   where
-    searchableText flow =
-        T.unwords (flowKindName flow : concatMap S.toList (M.elems (flowKindSynonyms flow)))
+    searchableFields flow =
+        map
+            T.toCaseFold
+            (flowKindName flow : concatMap S.toList (M.elems (flowKindSynonyms flow)))
 
-{- | Split a query into the words it searches for. Anything not alphanumeric
-separates, so the punctuation a flow name carries never has to be retyped.
+{- | How closely a flow's name answers the query, smallest first: it carries
+the query as it was typed, or it carries every word, or it does neither and
+was reached some other way (through a synonym, or with the words scattered
+over name and synonyms).
+
+Matching word by word widens what comes back a lot, and the result list is
+otherwise alphabetical, so on a real database @oil, crude@ pushed the flow
+named @Oil, crude@ hundreds of rows down a list an assistant only ever sees
+the first page of. Ranking is what keeps the width from costing the answer.
 -}
-queryWords :: Text -> [Text]
-queryWords = filter (not . T.null) . T.split (not . isAlphaNum)
+flowNameRelevance :: Text -> Text -> Int
+flowNameRelevance query name
+    | T.toCaseFold (T.strip query) `T.isInfixOf` folded = 0
+    | all ((`T.isInfixOf` folded) . T.toCaseFold) (Normalize.queryWords query) = 1
+    | otherwise = 2
+  where
+    folded = T.toCaseFold name
