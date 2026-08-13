@@ -176,18 +176,19 @@ executeCommand (CLIConfig globalOpts _) cmd manager = do
         ExportMatrices _ -> do
             (database, _solver) <- requireDatabase manager (dbName globalOpts)
             executeDbCommand outputFormat globalOpts database cmd
+        QualityReport _ -> do
+            reportError "quality-report is served over HTTP; Main.hs routes it to the client"
+            exitFailure
+        ComputedQualityReport _ -> do
+            reportError "computed-quality-report is served over HTTP; Main.hs routes it to the client"
+            exitFailure
         Stop -> do
             reportError "Stop command should be handled in Main.hs"
             exitFailure
         Repl -> do
             reportError "Repl command should be handled in Main.hs"
             exitFailure
-        DumpOpenApi -> do
-            reportError "DumpOpenApi should be handled in Main.hs"
-            exitFailure
-        DumpMcpTools -> do
-            reportError "DumpMcpTools should be handled in Main.hs"
-            exitFailure
+        Dump _ -> reportError "A dump command is answered before a database is loaded."
 
 -- | Execute commands that require a loaded database
 executeDbCommand :: OutputFormat -> GlobalOptions -> Database -> Command -> IO ()
@@ -219,10 +220,11 @@ executeDbCommand fmt _globalOpts database = \case
     CompartmentMappings -> pure ()
     Units -> pure ()
     FlowMapping _ -> pure ()
+    QualityReport _ -> pure ()
+    ComputedQualityReport _ -> pure ()
     Stop -> pure ()
     Repl -> pure ()
-    DumpOpenApi -> pure ()
-    DumpMcpTools -> pure ()
+    Dump _ -> pure ()
 
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()

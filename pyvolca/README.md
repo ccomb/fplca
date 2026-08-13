@@ -28,7 +28,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 _Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 7** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 8** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 

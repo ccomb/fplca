@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -29,7 +30,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, freePortHost, hostingReadOnly, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -79,8 +80,7 @@ main = do
     validateCLIConfig cliConfig
 
     case (CLI.Types.command cliConfig, configFile (globalOptions cliConfig)) of
-        (Just DumpOpenApi, _) -> BSL.putStrLn (encode volcaOpenApi)
-        (Just DumpMcpTools, _) -> BSL.putStrLn (encode (toolDefinitions (ReadOnly False)))
+        (Just (Dump target), _) -> BSL.putStrLn (dumpDocument target)
         (Just (Server serverOpts), mCfgFile) -> runServerWithConfig cliConfig serverOpts mCfgFile
         (Just Repl, Just cfgFile) -> runReplMode cliConfig cfgFile
         (Just cmd, Just cfgFile) | isLocalCommand cmd -> runCLIWithConfig cliConfig cmd cfgFile
@@ -186,6 +186,16 @@ resolvePassword globalOpts serverCfg = case CLI.Types.serverPassword globalOpts 
     Nothing -> case scPassword serverCfg of
         Just pwd -> pure (Just (T.unpack pwd))
         Nothing -> lookupEnv "VOLCA_PASSWORD"
+
+{- | What a hidden @dump-*@ command writes to stdout. Pure, and answered
+before any configuration is read, so these documents describe the engine
+itself rather than one installation of it.
+-}
+dumpDocument :: DumpTarget -> BSL.ByteString
+dumpDocument = \case
+    DumpOpenApi -> encode volcaOpenApi
+    DumpMcpTools -> encode (toolDefinitions (ReadOnly False))
+    DumpConfigSchema -> encode (keyPaths configKeys)
 
 {- | In desktop mode, print a machine-readable port line for the launcher
 to capture and stay quiet. Otherwise emit the human-facing startup banner,
@@ -430,14 +440,20 @@ handleLogStream req respond = do
 
 -- | Validate CLI configuration for consistency
 validateCLIConfig :: CLIConfig -> IO ()
-validateCLIConfig (CLIConfig globalOpts _) =
+validateCLIConfig (CLIConfig globalOpts mCmd) =
     case (format globalOpts, jsonPath globalOpts) of
-        (Just CSV, Nothing) ->
-            die "--format csv requires --jsonpath. Examples: --jsonpath 'srResults', --jsonpath 'piActivity.pfaExchanges'"
+        (Just CSV, Nothing)
+            | not ownCsv ->
+                die "--format csv requires --jsonpath. Examples: --jsonpath 'srResults', --jsonpath 'piActivity.pfaExchanges'"
+        (Just CSV, Just _)
+            | ownCsv ->
+                die "--jsonpath does not apply here: the engine renders this report's CSV itself"
         (Just fmt, Just _)
             | fmt /= CSV ->
                 die "--jsonpath can only be used with --format csv"
         _ -> pure ()
+  where
+    ownCsv = maybe False rendersOwnCsv mCmd
 
 {- | WAI middleware that updates the last-request timestamp on every request.
 

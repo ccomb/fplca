@@ -109,12 +109,15 @@ commandParser =
             <> cmd "compartment-mappings" (pure CompartmentMappings) "List compartment mappings"
             <> cmd "units" (pure Units) "List unit definitions"
             <> cmd "flow-mapping" flowMappingParser "Analyze flow mapping coverage between a method and database"
+            <> cmd "quality-report" qualityReportParser "Report what is malformed in a database (--format csv for a spreadsheet)"
+            <> cmd "computed-quality-report" computedQualityReportParser "Report what a loaded database computes, judged against its own norms"
             <> cmd "stop" (pure Stop) "Stop running server (uses --config or --url to find it)"
             <> cmd "repl" (pure Repl) "Interactive REPL over HTTP (connects to running server)"
         )
         <|> subparser
-            ( cmd "dump-openapi" (pure DumpOpenApi) "Dump OpenAPI spec as JSON to stdout"
-                <> cmd "dump-mcp-tools" (pure DumpMcpTools) "Dump MCP tool definitions as JSON to stdout"
+            ( cmd "dump-openapi" (pure (Dump DumpOpenApi)) "Dump OpenAPI spec as JSON to stdout"
+                <> cmd "dump-mcp-tools" (pure (Dump DumpMcpTools)) "Dump MCP tool definitions as JSON to stdout"
+                <> cmd "dump-config-schema" (pure (Dump DumpConfigSchema)) "Dump the configuration file's key names as JSON to stdout"
                 <> internal
             )
 
@@ -373,6 +376,20 @@ flowMappingParser = do
                 , mappingShowUnmatched = showUnmatched
                 , mappingShowUncharacterized = showUncharacterized
                 }
+
+{- | Quality report parsers. Both read the database from the global @--db@,
+like every other command that queries one, and both answer CSV under
+@--format csv@ - the file the web UI downloads, byte for byte.
+-}
+qualityReportParser :: Parser Command
+qualityReportParser =
+    QualityReport <$> optIntOpt "limit" Nothing "N" "Keep at most N findings per check (worst first, default: all)"
+
+computedQualityReportParser :: Parser Command
+computedQualityReportParser = do
+    cqoCollection <- optTextOpt "collection" Nothing "NAME" "Method collection to score against (default: the only one loaded)"
+    cqoLimit <- optIntOpt "limit" Nothing "N" "Keep at most N findings per check (worst first, default: all)"
+    pure $ ComputedQualityReport ComputedQualityOptions{..}
 
 -- | Text reader for UUID arguments
 textReader :: ReadM Text

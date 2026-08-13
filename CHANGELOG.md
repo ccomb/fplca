@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- The two quality reports of a database can now be taken as a CSV file, from
+  the command line or from a plain web address. Load a database with one
+  command and take its report with the next:
+  `volca --config volca.toml --db agribalyse --format csv quality-report >
+  quality.csv`, or `curl -OJ .../api/v1/db/agribalyse/quality-report.csv`. One
+  row per finding, one column per thing a finding says. `--limit` keeps the
+  worst findings of each check; without it the file holds them all. This is
+  wire revision 8.
+- `volca dump-config-schema` prints the keys a configuration file may carry, by
+  name, as JSON, the way `dump-mcp-tools` prints the assistant tools. Writing
+  about this file has meant reading the decoders, so anything written about it
+  drifts quietly; now there is a list to check a text against.
 - A hosted server can refuse changes in its operator's own words:
   `read_only_message` under `[hosting]` replaces the default read-only
   sentence on every surface (the REST API, the MCP tools, and the shutdown
@@ -48,6 +60,16 @@
   thousand, so widening what matches without ranking it would push the flow
   asked about off the page. `aggregate`'s `filter_name` also feeds an exclusion
   list and activity names, which need their own answer.
+- The command line can again find the loaded database on its own, so `--db`
+  is only needed when several are loaded. It was reading the database list
+  under names the engine stopped using, and reported "No databases loaded on
+  the server" for a server that had one. A database whose cross-database links
+  did not all resolve now counts as well: it is in memory and answers queries.
+  A list the command line cannot read now says so instead of reporting an
+  empty one.
+- `volca impacts UUID --method M` works again. It read the method list under
+  the same stale names, so it answered "Method not found in loaded
+  collections" for every method the server was serving.
 - Searching flows now finds a flow whose name you didn't punctuate exactly.
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the

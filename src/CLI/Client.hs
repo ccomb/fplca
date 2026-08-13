@@ -19,7 +19,7 @@ import Data.Aeson (FromJSON, Value (..), decode, eitherDecode, encode, object, (
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import Data.Aeson.Types (Parser, parseMaybe, withArray, withObject)
+import Data.Aeson.Types (Parser, parseEither, parseMaybe, withArray, withObject)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
@@ -222,6 +222,18 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             db <- resolveDbName mgr rc (dbName globalOpts)
             let methodId = T.unpack (mappingMethodId opts)
             apiGet mgr rc (dbPath db ++ "/method/" ++ methodId ++ "/mapping") >>= output fmt jp
+        QualityReport mLimit -> do
+            db <- resolveDbName mgr rc (dbName globalOpts)
+            fetchReport mgr rc fmt jp (dbPath db ++ "/quality-report") (buildQuery [("limit", show <$> mLimit)])
+        ComputedQualityReport opts -> do
+            db <- resolveDbName mgr rc (dbName globalOpts)
+            fetchReport
+                mgr
+                rc
+                fmt
+                jp
+                (dbPath db ++ "/computed-quality-report")
+                (buildQuery [("collection", T.unpack <$> cqoCollection opts), ("limit", show <$> cqoLimit opts)])
         Stop -> do
             result <- apiPost mgr rc "/api/v1/shutdown" (object [])
             case result of
@@ -233,8 +245,10 @@ executeRemoteCommand mgr rc globalOpts cmd = do
         DebugMatrices{} -> reportError "debug-matrices is local-only" >> exitFailure
         ExportMatrices{} -> reportError "export-matrices is local-only" >> exitFailure
         Repl -> reportError "repl should be handled in Main" >> exitFailure
-        DumpOpenApi -> reportError "dump-openapi should be handled in Main" >> exitFailure
-        DumpMcpTools -> reportError "dump-mcp-tools should be handled in Main" >> exitFailure
+        -- Answered before a server is contacted, so reaching here means the
+        -- REPL, where the line is simply not one of its commands. Saying so
+        -- and carrying on, rather than ending the session over it.
+        Dump _ -> reportError "A dump command writes to stdout; run it outside the REPL."
 
 -- | Look up the collection name for a given method UUID via /api/v1/methods
 lookupMethodCollection :: Manager -> RemoteConfig -> Text -> IO (Maybe Text)
@@ -249,8 +263,8 @@ lookupMethodCollection mgr rc methodId = do
             [] -> fail "method not found"
     matchOne :: Value -> Parser Text
     matchOne = withObject "method" $ \obj -> do
-        uuid <- obj .: "msmId"
-        col <- obj .: "msmCollection"
+        uuid <- obj .: "id"
+        col <- obj .: "collection"
         if (uuid :: Text) == methodId then pure col else fail "no match"
 
 -- | Auto-detect the single loaded database, or use the specified one
@@ -260,28 +274,38 @@ resolveDbName mgr rc Nothing = do
     result <- apiGet mgr rc "/api/v1/db"
     case result of
         Right val -> case extractLoadedDbNames val of
-            [name] -> return name
-            [] -> reportError "No databases loaded on the server" >> exitFailure
-            names -> do
+            Right [name] -> return name
+            Right [] -> reportError "No databases loaded on the server" >> exitFailure
+            Right names -> do
                 reportError $
                     "Multiple databases loaded, use --db to select one: "
                         ++ unwords (map T.unpack names)
                 exitFailure
+            Left err -> do
+                reportError $ "Cannot read the database list from " ++ rcBaseUrl rc ++ ": " ++ err
+                exitFailure
         Left err -> reportError err >> exitFailure
 
--- | Extract names of loaded databases from the database list JSON
-extractLoadedDbNames :: Value -> [Text]
-extractLoadedDbNames = fromMaybe [] . parseMaybe go
+{- | Names of the databases in memory, read from the database list. The keys
+are the wire's, not the Haskell record's: a list this cannot read is an engine
+whose shape moved, which is why it says so rather than answering "none".
+
+A database whose cross-database links did not all resolve is in memory and
+answers queries, so it counts: leaving it out reported "no databases loaded"
+for a server holding one.
+-}
+extractLoadedDbNames :: Value -> Either String [Text]
+extractLoadedDbNames = parseEither go
   where
     go :: Value -> Parser [Text]
     go = withObject "resp" $ \obj -> do
-        dbs <- obj .: "dlrDatabases"
+        dbs <- obj .: "databases"
         catMaybes <$> mapM getName dbs
     getName :: Value -> Parser (Maybe Text)
     getName = withObject "db" $ \db -> do
-        status <- db .: "dsaStatus"
-        name <- db .: "dsaName"
-        return $ if (status :: Text) == "loaded" then Just name else Nothing
+        status <- db .: "status"
+        name <- db .: "name"
+        return $ if (status :: Text) `elem` ["loaded", "partially_linked"] then Just name else Nothing
 
 -- | Build a database-scoped API path
 dbPath :: Text -> String
@@ -576,13 +600,30 @@ readJsonFile path = do
         Left (e :: IOException) -> Left (path <> ": " <> show e)
         Right raw -> either (\err -> Left (path <> ": " <> err)) Right (eitherDecode raw)
 
+{- | Fetch a quality report in the representation the caller asked for.
+@--format csv@ takes the engine's own CSV rendering, so the file the CLI
+writes down a pipe is the file the web UI downloads; every other format takes
+the JSON and renders it like any other command.
+-}
+fetchReport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -> String -> IO ()
+fetchReport mgr rc fmt jp path query = case fmt of
+    CSV -> apiGetRaw mgr rc (path ++ ".csv" ++ query) >>= either fail' (BSL.putStr . responseBody)
+    JSON -> asJson
+    Pretty -> asJson
+    Table -> asJson
+  where
+    asJson = apiGet mgr rc (path ++ query) >>= output fmt jp
+    fail' err = reportError err >> exitFailure
+
 {- | POST a JSON body and return the raw response (bytes + headers), for
 octet-stream endpoints like database export. Shares the error formatting of
 'apiRequest' but skips its JSON decoding.
 -}
 apiPostRaw :: Manager -> RemoteConfig -> String -> Value -> IO (Either String (Response BL.ByteString))
-apiPostRaw mgr rc path body = do
-    result <- try $ do
+apiPostRaw mgr rc path body =
+    rawOutcome rc <$> try request
+  where
+    request = do
         req0 <- parseRequest (rcBaseUrl rc ++ path)
         httpLbs
             req0
@@ -591,13 +632,24 @@ apiPostRaw mgr rc path body = do
                 , requestBody = RequestBodyLBS (encode body)
                 }
             mgr
-    pure $ case result of
-        Left e -> Left (formatHttpError (rcBaseUrl rc) e)
-        Right resp ->
-            let status = statusCode (responseStatus resp)
-             in if status >= 200 && status < 300
-                    then Right resp
-                    else Left (formatApiError status (responseBody resp))
+
+-- | GET a raw response, for the endpoints that answer something other than JSON.
+apiGetRaw :: Manager -> RemoteConfig -> String -> IO (Either String (Response BL.ByteString))
+apiGetRaw mgr rc path =
+    rawOutcome rc <$> try request
+  where
+    request = do
+        req0 <- parseRequest (rcBaseUrl rc ++ path)
+        httpLbs req0{requestHeaders = authHeaders rc ++ requestHeaders req0} mgr
+
+-- | Read a raw HTTP outcome: 2xx is the response, anything else the formatted error.
+rawOutcome :: RemoteConfig -> Either HttpException (Response BL.ByteString) -> Either String (Response BL.ByteString)
+rawOutcome rc (Left e) = Left (formatHttpError (rcBaseUrl rc) e)
+rawOutcome _ (Right resp)
+    | status >= 200 && status < 300 = Right resp
+    | otherwise = Left (formatApiError status (responseBody resp))
+  where
+    status = statusCode (responseStatus resp)
 
 -- | Core HTTP request helper with error handling
 apiRequest :: Manager -> RemoteConfig -> String -> String -> Maybe Value -> IO (Either String Value)

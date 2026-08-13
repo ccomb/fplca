@@ -103,7 +103,7 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 
 ### Documentation
 - **Re-read this file + README before each PR.** Update them when: (a) you hit a statement contradicting the code, (b) a new convention appears, (c) a command or a config key changes. NON-trigger: adding a module, tool, or endpoint that follows the stated conventions — the rules cover it, no list to grow.
-- Never write hand-maintained counts, versions, or enumerations the code already knows — state the naming rule and point at the source of truth (`versions.env`, `API.Resources`, `volca dump-mcp-tools`).
+- Never write hand-maintained counts, versions, or enumerations the code already knows — state the naming rule and point at the source of truth (`versions.env`, `API.Resources`, `volca dump-mcp-tools`, `volca dump-config-schema`).
 
 ### Commits & PRs
 - NEVER use `git add -A` — always add specific files explicitly.
