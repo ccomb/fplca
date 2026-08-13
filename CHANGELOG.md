@@ -16,8 +16,18 @@
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the
   comma is part of the name. Every word of the query is now looked for on its
-  own, in any order, so `fossil water` finds it too. Searching by fragment is
-  unchanged: `chlor` still reaches `Trichloroethane`.
+  own, in any order, so `fossil water` finds it too, and a word is still looked
+  for inside longer words: `chlor` reaches `Trichloroethane`.
+  Two consequences worth knowing. Results are no longer purely alphabetical:
+  with no sort column asked for, the flows whose name carries the query as you
+  typed it come first, then those carrying all its words, then the rest. This
+  is what keeps the exact flow on the first page, since looking for words
+  separately returns a good deal more than before. And a punctuated query is
+  now a set of words rather than one string, so `2,4-D` also returns names
+  holding a 2, a 4 and a d elsewhere. They sort below the flow actually named
+  `2,4-D`.
+  A search with an empty query returns nothing instead of the whole catalogue,
+  which is what asking for no flow in particular already did.
 - `--help` now describes every subcommand, including inside the REPL. Nine
   answered something else. `database upload`, `database delete`,
   `method upload` and `method delete` printed ``Invalid option `--help'`` and
