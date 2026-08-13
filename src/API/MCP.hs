@@ -33,6 +33,7 @@ import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
 import Data.Bifunctor (first)
+import Database (flowMatchesQuery, flowSearchFields)
 import Database.Edit (editExchanges, refusalMessage)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
@@ -52,11 +53,12 @@ import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodColle
 import Network.HTTP.Types.Header (RequestHeaders, hAccept, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
+import qualified Search.Normalize as Normalize
 import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, lookupExchangeFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -825,9 +827,21 @@ callGetActivity rid args (db, _) = runTool rid $ do
     matchType ewu = case validatedExchangeType of
         Right (Just want) -> Agg.exchangeKindOf (ewuExchange ewu) == want
         _ -> True
-    matchFlow ewu = case flowFilter of
-        Nothing -> True
-        Just q -> T.isInfixOf (T.toLower q) (T.toLower (ewuFlowName ewu))
+    -- Same reading of the query as search_flows, so a name found there
+    -- filters here: the words in any order, punctuation the caller's to
+    -- skip, synonyms included whenever the exchange resolves to a flow.
+    -- Built once per call, applied per exchange.
+    matchFlow = case flowFilter of
+        Nothing -> const True
+        Just q ->
+            let matches = Normalize.matchesEveryWord q
+             in \ewu ->
+                    matches $
+                        maybe
+                            -- Unresolved flow: the rendered placeholder is all there is.
+                            [ewuFlowName ewu]
+                            flowSearchFields
+                            (lookupExchangeFlow db (ewuExchange ewu))
     matchIsInput ewu = case isInputFilter of
         Nothing -> True
         Just want -> exchangeIsInput (ewuExchange ewu) == want
@@ -1016,9 +1030,11 @@ callGetInventory dbManager rid args =
                                 subs
         let inv = Service.convertToInventoryExport db mFlows mUnits processId activity inventory
             flows = ieFlows inv
+            -- The filter search_flows applies, applied to the inventory: a
+            -- name found there, synonym included, filters here unchanged.
             filtered = case nameFilter of
                 Nothing -> flows
-                Just q -> filter (T.isInfixOf (T.toLower q) . T.toLower . bfName . ifdFlow) flows
+                Just q -> filter (flowMatchesQuery q . BioKind . ifdFlow) flows
             sorted = L.sortBy (\a b -> compare (abs $ ifdQuantity b) (abs $ ifdQuantity a)) filtered
             topN = take limit sorted
             slim f =

@@ -24,6 +24,19 @@
   an older engine.
 
 ### Fixed
+- A flow name that finds something in a search now finds the same thing in a
+  filter. `get_inventory` and `get_activity` matched the whole query as one
+  piece of text, so the name read off a search came back empty as soon as the
+  words were retyped without the punctuation: `carbon dioxide fossil` found
+  `Carbon dioxide, fossil` in the search and nothing in the inventory of the
+  activity emitting it, which reads like an activity that emits no CO2. Both
+  filters, and the `--flow-filter` of the debug matrix export, now read a query
+  the way the search does: every word, in any order, punctuation optional, and
+  synonyms count wherever the flow behind the line is known.
+  The characterization factor list keeps matching the whole string for now: it
+  shows the twenty largest factors of a method out of several thousand, so
+  widening what matches without ranking it would push the flow asked about off
+  the page.
 - Searching flows now finds a flow whose name you didn't punctuate exactly.
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the

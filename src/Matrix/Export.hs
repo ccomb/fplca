@@ -13,6 +13,7 @@ module Matrix.Export (
     escapeCsvField,
 ) where
 
+import Database (flowMatchesQuery)
 import Matrix (applySparseMatrix, buildDemandVectorFromIndex, solveSparseLinearSystem, toList)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
@@ -82,11 +83,14 @@ extractMatrixDebugInfo database targetUUID flowFilter = do
         filteredBioTriples = case flowFilter of
             Nothing -> bioTriples
             Just filterText ->
-                let matchingFlowIndices =
+                -- Same reading of the filter as a flow search: the words in
+                -- any order, punctuation of the name left to the name.
+                let matches = flowMatchesQuery filterText
+                    matchingFlowIndices =
                         [ idx
                         | (uuid, idx) <- zip (V.toList bioFlowUUIDs) ([0 ..] :: [Int])
                         , Just flow <- [M.lookup uuid bioFlows]
-                        , T.toLower filterText `T.isInfixOf` T.toLower (bfName flow)
+                        , matches (BioKind flow)
                         ]
                     matchingFlowIndicesInt32 = map fromIntegral matchingFlowIndices :: [Int32]
                  in U.filter (\(SparseTriple row _ _) -> row `elem` matchingFlowIndicesInt32) bioTriples

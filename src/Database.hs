@@ -332,30 +332,23 @@ allFlows tech bio waste =
         ++ map BioKind (M.elems bio)
         ++ map WasteKind (M.elems waste)
 
-{- | A flow matches when every word of the query appears in its name or in
-one of its synonyms, case-blind and in any order. Different words may land
-in different fields: a chemical is often searched by its trade name and its
-compartment at once.
+{- | The text a flow answers a search on: its name, then every synonym it
+carries. Different words of one query may land in different fields, since a
+chemical is often searched by its trade name and its compartment at once.
+-}
+flowSearchFields :: FlowKind -> [Text]
+flowSearchFields flow =
+    flowKindName flow : concatMap S.toList (M.elems (flowKindSynonyms flow))
 
-Matching the query as a single string instead made @water fossil@ miss the
-flow named @Water, fossil@: the comma belongs to the name, so the user had
-to punctuate exactly, and @fossil water@ found nothing either.
+{- | A flow matches when every word of the query appears in one of its
+searchable fields, case-blind and in any order ('Normalize.matchesEveryWord'
+holds the rule, so a filter elsewhere answers the same query the same way).
 
-Words stay substrings rather than whole tokens, because flows are searched
-by fragment: @chlor@ must keep reaching @Trichloroethane@, which no
-tokenizer would return. That width is paid for by 'flowNameRelevance',
-which puts the flow the user actually typed at the top. A query holding no
-word at all (pure punctuation) matches nothing rather than everything.
+The width that word-by-word matching brings is paid for by
+'flowNameRelevance', which puts the flow the user actually typed at the top.
 -}
 flowMatchesQuery :: Text -> FlowKind -> Bool
-flowMatchesQuery query = case map T.toCaseFold (Normalize.queryWords query) of
-    [] -> const False
-    ws -> \flow -> all (\w -> any (T.isInfixOf w) (searchableFields flow)) ws
-  where
-    searchableFields flow =
-        map
-            T.toCaseFold
-            (flowKindName flow : concatMap S.toList (M.elems (flowKindSynonyms flow)))
+flowMatchesQuery query = Normalize.matchesEveryWord query . flowSearchFields
 
 {- | How closely a flow's name answers the query, smallest first: it carries
 the query as it was typed, or it carries every word, or it does neither and

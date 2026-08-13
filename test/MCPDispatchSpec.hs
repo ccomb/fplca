@@ -9,7 +9,7 @@ module MCPDispatchSpec (spec) where
 
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), decodeStrict)
-import Data.Aeson.Key (fromText, toText)
+import Data.Aeson.Key (Key, fromText, toText)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
 import Data.List (sort)
@@ -100,6 +100,38 @@ callEdit = do
     oneRemoval =
         fromMaybe Null $
             decodeStrict "[{\"kind\":\"biosphere\",\"flow\":\"00000000-0000-0000-0000-000000000003\"}]"
+
+-- | The four-activity fixture, as a database the manager can load.
+sampleConfig :: DatabaseConfig
+sampleConfig =
+    DatabaseConfig
+        { dcName = "sample"
+        , dcDisplayName = "sample"
+        , dcPath = "test-data/SAMPLE.min"
+        , dcDescription = Nothing
+        , dcLoad = False
+        , dcDefault = False
+        , dcDepends = []
+        , dcLocationAliases = M.empty
+        , dcFormat = Nothing
+        , dcIsUploaded = False
+        , dcDeletable = False
+        , dcGeographyPolicy = GeoGlobal
+        }
+
+-- | Call a tool against that fixture, freshly loaded.
+callOnSampleWith :: Text -> [(Key, Value)] -> IO Value
+callOnSampleWith name extraArgs = do
+    manager <- initDatabaseManager defaultConfig True
+    addDatabase manager sampleConfig
+    loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
+    callTool manager [] Nothing Nothing Null name $
+        KM.fromList (("database", String "sample") : extraArgs)
+
+positiveNumber :: Maybe Value -> Bool
+positiveNumber v = case v of
+    Just (Number n) -> n > 0
+    _ -> False
 
 -- | For every array parameter a tool declares, the @type@ its items promise.
 itemTypesOf :: Text -> [(Text, Text)]
@@ -231,22 +263,7 @@ spec = describe "MCP database load/unload tools" $ do
         -- preset that resolves must narrow the answer to nothing — a handler
         -- ignoring it answers with the unfiltered set instead.
         describe "a preset that resolves is applied" $ do
-            let sampleConfig =
-                    DatabaseConfig
-                        { dcName = "sample"
-                        , dcDisplayName = "sample"
-                        , dcPath = "test-data/SAMPLE.min"
-                        , dcDescription = Nothing
-                        , dcLoad = False
-                        , dcDefault = False
-                        , dcDepends = []
-                        , dcLocationAliases = M.empty
-                        , dcFormat = Nothing
-                        , dcIsUploaded = False
-                        , dcDeletable = False
-                        , dcGeographyPolicy = GeoGlobal
-                        }
-                callOnSample name presetArgs = do
+            let callOnSample name presetArgs = do
                     manager <- initDatabaseManager defaultConfig True
                     addDatabase manager sampleConfig
                     loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
@@ -257,9 +274,6 @@ spec = describe "MCP database load/unload tools" $ do
                             , ("scope", String "direct")
                             ]
                                 ++ presetArgs
-                positiveNumber v = case v of
-                    Just (Number n) -> n > 0
-                    _ -> False
 
             forM_ [("aggregate", "filteredCount"), ("get_supply_chain", "filteredActivities")] $
                 \(tool, field) -> it (T.unpack tool <> " narrows to nothing under the preset") $ do
@@ -267,6 +281,34 @@ spec = describe "MCP database load/unload tools" $ do
                     jsonField field full `shouldSatisfy` positiveNumber
                     narrowed <- callOnSample tool [("preset", String "raw")]
                     jsonField field narrowed `shouldBe` Just (Number 0)
+
+    -- An assistant reads "Carbon dioxide, fossil" off a search and reuses the
+    -- words, not the punctuation. When the search answers that query with the
+    -- flow and the filters answer it with nothing, two tools disagree about
+    -- one string, and the empty inventory reads like a real answer.
+    describe "a flow filter reads a query the way search_flows does" $ do
+        let unpunctuated = String "carbon dioxide fossil"
+            emitter = String "dd000004-0000-0000-0000-000000000000"
+            carriesTheFlow = maybe False ("Carbon dioxide, fossil" `T.isInfixOf`)
+
+        it "finds the flow from words the caller did not punctuate" $ do
+            resp <- callOnSampleWith "search_flows" [("query", unpunctuated)]
+            resultText resp `shouldSatisfy` carriesTheFlow
+
+        it "keeps it in the inventory under that same query" $ do
+            resp <- callOnSampleWith "get_inventory" [("process_id", emitter), ("flow", unpunctuated)]
+            jsonField "shown_flows" resp `shouldSatisfy` positiveNumber
+            resultText resp `shouldSatisfy` carriesTheFlow
+
+        it "keeps its exchange in get_activity under that same query" $ do
+            resp <- callOnSampleWith "get_activity" [("process_id", emitter), ("flow", unpunctuated)]
+            resultText resp `shouldSatisfy` carriesTheFlow
+
+        -- Reading the words is not the same as dropping the filter: a query
+        -- naming a flow the activity does not carry must still empty the list.
+        it "drops what the query does not name" $ do
+            resp <- callOnSampleWith "get_inventory" [("process_id", emitter), ("flow", String "sulphur dioxide")]
+            jsonField "shown_flows" resp `shouldBe` Just (Number 0)
 
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for
