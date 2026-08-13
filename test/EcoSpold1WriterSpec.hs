@@ -73,6 +73,73 @@ minimalXml =
         , "</ecoSpold>"
         ]
 
+{- | Three datasets that pin what a number means across an export.
+
+One substance (@Carbon dioxide, fossil@, number 100) is emitted by all three,
+at the second position in two of them and at the first in the third. Two
+products carry the same name, category and unit and differ only by geography,
+each numbered after its own dataset.
+
+Numbering exchanges by their position instead would re-import this as two
+carbon dioxide flows (positions 1 and 2) and fuse the two electricity products
+into one (both at position 1).
+-}
+sharedFlowXml :: BC.ByteString
+sharedFlowXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"1\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"electricity, low voltage\" category=\"Energy\" unit=\"kWh\"/>"
+        , "        <geography location=\"CH\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"1\" name=\"electricity, low voltage\" category=\"Energy\" unit=\"kWh\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"100\" name=\"Carbon dioxide, fossil\" category=\"air\" unit=\"kg\" meanValue=\"0.05\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "  <dataset number=\"2\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"electricity, low voltage\" category=\"Energy\" unit=\"kWh\"/>"
+        , "        <geography location=\"DE\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"2\" name=\"electricity, low voltage\" category=\"Energy\" unit=\"kWh\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"100\" name=\"Carbon dioxide, fossil\" category=\"air\" unit=\"kg\" meanValue=\"0.42\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "  <dataset number=\"3\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"heat, district network\" category=\"Energy\" unit=\"MJ\"/>"
+        , "        <geography location=\"CH\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"100\" name=\"Carbon dioxide, fossil\" category=\"air\" unit=\"kg\" meanValue=\"0.07\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"3\" name=\"heat, district network\" category=\"Energy\" unit=\"MJ\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 {- | Parsed fixture as a 'SimpleDatabase'. Fails the spec loudly if the
 fixture can't be parsed (it is a known-good EcoSpold1 document).
 -}
@@ -442,6 +509,16 @@ spec = do
             -- the only check that exercises a linked input end to end.
             (dbViews <$> roundTrip (linkedDb supplierLink))
                 `shouldBe` Right (dbViews (linkedDb supplierLink))
+
+    describe "flow tables across a multi-dataset round-trip" $ do
+        it "keeps one substance one flow and two same-named products apart" $
+            case parseAllWithXeno sharedFlowXml >>= sequence of
+                Left err -> expectationFailure ("fixture parse failed: " ++ err)
+                Right datasets -> do
+                    let sdb = assembleSimpleDb datasets
+                        sizes db = (M.size (sdbBioFlows db), M.size (sdbTechFlows db))
+                    sizes sdb `shouldBe` (1, 3)
+                    (sizes <$> roundTrip sdb) `shouldBe` Right (1, 3)
 
     describe "empty database" $ do
         it "writes a well-formed, dataset-free document the parser accepts" $ do

@@ -9,16 +9,19 @@ __canonical and deterministic__:
   * activities are emitted in a stable order (sorted by @(activityName,
     location)@), each in its own @\<dataset\>@ inside one @\<ecoSpold\>@;
   * dataset numbers are assigned sequentially (1-based) in that order, and
-    exchange numbers likewise (see below). Because the parser derives flow
-    UUIDs from @datasetNumber@, exchange number, name and category, these
-    reassigned numbers make the writer's output __self-stable for every
-    exchange except a linked technosphere input__: reference products,
-    co-products, biosphere and waste exchanges, and /unlinked/ inputs all
-    reproduce the same flow UUIDs on a write→parse→write cycle. This is
-    fixed-point stability of the writer's own canonical form, __not__
-    reproduction of the UUIDs of an arbitrary parsed source file — that source
-    carried its own dataset/exchange numbering, which the writer does not
-    preserve;
+    exchange numbers follow the convention EcoSpold1 exports use, which the
+    parser reads as a flow's identity: a number names a flow for the whole
+    export, not a position in one dataset. A reference product carries its own
+    dataset's number, a linked technosphere input carries its supplier's, and
+    every other exchange carries a number assigned once per distinct flow.
+    That makes the writer's output __self-stable for every exchange except a
+    linked technosphere input__: reference products, co-products, biosphere and
+    waste exchanges, and /unlinked/ inputs all reproduce the same flow UUIDs on
+    a write→parse→write cycle, and one substance stays one flow across the
+    re-imported export. This is fixed-point stability of the writer's own
+    canonical form, __not__ reproduction of the UUIDs of an arbitrary parsed
+    source file — that source carried its own numbering, which the writer does
+    not preserve;
   * a /linked/ technosphere input is the one exception. Its @number@ attribute
     carries the /supplier's/ dataset number (so the loader can re-link it by
     'techActivityLinkId'); but 'SimpleDatabase' has no field for that link, so a
@@ -27,7 +30,7 @@ __canonical and deterministic__:
     loader re-resolving the link (by supplier name/location) rather than on a
     direct 'SimpleDatabase' round-trip. The semantic round-trip — flow name,
     amount, role, unit — is preserved either way;
-  * exchange numbers are sequential (1-based) in exchange order;
+  * exchange numbers come from the flow, not from the position in the dataset;
   * attributes appear in a fixed order, classification maps are sorted by
     key, numbers use a fixed textual form, and there is no insignificant
     whitespace beyond a single newline between top-level lines;
@@ -77,6 +80,7 @@ import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -157,7 +161,7 @@ writeActivities opts techs bios wastes units activities =
             ++ concat (zipWith (datasetLines opts res) [1 ..] (map snd ordered))
             ++ ["</ecoSpold>"]
   where
-    res = Resolvers techs bios wastes units (supplierNumberIndex ordered)
+    res = Resolvers techs bios wastes units (supplierNumberIndex ordered) (flowNumberIndex ordered)
     -- Stable, content-derived order so dataset numbers (and thus flow UUIDs)
     -- are reproducible regardless of the source Map's ordering.
     ordered = orderedActivities activities
@@ -186,6 +190,30 @@ source format minted the UUID in.
 supplierNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
 supplierNumberIndex ordered =
     M.fromList [(actU, n) | (n, (actU, _)) <- zip [1 ..] ordered]
+
+{- | Map each flow that is not a reference product to the number the export
+gives it, once, across every dataset that carries it.
+
+EcoSpold1 numbers a flow for the whole export, not for the dataset it appears
+in, and the parser reads that number as part of the flow's identity. Numbering
+by position instead would re-import one substance as one flow per position it
+happens to occupy, which is exactly the splintering the parser stopped doing.
+
+Numbers start above the dataset numbers, which occupy @1 .. length ordered@ and
+are what a reference product and a linked input carry.
+-}
+flowNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
+flowNumberIndex ordered =
+    M.fromList (zip flows [length ordered + 1 ..])
+  where
+    flows =
+        S.toAscList $
+            S.fromList
+                [ exchangeFlowId ex
+                | (_, act) <- ordered
+                , ex <- exchanges act
+                , not (exchangeIsReference ex)
+                ]
 
 {- | Guard an EcoSpold1 export against data the writer cannot faithfully
 re-encode. Each check reports its first offender and fails loudly rather than
@@ -365,6 +393,7 @@ data Resolvers = Resolvers
     , rWaste :: !WasteFlowDB
     , rUnits :: !UnitDB
     , rSupplierNumbers :: !(M.Map UUID Int)
+    , rFlowNumbers :: !(M.Map UUID Int)
     }
 
 -- ----------------------------------------------------------------------------
@@ -383,7 +412,7 @@ datasetLines opts res num act =
     , indent 2 <> "</metaInformation>"
     , indent 2 <> "<flowData>"
     ]
-        ++ concat (zipWith (exchangeLines res) [1 ..] (exchanges act))
+        ++ concatMap (exchangeLines res num) (exchanges act)
         ++ [ indent 2 <> "</flowData>"
            , indent 1 <> "</dataset>"
            ]
@@ -430,39 +459,49 @@ to classify the exchange, so it is derived from the exchange variant +
 role/direction, never guessed.
 -}
 exchangeLines :: Resolvers -> Int -> Exchange -> [Text]
-exchangeLines res num ex =
-    [ indent 3 <> "<exchange" <> exchangeAttrs res num ex <> ">"
+exchangeLines res datasetNum ex =
+    [ indent 3 <> "<exchange" <> exchangeAttrs res datasetNum ex <> ">"
     , indent 4 <> groupElement ex
     , indent 3 <> "</exchange>"
     ]
 
-{- | The @number@ attribute to emit for an exchange. For a technosphere input
-that the loader resolved to a supplier, this is the supplier's assigned dataset
-number ('EcoSpold.Parser1.closeExchange' reads it back as the supplier link),
-not the positional exchange index. Every other exchange (reference products,
-co-products, biosphere, waste, and unlinked inputs) keeps the positional index,
-which seeds its flow UUID on re-parse. 'checkEcoSpold1Exportable' guarantees any
-resolved link is present in the index before export, so the @positional@
-fallback is unreachable for a linked input on the wired-up path.
+{- | The @number@ attribute to emit for an exchange, following the convention
+the parser reads: a number names a flow across the whole export.
+
+A reference product carries its own dataset's number, which is what every
+EcoSpold1 export observed here does and what lets a consumer name its supplier.
+A technosphere input the loader resolved carries its supplier's dataset number
+('EcoSpold.Parser1.closeExchange' reads it back as the supplier link), so the
+two agree on one number for one product. Everything else — co-products,
+biosphere, waste, and unlinked inputs — carries the number its flow was given
+once for the whole export ('flowNumberIndex').
+
+'checkEcoSpold1Exportable' guarantees any resolved link is present in the
+supplier index before export, so that fallback is unreachable on the wired-up
+path; the flow index covers every non-reference exchange by construction.
 -}
 exchangeNumber :: Resolvers -> Int -> Exchange -> Int
-exchangeNumber res positional ex = case ex of
-    TechnosphereExchange{techRole = Input, techActivityLinkId = link}
-        | link /= UUID.nil ->
-            M.findWithDefault positional link (rSupplierNumbers res)
-    TechnosphereExchange{} -> positional
-    BiosphereExchange{} -> positional
-    WasteExchange{} -> positional
+exchangeNumber res datasetNum ex
+    | exchangeIsReference ex = datasetNum
+    | otherwise = case ex of
+        TechnosphereExchange{techRole = Input, techActivityLinkId = link}
+            | link /= UUID.nil ->
+                M.findWithDefault flowNum link (rSupplierNumbers res)
+        TechnosphereExchange{} -> flowNum
+        BiosphereExchange{} -> flowNum
+        WasteExchange{} -> flowNum
+  where
+    flowNum = M.findWithDefault datasetNum (exchangeFlowId ex) (rFlowNumbers res)
 
 {- | Common exchange attributes in fixed order: number, name, category,
 subCategory, location, unit, meanValue, then optional CAS / generalComment.
-Name and category are the inputs the parser hashes into the flow UUID, so
-they must be reproduced verbatim for a stable round-trip.
+Number, name, category, subCategory and unit are the inputs the parser hashes
+into the flow UUID, so they must be reproduced verbatim for a stable round-trip.
 -}
 exchangeAttrs :: Resolvers -> Int -> Exchange -> Text
-exchangeAttrs res num ex =
+exchangeAttrs res datasetNum ex =
     " number="
-        <> attr (T.pack (show (exchangeNumber res num ex)))
+        <> attr (T.pack (show (exchangeNumber res datasetNum ex)))
         <> " name="
         <> attr name
         <> optAttr "category" category

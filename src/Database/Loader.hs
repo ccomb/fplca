@@ -86,6 +86,7 @@ module Database.Loader (
 
 import qualified BrightwayExcel.Parser as BrightwayExcel
 import qualified Codec.Compression.Zstd as Zstd
+import Control.Applicative ((<|>))
 import Control.Concurrent.Async
 import Control.DeepSeq (force)
 import Control.Exception (SomeException, catch, evaluate)
@@ -97,6 +98,12 @@ import Data.Either (lefts, partitionEithers, rights)
 import Data.List (sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
+
+-- The flow tables are merged through the strict API: one substance now appears
+-- in many datasets, so every merge that used to be a no-op (keys were unique
+-- per dataset) is real, and the lazy API would stack one unforced merge per
+-- occurrence, holding every superseded record until something forced the chain.
+import qualified Data.Map.Strict as MS
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
 import Data.Proxy (Proxy (..))
@@ -141,7 +148,7 @@ import Method.Types (Location)
 import Progress
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB (SynonymDB)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.FilePath (takeBaseName, takeDirectory, takeExtension, (</>))
 import Text.Printf (printf)
 import Types
@@ -151,16 +158,32 @@ import qualified UnitConversion as UC
 cacheMagic :: BS.ByteString
 cacheMagic = "VOLCACHE"
 
-{- | Merge two technosphere flows with the same UUID, combining their synonyms.
+{- | Merge two technosphere flows with the same UUID, combining their synonyms
+and keeping whichever of the two declares a CAS number.
 When multiple .spold files reference the same flow each may carry different
 synonyms; M.fromListWith mergeTechFlows ensures no synonym is lost.
+
+The CAS is kept the same way because a file that declares it and a file that
+omits it describe the same substance, and which one lands first is an accident
+of how the loader distributed the files over its workers. Of the export
+measured here, 430 flows are declared with a CAS in some datasets and without
+in others; losing it there would silently disable the CAS rung of the
+characterization cascade for the whole database.
 -}
 mergeTechFlows :: TechnosphereFlow -> TechnosphereFlow -> TechnosphereFlow
-mergeTechFlows a b = a{tfSynonyms = M.unionWith S.union (tfSynonyms a) (tfSynonyms b)}
+mergeTechFlows a b =
+    a
+        { tfSynonyms = M.unionWith S.union (tfSynonyms a) (tfSynonyms b)
+        , tfCAS = tfCAS a <|> tfCAS b
+        }
 
 -- | Biosphere counterpart of 'mergeTechFlows'.
 mergeBioFlows :: BiosphereFlow -> BiosphereFlow -> BiosphereFlow
-mergeBioFlows a b = a{bfSynonyms = M.unionWith S.union (bfSynonyms a) (bfSynonyms b)}
+mergeBioFlows a b =
+    a
+        { bfSynonyms = M.unionWith S.union (bfSynonyms a) (bfSynonyms b)
+        , bfCAS = bfCAS a <|> bfCAS b
+        }
 
 -- | 9-element unzip helper (Data.List ships 7-tuple as max).
 unzip9 :: [(a, b, c, d, e, f, g, h, i)] -> ([a], [b], [c], [d], [e], [f], [g], [h], [i])
@@ -219,6 +242,10 @@ History of manual bumps:
 - 13: Activity record gained activityLocationSource (declared, read off the
      dataset name, or neither). Old caches miss the field; the Store layout
      is positional, so decoding them would misread every field after it.
+- 14: EcoSpold1 flow UUID no longer carries the dataset a flow was read from,
+     so one substance is one flow across the export. Old caches hold one flow
+     per (dataset, substance) pair — a value change with no type change, which
+     the fingerprint alone would accept.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -226,7 +253,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 13
+     in hi `xor` lo `xor` 14
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -785,8 +812,8 @@ loadEcoSpoldDirectory locationAliases dir = do
                 let successResults = rights results
                 let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip9 successResults
                 let !finalProcMap = M.unions procMaps
-                let !finalTechFlowMap = M.unionsWith mergeTechFlows techFlowMaps
-                let !finalBioFlowMap = M.unionsWith mergeBioFlows bioFlowMaps
+                let !finalTechFlowMap = MS.unionsWith mergeTechFlows techFlowMaps
+                let !finalBioFlowMap = MS.unionsWith mergeBioFlows bioFlowMaps
                 let !finalWasteFlowMap = M.unions wasteFlowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
@@ -864,8 +891,8 @@ loadEcoSpoldDirectory locationAliases dir = do
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let !procMap = M.fromList (rights procEntries)
-                let !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
-                let !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
+                let !techFlowMap = MS.fromListWith mergeTechFlows [(tfId f, f) | f <- allTechs]
+                let !bioFlowMap = MS.fromListWith mergeBioFlows [(bfId f, f) | f <- allBios]
                 let !wasteFlowMap = M.fromList [(wfId f, f) | f <- allWastes]
                 let !unitMap = M.fromList [(unitId u, u) | u <- allUnits]
                 let !dsIndex =
@@ -929,8 +956,8 @@ loadSingleEcoSpold1File locationAliases filepath = do
             _ -> Nothing
         expanded = map (buildProcEntryFromResult fileUUID) results
         !procMap = M.fromList expanded
-        !techFlowMap = M.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
-        !bioFlowMap = M.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
+        !techFlowMap = MS.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
+        !bioFlowMap = MS.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
         !wasteFlowMap = M.fromList [(wfId f, f) | (_, _, _, wastes, _, _, _) <- results, f <- wastes]
         !unitMap = M.fromList [(unitId u, u) | (_, _, _, _, units, _, _) <- results, u <- units]
         !dsIndex =
@@ -1024,13 +1051,15 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
             return Nothing
         else do
             -- Delegate to the shared reader; a Nothing here means the cache
-            -- is corrupted/incompatible and should be rebuilt from source.
+            -- is corrupted or was written by another schema, and the database
+            -- is rebuilt from source. The file is left alone: a rebuild
+            -- overwrites it anyway, and a host that ships only the cache (see
+            -- 'Manager.loadDatabaseRawWithCrossDB') has no source to rebuild
+            -- from, so deleting it there destroyed the only copy of the data.
             result <- loadCompressedCacheFile zstdFile
             case result of
                 Just _ -> return result
                 Nothing -> do
-                    reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
-                    removeFile zstdFile
                     reportCacheOperation "Will rebuild database from source files"
                     return Nothing
 

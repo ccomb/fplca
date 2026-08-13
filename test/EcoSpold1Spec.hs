@@ -115,6 +115,48 @@ minimalXml =
         , "</ecoSpold>"
         ]
 
+{- | The same two elementary flows as 'minimalXml', in another dataset written
+by another author. The @<person number>@ sits where EcoSpold1 metadata really
+carries one: under @<dataset>@, after the dataset's own number. The reference
+product repeats the dataset's number, which is what every export observed does
+and what lets a consumer name this dataset as its supplier.
+-}
+otherAuthorXml :: BC.ByteString
+otherAuthorXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"43\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"heat production\" category=\"Energy\""
+        , "                           subCategory=\"Heat\" unit=\"MJ\"/>"
+        , "        <geography location=\"FR\" />"
+        , "      </processInformation>"
+        , "      <administrativeInformation>"
+        , "        <dataGeneratorAndPublication person=\"777\" />"
+        , "        <person number=\"777\" name=\"Doe\" />"
+        , "      </administrativeInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"43\" name=\"heat, district network\" category=\"Energy\""
+        , "                subCategory=\"Heat\" unit=\"MJ\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"2\" name=\"Carbon dioxide, fossil\" category=\"air\""
+        , "                subCategory=\"low population density\" unit=\"kg\" meanValue=\"0.08\""
+        , "                CASNumber=\"124-38-9\">"
+        , "        <outputGroup>4</outputGroup>"
+        , "      </exchange>"
+        , "      <exchange number=\"3\" name=\"natural gas\" category=\"resource\""
+        , "                subCategory=\"in ground\" unit=\"MJ\" meanValue=\"14.0\">"
+        , "        <inputGroup>4</inputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 {- | Fixture exercising per-exchange `generalComment` attribute.
 Exchange #1 (reference) carries a comment, #2 has none. The
 referenceFunction also carries an activity-level generalComment to
@@ -160,6 +202,9 @@ multiDatasetXml =
         , "        <referenceFunction name=\"process A\" unit=\"kg\"/>"
         , "        <geography location=\"CH\" />"
         , "      </processInformation>"
+        , "      <administrativeInformation>"
+        , "        <person number=\"777\" name=\"Doe\" />"
+        , "      </administrativeInformation>"
         , "    </metaInformation>"
         , "    <flowData>"
         , "      <exchange number=\"1\" name=\"product A\" category=\"goods\" unit=\"kg\" meanValue=\"1.0\">"
@@ -224,24 +269,42 @@ spec :: Spec
 spec = do
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
-            generateFlowUUID 42 1 "CO2" "air" ""
-                `shouldBe` read "64b107af-792c-5a2a-874f-2a3323510af7"
-
-        it "differs when dataset number changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 2 1 "CO2" "air" ""
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldBe` read "10615fc0-b605-52fc-86d4-273d5523c752"
 
         it "differs when exchange number changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 1 2 "CO2" "air" ""
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldNotBe` generateFlowUUID 2 "CO2" "air" "" "kg"
 
         it "differs when flow name changes" $
-            generateFlowUUID 1 1 "CO2" "air" ""
-                `shouldNotBe` generateFlowUUID 1 1 "methane" "air" ""
+            generateFlowUUID 1 "CO2" "air" "" "kg"
+                `shouldNotBe` generateFlowUUID 1 "methane" "air" "" "kg"
 
         it "differs when subcategory changes (river vs groundwater must not collapse)" $
-            generateFlowUUID 1 1 "Hydrogen sulfide" "water" "river"
-                `shouldNotBe` generateFlowUUID 1 1 "Hydrogen sulfide" "water" "groundwater, long-term"
+            generateFlowUUID 1 "Hydrogen sulfide" "water" "river" "kg"
+                `shouldNotBe` generateFlowUUID 1 "Hydrogen sulfide" "water" "groundwater, long-term" "kg"
+
+        it "differs when the unit changes (MJ must not be summed into kWh)" $
+            generateFlowUUID 1 "Heat, waste" "air" "unspecified" "MJ"
+                `shouldNotBe` generateFlowUUID 1 "Heat, waste" "air" "unspecified" "kWh"
+
+    describe "flow identity across datasets" $ do
+        it "gives one substance one flow id in every dataset that draws it" $
+            case (parseWithXeno minimalXml, parseWithXeno otherAuthorXml) of
+                (Right (_, _, bios1, _, _, _, _), Right (_, _, bios2, _, _, _, _)) ->
+                    map bfId bios1 `shouldBe` map bfId bios2
+                (Left err, _) -> expectationFailure ("minimalXml: " <> err)
+                (_, Left err) -> expectationFailure ("otherAuthorXml: " <> err)
+
+        it "reads the dataset number off <dataset>, not off a numbered <person>" $
+            case parseWithXeno otherAuthorXml of
+                Right (_, _, _, _, _, dsNum, _) -> dsNum `shouldBe` 43
+                Left err -> expectationFailure err
+
+        it "reads every dataset's own number when a numbered person precedes them" $
+            case parseAllWithXeno multiDatasetXml of
+                Right results -> map (fmap (\(_, _, _, _, _, n, _) -> n)) results `shouldBe` [Right 1, Right 2]
+                Left err -> expectationFailure err
 
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $
