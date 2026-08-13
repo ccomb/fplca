@@ -44,6 +44,10 @@ module Config (
     documentKeyPaths,
     unknownKeys,
 
+    -- * The paths a configuration carries
+    PathKind (..),
+    overPaths,
+
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
     applyDataDir,
@@ -760,55 +764,73 @@ redirectIntoDataDir (Just dataDir) p
         | last d == '/' || last d == '\\' = d ++ r
         | otherwise = d ++ "/" ++ r
 
+{- | What a path in a configuration file points at. The two rewrites below
+treat them differently, which is the only reason the distinction exists:
+reference data is shipped alongside the engine, user content is not.
+-}
+data PathKind
+    = {- | Flow synonyms, compartment mappings, units, energy densities,
+      geographies, chemical synonyms, substance edges — the data bundle.
+      -}
+      ReferenceDataPath
+    | -- | Databases and method collections, which the operator supplies.
+      UserContentPath
+    deriving (Show, Eq)
+
+{- | Rewrite every path a configuration carries.
+
+The one place that enumerates the path-bearing fields. Both rewrites below run
+through here, so a new path-bearing setting is added to this list rather than
+to each of them — a config whose @[[databases]]@ path followed the file while
+its @[[methods]]@ path followed the process was the bug that taught this.
+-}
+overPaths :: (PathKind -> FilePath -> FilePath) -> Config -> Config
+overPaths f cfg =
+    cfg
+        { cfgDatabases = map (\d -> d{dcPath = content (dcPath d)}) (cfgDatabases cfg)
+        , cfgMethods = map (\m -> m{mcPath = content (mcPath m)}) (cfgMethods cfg)
+        , cfgFlowSynonyms = map refData (cfgFlowSynonyms cfg)
+        , cfgCompartmentMappings = map refData (cfgCompartmentMappings cfg)
+        , cfgUnits = map refData (cfgUnits cfg)
+        , cfgEnergyDensities = map refData (cfgEnergyDensities cfg)
+        , cfgGeographies = fmap reference (cfgGeographies cfg)
+        , cfgChemSynonyms = fmap reference (cfgChemSynonyms cfg)
+        , cfgSubstanceEdges = fmap reference (cfgSubstanceEdges cfg)
+        }
+  where
+    reference = f ReferenceDataPath
+    content = f UserContentPath
+    refData r = r{rdPath = reference (rdPath r)}
+
 {- | Apply redirectIntoDataDir to every reference-data path on the Config.
 Other fields (databases, methods, plugins) are user content that lives
 outside the shipped data bundle and is left untouched.
 -}
 applyDataDir :: Maybe FilePath -> Config -> Config
-applyDataDir mDataDir cfg =
-    cfg
-        { cfgGeographies = fmap resolve (cfgGeographies cfg)
-        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
-        , cfgSubstanceEdges = fmap resolve (cfgSubstanceEdges cfg)
-        , cfgFlowSynonyms = map (mapPath resolve) (cfgFlowSynonyms cfg)
-        , cfgCompartmentMappings = map (mapPath resolve) (cfgCompartmentMappings cfg)
-        , cfgUnits = map (mapPath resolve) (cfgUnits cfg)
-        , cfgEnergyDensities = map (mapPath resolve) (cfgEnergyDensities cfg)
-        }
-  where
-    resolve = redirectIntoDataDir mDataDir
-    mapPath f r = r{rdPath = f (rdPath r)}
+applyDataDir mDataDir = overPaths $ \kind path -> case kind of
+    ReferenceDataPath -> redirectIntoDataDir mDataDir path
+    UserContentPath -> path
 
 {- | Resolve every relative path a config carries against the directory the
 config file sits in, so one file describes the same setup from any working
 directory. An absolute path is already unambiguous and is left alone; 'Nothing'
 (no config file) means the process directory, which is all there is to go on.
 
-Every path-bearing field is listed here, and nothing resolves paths anywhere
-else: a config whose @[[databases]]@ path followed the file while its
-@[[methods]]@ path followed the process was the bug this replaces.
+Every path-bearing field is listed in 'overPaths', and nothing resolves paths
+anywhere else: a config whose @[[databases]]@ path followed the file while its
+@[[methods]]@ path followed the process was the bug this replaces. Every kind
+is resolved, reference data included — this runs after 'applyDataDir', so a
+bundle path is already absolute by the time it arrives.
 
 'loadConfigOrDefault' composes this after 'applyDataDir', which is what
 recognises a leading @data/@ as the shipped bundle - prefixing it with a
 directory first would hide it.
 -}
 resolveConfigPaths :: Maybe FilePath -> Config -> Config
-resolveConfigPaths mConfigPath cfg =
-    cfg
-        { cfgDatabases = map (\d -> d{dcPath = resolve (dcPath d)}) (cfgDatabases cfg)
-        , cfgMethods = map (\m -> m{mcPath = resolve (mcPath m)}) (cfgMethods cfg)
-        , cfgFlowSynonyms = map refData (cfgFlowSynonyms cfg)
-        , cfgCompartmentMappings = map refData (cfgCompartmentMappings cfg)
-        , cfgUnits = map refData (cfgUnits cfg)
-        , cfgEnergyDensities = map refData (cfgEnergyDensities cfg)
-        , cfgGeographies = fmap resolve (cfgGeographies cfg)
-        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
-        , cfgSubstanceEdges = fmap resolve (cfgSubstanceEdges cfg)
-        }
+resolveConfigPaths mConfigPath = overPaths (const resolve)
   where
     configDir = maybe "." takeDirectory mConfigPath
     resolve p = normalise $ if isAbsolute p then p else configDir </> p
-    refData r = r{rdPath = resolve (rdPath r)}
 
 -- | Validate configuration
 validateConfig :: Config -> Either Text Config

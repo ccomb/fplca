@@ -357,13 +357,40 @@ spec = do
                     , cfgCompartmentMappings = [mkRef "data/compartments.csv"]
                     , cfgUnits = [mkRef "data/units.csv"]
                     }
+            userContent =
+                ( TOML.decode "name = \"agb\"\npath = \"agb.CSV\"\n" :: Either TOML.TOMLError DatabaseConfig
+                , TOML.decode "name = \"EF\"\npath = \"ef.zip\"\n" :: Either TOML.TOMLError MethodConfig
+                )
 
         it "rewrites every reference-data path when the env var is set" $ do
-            let resolved = applyDataDir (Just "/d") cfg
+            let resolved =
+                    applyDataDir
+                        (Just "/d")
+                        cfg
+                            { cfgEnergyDensities = [mkRef "data/energy.csv"]
+                            , cfgChemSynonyms = Just "data/chem.csv"
+                            , cfgSubstanceEdges = Just "data/edges.csv"
+                            }
             cfgGeographies resolved `shouldBe` Just "/d/geographies.csv"
+            cfgChemSynonyms resolved `shouldBe` Just "/d/chem.csv"
+            cfgSubstanceEdges resolved `shouldBe` Just "/d/edges.csv"
             map rdPath (cfgFlowSynonyms resolved) `shouldBe` ["/d/flows.csv"]
             map rdPath (cfgCompartmentMappings resolved) `shouldBe` ["/d/compartments.csv"]
             map rdPath (cfgUnits resolved) `shouldBe` ["/d/units.csv"]
+            map rdPath (cfgEnergyDensities resolved) `shouldBe` ["/d/energy.csv"]
+
+        -- Both rewrites walk one enumeration of the path-bearing fields, so
+        -- what keeps them apart is the kind each field is tagged with. A
+        -- database path is the operator's, not part of the shipped bundle.
+        it "leaves user content where the operator put it" $
+            case userContent of
+                (Right db, Right method) -> do
+                    let userCfg = cfg{cfgDatabases = [db], cfgMethods = [method]}
+                        resolved = applyDataDir (Just "/d") userCfg
+                    map dcPath (cfgDatabases resolved) `shouldBe` [dcPath db]
+                    map mcPath (cfgMethods resolved) `shouldBe` [mcPath method]
+                (Left e, _) -> expectationFailure (show e)
+                (_, Left e) -> expectationFailure (show e)
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
