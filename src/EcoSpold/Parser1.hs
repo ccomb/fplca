@@ -30,7 +30,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToText, isElement, nonEmptyText)
+import EcoSpold.Common (bsToDouble, bsToIntMaybe, bsToText, isElement, nonEmptyText)
 import EcoSpold.Cutoff (applyCutoffStrategy)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
@@ -222,11 +222,16 @@ onAttribute state name value = case psContext state of
     -- the head of the path. Accepting it anywhere under <dataset> let the
     -- metadata's own numbered elements (<source>, <person>) overwrite it, so
     -- what was recorded was really the last data generator's id.
+    --
+    -- A number that will not parse leaves the dataset with none, which drops
+    -- it out of the supplier index the same way a dataset carrying no number
+    -- does. 'bsToInt' would call @error@ from inside the pure fold instead,
+    -- killing the whole load over one malformed attribute.
     datasetNumberAttr
         | isElement name "number"
         , currentElement : _ <- psPath state
         , isElement currentElement "dataset" =
-            state{psDatasetNumber = bsToInt value}
+            state{psDatasetNumber = fromMaybe 0 (bsToIntMaybe value)}
         | otherwise = state
 
 -- | Apply a single referenceFunction attribute to the parse state.
@@ -244,7 +249,10 @@ setRefFunctionAttr name value st
 -- | Apply a single exchange attribute to the in-progress exchange.
 setExchangeAttr :: BS.ByteString -> BS.ByteString -> ExchangeData -> ExchangeData
 setExchangeAttr name value e
-    | isElement name "number" = e{exNumber = bsToInt value}
+    -- An unparseable number leaves the exchange at 0, which merges it with the
+    -- other unnumbered exchanges of the same name and compartment rather than
+    -- killing the load; 'bsToInt' would call @error@ from inside the fold.
+    | isElement name "number" = e{exNumber = fromMaybe 0 (bsToIntMaybe value)}
     | isElement name "name" = e{exName = bsToText value}
     | isElement name "category" = e{exCategory = bsToText value}
     | isElement name "subCategory" = e{exSubCategory = bsToText value}
