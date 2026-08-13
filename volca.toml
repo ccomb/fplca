@@ -9,9 +9,14 @@
 
 # Top-level scalar fields MUST come before any [section] / [[array-of-tables]]
 # header. After a header, every following key is parsed as a member of that
-# section until the next header — silently dropped if the schema doesn't know
-# the key. Geographies are required for regionalized LCIA cascade lookups.
+# section until the next header. Startup warns about every key nothing reads,
+# naming its path, which is how such a mistake is found.
+#
+# Geographies are required for regionalized LCIA cascade lookups. The other two
+# widen how flows are recognised across databases and methods; both optional.
 geographies = "data/geographies.csv"
+# chem-synonyms = "data/chem_synonyms.csv"      # PubChem snapshot for the mapping suggester
+# substance-edges = "data/substance_edges.csv"  # typed correspondences between substances
 
 # ── Server ───────────────────────────────────────────────────────────
 
@@ -22,7 +27,30 @@ port = 8080                     # HTTP port
 # answer the network over IPv4, "::" over IPv6, or name one interface's own
 # address to answer on that one alone.
 host = "127.0.0.1"
-# password = "changeme"        # Optional HTTP Basic Auth password
+# A request must carry this: Authorization: Bearer <it>, HTTP Basic, or the
+# session cookie the login page sets. --password and VOLCA_PASSWORD override it.
+# password = "changeme"
+# How this server introduces itself over MCP, so someone holding several can
+# tell which one answered.
+# name = "lab-archive"
+
+# ── Hosting limits ───────────────────────────────────────────────────
+#
+# For a server answering people who did not configure it. Every setting here
+# is a refusal rather than data, and GET /api/v1/hosting reports all of them,
+# so a client can explain a limit before a request runs into it. Absent, the
+# server refuses nothing.
+#
+# [hosting]
+# read_only = true                  # refuse every change; queries still answer
+# read_only_message = "Ask the operator to load it for you."
+# max_uploads = 2                   # -1 unlimited, 0 disables uploading
+# max_upload_mb = 100               # per upload; -1 unlimited, 0 disables
+# max_loaded_uploads = 1            # how many uploads may sit in memory at once
+# api_access = true                 # false refuses programmatic access
+# upgrade_upload = ""               # what to say instead of a bare refusal
+# upgrade_api = ""
+# upgrade_vm_size = ""
 
 # ── Databases ────────────────────────────────────────────────────────
 #
@@ -62,10 +90,18 @@ host = "127.0.0.1"
 # files, a SimaPro or columnar method .csv, or an openLCA ImpactCategory .json.
 #
 # Fields:
-#   name          (required) Method collection name
-#   path          (required) Path to method archive
-#   active        = true     Enable this method
-#   description              Short description
+#   name           (required) Method collection name
+#   path           (required) Path to method archive
+#   active         = true     Enable this method
+#   description               Short description
+#   global-methods            Names of methods here whose factors apply
+#                             everywhere, so the regionalized cascade is skipped
+#   scoring                   [[methods.scoring]] blocks: single scores built
+#                             from these categories
+#   patches                   [[methods.patches]] blocks: corrections to
+#                             individual characterization factors
+#
+# The last two have a page of their own: https://www.volca.run/docs/guides/single-score/
 #
 # Example (bring your own):
 #
