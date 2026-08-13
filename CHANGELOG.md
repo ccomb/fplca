@@ -12,12 +12,17 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Fixed
-- `--help` now works on every subcommand. Seven of them answered
-  ``Invalid option `--help'`` and exited with an error instead of describing
-  themselves: `database list`, `database upload`, `database delete`,
-  `method list`, `method upload`, `method delete` and `flow activities`. The
-  usage text was printed, but to the error stream and behind a failure, so
-  anything reading the help of `volca database upload` got nothing at all.
+- `--help` now describes every subcommand, including inside the REPL. Nine
+  answered something else. `database upload`, `database delete`,
+  `method upload` and `method delete` printed ``Invalid option `--help'`` and
+  exited with an error, putting their usage on the error stream where anything
+  capturing it got nothing: that is why four of the command pages on the
+  website have been empty. `database list`, `method list` and
+  `flow ... activities` quietly answered with their parent command's help page
+  instead of their own. `dump-openapi` and `dump-mcp-tools` answered with the
+  top-level one. In the REPL, every `--help` read as an unknown command,
+  because a parser answers the flag by failing with the help text and the REPL
+  kept only successes.
 - The Docker image's default configuration now loads everything it ships.
   `geographies` was declared below `[server]`, where it parsed as
   `server.geographies` and was silently dropped, so a standalone container

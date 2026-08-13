@@ -8,6 +8,7 @@ import Options.Applicative (
     execParserPure,
     renderFailure,
  )
+import System.Exit (ExitCode (..))
 import Test.Hspec
 
 import CLI.Parser (cliParserInfo)
@@ -31,6 +32,59 @@ parseCmd argv = case runParse argv of
 
 spec :: Spec
 spec = do
+    describe "--help on every subcommand" $ do
+        -- A parser built without `helper` does not know --help, so it rejects
+        -- it: usage on the error stream, non-zero exit, nothing for whoever
+        -- was capturing the help. That is invisible from the terminal, where
+        -- the usage still appears, which is how four documentation files came
+        -- to be committed empty. So it is asked of every subcommand here.
+        let answersHelp argv = case execParserPure defaultPrefs cliParserInfo (argv <> ["--help"]) of
+                Failure f -> snd (renderFailure f "volca") == ExitSuccess
+                Success _ -> False
+                CompletionInvoked _ -> False
+            subcommands =
+                [ ["server"]
+                , ["activity", "x"]
+                , ["inventory", "x"]
+                , ["flow", "x"]
+                , ["flow", "x", "activities"]
+                , ["activities"]
+                , ["flows"]
+                , ["impacts", "x"]
+                , ["debug-matrices"]
+                , ["export-matrices"]
+                , ["database"]
+                , ["database", "list"]
+                , ["database", "load", "x"]
+                , ["database", "unload", "x"]
+                , ["database", "upload", "f"]
+                , ["database", "delete", "x"]
+                , ["database", "delete-activities"]
+                , ["database", "copy", "x"]
+                , ["database", "relink", "x"]
+                , ["database", "export", "x"]
+                , ["database", "create-activities", "x"]
+                , ["database", "replace-activity", "x"]
+                , ["database", "edit-exchanges", "x"]
+                , ["method"]
+                , ["method", "list"]
+                , ["method", "upload", "f"]
+                , ["method", "delete", "x"]
+                , ["method", "export", "x"]
+                , ["methods"]
+                , ["synonyms"]
+                , ["compartment-mappings"]
+                , ["units"]
+                , ["flow-mapping"]
+                , ["stop"]
+                , ["repl"]
+                , ["dump-openapi"]
+                , ["dump-mcp-tools"]
+                ]
+        mapM_
+            (\argv -> it (unwords argv <> " --help describes itself") $ answersHelp argv `shouldBe` True)
+            subcommands
+
     describe "CLI.Types.parseOutputFormat" $ do
         let cases =
                 [ ("json", Just JSON)

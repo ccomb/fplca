@@ -20,6 +20,7 @@ import qualified Options.Applicative as OA
 import System.Console.Haskeline
 import System.Directory (getTemporaryDirectory)
 import System.Environment (getExecutablePath)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (IOMode (..), hFlush, openFile, stdout)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, proc)
@@ -112,14 +113,19 @@ runRepl mgr rc globalOpts cfgFile = do
     dispatch stateRef tokens = liftIO $ do
         st <- readIORef stateRef
         let opts = globalOpts{dbName = rsDb st, format = rsFormat st}
-        case parseCommand tokens of
-            Just cmd -> executeRemoteCommand mgr rc opts cmd
-            Nothing -> putStrLn "Unknown command. Type :help for usage."
+        case OA.execParserPure OA.defaultPrefs (OA.info (commandParser OA.<**> OA.helper) mempty) tokens of
+            OA.Success cmd -> executeRemoteCommand mgr rc opts cmd
+            OA.CompletionInvoked _ -> putStrLn unknownCommand
+            -- A parser answers --help by failing with the help text and an
+            -- exit code of zero. Reading only the success case, as
+            -- getParseResult does, made every --help here read as a command
+            -- nobody knows - in the one place a user types it by reflex.
+            OA.Failure failure -> case OA.renderFailure failure "volca" of
+                (helpText, ExitSuccess) -> putStrLn helpText
+                (_, ExitFailure _) -> putStrLn unknownCommand
         return True
 
-    parseCommand tokens =
-        OA.getParseResult $
-            OA.execParserPure OA.defaultPrefs (OA.info (commandParser OA.<**> OA.helper) mempty) tokens
+    unknownCommand = "Unknown command. Type :help for usage."
 
     cleanupServer _stateRef = pure ()
 
