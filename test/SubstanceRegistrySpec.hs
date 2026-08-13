@@ -94,7 +94,7 @@ spec = do
             normCas "  not-valid  " `shouldBe` "not-valid"
 
         it "agrees on a CAS however it was padded, so the bridge meets" $
-            normCas "0000050-00-0" `shouldBe` normCas "50-00-0"
+            normCas "0000050-00-0" `shouldBe` "50-00-0"
 
     describe "nonEmptyCAS" $ do
         it "canonicalizes a stated CAS" $
@@ -113,7 +113,7 @@ spec = do
         -- every flow carried "50-00-0", so the CAS rung compared two spellings
         -- of the same substance and never bridged.
         it "keeps the group segment padded, so a method CAS meets a flow CAS" $
-            nonEmptyCas "50-00-0" `shouldBe` Just (normCas "50-00-0")
+            nonEmptyCas "50-00-0" `shouldBe` Just "50-00-0"
 
     describe "equivalenceClasses" $ do
         it "takes the transitive closure of chained pairs (A=B, B=C ⟹ {A,B,C})" $

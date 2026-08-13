@@ -35,6 +35,7 @@ module SubstanceRegistry (
     -- * CAS enrichment
     normalizeCAS,
     nonEmptyCAS,
+    casKey,
     casBindings,
     casBindingsFromEdges,
 
@@ -238,6 +239,17 @@ nonEmptyCAS cas
   where
     stripped = T.strip cas
 
+{- | The key a CAS anchors on, or 'Nothing' when the text states no CAS.
+
+Both sides of the CAS bridge build their key through here, so a flow and a
+method factor meet whichever source spelled the padding — which is the whole
+point of canonicalizing, and does not happen if either side keys on the raw
+string. A placeholder never becomes a key at all, so unrelated substances
+cannot collide on one.
+-}
+casKey :: Text -> Maybe CASNumber
+casKey = fmap CASNumber . nonEmptyCAS
+
 {- | Fold name→CAS pairs into bindings under the registry's conflict rule: the
 first binding of a name wins, and a later pair binding the same name to a
 /different/ CAS comes back as a conflict for the caller to report — never
@@ -254,10 +266,10 @@ casBindings = foldl' (flip insert) (M.empty, [])
                 | otherwise -> (m, (n, (c', c)) : conflicts)
 
 {- | The normalizers a CSV row's keys pass through, injected to keep this
-module free of the synonym layer it would otherwise have to import.
-'knName' canonicalizes a flow name (typically @SynonymDB.normalizeName@);
-'knCAS' canonicalizes a CAS string (typically 'normalizeCAS') so an edge's CAS
-lands in the same form as a method's, and the two actually meet on the bridge.
+module free of the synonym layer it would otherwise have to import. Only
+'knName' still needs injecting for that reason; 'knCAS' is 'normalizeCAS',
+which lives here, and is a parameter so a test can key edges by a stub without
+building the real name normalizer.
 -}
 data KeyNormalizers = KeyNormalizers
     { knName :: Text -> NormName

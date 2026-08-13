@@ -70,15 +70,15 @@ cfMatches sel category cf =
         && maybe True (casMatches (mcfCAS cf)) (mpmCAS sel)
         && maybe True (subcompartmentMatches (mcfCompartment cf)) (mpmSubcompartmentContains sel)
 
-{- | Compare CAS numbers after normalizing both sides the same way (dropping
-insignificant leading zeros), so either the raw or normalized form matches.
-An unnormalizable selector (e.g. all zeros/dashes) matches nothing rather
-than mis-matching every CAS-less CF.
+{- | Compare CAS numbers with both sides canonicalized, so a selector matches
+whichever way the method's parser spelled the padding. A selector that states
+no CAS (empty, or all zeros and dashes) matches nothing rather than matching
+every CAS-less CF.
 -}
 casMatches :: Maybe T.Text -> T.Text -> Bool
 casMatches mcfCas want = case nonEmptyCAS want of
     Nothing -> False
-    Just normalized -> mcfCas == Just normalized
+    Just wanted -> (nonEmptyCAS =<< mcfCas) == Just wanted
 
 subcompartmentMatches :: Maybe Compartment -> T.Text -> Bool
 subcompartmentMatches Nothing _ = False

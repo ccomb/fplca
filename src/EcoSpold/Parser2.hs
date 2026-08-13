@@ -20,7 +20,7 @@ import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement, 
 import EcoSpold.Cutoff (applyCutoffStrategy)
 import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
-import SubstanceRegistry (normalizeCAS)
+import SubstanceRegistry (nonEmptyCAS)
 import System.FilePath (takeBaseName)
 import Types
 import qualified Xeno.SAX as X
@@ -490,7 +490,7 @@ parseWithXeno xmlContent processId = do
                             | isElement name "unitId" && not isInsideProperty = edata{edUnitId = bsToText value}
                             | isElement name "inputGroup" = edata{edInputGroup = bsToText value}
                             | isElement name "outputGroup" = edata{edOutputGroup = bsToText value}
-                            | isElement name "casNumber" = edata{edCAS = Just (normalizeCAS (bsToText value))}
+                            | isElement name "casNumber" = edata{edCAS = nonEmptyCAS (bsToText value)}
                             | isElement name "variableName" && not isInsideProperty = edata{edVariableName = bsToText value}
                             | isElement name "mathematicalRelation" && not isInsideProperty = edata{edMathRel = bsToText value}
                             | otherwise = edata

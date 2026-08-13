@@ -275,9 +275,11 @@ data MethodPatchMatch = MethodPatchMatch
     , mpmFlowNamePrefix :: !(Maybe Text)
     -- ^ Flow name prefix (TOML: @flow-name-prefix@), matched with 'Data.Text.isPrefixOf'.
     , mpmCAS :: !(Maybe Text)
-    {- ^ CAS registry number (TOML: @cas@), matched against 'Method.mcfCAS' after
-    normalizing both sides the same way (leading zeros in each dash-separated
-    segment are insignificant), so either the raw or the normalized form works.
+    {- ^ CAS registry number (TOML: @cas@), matched against 'Method.mcfCAS' with
+    both sides canonicalized, so a selector matches whichever way the method's
+    source spelled the padding. Only the registry number (the first segment) is
+    ever zero-padded, so @0000050-00-0@ and @50-00-0@ are the same substance
+    while @50-0-0@ is not one at all.
     -}
     , mpmSubcompartmentContains :: !(Maybe Text)
     {- ^ Case-insensitive substring of the subcompartment (TOML:
