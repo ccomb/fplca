@@ -117,7 +117,9 @@ minimalXml =
 
 {- | The same two elementary flows as 'minimalXml', in another dataset written
 by another author. The @<person number>@ sits where EcoSpold1 metadata really
-carries one: under @<dataset>@, after the dataset's own number.
+carries one: under @<dataset>@, after the dataset's own number. The reference
+product repeats the dataset's number, which is what every export observed does
+and what lets a consumer name this dataset as its supplier.
 -}
 otherAuthorXml :: BC.ByteString
 otherAuthorXml =
@@ -137,7 +139,7 @@ otherAuthorXml =
         , "      </administrativeInformation>"
         , "    </metaInformation>"
         , "    <flowData>"
-        , "      <exchange number=\"5\" name=\"heat, district network\" category=\"Energy\""
+        , "      <exchange number=\"43\" name=\"heat, district network\" category=\"Energy\""
         , "                subCategory=\"Heat\" unit=\"MJ\" meanValue=\"1.0\">"
         , "        <outputGroup>0</outputGroup>"
         , "      </exchange>"
@@ -200,6 +202,9 @@ multiDatasetXml =
         , "        <referenceFunction name=\"process A\" unit=\"kg\"/>"
         , "        <geography location=\"CH\" />"
         , "      </processInformation>"
+        , "      <administrativeInformation>"
+        , "        <person number=\"777\" name=\"Doe\" />"
+        , "      </administrativeInformation>"
         , "    </metaInformation>"
         , "    <flowData>"
         , "      <exchange number=\"1\" name=\"product A\" category=\"goods\" unit=\"kg\" meanValue=\"1.0\">"
@@ -288,13 +293,18 @@ spec = do
             case (parseWithXeno minimalXml, parseWithXeno otherAuthorXml) of
                 (Right (_, _, bios1, _, _, _, _), Right (_, _, bios2, _, _, _, _)) ->
                     map bfId bios1 `shouldBe` map bfId bios2
-                _ -> expectationFailure "both fixtures should parse"
+                (Left err, _) -> expectationFailure ("minimalXml: " <> err)
+                (_, Left err) -> expectationFailure ("otherAuthorXml: " <> err)
 
         it "reads the dataset number off <dataset>, not off a numbered <person>" $
             case parseWithXeno otherAuthorXml of
                 Right (_, _, _, _, _, dsNum, _) -> dsNum `shouldBe` 43
                 Left err -> expectationFailure err
 
+        it "reads every dataset's own number when a numbered person precedes them" $
+            case parseAllWithXeno multiDatasetXml of
+                Right results -> map (fmap (\(_, _, _, _, _, n, _) -> n)) results `shouldBe` [Right 1, Right 2]
+                Left err -> expectationFailure err
 
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $
