@@ -263,8 +263,8 @@ lookupMethodCollection mgr rc methodId = do
             [] -> fail "method not found"
     matchOne :: Value -> Parser Text
     matchOne = withObject "method" $ \obj -> do
-        uuid <- obj .: "msmId"
-        col <- obj .: "msmCollection"
+        uuid <- obj .: "id"
+        col <- obj .: "collection"
         if (uuid :: Text) == methodId then pure col else fail "no match"
 
 -- | Auto-detect the single loaded database, or use the specified one
@@ -286,9 +286,13 @@ resolveDbName mgr rc Nothing = do
                 exitFailure
         Left err -> reportError err >> exitFailure
 
-{- | Names of the loaded databases, read from the database list. The keys are
-the wire's, not the Haskell record's: a list this cannot read is an engine
+{- | Names of the databases in memory, read from the database list. The keys
+are the wire's, not the Haskell record's: a list this cannot read is an engine
 whose shape moved, which is why it says so rather than answering "none".
+
+A database whose cross-database links did not all resolve is in memory and
+answers queries, so it counts: leaving it out reported "no databases loaded"
+for a server holding one.
 -}
 extractLoadedDbNames :: Value -> Either String [Text]
 extractLoadedDbNames = parseEither go
@@ -301,7 +305,7 @@ extractLoadedDbNames = parseEither go
     getName = withObject "db" $ \db -> do
         status <- db .: "status"
         name <- db .: "name"
-        return $ if (status :: Text) == "loaded" then Just name else Nothing
+        return $ if (status :: Text) `elem` ["loaded", "partially_linked"] then Just name else Nothing
 
 -- | Build a database-scoped API path
 dbPath :: Text -> String

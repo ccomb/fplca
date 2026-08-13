@@ -38,8 +38,13 @@
 - The command line can again find the loaded database on its own, so `--db`
   is only needed when several are loaded. It was reading the database list
   under names the engine stopped using, and reported "No databases loaded on
-  the server" for a server that had one. A list it cannot read now says so
-  instead of reporting an empty one.
+  the server" for a server that had one. A database whose cross-database links
+  did not all resolve now counts as well: it is in memory and answers queries.
+  A list the command line cannot read now says so instead of reporting an
+  empty one.
+- `volca impacts UUID --method M` works again. It read the method list under
+  the same stale names, so it answered "Method not found in loaded
+  collections" for every method the server was serving.
 - Searching flows now finds a flow whose name you didn't punctuate exactly.
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the
