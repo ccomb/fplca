@@ -1,14 +1,15 @@
 {-# LANGUAGE BangPatterns #-}
 
-{- | Pure BM25 ranker for activity search.
+{- | Pure BM25 ranker.
 
-The index is built once at database load time and queried per-request.
-Documents are identified by ProcessId-equivalent Ints (0..N-1), matching
+The index is built once at database load time and queried per-request. A
+document is an Int (0..N-1): its position in the vector the tokens were
+drawn from, which the caller resolves it back through. The one corpus built
+today is the activities, so those Ints are ProcessId-equivalent, matching
 the activity vector layout the rest of the engine uses.
 -}
 module Search.BM25 (
     BM25Index,
-    buildIndex,
     indexActivities,
     addBM25Index,
     score,
@@ -53,7 +54,9 @@ b = 0.75
 A document is its position in the vector and nothing else, so any corpus
 can be indexed here as long as the caller keeps the vector it drew the
 tokens from: activity documents resolve back through the activity vector,
-and a second corpus would resolve through its own.
+and a second corpus would resolve through its own. Kept module-private
+until such a corpus exists, so nothing can build an index whose documents
+the activity-shaped consumers would misread.
 -}
 buildIndex :: V.Vector [Text] -> BM25Index
 buildIndex tokensByDoc =
