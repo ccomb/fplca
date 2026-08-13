@@ -31,6 +31,7 @@ import Config (
     validateConfig,
  )
 import Data.Either (isRight)
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -153,6 +154,21 @@ spec = do
                 "[[methods]]\nname=\"EF\"\npath=\"x.zip\"\n\
                 \[[methods.patches]]\nscale = 0.6\nmatch = { flow-name = \"Uranium\", flavour = \"x\" }\n"
                 `shouldBe` ["methods[].patches[].match.flavour"]
+
+    describe "keyPaths" $ do
+        -- What `volca dump-config-schema` prints, which another build reads.
+        it "names a key of every section, sorted" $ do
+            let paths = keyPaths configKeys
+            paths `shouldSatisfy` elem "hosting.read_only"
+            paths `shouldSatisfy` elem "methods.scoring.weighting"
+            paths `shouldSatisfy` elem "geographies"
+            paths `shouldBe` sort paths
+
+        -- A section whose keys the file's author invents is named, but its
+        -- contents cannot be enumerated, so the list stops there.
+        it "stops at a section the file's author fills" $
+            filter (T.isPrefixOf "methods.scoring.variables") (keyPaths configKeys)
+                `shouldBe` ["methods.scoring.variables"]
 
     describe "expandClassificationPreset" $ do
         let raw =

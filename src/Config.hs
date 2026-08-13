@@ -659,11 +659,18 @@ configKeys =
             map plain ["description", "scale", "set-value"]
                 <> [("match", keys (map plain ["category", "flow-name", "flow-name-prefix", "cas", "subcompartment-contains"]))]
 
-{- | Every key a shape names, as the dotted paths 'unknownKeys' reports: what
-a document has to spell out to exercise the whole of it.
+{- | Every key a shape names by name, dotted: what a document has to spell out
+to exercise the whole of it.
+
+Not quite what 'unknownKeys' reports, which marks an array of tables @name[]@
+because it is describing one document; a shape has no arity to mark. And not
+every key a document may carry: an 'AcceptsAnything' section is named, but the
+keys under it are the file author\'s and cannot be enumerated.
+
+Sorted, so a consumer can diff two of these.
 -}
 keyPaths :: KeySpec -> [Text]
-keyPaths = go []
+keyPaths = S.toAscList . S.fromList . go []
   where
     go _ AcceptsAnything = []
     go here (Accepts known) =
