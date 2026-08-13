@@ -34,6 +34,28 @@
   of its reference product, so anything holding one has to look it up again.
   And the cache of every database, whatever its format, is rebuilt from its
   source once, because one version number covers them all.
+- A substance an EcoSpold 1 export records in two units stays two flows. One
+  export writes waste heat in MJ in some datasets and in kWh in others, and
+  natural gas in m3 and Nm3, 193 flows in all; an inventory row is summed
+  without conversion, so merging those would have added MJ to kWh and reported
+  the total under one of the two units.
+- A cache the engine can no longer read is left on disk instead of deleted.
+  A cache written by an older version reads the same way a corrupted one does,
+  and both were deleted before rebuilding from source. A host that ships only
+  the cache, with no source archive beside it, lost the database outright and
+  failed to start from then on.
+- A CAS number an EcoSpold 1 export declares in one dataset and omits in
+  another is kept. It decides whether a flow can be matched to a
+  characterization factor by CAS when its name does not match, and which of the
+  two datasets was read first was an accident of file distribution.
+- One malformed number in an EcoSpold 1 export no longer stops the whole load.
+  A dataset or an exchange numbered with something that is not a number ended
+  the read there; it is now treated as carrying no number, which the parser
+  already handles.
+- An EcoSpold 1 export the engine writes reads back the way it was written.
+  Exchanges were numbered by their position in their dataset, and a number is
+  what names a flow, so re-importing split one substance into one flow per
+  position and merged two products that differed only by geography.
 - An input of an EcoSpold 1 dataset is now resolved to its supplier through the
   dataset number the export itself points at. That number was read off the last
   numbered element in the dataset's metadata, which is the person who wrote it,
