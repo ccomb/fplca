@@ -43,6 +43,30 @@
   an older engine.
 
 ### Fixed
+- A flow name that finds something in a search now finds the same thing in a
+  filter. `get_inventory` and `get_activity` matched the whole query as one
+  piece of text, so the name read off a search came back empty as soon as the
+  words were retyped without the punctuation: `carbon dioxide fossil` found
+  `Carbon dioxide, fossil` in the search and nothing in the inventory of the
+  activity emitting it, which reads like an activity that emits no CO2. Both
+  filters, and the `--flow-filter` of the debug matrix export, now read a query
+  the way the search does: every word, in any order, punctuation optional, and
+  synonyms count wherever the flow behind the line is known.
+  A filter keeps only the closest match, which a search does not have to do: it
+  ranks a lookalike onto a later page, while a filter has no later page. So
+  asking for `Carbon dioxide, fossil` as it is written returns exactly it, not
+  it plus `Carbon dioxide, non-fossil`; dropping the punctuation returns
+  everything the words reach, both of them, each under its own name. And a
+  filter naming no word at all (blank, or punctuation only) now filters
+  nothing, where it used to answer with an empty inventory.
+  `get_inventory` also reports `matched_flows` next to `total_flows` and
+  `shown_flows`, so a filter matching three hundred rows and showing fifty says
+  so instead of looking like fifty matches.
+  Two filters still match the whole query as one string. The characterization
+  factor list shows the twenty largest factors of a method out of several
+  thousand, so widening what matches without ranking it would push the flow
+  asked about off the page. `aggregate`'s `filter_name` also feeds an exclusion
+  list and activity names, which need their own answer.
 - A password now guards the assistant protocol as well as the REST API.
   `authMiddleware` only ever protected `/api/`, so a server started with
   `password` set answered `/mcp` to anyone who asked - and `/mcp` reaches the

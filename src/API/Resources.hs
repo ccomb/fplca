@@ -788,7 +788,7 @@ params r = case r of
         , pProcessId
         , Param "exchange_type" "string" Optional "Filter exchanges by kind: \"technosphere\" (product/input flows), \"biosphere\" (emissions/resources), \"waste\" (third flow kind: residuals routed to treatment), or \"all\" (default)"
         , Param "is_input" "boolean" Optional "If true, return only inputs; if false, only outputs; omit for both. Combines with exchange_type."
-        , Param "flow" "string" Optional "Filter exchanges by flow name (case-insensitive substring)"
+        , Param "flow" "string" Optional "Filter exchanges by flow name or synonym, the way search_flows reads a query: every word must appear, case-blind, in any order, punctuation optional"
         ]
     Aggregate ->
         [ pDatabase
@@ -825,7 +825,7 @@ params r = case r of
     GetInventory ->
         [ pDatabase
         , pProcessId
-        , Param "flow" "string" Optional "Filter flows by name (case-insensitive substring)"
+        , Param "flow" "string" Optional "Filter flows by name or synonym, the way search_flows reads a query: every word must appear, case-blind, in any order, punctuation optional"
         , pLimit "Max flows to return, sorted by absolute quantity (default 50)"
         , pSubstitutions
         ]

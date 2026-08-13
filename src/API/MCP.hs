@@ -33,6 +33,7 @@ import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
 import Data.Bifunctor (first)
+import Database (filterByName, flowSearchFields)
 import Database.Edit (editExchanges, refusalMessage)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
@@ -56,7 +57,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, lookupExchangeFlow, processIdToText, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -783,8 +784,13 @@ callGetActivity rid args (db, _) = runTool rid $ do
     val <- liftShow (Service.getActivityInfo defaultUnitConfig db pid)
     pure $ case fromJSON val of
         -- 'val' was built from an 'ActivityInfo' upstream, so a decode
-        -- failure is genuinely defensive — pass it through unchanged, hint-less.
-        Error _ -> toolSuccessJson rid val
+        -- failure is genuinely defensive — pass it through unchanged,
+        -- hint-less. Unless filters were asked for: answering the whole
+        -- activity to a caller who asked for a subset of it looks like the
+        -- subset, and nothing in the reply says otherwise.
+        Error _
+            | noFilters -> toolSuccessJson rid val
+            | otherwise -> toolError rid "Could not read this activity's exchanges, so the filters asked for could not be applied"
         Success ai ->
             -- Single resolve: take the activity name from the 'ActivityInfo'
             -- already in hand instead of asking the engine to resolve the PID again.
@@ -797,7 +803,7 @@ callGetActivity rid args (db, _) = runTool rid $ do
                                 { piActivity =
                                     (piActivity ai)
                                         { pfaExchanges =
-                                            filter matchExchange (pfaExchanges (piActivity ai))
+                                            keptExchanges (pfaExchanges (piActivity ai))
                                         }
                                 }
              in toolSuccessJson rid (attach payload)
@@ -821,13 +827,22 @@ callGetActivity rid args (db, _) = runTool rid $ do
         exchangeType `elem` [Nothing, Just "all"]
             && isNothing flowFilter
             && isNothing isInputFilter
-    matchExchange ewu = matchType ewu && matchFlow ewu && matchIsInput ewu
+    -- Kind and direction judge one exchange at a time; the flow name is
+    -- judged against the whole list, since keeping only the closest match
+    -- needs to know what else matched.
+    keptExchanges = matchingFlowName . filter (\ewu -> matchType ewu && matchIsInput ewu)
     matchType ewu = case validatedExchangeType of
         Right (Just want) -> Agg.exchangeKindOf (ewuExchange ewu) == want
         _ -> True
-    matchFlow ewu = case flowFilter of
-        Nothing -> True
-        Just q -> T.isInfixOf (T.toLower q) (T.toLower (ewuFlowName ewu))
+    -- The query read the way search_flows reads it, so a name found there
+    -- filters here, synonyms included whenever the exchange resolves to a
+    -- flow.
+    matchingFlowName = case flowFilter of
+        Nothing -> id
+        Just q -> filterByName q searchableFieldsOf
+    -- Unresolved flow: the rendered placeholder is all there is to match.
+    searchableFieldsOf ewu =
+        maybe [ewuFlowName ewu] flowSearchFields (lookupExchangeFlow db (ewuExchange ewu))
     matchIsInput ewu = case isInputFilter of
         Nothing -> True
         Just want -> exchangeIsInput (ewuExchange ewu) == want
@@ -1016,9 +1031,11 @@ callGetInventory dbManager rid args =
                                 subs
         let inv = Service.convertToInventoryExport db mFlows mUnits processId activity inventory
             flows = ieFlows inv
+            -- The query read the way search_flows reads it, synonyms
+            -- included, and only its closest match kept.
             filtered = case nameFilter of
                 Nothing -> flows
-                Just q -> filter (T.isInfixOf (T.toLower q) . T.toLower . bfName . ifdFlow) flows
+                Just q -> filterByName q (flowSearchFields . BioKind . ifdFlow) flows
             sorted = L.sortBy (\a b -> compare (abs $ ifdQuantity b) (abs $ ifdQuantity a)) filtered
             topN = take limit sorted
             slim f =
@@ -1034,6 +1051,9 @@ callGetInventory dbManager rid args =
                 object
                     [ "statistics" .= toJSON (ieStatistics inv)
                     , "total_flows" .= length flows
+                    , -- What the filter kept, so a caller can tell 50 rows
+                      -- shown out of 50 matched from 50 out of 300.
+                      "matched_flows" .= length filtered
                     , "shown_flows" .= length topN
                     , "flows" .= map slim topN
                     ]

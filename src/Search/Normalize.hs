@@ -6,6 +6,7 @@ module Search.Normalize (
     normalize,
     tokenize,
     queryWords,
+    matchesEveryWord,
     caseInsensitiveInfixOf,
 ) where
 
@@ -51,6 +52,29 @@ queryWords =
         . filter (not . T.null)
         . T.split (not . isAlphaNum)
         . TN.normalize TN.NFC
+
+{- | Does every word of the query appear, case-blind, in at least one of the
+given fields? Order and punctuation are then the searched text's business
+rather than the typist's: @carbon dioxide fossil@ reaches a flow named
+@Carbon dioxide, fossil@, and so does @fossil carbon dioxide@.
+
+Matching the query as one string instead is what made those two miss, and
+every place that filters by name owes the same answer to the same query.
+
+Words stay substrings rather than whole tokens, because names are searched
+by fragment: @chlor@ must keep reaching @Trichloroethane@, which no
+tokenizer would return. A query holding no word at all (pure punctuation)
+matches nothing rather than everything.
+
+Apply it to the query first and to each candidate afterwards: a corpus scan
+then splits the query once instead of once per candidate.
+-}
+matchesEveryWord :: Text -> [Text] -> Bool
+matchesEveryWord query = case map T.toCaseFold (queryWords query) of
+    [] -> const False
+    ws -> \fields ->
+        let folded = map T.toCaseFold fields
+         in all (\w -> any (w `T.isInfixOf`) folded) ws
 
 {- | Case-insensitive substring test using Unicode case folding.
 @needle `caseInsensitiveInfixOf` haystack@ mirrors 'T.isInfixOf' semantics.

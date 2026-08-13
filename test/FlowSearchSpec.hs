@@ -13,7 +13,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.UUID as UUID
-import Database (allFlows, flowMatchesQuery)
+import Database (allFlows, filterByName, flowMatchesQuery, flowSearchFields)
 import Service (FlowFilter (..), flowSearchResults)
 import Test.Hspec
 import Types (
@@ -29,7 +29,51 @@ import Types (
 spec :: Spec
 spec = do
     matchSpec
+    filterSpec
     orderSpec
+
+{- | A filter is not a search: it has no second page to relegate a lookalike
+to, and an argument naming nothing must not empty the answer.
+-}
+filterSpec :: Spec
+filterSpec = describe "Database.filterByName" $ do
+    let carbonFlows =
+            map
+                (`namedFlow` [])
+                [ "Carbon dioxide, fossil"
+                , "Carbon dioxide, non-fossil, resource correction"
+                , "Methane, fossil"
+                ]
+        kept query flows = map flowKindName (filterByName query flowSearchFields flows)
+
+    it "keeps exactly the flow whose name carries the query as written" $
+        -- The query splits into words like any other, but the name written
+        -- out is the closest match, so the opposite flow that also holds
+        -- "fossil" is not mixed into the answer.
+        kept "Carbon dioxide, fossil" carbonFlows `shouldBe` ["Carbon dioxide, fossil"]
+
+    it "keeps everything the words reach once the punctuation is dropped" $
+        -- No name carries "carbon dioxide fossil" as typed, so the closest
+        -- tier is the one carrying every word — both of them, the caller
+        -- reading the two names it gets back.
+        kept "carbon dioxide fossil" carbonFlows
+            `shouldBe` ["Carbon dioxide, fossil", "Carbon dioxide, non-fossil, resource correction"]
+
+    it "prefers a name match to a synonym match" $
+        -- The curated registry gives biogenic CO2 the synonym
+        -- "Carbon dioxide, non-fossil", which holds every word of the query.
+        kept
+            "Carbon dioxide, fossil"
+            [ namedFlow "Carbon dioxide, biogenic" ["Carbon dioxide, non-fossil"]
+            , namedFlow "Carbon dioxide, fossil" []
+            ]
+            `shouldBe` ["Carbon dioxide, fossil"]
+
+    it "filters nothing when the argument names no word" $
+        -- A blank filter is a filter naming nothing, not a search for
+        -- nothing: emptying the answer would read as an empty inventory.
+        map (`kept` carbonFlows) ["", " ", ", "]
+            `shouldBe` replicate 3 (map flowKindName carbonFlows)
 
 matchSpec :: Spec
 matchSpec = describe "Database.flowMatchesQuery" $ do
