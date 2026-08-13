@@ -15,6 +15,7 @@ module API.Csv (
     CSV,
     qualityReportCsv,
     computedQualityReportCsv,
+    spreadsheetSafe,
 ) where
 
 import API.Types (ComputedQualityReportAPI (..), QualityCheckAPI (..), QualityOffenderAPI (..), QualityReportAPI (..))

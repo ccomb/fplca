@@ -480,7 +480,7 @@ output :: OutputFormat -> Maybe Text -> Either String Value -> IO ()
 output _ _ (Left err) = reportError err >> exitFailure
 output fmt jp (Right val) = case renderResult fmt jp val of
     Left err -> reportError (T.unpack err) >> exitFailure
-    Right rendered -> TIO.putStr rendered
+    Right rendered -> BSL.putStr rendered
 
 authHeaders :: RemoteConfig -> [(HeaderName, BS.ByteString)]
 authHeaders rc = case rcAuth rc of

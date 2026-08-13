@@ -387,7 +387,7 @@ Authentication uses the same password as the REST API.
 | `--password PWD` | Server password (or set `VOLCA_PASSWORD`) |
 | `--db NAME` | Database name to query |
 | `--format FORMAT` | Output format: `pretty` (default), `json`, `table`, `csv` |
-| `--jsonpath PATH` | Field to extract for CSV output (e.g., `srResults`) |
+| `--jsonpath PATH` | Field holding the array to flatten for CSV output (e.g. `results`, `activity.exchanges`); only needed when a response carries several arrays |
 | `--no-cache` | Disable caching (for development) |
 
 ### Modes of Operation

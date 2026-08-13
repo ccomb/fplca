@@ -1,17 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Turn a result value into the text the user asked for.
+{- | Turn a result value into the bytes the user asked for.
 
-One renderer for both ways a command reaches a result: over HTTP
-("CLI.Client") and against a database loaded in-process ("CLI.Command").
-Pure, so the rendering rules are testable without a server or a database.
+Pure, so the rendering rules are testable without a server: the previous ones
+sat inside the HTTP client and could only be reached with one running.
 
-@--format csv@ flattens an array of objects into a header row plus one row
-per element. Which array is a choice the caller has to make — a response
-carries several — so @--jsonpath@ names it, as a dotted field path
-(@srResults@, @piActivity.pfaExchanges@). A path that names nothing, or
-names something that is not an array, is refused with what was found
-instead of quietly printing JSON where a table was expected.
+@--format csv@ flattens an array of objects into a header row plus one row per
+element. A response often carries several arrays, and nothing can guess which
+one was meant, so @--jsonpath@ names it as a dotted field path over the /wire/
+names — @results@, @activity.exchanges@ — not the Haskell record fields, whose
+lowercase prefix "API.JsonOptions" strips on the way out. When the response
+carries exactly one array, or is itself one, the path is unnecessary.
+
+Cells go out through the same encoder and the same formula guard as the
+engine's own CSV routes ("API.Csv"), so a leading @=@ cannot become a
+spreadsheet formula on one surface and not the other.
 -}
 module CLI.Render (
     renderResult,
@@ -26,34 +29,39 @@ import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Lazy.Char8 as BSL
+import qualified Data.Csv as Csv
 import Data.List (intercalate, transpose)
 import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Scientific (FPFormat (Fixed), formatScientific)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as V
 
+import API.Csv (spreadsheetSafe)
 import CLI.Types (OutputFormat (..))
 
-{- | Render a result, or say why it cannot be rendered that way. The path is
-the @--jsonpath@ the caller was given; it only bears on 'CSV', the one format
-that has to pick a single array out of the response.
+{- | Render a result, or say why it cannot be rendered that way. Returns bytes
+rather than 'Text': the caller writes them to stdout as they are, so the output
+is UTF-8 whatever locale the process was started in.
 -}
-renderResult :: OutputFormat -> Maybe Text -> Value -> Either Text Text
+renderResult :: OutputFormat -> Maybe Text -> Value -> Either Text BL.ByteString
 renderResult fmt mPath val = case fmt of
-    JSON -> Right (lazyUtf8 (encode val) <> "\n")
-    Pretty -> Right (lazyUtf8 (encodePretty val) <> "\n")
-    Table -> Right (T.pack (renderTable val))
-    CSV -> T.pack . renderCSV <$> csvRows mPath val
+    JSON -> Right (encode val <> "\n")
+    Pretty -> Right (encodePretty val <> "\n")
+    Table -> Right (utf8 (renderTable val))
+    CSV -> renderCSV <$> csvRows mPath val
 
-lazyUtf8 :: BL.ByteString -> Text
-lazyUtf8 = TL.toStrict . TLE.decodeUtf8
+utf8 :: Text -> BL.ByteString
+utf8 = TLE.encodeUtf8 . TL.fromStrict
 
-{- | The rows @--format csv@ should flatten. With a path, the array it names;
-without one, the response's single array field, which is all the guess can
-resolve unambiguously.
+fromUtf8 :: BL.ByteString -> Text
+fromUtf8 = TL.toStrict . TLE.decodeUtf8
+
+{- | The rows @--format csv@ should flatten: the array the path names, or —
+when there is no path — the response itself if it is an array, or its single
+array field. Ambiguity is refused rather than guessed at.
 -}
 csvRows :: Maybe Text -> Value -> Either Text [Value]
 csvRows Nothing val = case findArray val of
@@ -72,7 +80,7 @@ csvRows (Just path) val = do
                     <> jsonKind other
                     <> ", and --format csv flattens an array"
 
-{- | Resolve a dotted field path against a JSON value: @piActivity.pfaExchanges@
+{- | Resolve a dotted field path against a JSON value: @activity.exchanges@
 walks two object fields. A step that finds no such field lists the fields that
 are there, because the wire names are the stripped record prefixes and are easy
 to misremember.
@@ -83,7 +91,7 @@ selectPath path = go [] (T.splitOn "." path)
     go _ [] value = Right value
     go walked (field : rest) value = case value of
         Object o -> case KM.lookup (Key.fromText field) o of
-            Just next -> go (walked ++ [field]) rest next
+            Just next -> go (field : walked) rest next
             Nothing ->
                 Left $
                     "--jsonpath \""
@@ -106,7 +114,7 @@ selectPath path = go [] (T.splitOn "." path)
                     <> jsonKind other
 
     atPath [] = ""
-    atPath walked = " in \"" <> T.intercalate "." walked <> "\""
+    atPath walked = " in \"" <> T.intercalate "." (reverse walked) <> "\""
 
 jsonKind :: Value -> Text
 jsonKind v = case v of
@@ -118,68 +126,79 @@ jsonKind v = case v of
     Null -> "null"
 
 -- | Render a JSON value as an aligned text table
-renderTable :: Value -> String
+renderTable :: Value -> Text
 renderTable val =
     case findArray val of
-        Just rows -> formatTable (extractTable rows)
-        Nothing -> BSL.unpack (encodePretty val) ++ "\n" -- fallback for non-array
+        Just rows -> T.pack (formatTable (extractTable rows))
+        Nothing -> fromUtf8 (encodePretty val) <> "\n" -- fallback for non-array
 
--- | Render rows as CSV
-renderCSV :: [Value] -> String
+{- | Render rows as RFC 4180 CSV, through the same encoder and formula guard
+as the engine's CSV routes. An empty selection yields no bytes rather than a
+blank line, so a consumer can tell "no rows" from a truncated write.
+-}
+renderCSV :: [Value] -> BL.ByteString
+renderCSV [] = ""
 renderCSV rows =
     let (headers, dataRows) = extractTable rows
-     in unlines $ intercalate "," (map quote headers) : map (intercalate "," . map quote) dataRows
-  where
-    quote s = "\"" ++ concatMap (\c -> if c == '"' then "\"\"" else [c]) s ++ "\""
+     in Csv.encode (map (map spreadsheetSafe) (headers : dataRows))
 
--- | Find the first array in a JSON value (top-level or one level deep)
+-- | Find the sole array in a JSON value: the value itself, or its one array field.
 findArray :: Value -> Maybe [Value]
 findArray (Array arr) = Just (V.toList arr)
 findArray (Object obj) =
-    -- Look for a single array field (e.g., databases, results, methods, items)
-    case mapMaybe extractArr (KM.toList obj) of
-        [(_, arr)] -> Just arr
+    case mapMaybe extractArr (KM.elems obj) of
+        [arr] -> Just arr
         _ -> Nothing
   where
-    extractArr (_, Array arr) = Just ((), V.toList arr)
+    extractArr (Array arr) = Just (V.toList arr)
     extractArr _ = Nothing
 findArray _ = Nothing
 
 -- | Extract headers and rows from a list of JSON objects
-extractTable :: [Value] -> ([String], [[String]])
+extractTable :: [Value] -> ([Text], [[Text]])
 extractTable [] = ([], [])
 extractTable rows@(Object first : _) =
-    let keys = map fst (KM.toList first)
-        headers = map Key.toString keys
+    let keys = KM.keys first
+        headers = map Key.toText keys
         dataRows = map (rowValues keys) rows
      in (headers, dataRows)
 extractTable rows = (["value"], map (\v -> [cellValue v]) rows)
 
-rowValues :: [KM.Key] -> Value -> [String]
+rowValues :: [KM.Key] -> Value -> [Text]
 rowValues keys (Object obj) = map (\k -> cellValue (fromMaybe Null (KM.lookup k obj))) keys
-rowValues _ v = [cellValue v]
+-- A non-object among objects would otherwise emit a one-field record under an
+-- N-column header; pad so every row keeps the header's width.
+rowValues keys v = cellValue v : replicate (length keys - 1) ""
 
--- | Convert a JSON value to a display string for table cells
-cellValue :: Value -> String
-cellValue (String t) = T.unpack t
-cellValue (Number n) = let s = show n in if ".0" `isSuffixOf` s then take (length s - 2) s else s
+{- | A JSON value as one cell. Numbers are written in fixed notation: a
+spreadsheet reads @1.0e-2@ as text, and an LCA inventory is full of small
+amounts.
+-}
+cellValue :: Value -> Text
+cellValue (String t) = t
+cellValue (Number n) = T.pack (trimTrailingZero (formatScientific Fixed Nothing n))
 cellValue (Bool True) = "yes"
 cellValue (Bool False) = ""
 cellValue Null = ""
-cellValue v = BSL.unpack (encode v)
+cellValue v = fromUtf8 (encode v)
+
+trimTrailingZero :: String -> String
+trimTrailingZero s = if ".0" `isSuffixOf` s then take (length s - 2) s else s
 
 isSuffixOf :: String -> String -> Bool
 isSuffixOf suffix str = drop (length str - length suffix) str == suffix
 
 -- | Format headers + rows as an aligned table with separators
-formatTable :: ([String], [[String]]) -> String
+formatTable :: ([Text], [[Text]]) -> String
 formatTable ([], _) = ""
 formatTable (headers, rows) =
-    let allRows = headers : rows
+    let allRows = map (map T.unpack) (headers : rows)
         widths = map (maximum . map length) (transpose (map (map (take maxColWidth)) allRows))
         padRow = zipWith (\w c -> take maxColWidth c ++ replicate (w - length (take maxColWidth c)) ' ') widths
         sep = intercalate "+" (map (\w -> replicate (w + 2) '-') widths)
         fmtRow r = "  " ++ intercalate " | " (padRow r)
-     in unlines $ fmtRow headers : ("--" ++ sep) : map fmtRow rows
+     in unlines $ case allRows of
+            (h : rs) -> fmtRow h : ("--" ++ sep) : map fmtRow rs
+            [] -> []
   where
     maxColWidth = 60
