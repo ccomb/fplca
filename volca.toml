@@ -19,7 +19,8 @@ geographies = "data/geographies.csv"
 port = 8080                     # HTTP port
 # The interface to listen on. The default answers this machine and nothing
 # else, which is what leaving the password unset assumes. Use "0.0.0.0" to
-# answer the network over IPv4, "*" to answer it over IPv4 and IPv6.
+# answer the network over IPv4, "::" over IPv6, or name one interface's own
+# address to answer on that one alone.
 host = "127.0.0.1"
 # password = "changeme"        # Optional HTTP Basic Auth password
 

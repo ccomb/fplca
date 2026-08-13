@@ -17,18 +17,17 @@ import Config (
     ScoringSetConfig (..),
     ServerConfig (..),
     applyDataDir,
+    clientHost,
     defaultConfig,
     expandClassificationPreset,
     listenOn,
     loadConfigOrDefault,
     redirectIntoDataDir,
-    renderHost,
     resolveConfigPaths,
     validateConfig,
  )
 import Data.Either (isRight)
 import qualified Data.Map.Strict as M
-import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.FilePath (normalise)
@@ -59,25 +58,35 @@ spec :: Spec
 spec = do
     describe "listenOn" $ do
         it "listens on the interface the configuration names" $
-            listenOn Nothing (serverOn "0.0.0.0") `shouldBe` ListenOn (fromString "0.0.0.0") 8080
+            listenOn Nothing (serverOn "0.0.0.0") `shouldBe` ListenOn "0.0.0.0" 8080
 
-        -- The default is what a password left unset assumes: reachable from
-        -- this machine and from nowhere else.
+        -- Read through the real decoder rather than a hand-built record: what
+        -- has to hold is the decoder's own fallback, since it is what a file
+        -- with no host at all gets, and what a password left unset assumes.
         it "keeps a configuration that names no host on loopback" $
-            listenOn Nothing (serverOn "127.0.0.1") `shouldBe` ListenOn (fromString "127.0.0.1") 8080
+            case TOML.decode "port = 8080\n" :: Either TOML.TOMLError ServerConfig of
+                Left err -> expectationFailure (show err)
+                Right sc -> listenOn Nothing sc `shouldBe` ListenOn "127.0.0.1" 8080
 
         it "lets --port override the configured port without moving the interface" $
-            listenOn (Just 9000) (serverOn "0.0.0.0") `shouldBe` ListenOn (fromString "0.0.0.0") 9000
+            listenOn (Just 9000) (serverOn "0.0.0.0") `shouldBe` ListenOn "0.0.0.0" 9000
 
         -- --port 0 goes through the free-port path, which binds loopback and
         -- takes no host, so the configured one cannot be honoured there.
         it "asks for a free loopback port whatever host the configuration names" $
             listenOn (Just 0) (serverOn "0.0.0.0") `shouldBe` ListenOnFreeLoopbackPort
 
-    describe "renderHost" $
-        it "writes an address back the way a configuration file writes it" $ do
-            let written = ["127.0.0.1", "0.0.0.0", "example.internal", "*", "*4", "!4", "*6", "!6"]
-            map (renderHost . fromString) written `shouldBe` written
+    describe "clientHost" $ do
+        -- A listening address names interfaces to accept on. Handing one to a
+        -- client as a destination gives http://0.0.0.0:8080, which fails
+        -- outright on Windows, or http://*:8080, which is not a URL at all.
+        it "sends a client to this machine when the server accepts on every interface" $
+            map clientHost ["0.0.0.0", "::", "*", "*4", "!4", "*6", "!6"]
+                `shouldBe` replicate 7 "localhost"
+
+        it "leaves an address that names one interface alone" $
+            map clientHost ["127.0.0.1", "::1", "192.168.1.10", "engine.internal"]
+                `shouldBe` ["127.0.0.1", "::1", "192.168.1.10", "engine.internal"]
 
     describe "expandClassificationPreset" $ do
         let raw =

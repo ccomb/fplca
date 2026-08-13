@@ -10,6 +10,7 @@ import Data.IORef
 import Data.List (intercalate)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Foreign.C.Types (CInt (..))
@@ -28,7 +29,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostPreference, HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, freePortHost, hostingReadOnly, listenOn, loadConfigOrDefault, readOnlyRefusalFor, renderHost)
+import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, freePortHost, hostingReadOnly, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -192,18 +193,18 @@ naming the interface as well as the port: a configuration asking for one the
 server cannot bind - @0.0.0.0@ under @--port 0@ - shows up here rather than
 being discovered from a connection that never arrives.
 -}
-logServerStartup :: ServerOptions -> HostPreference -> Int -> Maybe String -> IO ()
+logServerStartup :: ServerOptions -> Text -> Int -> Maybe String -> IO ()
 logServerStartup serverOpts host port password
     | serverDesktopMode serverOpts = do
         putStrLn ("VOLCA_PORT=" ++ show port)
         hFlush stdout
     | otherwise = do
-        reportProgress Info ("Starting API server on " ++ renderHost host ++ " port " ++ show port)
+        reportProgress Info ("Starting API server on " ++ T.unpack host ++ " port " ++ show port)
         reportProgress Info ("Tree depth: " ++ show (serverTreeDepth serverOpts))
         reportProgress Info $ case password of
             Just _ -> "Authentication: ENABLED"
             Nothing -> "Authentication: DISABLED (use --password or VOLCA_PASSWORD to enable)"
-        reportProgress Info ("Web interface available at: http://localhost:" ++ show port ++ "/")
+        reportProgress Info ("Web interface available at: http://" ++ T.unpack (clientHost host) ++ ":" ++ show port ++ "/")
 
 {- | Allocate the idle-tracking refs and fork the watchdog when
 @--idle-timeout@ is positive. The refs are returned for both the
@@ -276,7 +277,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             runSettingsSocket settings socket finalApp
         ListenOn host port -> do
             logServerStartup serverOpts host port password
-            runSettings (setHost host (setPort port settings)) finalApp
+            runSettings (setHost (fromString (T.unpack host)) (setPort port settings)) finalApp
 
 {- | Run config load-only mode (load all databases from config and exit)
 Useful for cache generation, validation, and benchmarking

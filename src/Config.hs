@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -33,10 +32,9 @@ module Config (
 
     -- * Listening address
     Listen (..),
-    HostPreference,
     listenOn,
     freePortHost,
-    renderHost,
+    clientHost,
 
     -- * VOLCA_DATA_DIR resolution
     redirectIntoDataDir,
@@ -58,8 +56,6 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Set as S
-import Data.Streaming.Network.Internal (HostPreference (..))
-import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Database.Upload (DatabaseFormat (..))
@@ -335,7 +331,7 @@ so a configured host cannot be honoured there. Naming the case keeps it from
 reading as an oversight where the server starts.
 -}
 data Listen
-    = ListenOn HostPreference Int
+    = ListenOn Text Int
     | ListenOnFreeLoopbackPort
     deriving (Show, Eq)
 
@@ -347,23 +343,26 @@ left unset assumes.
 listenOn :: Maybe Int -> ServerConfig -> Listen
 listenOn mPort sc = case fromMaybe (scPort sc) mPort of
     0 -> ListenOnFreeLoopbackPort
-    port -> ListenOn (fromString (T.unpack (scHost sc))) port
+    port -> ListenOn (scHost sc) port
 
 {- | What 'ListenOnFreeLoopbackPort' ends up bound to, so the address the
 server announces is the one it is actually reachable at.
 -}
-freePortHost :: HostPreference
-freePortHost = Host "127.0.0.1"
+freePortHost :: Text
+freePortHost = "127.0.0.1"
 
--- | An address written the way it is written in the configuration file.
-renderHost :: HostPreference -> String
-renderHost = \case
-    Host h -> h
-    HostAny -> "*"
-    HostIPv4 -> "*4"
-    HostIPv4Only -> "!4"
-    HostIPv6 -> "*6"
-    HostIPv6Only -> "!6"
+{- | The host a client dials to reach a server told to listen on this one.
+
+A listening address names interfaces to accept on; it is not a destination.
+@0.0.0.0@ and warp\'s wildcards mean "every interface", which nothing can
+connect to - on Windows @http:\/\/0.0.0.0@ fails outright, and @*@ is not
+even a valid URL host. A server accepting on all of them accepts on this
+machine too, so that is where a client on this machine goes.
+-}
+clientHost :: Text -> Text
+clientHost host
+    | host `elem` ["0.0.0.0", "::", "*", "*4", "!4", "*6", "!6"] = "localhost"
+    | otherwise = host
 
 -- | Default config (empty databases)
 defaultConfig :: Config
