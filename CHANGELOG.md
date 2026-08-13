@@ -28,6 +28,11 @@
   an older engine.
 
 ### Fixed
+- The command line can again find the loaded database on its own, so `--db`
+  is only needed when several are loaded. It was reading the database list
+  under names the engine stopped using, and reported "No databases loaded on
+  the server" for a server that had one. A list it cannot read now says so
+  instead of reporting an empty one.
 - Searching flows now finds a flow whose name you didn't punctuate exactly.
   `water fossil` returned nothing at all while `water, fossil` returned eight
   results, because the whole query was looked up as one piece of text and the

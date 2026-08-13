@@ -19,7 +19,7 @@ import Data.Aeson (FromJSON, Value (..), decode, eitherDecode, encode, object, (
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import Data.Aeson.Types (Parser, parseMaybe, withArray, withObject)
+import Data.Aeson.Types (Parser, parseEither, parseMaybe, withArray, withObject)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
@@ -262,27 +262,33 @@ resolveDbName mgr rc Nothing = do
     result <- apiGet mgr rc "/api/v1/db"
     case result of
         Right val -> case extractLoadedDbNames val of
-            [name] -> return name
-            [] -> reportError "No databases loaded on the server" >> exitFailure
-            names -> do
+            Right [name] -> return name
+            Right [] -> reportError "No databases loaded on the server" >> exitFailure
+            Right names -> do
                 reportError $
                     "Multiple databases loaded, use --db to select one: "
                         ++ unwords (map T.unpack names)
                 exitFailure
+            Left err -> do
+                reportError $ "Cannot read the database list from " ++ rcBaseUrl rc ++ ": " ++ err
+                exitFailure
         Left err -> reportError err >> exitFailure
 
--- | Extract names of loaded databases from the database list JSON
-extractLoadedDbNames :: Value -> [Text]
-extractLoadedDbNames = fromMaybe [] . parseMaybe go
+{- | Names of the loaded databases, read from the database list. The keys are
+the wire's, not the Haskell record's: a list this cannot read is an engine
+whose shape moved, which is why it says so rather than answering "none".
+-}
+extractLoadedDbNames :: Value -> Either String [Text]
+extractLoadedDbNames = parseEither go
   where
     go :: Value -> Parser [Text]
     go = withObject "resp" $ \obj -> do
-        dbs <- obj .: "dlrDatabases"
+        dbs <- obj .: "databases"
         catMaybes <$> mapM getName dbs
     getName :: Value -> Parser (Maybe Text)
     getName = withObject "db" $ \db -> do
-        status <- db .: "dsaStatus"
-        name <- db .: "dsaName"
+        status <- db .: "status"
+        name <- db .: "name"
         return $ if (status :: Text) == "loaded" then Just name else Nothing
 
 -- | Build a database-scoped API path
