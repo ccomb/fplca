@@ -594,7 +594,7 @@ batchedScoresFor dbManager _dbName collection _db sol methods = do
     perDb <- buildPerDbSetTables dbManager collection (SharedSolver.csScalings sol) methods
     unitCfg <- getMergedUnitConfig dbManager
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-    hier <- DM.getLocationHierarchy dbManager
+    let hier = DM.dmLocationHierarchy dbManager
     pure $
         M.fromList $
             computeLCIAScoreSetFromTables
@@ -669,7 +669,7 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
                 if M.null (mtRegionalizedCF tables)
                     then Right <$> evaluate (loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables))
                     else do
-                        hier <- DM.getLocationHierarchy dbManager
+                        let hier = DM.dmLocationHierarchy dbManager
                         perDb <-
                             forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
                                 tbls <- DM.mapMethodToTablesCached dbManager n collection d method
