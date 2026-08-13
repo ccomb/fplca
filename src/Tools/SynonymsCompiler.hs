@@ -74,8 +74,8 @@ outputOpts =
 optParser :: Parser Options
 optParser =
     subparser
-        ( command "json" (info jsonParser (progDesc "Compile from JSON (legacy mode)"))
-            <> command "sources" (info sourcesParser (progDesc "Build from ILCD flows + pair CSVs"))
+        ( command "json" (info (jsonParser <**> helper) (progDesc "Compile from JSON (legacy mode)"))
+            <> command "sources" (info (sourcesParser <**> helper) (progDesc "Build from ILCD flows + pair CSVs"))
         )
         <|> jsonParser -- default to JSON mode for backward compatibility
 

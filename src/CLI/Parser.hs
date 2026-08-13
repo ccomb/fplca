@@ -48,6 +48,17 @@ textArg m h = T.pack <$> argument str (metavar m <> help h)
 strArg :: String -> String -> Parser String
 strArg m h = argument str (metavar m <> help h)
 
+{- | A subcommand that answers @--help@.
+
+'OA.command' alone does not: a parser built without 'helper' does not know
+the flag, so it rejects it and prints its usage to the error stream behind a
+failing exit, where anything capturing a command's help sees nothing at all.
+Declaring every subcommand through here is what keeps that from being one
+more thing to remember.
+-}
+cmd :: String -> Parser a -> String -> Mod CommandFields a
+cmd name parser desc = OA.command name (info (parser <**> helper) (progDesc desc))
+
 {- | Main CLI parser combining global options and optional command
 If no command is given, just load database and exit (useful for cache generation)
 -}
@@ -82,28 +93,28 @@ outputFormatReader = eitherReader $ \s ->
 commandParser :: Parser Command
 commandParser =
     subparser
-        ( OA.command "server" (info (serverParser <**> helper) (progDesc "Start API server"))
-            <> OA.command "activity" (info (activityParser <**> helper) (progDesc "Get basic activity information"))
-            <> OA.command "inventory" (info (inventoryParser <**> helper) (progDesc "Get life cycle inventory for activity"))
-            <> OA.command "flow" (info (flowParser <**> helper) (progDesc "Query flow information"))
-            <> OA.command "activities" (info (searchActivitiesParser <**> helper) (progDesc "Search activities"))
-            <> OA.command "flows" (info (searchFlowsParser <**> helper) (progDesc "Search flows"))
-            <> OA.command "impacts" (info (impactsParser <**> helper) (progDesc "Compute impact assessment (LCIA) scores with a characterization method"))
-            <> OA.command "debug-matrices" (info (debugMatricesParser <**> helper) (progDesc "Export targeted matrix slices for debugging"))
-            <> OA.command "export-matrices" (info (exportMatricesParser <**> helper) (progDesc "Export matrices in universal format (Ecoinvent-compatible)"))
-            <> OA.command "database" (info (databaseParser <**> helper) (progDesc "Manage databases (list, upload, delete)"))
-            <> OA.command "method" (info (methodParser <**> helper) (progDesc "Manage method collections"))
-            <> OA.command "methods" (info (pure Methods <**> helper) (progDesc "List loaded methods (flattened)"))
-            <> OA.command "synonyms" (info (pure Synonyms <**> helper) (progDesc "List synonym sources"))
-            <> OA.command "compartment-mappings" (info (pure CompartmentMappings <**> helper) (progDesc "List compartment mappings"))
-            <> OA.command "units" (info (pure Units <**> helper) (progDesc "List unit definitions"))
-            <> OA.command "flow-mapping" (info (flowMappingParser <**> helper) (progDesc "Analyze flow mapping coverage between a method and database"))
-            <> OA.command "stop" (info (pure Stop <**> helper) (progDesc "Stop running server (uses --config or --url to find it)"))
-            <> OA.command "repl" (info (pure Repl <**> helper) (progDesc "Interactive REPL over HTTP (connects to running server)"))
+        ( cmd "server" serverParser "Start API server"
+            <> cmd "activity" activityParser "Get basic activity information"
+            <> cmd "inventory" inventoryParser "Get life cycle inventory for activity"
+            <> cmd "flow" flowParser "Query flow information"
+            <> cmd "activities" searchActivitiesParser "Search activities"
+            <> cmd "flows" searchFlowsParser "Search flows"
+            <> cmd "impacts" impactsParser "Compute impact assessment (LCIA) scores with a characterization method"
+            <> cmd "debug-matrices" debugMatricesParser "Export targeted matrix slices for debugging"
+            <> cmd "export-matrices" exportMatricesParser "Export matrices in universal format (Ecoinvent-compatible)"
+            <> cmd "database" databaseParser "Manage databases (list, upload, delete)"
+            <> cmd "method" methodParser "Manage method collections"
+            <> cmd "methods" (pure Methods) "List loaded methods (flattened)"
+            <> cmd "synonyms" (pure Synonyms) "List synonym sources"
+            <> cmd "compartment-mappings" (pure CompartmentMappings) "List compartment mappings"
+            <> cmd "units" (pure Units) "List unit definitions"
+            <> cmd "flow-mapping" flowMappingParser "Analyze flow mapping coverage between a method and database"
+            <> cmd "stop" (pure Stop) "Stop running server (uses --config or --url to find it)"
+            <> cmd "repl" (pure Repl) "Interactive REPL over HTTP (connects to running server)"
         )
         <|> subparser
-            ( OA.command "dump-openapi" (info (pure DumpOpenApi) (progDesc "Dump OpenAPI spec as JSON to stdout"))
-                <> OA.command "dump-mcp-tools" (info (pure DumpMcpTools) (progDesc "Dump MCP tool definitions as JSON to stdout"))
+            ( cmd "dump-openapi" (pure DumpOpenApi) "Dump OpenAPI spec as JSON to stdout"
+                <> cmd "dump-mcp-tools" (pure DumpMcpTools) "Dump MCP tool definitions as JSON to stdout"
                 <> internal
             )
 
@@ -113,18 +124,18 @@ databaseParser =
     Database . fromMaybe DbList
         <$> optional
             ( subparser
-                ( OA.command "list" (info (pure DbList) (progDesc "List databases"))
-                    <> OA.command "load" (info (DbLoad <$> textArg "DB" "Name of the configured database to load" <**> helper) (progDesc "Load a configured database into memory"))
-                    <> OA.command "unload" (info (DbUnload <$> textArg "DB" "Name of the loaded database to unload" <**> helper) (progDesc "Unload a database from memory"))
-                    <> OA.command "upload" (info (DbUpload <$> uploadArgsParser) (progDesc "Upload a database from a local file"))
-                    <> OA.command "delete" (info (DbDelete <$> deleteNameParser) (progDesc "Delete a database"))
-                    <> OA.command "delete-activities" (info (DbDeleteActivities <$> deleteActivitiesArgsParser <**> helper) (progDesc "Delete the whole filtered set of activities from a loaded database"))
-                    <> OA.command "copy" (info (copyArgsParser <**> helper) (progDesc "Copy a loaded database under a new name"))
-                    <> OA.command "relink" (info (DbRelinkMapping <$> relinkArgsParser <**> helper) (progDesc "Relink a database to a dependency using a supplier alias CSV (source/target names, optional locations)"))
-                    <> OA.command "export" (info (DbExport <$> exportArgsParser <**> helper) (progDesc "Export a loaded database to a file"))
-                    <> OA.command "create-activities" (info (DbCreateActivities <$> writeArgsParser <**> helper) (progDesc "Write new activities into a database from a JSON file"))
-                    <> OA.command "replace-activity" (info (DbReplaceActivity <$> replaceArgsParser <**> helper) (progDesc "Rewrite one activity of a database from a JSON file"))
-                    <> OA.command "edit-exchanges" (info (DbEditExchanges <$> editArgsParser <**> helper) (progDesc "Change one activity's inventory from a JSON file, keeping the rest of the activity"))
+                ( cmd "list" (pure DbList) "List databases"
+                    <> cmd "load" (DbLoad <$> textArg "DB" "Name of the configured database to load") "Load a configured database into memory"
+                    <> cmd "unload" (DbUnload <$> textArg "DB" "Name of the loaded database to unload") "Unload a database from memory"
+                    <> cmd "upload" (DbUpload <$> uploadArgsParser) "Upload a database from a local file"
+                    <> cmd "delete" (DbDelete <$> deleteNameParser) "Delete a database"
+                    <> cmd "delete-activities" (DbDeleteActivities <$> deleteActivitiesArgsParser) "Delete the whole filtered set of activities from a loaded database"
+                    <> cmd "copy" copyArgsParser "Copy a loaded database under a new name"
+                    <> cmd "relink" (DbRelinkMapping <$> relinkArgsParser) "Relink a database to a dependency using a supplier alias CSV (source/target names, optional locations)"
+                    <> cmd "export" (DbExport <$> exportArgsParser) "Export a loaded database to a file"
+                    <> cmd "create-activities" (DbCreateActivities <$> writeArgsParser) "Write new activities into a database from a JSON file"
+                    <> cmd "replace-activity" (DbReplaceActivity <$> replaceArgsParser) "Rewrite one activity of a database from a JSON file"
+                    <> cmd "edit-exchanges" (DbEditExchanges <$> editArgsParser) "Change one activity's inventory from a JSON file, keeping the rest of the activity"
                 )
             )
 
@@ -219,10 +230,10 @@ methodParser =
     Method . fromMaybe McList
         <$> optional
             ( subparser
-                ( OA.command "list" (info (pure McList) (progDesc "List method collections"))
-                    <> OA.command "upload" (info (McUpload <$> uploadArgsParser) (progDesc "Upload a method collection from a local file"))
-                    <> OA.command "delete" (info (McDelete <$> deleteNameParser) (progDesc "Delete a method collection"))
-                    <> OA.command "export" (info (McExport <$> mcExportArgsParser <**> helper) (progDesc "Export a loaded method collection to a file (SimaPro CSV, columnar CSV, openLCA JSON-LD, or ILCD method package)"))
+                ( cmd "list" (pure McList) "List method collections"
+                    <> cmd "upload" (McUpload <$> uploadArgsParser) "Upload a method collection from a local file"
+                    <> cmd "delete" (McDelete <$> deleteNameParser) "Delete a method collection"
+                    <> cmd "export" (McExport <$> mcExportArgsParser) "Export a loaded method collection to a file (SimaPro CSV, columnar CSV, openLCA JSON-LD, or ILCD method package)"
                 )
             )
 
@@ -281,7 +292,7 @@ flowParser = do
 flowSubCommandParser :: Parser FlowSubCommand
 flowSubCommandParser =
     subparser
-        (OA.command "activities" (info (pure FlowActivities) (progDesc "List activities using this flow")))
+        (cmd "activities" (pure FlowActivities) "List activities using this flow")
 
 -- | Search activities parser (now top-level)
 searchActivitiesParser :: Parser Command
