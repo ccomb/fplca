@@ -105,7 +105,8 @@ import Types (
     findProcessIdByActivityUUID,
     getActivity,
     initializeRuntimeFields,
-    parseUUIDPair,
+    parseProcessRef,
+    processRefText,
  )
 
 {- | Copy a loaded database into the runtime registry under the slugified
@@ -455,8 +456,8 @@ here too. A target that resolves to nothing is kept as sent: the presence
 check owns that refusal.
 -}
 canonicalTarget :: Database -> Text -> Text
-canonicalTarget db target = case parseUUIDPair target of
-    Just pair -> renderKey pair
+canonicalTarget db target = case parseProcessRef target of
+    Just ref -> processRefText ref
     Nothing -> fromMaybe target $ do
         actUUID <- UUID.fromText target
         pid <- findProcessIdByActivityUUID db actUUID

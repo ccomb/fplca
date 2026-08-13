@@ -130,7 +130,7 @@ ilcdProcessUUID :: S.Set UUID -> (UUID, UUID) -> UUID
 ilcdProcessUUID sharedActUUIDs (actUUID, prodUUID)
     | actUUID `S.member` sharedActUUIDs =
         UUID5.generateNamed ilcdExportNamespace $
-            BS.unpack (TE.encodeUtf8 ("process:" <> uuidText actUUID <> "_" <> uuidText prodUUID))
+            BS.unpack (TE.encodeUtf8 ("process:" <> processRefText (ProcessRef actUUID prodUUID)))
     | otherwise = actUUID
 
 {- | One warning per activity whose products 'ilcdProcessUUID' spreads over

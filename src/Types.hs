@@ -59,6 +59,21 @@ Based on EcoSpold filename pattern {activity_uuid}_{product_uuid}.spold
 -}
 type ProcessId = Int32
 
+{- | The (activity, product) pair a process is. 'ProcessId' is the matrix row
+index for that pair inside one database; a 'ProcessRef' is the pair itself,
+which is what travels — over the wire, in a @.spold@ file name, in an ILCD
+process identifier.
+
+Named fields rather than a bare @(UUID, UUID)@ because the two halves are
+indistinguishable to the compiler, and a swapped pair produces a reference
+that is well-formed and wrong.
+-}
+data ProcessRef = ProcessRef
+    { prActivity :: !UUID
+    , prProduct :: !UUID
+    }
+    deriving (Eq, Ord, Show)
+
 {- | Biosphere compartment — the natural medium a biosphere flow exchanges
 with. Present only on `BiosphereFlow`; technosphere flows have no
 compartment (their taxonomy, when meaningful, lives on the producing
@@ -995,32 +1010,51 @@ searchProductsByLocation :: Database -> Text -> [ProcessId]
 searchProductsByLocation db loc =
     M.findWithDefault [] loc (piByLocation $ dbProductIndex db)
 
--- | Convert ProcessId to UUID pair
-processIdToUUIDs :: Database -> ProcessId -> Maybe (UUID, UUID)
-processIdToUUIDs db pid
+-- | The pair a 'ProcessId' indexes, if the index is in range.
+processIdToRef :: Database -> ProcessId -> Maybe ProcessRef
+processIdToRef db pid
     | pid >= 0 && fromIntegral pid < V.length (dbProcessIdTable db) =
-        Just $ dbProcessIdTable db V.! fromIntegral pid
+        Just $ uncurry ProcessRef $ dbProcessIdTable db V.! fromIntegral pid
     | otherwise = Nothing
 
--- | Convert ProcessId to Text representation for display (activityUUID_productUUID)
+{- | The one spelling of a process reference: @activityUUID_productUUID@.
+Everything that writes a reference — the wire, a @.spold@ file name, an ILCD
+process identifier — goes through here, so there is one place the separator
+is decided.
+-}
+processRefText :: ProcessRef -> Text
+processRefText r = UUID.toText (prActivity r) <> refSeparator <> UUID.toText (prProduct r)
+
+-- | The separator between the two halves. Inverse of 'parseProcessRef'.
+refSeparator :: Text
+refSeparator = "_"
+
+-- | Text form of the process a 'ProcessId' indexes, for display.
 processIdToText :: Database -> ProcessId -> Text
 processIdToText db pid =
-    case processIdToUUIDs db pid of
-        Just (actUUID, prodUUID) -> UUID.toText actUUID <> "_" <> UUID.toText prodUUID
-        Nothing -> "invalid-process-id-" <> T.pack (show pid)
+    maybe ("invalid-process-id-" <> T.pack (show pid)) processRefText (processIdToRef db pid)
 
-{- | Pure syntactic parse of a ProcessId reference (activityUUID_productUUID).
-Returns the UUID pair when the text has the expected shape, regardless of
-whether that pair exists in any database. 'Nothing' is a genuine format
-error — callers treat a well-formed-but-absent pair as not-found, not malformed.
+{- | Pure syntactic parse of a process reference. Returns the pair when the
+text has the expected shape, regardless of whether it exists in any database.
+'Nothing' is a genuine format error — callers treat a well-formed-but-absent
+reference as not-found, not malformed.
 -}
-parseUUIDPair :: Text -> Maybe (UUID, UUID)
-parseUUIDPair t = case T.splitOn "_" t of
+parseProcessRef :: Text -> Maybe ProcessRef
+parseProcessRef t = case T.splitOn refSeparator t of
     [actText, prodText]
         | not (T.null actText)
         , not (T.null prodText) ->
-            (,) <$> UUID.fromText actText <*> UUID.fromText prodText
+            ProcessRef <$> UUID.fromText actText <*> UUID.fromText prodText
     _ -> Nothing
+
+{- | The activity a reference names. Accepts a bare activity UUID as well as
+the full @activityUUID_productUUID@ form, because callers that only need the
+activity half are given both by the surfaces above them.
+-}
+refActivityUUID :: Text -> Maybe UUID
+refActivityUUID t = case parseProcessRef t of
+    Just r -> Just (prActivity r)
+    Nothing -> UUID.fromText t
 
 -- | Add SynonymDB to a Database (used after loading from cache)
 addSynonymDBToDatabase :: Database -> SynonymDB -> Database

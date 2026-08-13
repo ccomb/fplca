@@ -84,6 +84,7 @@ import Types (
     Database (..),
     Exchange (..),
     ProcessId,
+    ProcessRef (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -94,7 +95,7 @@ import Types (
     exchangeIsReference,
     findProcessIdByActivityUUID,
     getUnitNameForExchange,
-    parseUUIDPair,
+    parseProcessRef,
  )
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
 
@@ -561,8 +562,8 @@ import — is still addressable.
 data ProviderKey = ProviderPair UUID UUID | ProviderActivity UUID
 
 parseProvider :: Text -> Maybe ProviderKey
-parseProvider provider = case parseUUIDPair provider of
-    Just (activityId, productId) -> Just (ProviderPair activityId productId)
+parseProvider provider = case parseProcessRef provider of
+    Just ref -> Just (ProviderPair (prActivity ref) (prProduct ref))
     Nothing -> ProviderActivity <$> UUID.fromText provider
 
 matchesProvider :: ProviderKey -> UUID -> UUID -> Bool
@@ -846,8 +847,8 @@ does: the canonical @activityUUID_productUUID@ pair, or a bare activity UUID
 when that activity has a single product.
 -}
 resolveProcess :: Database -> Text -> Maybe ProcessId
-resolveProcess db queryText = case parseUUIDPair queryText of
-    Just (a, p) -> M.lookup (a, p) (dbProcessIdLookup db)
+resolveProcess db queryText = case parseProcessRef queryText of
+    Just ref -> M.lookup (prActivity ref, prProduct ref) (dbProcessIdLookup db)
     Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
 
 refUnitOf :: Database -> Activity -> (Exchange -> Bool) -> Text
