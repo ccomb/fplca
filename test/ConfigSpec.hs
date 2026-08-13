@@ -20,7 +20,9 @@ import Config (
     clientHost,
     configKeys,
     defaultConfig,
+    documentKeyPaths,
     expandClassificationPreset,
+    keyPaths,
     listenOn,
     loadConfigOrDefault,
     redirectIntoDataDir,
@@ -98,10 +100,29 @@ spec = do
 
         -- The one that matters: a key wrongly reported unread is a warning on
         -- a file that is perfectly good, which teaches the reader to ignore
-        -- warnings.
+        -- warnings. The shipped configuration exercises about a quarter of the
+        -- schema, so the fixture below names the rest.
         it "reads every key of the configuration this repository ships" $ do
             shipped <- TIO.readFile "volca.toml"
             unread shipped `shouldBe` []
+
+        it "reads every key a document can name" $ do
+            everyKey <- TIO.readFile "test/data/every-config-key.toml"
+            unread everyKey `shouldBe` []
+
+        -- The other direction, so the fixture cannot quietly stop covering
+        -- what it claims to: whatever the schema names, the fixture spells
+        -- out. Without this, a key dropped from configKeys would go on being
+        -- reported unread on every valid file and no test would notice.
+        it "leaves no key of the schema unexercised" $ do
+            everyKey <- TIO.readFile "test/data/every-config-key.toml"
+            case TOML.decode everyKey :: Either TOML.TOMLError TOML.Table of
+                Left err -> expectationFailure (show err)
+                Right doc ->
+                    -- Compared without the [] an array carries in a path: the
+                    -- schema names keys, not how many of each a file holds.
+                    let named = map (T.replace "[]" "") (documentKeyPaths doc)
+                     in filter (`notElem` named) (keyPaths configKeys) `shouldBe` []
 
         -- How geographies went missing from the Docker image's own config: a
         -- top-level key written below a header belongs to that header.

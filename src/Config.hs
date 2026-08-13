@@ -40,6 +40,8 @@ module Config (
     -- * Keys nothing reads
     KeySpec (..),
     configKeys,
+    keyPaths,
+    documentKeyPaths,
     unknownKeys,
 
     -- * VOLCA_DATA_DIR resolution
@@ -71,7 +73,7 @@ import Progress (ProgressLevel (..), reportProgress)
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, normalise, takeDirectory, takeFileName, (</>))
-import TOML (DecodeTOML (..), Decoder, TOMLError, Table, Value (..), decode, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
+import TOML (DecodeTOML (..), Decoder, TOMLError, Table, Value (..), decode, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
 import Types (GeographyPolicy (..))
 
 -- | A single classification filter entry (system + value)
@@ -541,12 +543,20 @@ loadConfigFile path = do
     if not exists
         then pure $ Left $ "Config file not found: " <> T.pack path
         else do
+            -- The keys first, and from the text rather than from the decoded
+            -- configuration: a document that parses can say which of its keys
+            -- nothing reads whether or not it then decodes, and an operator
+            -- fixing one mistake per restart pays minutes a time on a machine
+            -- that is already running.
             text <- TIO.readFile path
-            case decode text of
-                Left err -> pure $ Left $ "TOML parse error: " <> T.pack (show err)
-                Right cfg -> do
-                    mapM_ (reportProgress Warning . T.unpack) (unreadKeyWarnings path text)
-                    pure $ Right cfg
+            mapM_ (reportProgress Warning . T.unpack) (unreadKeyWarnings path text)
+            -- decodeFile rather than the text just read: it hands the parser
+            -- the file name, so a syntax error says which file, which matters
+            -- most where the engine reads a document assembled from two.
+            result <- decodeFile path
+            pure $ case result of
+                Right cfg -> Right cfg
+                Left err -> Left $ "TOML parse error: " <> T.pack (show err)
 
 {- | One line per key of the file no decoder reads.
 
@@ -554,6 +564,9 @@ A warning, not a refusal: a key from a later release should not stop an older
 engine. But saying nothing is worse than either, because the ways a key goes
 unread are all invisible - written under the wrong section header, spelled
 with the wrong separator, or named the way an older release named it.
+
+Nothing to say about a document that does not parse: the decode that follows
+reports that, and better.
 -}
 unreadKeyWarnings :: FilePath -> Text -> [Text]
 unreadKeyWarnings path text = map complain (either (const []) (unknownKeys configKeys) parsed)
@@ -569,11 +582,15 @@ unread. Keyed by the path 'unknownKeys' reports, with any array index dropped.
 renamedKeys :: [(Text, Text)]
 renamedKeys = [("databases[].active", "load")]
 
-{- | What one part of the configuration accepts: keys read for their value,
-and the parts nested under it.
+{- | What one part of the configuration accepts: the keys read there, each
+with what is accepted under it. A key read for its value alone accepts an
+empty map.
+
+One map rather than a list of keys beside a list of sections, so a key cannot
+be declared as both and then be silently resolved one way.
 -}
 data KeySpec
-    = Accepts [Text] [(Text, KeySpec)]
+    = Accepts (Map Text KeySpec)
     | {- | The caller names the keys, so none of them can be unknown: a scoring
       set's variables, a database's location aliases.
       -}
@@ -588,21 +605,23 @@ read perfectly well.
 -}
 configKeys :: KeySpec
 configKeys =
-    Accepts
-        ["geographies", "chem-synonyms", "substance-edges"]
-        [ ("server", Accepts ["port", "host", "password", "name"] [])
-        , ("hosting", Accepts hostingKeys [])
+    keys
+        [ ("geographies", value)
+        , ("chem-synonyms", value)
+        , ("substance-edges", value)
+        , ("server", keys (map plain ["port", "host", "password", "name"]))
+        , ("hosting", keys (map plain hostingKeys))
         ,
             ( "databases"
-            , Accepts
-                ["name", "displayName", "path", "description", "load", "default", "depends", "deletable", "geography_policy"]
-                [("locationAliases", AcceptsAnything)]
+            , keys $
+                map plain ["name", "displayName", "path", "description", "load", "default", "depends", "deletable", "geography_policy"]
+                    <> [("locationAliases", AcceptsAnything)]
             )
         ,
             ( "methods"
-            , Accepts
-                ["name", "path", "active", "description", "global-methods"]
-                [("scoring", scoringSet), ("patches", patch)]
+            , keys $
+                map plain ["name", "path", "active", "description", "global-methods"]
+                    <> [("scoring", scoringSet), ("patches", patch)]
             )
         , ("flow-synonyms", refData)
         , ("compartment-mappings", refData)
@@ -610,10 +629,15 @@ configKeys =
         , ("energy-densities", refData)
         ,
             ( "classification-presets"
-            , Accepts ["name", "label", "description"] [("filters", Accepts ["system", "value", "mode"] [])]
+            , keys $
+                map plain ["name", "label", "description"]
+                    <> [("filters", keys (map plain ["system", "value", "mode"]))]
             )
         ]
   where
+    keys = Accepts . M.fromList
+    value = Accepts M.empty
+    plain k = (k, value)
     hostingKeys =
         [ "max_uploads"
         , "max_upload_mb"
@@ -625,15 +649,25 @@ configKeys =
         , "upgrade_api"
         , "upgrade_vm_size"
         ]
-    refData = Accepts ["path", "name", "active", "description"] []
+    refData = keys (map plain ["path", "name", "active", "description"])
     scoringSet =
-        Accepts
-            ["name", "unit", "displayMultiplier"]
-            [(k, AcceptsAnything) | k <- ["variables", "computed", "labels", "normalization", "weighting", "scores"]]
+        keys $
+            map plain ["name", "unit", "displayMultiplier"]
+                <> [(k, AcceptsAnything) | k <- ["variables", "computed", "labels", "normalization", "weighting", "scores"]]
     patch =
-        Accepts
-            ["description", "scale", "set-value"]
-            [("match", Accepts ["category", "flow-name", "flow-name-prefix", "cas", "subcompartment-contains"] [])]
+        keys $
+            map plain ["description", "scale", "set-value"]
+                <> [("match", keys (map plain ["category", "flow-name", "flow-name-prefix", "cas", "subcompartment-contains"]))]
+
+{- | Every key a shape names, as the dotted paths 'unknownKeys' reports: what
+a document has to spell out to exercise the whole of it.
+-}
+keyPaths :: KeySpec -> [Text]
+keyPaths = go []
+  where
+    go _ AcceptsAnything = []
+    go here (Accepts known) =
+        concat [T.intercalate "." (reverse (k : here)) : go (k : here) nested | (k, nested) <- M.toList known]
 
 {- | The dotted path of every key of a parsed document that the given shape
 does not name, an array written @name[]@ because the complaint is about the
@@ -644,30 +678,40 @@ unknownKeys :: KeySpec -> Table -> [Text]
 unknownKeys spec = S.toAscList . S.fromList . walk [] spec
   where
     walk _ AcceptsAnything _ = []
-    walk here (Accepts keys sections) table = concatMap (judge here keys sections) (M.toList table)
+    walk here (Accepts known) table = concatMap (judge here known) (M.toList table)
 
-    judge here keys sections (key, value) = case lookup key sections of
-        Just nested -> let (segment, tables) = sectionUnder key value in concatMap (walk (here <> [segment]) nested) tables
-        Nothing
-            | key `elem` keys -> []
-            | otherwise -> [T.intercalate "." (here <> [key])]
+    judge here known (key, val) = case M.lookup key known of
+        Nothing -> [T.intercalate "." (here <> [key])]
+        Just nested -> let (segment, tables) = sectionUnder key val in concatMap (walk (here <> [segment]) nested) tables
 
-    -- How a section is written in a path, and the tables it holds. A section
-    -- is a table or an array of tables wherever a decoder reads one, and a
-    -- value of any other shape has already failed to decode, so there is
-    -- nothing under it left to judge.
-    sectionUnder :: Text -> Value -> (Text, [Table])
-    sectionUnder key = \case
-        Table t -> (key, [t])
-        Array vs -> (key <> "[]", concatMap (snd . sectionUnder key) vs)
-        String{} -> (key, [])
-        Integer{} -> (key, [])
-        Float{} -> (key, [])
-        Boolean{} -> (key, [])
-        OffsetDateTime{} -> (key, [])
-        LocalDateTime{} -> (key, [])
-        LocalDate{} -> (key, [])
-        LocalTime{} -> (key, [])
+{- | The dotted path of every key a parsed document names, written the way
+'unknownKeys' and 'keyPaths' write them. What a document actually exercises,
+against what a shape allows.
+-}
+documentKeyPaths :: Table -> [Text]
+documentKeyPaths = S.toAscList . S.fromList . walk []
+  where
+    walk here table = concatMap (describe here) (M.toList table)
+    describe here (key, val) =
+        let (segment, tables) = sectionUnder key val
+         in T.intercalate "." (here <> [segment]) : concatMap (walk (here <> [segment])) tables
+
+{- | How a section is written in a path, and the tables it holds. A section is
+a table or an array of tables wherever a decoder reads one; a value of any
+other shape holds nothing to walk into.
+-}
+sectionUnder :: Text -> Value -> (Text, [Table])
+sectionUnder key = \case
+    Table t -> (key, [t])
+    Array vs -> (key <> "[]", concatMap (snd . sectionUnder key) vs)
+    String{} -> (key, [])
+    Integer{} -> (key, [])
+    Float{} -> (key, [])
+    Boolean{} -> (key, [])
+    OffsetDateTime{} -> (key, [])
+    LocalDateTime{} -> (key, [])
+    LocalDate{} -> (key, [])
+    LocalTime{} -> (key, [])
 
 {- | Load configuration, with validation. Honours VOLCA_DATA_DIR: when set,
 any reference-data path beginning with "data/" (e.g. "data/flows.csv")

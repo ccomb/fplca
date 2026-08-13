@@ -1,0 +1,110 @@
+# Names every key the decoders read, so the unknown-key check is exercised
+# over the whole schema rather than over the quarter of it the shipped
+# volca.toml happens to use. Nothing loads this file; it is read as text.
+#
+# Keeping it complete is what the ConfigSpec assertion is for: it compares
+# what this names against what `configKeys` names, in both directions.
+
+geographies = "data/geographies.csv"
+chem-synonyms = "data/chem_synonyms.csv"
+substance-edges = "data/substance_edges.csv"
+
+[server]
+port = 8080
+host = "127.0.0.1"
+password = "secret"
+name = "every-key"
+
+[hosting]
+max_uploads = 2
+max_upload_mb = 100
+max_loaded_uploads = 1
+api_access = true
+read_only = false
+read_only_message = "Ask the operator."
+upgrade_upload = "upload"
+upgrade_api = "api"
+upgrade_vm_size = "size"
+
+[[databases]]
+name = "db"
+displayName = "Db"
+path = "db.zip"
+description = "a database"
+load = true
+default = true
+depends = ["other"]
+deletable = false
+geography_policy = "parent"
+
+[databases.locationAliases]
+"FR " = "FR"
+
+[[methods]]
+name = "EF"
+path = "ef.zip"
+active = true
+description = "a method collection"
+global-methods = ["Land use"]
+
+[[methods.scoring]]
+name = "ECS"
+unit = "Pts"
+displayMultiplier = 1e6
+
+[methods.scoring.variables]
+cch = "Climate change"
+
+[methods.scoring.computed]
+tot = "2 * cch"
+
+[methods.scoring.labels]
+tot = "Total"
+
+[methods.scoring.normalization]
+cch = 7553.08
+
+[methods.scoring.weighting]
+cch = 0.2106
+
+[methods.scoring.scores]
+total = "cch"
+
+[[methods.patches]]
+description = "a patch"
+match = { category = "Resource use, fossils", flow-name = "Uranium", flow-name-prefix = "Ura", cas = "7440-61-1", subcompartment-contains = "long-term" }
+scale = 0.6
+
+[[methods.patches]]
+match = { flow-name = "Other" }
+set-value = 0.0
+
+[[flow-synonyms]]
+name = "Default flow synonyms"
+path = "data/flows.csv"
+active = true
+description = "synonyms"
+
+[[compartment-mappings]]
+name = "Default compartment mapping"
+path = "data/compartments.csv"
+active = true
+description = "compartments"
+
+[[units]]
+name = "Default units"
+path = "data/units.csv"
+active = true
+description = "units"
+
+[[energy-densities]]
+name = "Default energy densities"
+path = "data/energy_density.csv"
+active = true
+description = "densities"
+
+[[classification-presets]]
+name = "raw"
+label = "Raw"
+description = "a preset"
+filters = [{ system = "Category", value = "Agricultural", mode = "contains" }]
