@@ -1,6 +1,11 @@
 # Enforce LF line endings for all text files
 * text=auto eol=lf
 
+# Two branches each adding an entry under the same heading is not a
+# disagreement, it is two entries. Keep both sides instead of raising a
+# conflict every time a branch catches up with main.
+CHANGELOG.md merge=union
+
 # Windows-specific files can use CRLF
 *.bat text eol=crlf
 *.nsh text eol=crlf
