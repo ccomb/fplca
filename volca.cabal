@@ -78,6 +78,7 @@ library
                      , Method.FlowResolver
                      , API.Routes
                      , API.BatchImpacts
+                     , API.Csv
                      , API.Types
                      , API.JsonOptions
                      , API.DatabaseHandlers
@@ -151,6 +152,7 @@ library
                      , hashable
                      , uuid
                      , http-types
+                     , http-media
                      , network-uri
                      , streaming-commons
                      , vector
@@ -306,6 +308,7 @@ test-suite lca-tests
                      , CrossDBSubstitutionSpec
                      , GapReportSpec
                      , QualityReportSpec
+                     , QualityCsvSpec
                      , ComputedQualitySpec
                      , CoverageSpec
                      , GlobalSubstitutionSpec

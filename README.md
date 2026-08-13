@@ -276,6 +276,10 @@ POST   /api/v1/db/{dbName}/load                                          Load a 
 POST   /api/v1/db/{dbName}/unload                                        Unload (keep config, free memory)
 POST   /api/v1/db/{dbName}/relink                                        Re-resolve cross-DB links (optional JSON body: depDb + mappingCsv for an alias relink)
 GET    /api/v1/db/{dbName}/gap-report                                    Supplier-gap report (what is still unsupplied after linking)
+GET    /api/v1/db/{dbName}/quality-report                                Dataset-soundness report (what is malformed in the database)
+GET    /api/v1/db/{dbName}/quality-report.csv                            The same report as a downloadable file
+GET    /api/v1/db/{dbName}/computed-quality-report                       Computed checks (what the database computes, judged against its own norms)
+GET    /api/v1/db/{dbName}/computed-quality-report.csv                   The same report as a downloadable file
 POST   /api/v1/db/{dbName}/finalize                                      Finalize cross-DB linking
 DELETE /api/v1/db/{dbName}                                               Delete a database
 GET    /api/v1/db/{dbName}/setup                                         Setup info (path, dependencies)
@@ -447,6 +451,29 @@ volca --db agribalyse mapping METHOD_UUID --uncharacterized
 volca --db agribalyse mapping METHOD_UUID --matched --format json
 ```
 
+### Quality Reports
+
+The engine renders these two reports as CSV itself, so `--format csv` writes a
+file rather than a JSON dump, and the columns are the ones the web interface
+downloads. Load a database in one command, take its report in the next:
+
+```bash
+volca --config volca.toml database load agribalyse
+volca --config volca.toml --db agribalyse --format csv quality-report > quality.csv
+
+# What the database computes, judged against its own norms (needs a method collection)
+volca --db agribalyse --format csv computed-quality-report --collection EF31 > computed.csv
+
+# Worst findings only, as JSON
+volca --db agribalyse quality-report --limit 20
+```
+
+The same file over plain HTTP, named after the database it describes:
+
+```bash
+curl -OJ http://localhost:8080/api/v1/db/agribalyse/quality-report.csv
+```
+
 ### Database and Method Management
 
 ```bash
@@ -503,6 +530,9 @@ volca method delete ef-31                        # delete
 | Characterization for flow | `GET /db/{db}/method/{id}/characterization?flow=` | — |
 | Unmatched CFs | included in mapping response | `flow-mapping METHOD_UUID --unmatched` |
 | Uncharacterized flows | — | `flow-mapping METHOD_UUID --uncharacterized` |
+| **Quality** | | |
+| Dataset soundness | `GET /db/{db}/quality-report[.csv]` | `quality-report [--limit N]` |
+| Computed checks | `GET /db/{db}/computed-quality-report[.csv]` | `computed-quality-report [--collection NAME]` |
 | **Database Management** | | |
 | List databases | `GET /db` | `database` |
 | Upload database | `POST /db/upload` | `database upload FILE --name NAME` |

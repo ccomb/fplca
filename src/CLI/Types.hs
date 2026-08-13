@@ -51,6 +51,9 @@ data Command
     | CompartmentMappings -- List compartment mappings
     | Units -- List unit definitions
     | FlowMapping MappingOptions -- Flow mapping coverage analysis
+    -- Quality reports (--format csv takes the engine's own CSV rendering)
+    | QualityReport (Maybe Int) -- Dataset-soundness report, --limit findings per check
+    | ComputedQualityReport ComputedQualityOptions -- Computed checks over a loaded database
     | Stop -- Stop running server
     | Repl -- Interactive REPL over HTTP
     | Dump DumpTarget -- Hidden tooling: write a machine-readable document to stdout
@@ -236,6 +239,15 @@ data SearchFlowsOptions = SearchFlowsOptions
 -- | LCIA computation options
 newtype LCIAOptions = LCIAOptions
     { lciaMethodId :: Text -- Method UUID (methods loaded on server)
+    }
+    deriving (Eq, Show, Generic)
+
+{- | Options of the computed quality report. The collection may be left out
+when exactly one is loaded - the server picks it, and says so when it can't.
+-}
+data ComputedQualityOptions = ComputedQualityOptions
+    { cqoCollection :: Maybe Text -- --collection: method collection to score against
+    , cqoLimit :: Maybe Int -- --limit: findings kept per check
     }
     deriving (Eq, Show, Generic)
 

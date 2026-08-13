@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- The two quality reports of a database can now be taken as a CSV file, from
+  the command line or from a plain web address. Load a database with one
+  command and take its report with the next:
+  `volca --db agribalyse --format csv quality-report > quality.csv`, or
+  `curl -OJ .../api/v1/db/agribalyse/quality-report.csv`. One row per finding,
+  the same columns the web interface downloads. `--limit` keeps the worst
+  findings of each check; without it the file holds them all.
 - `volca dump-config-schema` prints the keys a configuration file may carry, by
   name, as JSON, the way `dump-mcp-tools` prints the assistant tools. Writing
   about this file has meant reading the decoders, so anything written about it

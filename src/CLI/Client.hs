@@ -222,6 +222,18 @@ executeRemoteCommand mgr rc globalOpts cmd = do
             db <- resolveDbName mgr rc (dbName globalOpts)
             let methodId = T.unpack (mappingMethodId opts)
             apiGet mgr rc (dbPath db ++ "/method/" ++ methodId ++ "/mapping") >>= output fmt jp
+        QualityReport mLimit -> do
+            db <- resolveDbName mgr rc (dbName globalOpts)
+            fetchReport mgr rc fmt jp (dbPath db ++ "/quality-report") (buildQuery [("limit", show <$> mLimit)])
+        ComputedQualityReport opts -> do
+            db <- resolveDbName mgr rc (dbName globalOpts)
+            fetchReport
+                mgr
+                rc
+                fmt
+                jp
+                (dbPath db ++ "/computed-quality-report")
+                (buildQuery [("collection", T.unpack <$> cqoCollection opts), ("limit", show <$> cqoLimit opts)])
         Stop -> do
             result <- apiPost mgr rc "/api/v1/shutdown" (object [])
             case result of
@@ -584,13 +596,30 @@ readJsonFile path = do
         Left (e :: IOException) -> Left (path <> ": " <> show e)
         Right raw -> either (\err -> Left (path <> ": " <> err)) Right (eitherDecode raw)
 
+{- | Fetch a quality report in the representation the caller asked for.
+@--format csv@ takes the engine's own CSV rendering, so the file the CLI
+writes down a pipe is the file the web UI downloads; every other format takes
+the JSON and renders it like any other command.
+-}
+fetchReport :: Manager -> RemoteConfig -> OutputFormat -> Maybe Text -> String -> String -> IO ()
+fetchReport mgr rc fmt jp path query = case fmt of
+    CSV -> apiGetRaw mgr rc (path ++ ".csv" ++ query) >>= either fail' (BSL.putStr . responseBody)
+    JSON -> asJson
+    Pretty -> asJson
+    Table -> asJson
+  where
+    asJson = apiGet mgr rc (path ++ query) >>= output fmt jp
+    fail' err = reportError err >> exitFailure
+
 {- | POST a JSON body and return the raw response (bytes + headers), for
 octet-stream endpoints like database export. Shares the error formatting of
 'apiRequest' but skips its JSON decoding.
 -}
 apiPostRaw :: Manager -> RemoteConfig -> String -> Value -> IO (Either String (Response BL.ByteString))
-apiPostRaw mgr rc path body = do
-    result <- try $ do
+apiPostRaw mgr rc path body =
+    rawOutcome rc <$> try request
+  where
+    request = do
         req0 <- parseRequest (rcBaseUrl rc ++ path)
         httpLbs
             req0
@@ -599,13 +628,24 @@ apiPostRaw mgr rc path body = do
                 , requestBody = RequestBodyLBS (encode body)
                 }
             mgr
-    pure $ case result of
-        Left e -> Left (formatHttpError (rcBaseUrl rc) e)
-        Right resp ->
-            let status = statusCode (responseStatus resp)
-             in if status >= 200 && status < 300
-                    then Right resp
-                    else Left (formatApiError status (responseBody resp))
+
+-- | GET a raw response, for the endpoints that answer something other than JSON.
+apiGetRaw :: Manager -> RemoteConfig -> String -> IO (Either String (Response BL.ByteString))
+apiGetRaw mgr rc path =
+    rawOutcome rc <$> try request
+  where
+    request = do
+        req0 <- parseRequest (rcBaseUrl rc ++ path)
+        httpLbs req0{requestHeaders = authHeaders rc ++ requestHeaders req0} mgr
+
+-- | Read a raw HTTP outcome: 2xx is the response, anything else the formatted error.
+rawOutcome :: RemoteConfig -> Either HttpException (Response BL.ByteString) -> Either String (Response BL.ByteString)
+rawOutcome rc (Left e) = Left (formatHttpError (rcBaseUrl rc) e)
+rawOutcome _ (Right resp)
+    | status >= 200 && status < 300 = Right resp
+    | otherwise = Left (formatApiError status (responseBody resp))
+  where
+    status = statusCode (responseStatus resp)
 
 -- | Core HTTP request helper with error handling
 apiRequest :: Manager -> RemoteConfig -> String -> String -> Maybe Value -> IO (Either String Value)
