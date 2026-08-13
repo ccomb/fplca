@@ -1030,7 +1030,13 @@ every match across all pages, or use ``.page(n)`` for explicit
 access. See :meth:`search_activities` for the pagination contract.
 
 Args:
-    query: Substring matched case-insensitively against flow names.
+    query: Words matched case-insensitively against flow names and
+        synonyms. Every word must appear, in any order, and a word
+        matches inside a longer one (``chlor`` finds
+        ``Trichloroethane``). Punctuation separates words, so
+        ``water fossil`` and ``water, fossil`` search alike. With no
+        ``sort`` asked for, names carrying the query as typed come
+        first. An empty query returns nothing.
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.

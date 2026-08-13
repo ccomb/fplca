@@ -29,7 +29,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym)
+import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
@@ -787,21 +787,30 @@ sub-compartment, read as duplicates. Every sort key therefore continues with
 the remaining displayed fields, so equal-looking rows end up adjacent and
 ordered.
 
+With no column asked for, the flows whose name answers the query best come
+first ('flowNameRelevance'), because matching word by word returns far more
+than the exact name and a client often reads only the first page. Asking for
+a column is asking for that column alone, so the ranking steps aside: a
+table sorted by name must stay alphabetical.
+
 Shared by the REST and MCP/CLI search paths, which differ only in how they
 paginate.
 -}
 flowSearchResults :: UnitDB -> FlowFilter -> [FlowKind] -> [FlowSearchResult]
-flowSearchResults units FlowFilter{ffSort = sortParam, ffOrder = orderParam} =
+flowSearchResults units FlowFilter{ffQuery = query, ffSort = sortParam, ffOrder = orderParam} =
     L.sortBy (direction (\a b -> compare (sortKey a) (sortKey b))) . map toResult
   where
     direction = if orderParam == Just "desc" then flip else id
     -- Parsers turn an absent sub-compartment into 'Nothing', never @""@, so
     -- the empty string sorts where 'Nothing' would: ahead of every named one.
     sub = fromMaybe "" . fsrCompartment
+    -- A column asked for orders on that column alone, so its key carries a
+    -- constant rank; only the default arm ranks.
     sortKey r = case sortParam of
-        Just "category" -> (fsrCategory r, sub r, fsrName r, fsrUnitName r)
-        Just "unit" -> (fsrUnitName r, fsrName r, fsrCategory r, sub r)
-        _ -> (fsrName r, fsrCategory r, sub r, fsrUnitName r)
+        Just "category" -> (0, fsrCategory r, sub r, fsrName r, fsrUnitName r)
+        Just "unit" -> (0, fsrUnitName r, fsrName r, fsrCategory r, sub r)
+        Just "name" -> (0, fsrName r, fsrCategory r, sub r, fsrUnitName r)
+        _ -> (flowNameRelevance query (fsrName r), fsrName r, fsrCategory r, sub r, fsrUnitName r)
     -- Three-arm projections from Types are total over FlowKind.
     toResult flow =
         FlowSearchResult

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Flow search results must tell homonyms apart.
+{- | What a flow search matches, and how it orders what it found.
 
 Agribalyse 3.2 carries seven @Deltamethrin@ flows differing only by
 compartment. A result that drops the sub-compartment, or an order that
@@ -10,14 +10,84 @@ module FlowSearchSpec (spec) where
 
 import API.Types (FlowSearchResult (..))
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.UUID as UUID
+import Database (allFlows, flowMatchesQuery)
 import Service (FlowFilter (..), flowSearchResults)
 import Test.Hspec
-import Types (BiosphereFlow (..), Compartment (..), FlowKind (..), UUID)
+import Types (
+    BiosphereFlow (..),
+    Compartment (..),
+    FlowKind (..),
+    TechnosphereFlow (..),
+    UUID,
+    WasteFlow (..),
+    flowKindName,
+ )
 
 spec :: Spec
-spec = describe "Service.flowSearchResults" $ do
+spec = do
+    matchSpec
+    orderSpec
+
+matchSpec :: Spec
+matchSpec = describe "Database.flowMatchesQuery" $ do
+    it "finds a name whose words the query didn't punctuate" $
+        flowMatchesQuery "water fossil" waterFossil `shouldBe` True
+
+    it "finds it whatever order the words come in" $
+        flowMatchesQuery "fossil water" waterFossil `shouldBe` True
+
+    it "still finds it when the query does punctuate" $
+        flowMatchesQuery "water, fossil" waterFossil `shouldBe` True
+
+    it "requires every word, not just one" $
+        flowMatchesQuery "water fossil" (namedFlow "Water, lake" []) `shouldBe` False
+
+    it "keeps matching inside a word, which is how chemicals are searched" $
+        flowMatchesQuery "chlor" (namedFlow "Trichloroethane" []) `shouldBe` True
+
+    it "reads the name and the synonyms as one text" $
+        flowMatchesQuery "laughing dinitrogen" laughingGas `shouldBe` True
+
+    it "matches nothing when the query holds no word at all" $
+        flowMatchesQuery ", " waterFossil `shouldBe` False
+
+    it "reads a query whose accents arrived decomposed" $
+        -- Pasting from another application can deliver NFD, where the accent
+        -- is a separate combining mark (here U+0301 after a plain "e").
+        -- Splitting on it would search for "pe" and "trole" instead of the
+        -- word the user typed.
+        flowMatchesQuery "Pe\769trole" (namedFlow "Pétrole brut" []) `shouldBe` True
+
+    it "searches a punctuated name for the pieces the user typed" $
+        flowMatchesQuery "2,4-D" (namedFlow "2,4-D" []) `shouldBe` True
+
+    it "looks in every family of flows, not only the biosphere" $
+        map flowKindName (allFlows techMap bioMap wasteMap)
+            `shouldMatchList` ["tap water", "Water, fossil", "Waste paperboard"]
+
+waterFossil :: FlowKind
+waterFossil = namedFlow "Water, fossil" []
+
+laughingGas :: FlowKind
+laughingGas = namedFlow "Dinitrogen monoxide" ["laughing gas", "nitrous oxide"]
+
+namedFlow :: Text -> [Text] -> FlowKind
+namedFlow name syns = BioKind (biosphere 0 name syns)
+
+techMap :: M.Map UUID TechnosphereFlow
+techMap = M.singleton (mkUUID 1) (TechnosphereFlow (mkUUID 1) "tap water" (mkUUID 0) M.empty Nothing Nothing)
+
+bioMap :: M.Map UUID BiosphereFlow
+bioMap = M.singleton (mkUUID 2) (biosphere 2 "Water, fossil" [])
+
+wasteMap :: M.Map UUID WasteFlow
+wasteMap = M.singleton (mkUUID 3) (WasteFlow (mkUUID 3) "Waste paperboard" (mkUUID 0) M.empty Nothing Nothing)
+
+orderSpec :: Spec
+orderSpec = describe "Service.flowSearchResults" $ do
     it "carries the sub-compartment that tells two same-medium flows apart" $
         map (\r -> (fsrCategory r, fsrCompartment r)) (search sortByName deltamethrins)
             `shouldContain` [("soil", Just "agricultural"), ("soil", Just "forestry")]
@@ -42,6 +112,26 @@ spec = describe "Service.flowSearchResults" $ do
     it "orders by medium then sub-compartment when sorting on the category" $
         map compartmentOf (search sortByName{ffSort = Just "category"} deltamethrins)
             `shouldBe` map compartmentOf (search sortByName deltamethrins)
+
+    it "puts the flow the user typed first, ahead of what the words also reached" $
+        -- "Crude oil, in ground" is alphabetically first and is only reached
+        -- because the query was split into words, so it goes last; the two
+        -- names carrying "oil, crude" as typed come first, in name order.
+        map fsrName (search crudeOil oilFlows)
+            `shouldBe` ["Oil, crude", "Palm oil, crude, at plant", "Crude oil, in ground"]
+
+    it "leaves the order alone when a column was asked for" $
+        map fsrName (search crudeOil{ffSort = Just "name"} oilFlows)
+            `shouldBe` ["Crude oil, in ground", "Oil, crude", "Palm oil, crude, at plant"]
+
+crudeOil :: FlowFilter
+crudeOil = sortByName{ffQuery = "oil, crude"}
+
+oilFlows :: [FlowKind]
+oilFlows =
+    map
+        (`namedFlow` [])
+        ["Crude oil, in ground", "Oil, crude", "Palm oil, crude, at plant"]
 
 compartmentOf :: FlowSearchResult -> (Text, Maybe Text)
 compartmentOf r = (fsrCategory r, fsrCompartment r)
@@ -77,16 +167,19 @@ deltamethrins =
 
 bioFlow :: Int -> Text -> Maybe Text -> FlowKind
 bioFlow n medium sub =
-    BioKind
-        BiosphereFlow
-            { bfId = mkUUID n
-            , bfName = "Deltamethrin"
-            , bfUnitId = mkUUID 0
-            , bfSynonyms = M.empty
-            , bfCAS = Just "52918-63-5"
-            , bfSubstanceId = Nothing
-            , bfCompartment = Just (Compartment medium sub)
-            }
+    BioKind (biosphere n "Deltamethrin" []){bfCompartment = Just (Compartment medium sub)}
+
+biosphere :: Int -> Text -> [Text] -> BiosphereFlow
+biosphere n name syns =
+    BiosphereFlow
+        { bfId = mkUUID n
+        , bfName = name
+        , bfUnitId = mkUUID 0
+        , bfSynonyms = M.singleton "en" (S.fromList syns)
+        , bfCAS = Nothing
+        , bfSubstanceId = Nothing
+        , bfCompartment = Nothing
+        }
 
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
