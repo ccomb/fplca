@@ -148,7 +148,7 @@ import Method.Types (Location)
 import Progress
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB (SynonymDB)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
 import System.FilePath (takeBaseName, takeDirectory, takeExtension, (</>))
 import Text.Printf (printf)
 import Types
@@ -1051,13 +1051,15 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
             return Nothing
         else do
             -- Delegate to the shared reader; a Nothing here means the cache
-            -- is corrupted/incompatible and should be rebuilt from source.
+            -- is corrupted or was written by another schema, and the database
+            -- is rebuilt from source. The file is left alone: a rebuild
+            -- overwrites it anyway, and a host that ships only the cache (see
+            -- 'Manager.loadDatabaseRawWithCrossDB') has no source to rebuild
+            -- from, so deleting it there destroyed the only copy of the data.
             result <- loadCompressedCacheFile zstdFile
             case result of
                 Just _ -> return result
                 Nothing -> do
-                    reportCacheOperation $ "Deleting corrupted cache file: " ++ zstdFile
-                    removeFile zstdFile
                     reportCacheOperation "Will rebuild database from source files"
                     return Nothing
 
