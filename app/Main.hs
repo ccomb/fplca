@@ -440,14 +440,20 @@ handleLogStream req respond = do
 
 -- | Validate CLI configuration for consistency
 validateCLIConfig :: CLIConfig -> IO ()
-validateCLIConfig (CLIConfig globalOpts _) =
+validateCLIConfig (CLIConfig globalOpts mCmd) =
     case (format globalOpts, jsonPath globalOpts) of
-        (Just CSV, Nothing) ->
-            die "--format csv requires --jsonpath. Examples: --jsonpath 'srResults', --jsonpath 'piActivity.pfaExchanges'"
+        (Just CSV, Nothing)
+            | not ownCsv ->
+                die "--format csv requires --jsonpath. Examples: --jsonpath 'srResults', --jsonpath 'piActivity.pfaExchanges'"
+        (Just CSV, Just _)
+            | ownCsv ->
+                die "--jsonpath does not apply here: the engine renders this report's CSV itself"
         (Just fmt, Just _)
             | fmt /= CSV ->
                 die "--jsonpath can only be used with --format csv"
         _ -> pure ()
+  where
+    ownCsv = maybe False rendersOwnCsv mCmd
 
 {- | WAI middleware that updates the last-request timestamp on every request.
 

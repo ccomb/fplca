@@ -7,6 +7,7 @@
 
 module API.Routes where
 
+import API.Csv (CSV)
 import API.DatabaseHandlers (explainCFToAPI, simpleAction)
 import qualified API.DatabaseHandlers as DBHandlers
 import qualified API.OpenApi
@@ -22,6 +23,7 @@ import Control.Monad.Reader (asks)
 import Data.Aeson
 import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
+import Data.Char (isAscii, isControl)
 import Data.Foldable (asum)
 import Data.List (intercalate, sortOn)
 import qualified Data.List.NonEmpty as NE
@@ -131,8 +133,11 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "gap-report" :> QueryParam "limit" Int :> Get '[JSON] GapReportAPI
                 -- Dataset-soundness report: what is malformed in the database itself
                 :<|> "db" :> Capture "dbName" Text :> "quality-report" :> QueryParam "limit" Int :> Get '[JSON] QualityReportAPI
+                -- The same report as a file: one row per finding, for a spreadsheet or a shell
+                :<|> "db" :> Capture "dbName" Text :> "quality-report.csv" :> QueryParam "limit" Int :> Get '[CSV] (Headers '[Header "Content-Disposition" Text] QualityReportAPI)
                 -- Computed checks: what a loaded database computes, judged against its own norms
                 :<|> "db" :> Capture "dbName" Text :> "computed-quality-report" :> QueryParam "collection" Text :> QueryParam "limit" Int :> Get '[JSON] ComputedQualityReportAPI
+                :<|> "db" :> Capture "dbName" Text :> "computed-quality-report.csv" :> QueryParam "collection" Text :> QueryParam "limit" Int :> Get '[CSV] (Headers '[Header "Content-Disposition" Text] ComputedQualityReportAPI)
                 -- Characterization-coverage report: flows a method collection scores only through a name bridge
                 :<|> "db" :> Capture "dbName" Text :> "characterization-coverage" :> QueryParam "collection" Text :> QueryParam "limit" Int :> Get '[JSON] CoverageReportAPI
                 :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
@@ -1039,6 +1044,39 @@ computedQualityReportH dbName mCollection mLimit = do
             ]
     pure (DBHandlers.computedQualityReportToAPI mLimit (CQ.computedQualityReport dbName collection scored))
 
+{- | The same two reports as a downloadable file. They answer the question the
+JSON answers, in the shape the person asking it works in: a spreadsheet, or a
+shell. The rendering lives in 'API.Csv', so every client that hands the report
+over as a file fetches it rather than reimplementing the columns.
+
+These are a second representation of an operation 'API.Resources' already
+names, not operations of their own, so they get no registry entry: one there
+would mint a second MCP tool and a second CLI name for the same question.
+-}
+qualityReportCsvH :: Text -> Maybe Int -> AppM (Headers '[Header "Content-Disposition" Text] QualityReportAPI)
+qualityReportCsvH dbName mLimit =
+    addHeader (attachment dbName "quality-report") <$> DBHandlers.qualityReportHandler dbName mLimit
+
+computedQualityReportCsvH :: Text -> Maybe Text -> Maybe Int -> AppM (Headers '[Header "Content-Disposition" Text] ComputedQualityReportAPI)
+computedQualityReportCsvH dbName mCollection mLimit =
+    addHeader (attachment dbName "computed-quality-report") <$> computedQualityReportH dbName mCollection mLimit
+
+{- | @Content-Disposition@ naming the downloaded file after the database it
+describes, so two reports don't collide in a download folder. The name keeps
+every printable ASCII character but the two a quoted header field cannot
+carry, since dropping more would make distinct databases share a filename.
+Non-ASCII goes too: a header field is ASCII, and raw UTF-8 there reaches the
+client as mojibake or is refused outright. A name left with nothing at all
+names the report alone rather than a file opening with a dash.
+-}
+attachment :: Text -> Text -> Text
+attachment dbName report =
+    "attachment; filename=\"" <> prefix <> report <> ".csv\""
+  where
+    prefix = if T.null kept then "" else kept <> "-"
+    kept = T.filter headerSafe dbName
+    headerSafe c = isAscii c && not (isControl c) && c /= '"' && c /= '\\'
+
 {- | Batch size of the catalogue-wide solve: bounds the dense right-hand-side
 block of one multi-RHS solve while every chunk still reuses the one cached
 factorization.
@@ -1228,7 +1266,8 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 7: editing the exchanges of an activity the database already holds;
+(revision 8: the two quality reports as downloadable CSV;
+revision 7: editing the exchanges of an activity the database already holds;
 revision 6: the explain-cf route, and the @match_kind@ field flow
 contributions gained alongside it; revision 5: writing activities, and the
 @transient@ / @warnings@ fields the
@@ -1239,7 +1278,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 7
+currentWireVersion = 8
 
 getVersion :: AppM Value
 getVersion =
@@ -2167,7 +2206,9 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> DBHandlers.relinkDatabaseHandler
             :<|> DBHandlers.gapReportHandler
             :<|> DBHandlers.qualityReportHandler
+            :<|> qualityReportCsvH
             :<|> computedQualityReportH
+            :<|> computedQualityReportCsvH
             :<|> DBHandlers.coverageReportHandler
             :<|> DBHandlers.copyDatabaseHandler
             :<|> DBHandlers.deleteDatabaseHandler

@@ -51,6 +51,9 @@ data Command
     | CompartmentMappings -- List compartment mappings
     | Units -- List unit definitions
     | FlowMapping MappingOptions -- Flow mapping coverage analysis
+    -- Quality reports (--format csv takes the engine's own CSV rendering)
+    | QualityReport (Maybe Int) -- Dataset-soundness report, --limit findings per check
+    | ComputedQualityReport ComputedQualityOptions -- Computed checks over a loaded database
     | Stop -- Stop running server
     | Repl -- Interactive REPL over HTTP
     | Dump DumpTarget -- Hidden tooling: write a machine-readable document to stdout
@@ -239,6 +242,15 @@ newtype LCIAOptions = LCIAOptions
     }
     deriving (Eq, Show, Generic)
 
+{- | Options of the computed quality report. The collection may be left out
+when exactly one is loaded - the server picks it, and says so when it can't.
+-}
+data ComputedQualityOptions = ComputedQualityOptions
+    { cqoCollection :: Maybe Text -- --collection: method collection to score against
+    , cqoLimit :: Maybe Int -- --limit: findings kept per check
+    }
+    deriving (Eq, Show, Generic)
+
 -- | Matrix debugging options
 data DebugMatricesOptions = DebugMatricesOptions
     { debugOutput :: FilePath -- --output base filename (required)
@@ -263,6 +275,38 @@ data CLIConfig = CLIConfig
     , command :: Maybe Command
     }
     deriving (Eq, Show, Generic)
+
+{- | Whether the engine answers this command in CSV itself. The generic
+@--format csv@ flattens whichever JSON array @--jsonpath@ names; these fetch a
+file that is already a table, so the option has nothing left to name.
+
+It lives beside 'Command' and matches every constructor on purpose: a command
+added without deciding this would silently inherit the generic treatment, and
+be refused for want of a @--jsonpath@ that does not apply to it.
+-}
+rendersOwnCsv :: Command -> Bool
+rendersOwnCsv cmd = case cmd of
+    QualityReport _ -> True
+    ComputedQualityReport _ -> True
+    Server _ -> False
+    Activity _ -> False
+    Flow _ _ -> False
+    Inventory _ -> False
+    SearchActivities _ -> False
+    SearchFlows _ -> False
+    Impacts _ _ -> False
+    DebugMatrices _ _ -> False
+    ExportMatrices _ -> False
+    Database _ -> False
+    Method _ -> False
+    Methods -> False
+    Synonyms -> False
+    CompartmentMappings -> False
+    Units -> False
+    FlowMapping _ -> False
+    Stop -> False
+    Repl -> False
+    Dump _ -> False
 
 -- | Helper function to parse OutputFormat from string
 parseOutputFormat :: String -> Maybe OutputFormat
