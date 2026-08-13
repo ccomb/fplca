@@ -33,6 +33,8 @@ module SubstanceRegistry (
     classesFromEdges,
 
     -- * CAS enrichment
+    normalizeCAS,
+    nonEmptyCAS,
     casBindings,
     casBindingsFromEdges,
 
@@ -205,6 +207,37 @@ casBindingsFromEdges edges = casBindings pairs
     nameCasPair (ByCAS c) (ByName _ n) = [(n, c)]
     nameCasPair _ _ = []
 
+{- | Canonical spelling of a CAS registry number, so the same substance keys
+identically whichever source stated it.
+
+A CAS number is @registry-group-check@: a registry number of two to seven
+digits, a two-digit group, and a single check digit. Only the registry number
+is ever zero-padded — ecoinvent writes @001309-36-0@ where the canonical form
+is @1309-36-0@ — so only its leading zeros come off. The other two segments are
+fixed-width and keep theirs: formaldehyde is @50-00-0@, never @50-0-0@.
+
+Anything that is not three dash-separated segments is passed through stripped;
+this is a canonicalizer, not a validator.
+-}
+normalizeCAS :: Text -> Text
+normalizeCAS cas = case T.splitOn "-" (T.strip cas) of
+    [registry, group, check] ->
+        let registry' = T.dropWhile (== '0') registry
+         in (if T.null registry' then "0" else registry') <> "-" <> group <> "-" <> check
+    _ -> T.strip cas
+
+{- | 'normalizeCAS' for a field that may carry no CAS at all: 'Nothing' for an
+empty string and for a placeholder made only of zeros and dashes, which several
+sources write where they mean "unknown".
+-}
+nonEmptyCAS :: Text -> Maybe Text
+nonEmptyCAS cas
+    | T.null stripped = Nothing
+    | T.all (\c -> c == '-' || c == '0') stripped = Nothing
+    | otherwise = Just (normalizeCAS stripped)
+  where
+    stripped = T.strip cas
+
 {- | Fold name→CAS pairs into bindings under the registry's conflict rule: the
 first binding of a name wins, and a later pair binding the same name to a
 /different/ CAS comes back as a conflict for the caller to report — never
@@ -221,11 +254,10 @@ casBindings = foldl' (flip insert) (M.empty, [])
                 | otherwise -> (m, (n, (c', c)) : conflicts)
 
 {- | The normalizers a CSV row's keys pass through, injected to keep this
-module free of the parser/synonym layers it would otherwise have to import.
+module free of the synonym layer it would otherwise have to import.
 'knName' canonicalizes a flow name (typically @SynonymDB.normalizeName@);
-'knCAS' canonicalizes a CAS string (typically @EcoSpold.Parser2.normalizeCAS@)
-so an edge's CAS lands in the same form as a method's, and the two actually
-meet on the bridge.
+'knCAS' canonicalizes a CAS string (typically 'normalizeCAS') so an edge's CAS
+lands in the same form as a method's, and the two actually meet on the bridge.
 -}
 data KeyNormalizers = KeyNormalizers
     { knName :: Text -> NormName

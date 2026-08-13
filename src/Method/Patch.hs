@@ -22,8 +22,8 @@ import Config (CFPatchOp (..), MethodPatch (..), MethodPatchMatch (..))
 import Data.List (mapAccumL)
 import Data.Maybe (maybeToList)
 import qualified Data.Text as T
-import Method.ParserSimaPro (normalizeCAS)
 import Method.Types (Compartment (..), Method (..), MethodCF (..), MethodCollection (..))
+import SubstanceRegistry (nonEmptyCAS)
 
 {- | Apply every patch, in order, to a method collection. Each patch scans
 every CF of every method whose category matches (via 'cfMatches') and
@@ -76,7 +76,7 @@ An unnormalizable selector (e.g. all zeros/dashes) matches nothing rather
 than mis-matching every CAS-less CF.
 -}
 casMatches :: Maybe T.Text -> T.Text -> Bool
-casMatches mcfCas want = case normalizeCAS want of
+casMatches mcfCas want = case nonEmptyCAS want of
     Nothing -> False
     Just normalized -> mcfCas == Just normalized
 

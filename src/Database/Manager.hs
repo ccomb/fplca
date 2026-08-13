@@ -154,7 +154,6 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import qualified Database.Quality as Quality
-import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import qualified Method.Coverage as Coverage
@@ -208,7 +207,7 @@ import Progress (ProgressLevel (..), reportError, reportProgress, reportProgress
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
-import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
+import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, normalizeCAS, parseSubstanceEdges)
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),

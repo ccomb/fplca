@@ -136,11 +136,11 @@ import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
-import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (Inventory, Vector, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Progress (ProgressLevel (..), reportProgress)
+import SubstanceRegistry (normalizeCAS)
 import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)

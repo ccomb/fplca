@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile, normalizeCAS) where
+module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile) where
 
 import Amount (readAmount)
 import Data.Bifunctor (first)
@@ -20,19 +20,10 @@ import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement, 
 import EcoSpold.Cutoff (applyCutoffStrategy)
 import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
+import SubstanceRegistry (normalizeCAS)
 import System.FilePath (takeBaseName)
 import Types
 import qualified Xeno.SAX as X
-
-{- | Normalize CAS number by stripping leading zeros from first segment.
-Ecoinvent zero-pads: "001309-36-0" → "1309-36-0". ILCD uses canonical form.
--}
-normalizeCAS :: Text -> Text
-normalizeCAS cas = case T.splitOn "-" cas of
-    [a, b, c] ->
-        let a' = T.dropWhile (== '0') a
-         in (if T.null a' then "0" else a') <> "-" <> b <> "-" <> c
-    _ -> T.strip cas
 
 {- | Namespace UUID for generating deterministic UUIDs from invalid text
 Using UUID v5 (SHA1-based) with a custom namespace for test data compatibility
