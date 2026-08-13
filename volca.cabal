@@ -93,6 +93,7 @@ library
                      , CLI.Parser
                      , CLI.Command
                      , CLI.Client
+                     , CLI.Render
                      , CLI.Repl
                      , EcoSpold.Common
                      , EcoSpold.Cutoff
@@ -324,6 +325,7 @@ test-suite lca-tests
                      , MethodWriterSimaProSpec
                      , AuthSpec
                      , CLISpec
+                     , CLIRenderSpec
                      , RoutesSpec
                      , ScoringKeySpec
                      , NumericEdgesSpec

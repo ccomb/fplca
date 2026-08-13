@@ -12,12 +12,11 @@ module CLI.Client (
     readJsonFile,
 ) where
 
+import CLI.Render (renderResult)
 import CLI.Types
 import Config (Config (..), ServerConfig (..), clientHost)
 import Control.Exception (IOException, try)
 import Data.Aeson (FromJSON, Value (..), decode, eitherDecode, encode, object, (.:), (.=))
-import Data.Aeson.Encode.Pretty (encodePretty)
-import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseEither, parseMaybe, withArray, withObject)
 import qualified Data.ByteString as BS
@@ -25,7 +24,7 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
-import Data.List (intercalate, transpose)
+import Data.List (intercalate)
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -479,81 +478,9 @@ outputLoad fmt jp (Right val) = case val of
 -- | Format and output a result
 output :: OutputFormat -> Maybe Text -> Either String Value -> IO ()
 output _ _ (Left err) = reportError err >> exitFailure
-output fmt _jp (Right val) = case fmt of
-    JSON -> BSL.putStrLn $ encode val
-    Pretty -> BSL.putStrLn $ encodePretty val
-    Table -> putStr $ renderTable val
-    CSV -> putStr $ renderCSV val
-
--- | Render a JSON value as an aligned text table
-renderTable :: Value -> String
-renderTable val =
-    case findArray val of
-        Just rows -> formatTable (extractTable rows)
-        Nothing -> BSL.unpack (encodePretty val) ++ "\n" -- fallback for non-array
-
--- | Render a JSON value as CSV
-renderCSV :: Value -> String
-renderCSV val =
-    case findArray val of
-        Just rows ->
-            let (headers, dataRows) = extractTable rows
-             in unlines $ intercalate "," (map quote headers) : map (intercalate "," . map quote) dataRows
-        Nothing -> BSL.unpack (encode val) ++ "\n"
-  where
-    quote s = "\"" ++ concatMap (\c -> if c == '"' then "\"\"" else [c]) s ++ "\""
-
--- | Find the first array in a JSON value (top-level or one level deep)
-findArray :: Value -> Maybe [Value]
-findArray (Array arr) = Just (V.toList arr)
-findArray (Object obj) =
-    -- Look for a single array field (e.g., databases, results, methods, items)
-    case mapMaybe extractArr (KM.toList obj) of
-        [(_, arr)] -> Just arr
-        _ -> Nothing
-  where
-    extractArr (_, Array arr) = Just ((), V.toList arr)
-    extractArr _ = Nothing
-findArray _ = Nothing
-
--- | Extract headers and rows from a list of JSON objects
-extractTable :: [Value] -> ([String], [[String]])
-extractTable [] = ([], [])
-extractTable rows@(Object first : _) =
-    let keys = map fst (KM.toList first)
-        headers = map Key.toString keys
-        dataRows = map (rowValues keys) rows
-     in (headers, dataRows)
-extractTable rows = (["value"], map (\v -> [cellValue v]) rows)
-
-rowValues :: [KM.Key] -> Value -> [String]
-rowValues keys (Object obj) = map (\k -> cellValue (fromMaybe Null (KM.lookup k obj))) keys
-rowValues _ v = [cellValue v]
-
--- | Convert a JSON value to a display string for table cells
-cellValue :: Value -> String
-cellValue (String t) = T.unpack t
-cellValue (Number n) = let s = show n in if ".0" `isSuffixOf` s then take (length s - 2) s else s
-cellValue (Bool True) = "yes"
-cellValue (Bool False) = ""
-cellValue Null = ""
-cellValue v = BSL.unpack (encode v)
-
-isSuffixOf :: String -> String -> Bool
-isSuffixOf suffix str = drop (length str - length suffix) str == suffix
-
--- | Format headers + rows as an aligned table with separators
-formatTable :: ([String], [[String]]) -> String
-formatTable ([], _) = ""
-formatTable (headers, rows) =
-    let allRows = headers : rows
-        widths = map (maximum . map length) (transpose (map (map (take maxColWidth)) allRows))
-        padRow = zipWith (\w c -> take maxColWidth c ++ replicate (w - length (take maxColWidth c)) ' ') widths
-        sep = intercalate "+" (map (\w -> replicate (w + 2) '-') widths)
-        fmtRow r = "  " ++ intercalate " | " (padRow r)
-     in unlines $ fmtRow headers : ("--" ++ sep) : map fmtRow rows
-  where
-    maxColWidth = 60
+output fmt jp (Right val) = case renderResult fmt jp val of
+    Left err -> reportError (T.unpack err) >> exitFailure
+    Right rendered -> TIO.putStr rendered
 
 authHeaders :: RemoteConfig -> [(HeaderName, BS.ByteString)]
 authHeaders rc = case rcAuth rc of
