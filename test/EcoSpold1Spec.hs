@@ -286,6 +286,11 @@ spec = do
                     map bfId bios1 `shouldBe` map bfId bios2
                 _ -> expectationFailure "both fixtures should parse"
 
+        it "reads the dataset number off <dataset>, not off a numbered <person>" $
+            case parseWithXeno otherAuthorXml of
+                Right (_, _, _, _, _, dsNum, _) -> dsNum `shouldBe` 43
+                Left err -> expectationFailure err
+
     describe "generateUnitUUID" $ do
         it "produces a stable UUID for known inputs" $
             generateUnitUUID "kg" `shouldBe` read "d74bc05e-6502-555a-a40c-e6e7580dbf93"

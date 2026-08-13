@@ -210,9 +210,14 @@ onAttribute state name value = case psContext state of
     InOutputGroup _ -> datasetNumberAttr
     Other -> datasetNumberAttr
   where
-    -- The dataset's numeric id lives on the top-level <dataset> element.
+    -- The dataset's numeric id lives on the <dataset> element itself, which is
+    -- the head of the path. Accepting it anywhere under <dataset> let the
+    -- metadata's own numbered elements (<source>, <person>) overwrite it, so
+    -- what was recorded was really the last data generator's id.
     datasetNumberAttr
-        | isElement name "number" && any (isElement "dataset") (psPath state) =
+        | isElement name "number"
+        , currentElement : _ <- psPath state
+        , isElement currentElement "dataset" =
             state{psDatasetNumber = bsToInt value}
         | otherwise = state
 

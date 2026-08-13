@@ -34,6 +34,14 @@
   of its reference product, so anything holding one has to look it up again.
   And the cache of every database, whatever its format, is rebuilt from its
   source once, because one version number covers them all.
+- An input of an EcoSpold 1 dataset is now resolved to its supplier through the
+  dataset number the export itself points at. That number was read off the last
+  numbered element in the dataset's metadata, which is the person who wrote it,
+  not off the dataset, so the lookup found nothing and every input was matched
+  on name and geography instead. A 12 000 dataset export offered 67 suppliers
+  to that lookup where it should have offered 11 947. Inputs still all resolve,
+  and a few now resolve to the dataset the export names rather than to another
+  one carrying the same name.
 - The macOS download for Apple Silicon now runs on a Mac that has no developer
   tools. It was built against the build machine's Homebrew copies of OpenBLAS
   and the Fortran runtime and looked for them at the same paths on yours, so it
