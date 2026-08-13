@@ -11,7 +11,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Test.Hspec
 
-import Search.BM25 (buildIndex, score)
+import Search.BM25 (indexActivities, score)
 import Search.Normalize (tokenize)
 import Types
 
@@ -86,18 +86,18 @@ spec = describe "Search.BM25" $ do
                     , mkActivity "Viande bovine, steak haché, cru" "FR" []
                     , mkActivity "Lait demi-écrémé" "FR" []
                     ]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
             scores = score idx (weighted "steak hache")
         head (ranking scores) `shouldBe` 1
 
     it "returns empty results for no query terms" $ do
         let acts = V.fromList [mkActivity "foo" "GLO" []]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
         ranking (score idx []) `shouldBe` []
 
     it "returns zero scores when no term matches" $ do
         let acts = V.fromList [mkActivity "Electricity" "FR" []]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
         ranking (score idx (weighted "steak")) `shouldBe` []
 
     it "matches reference product names too" $ do
@@ -107,7 +107,7 @@ spec = describe "Search.BM25" $ do
                     [ mkActivity "Production activity alpha" "FR" [mkRefOutput f1]
                     , mkActivity "Electricity, grid" "FR" []
                     ]
-            idx = buildIndex acts flows
+            idx = indexActivities acts flows
             scores = score idx (weighted "lait")
         head (ranking scores) `shouldBe` 0
 
@@ -117,7 +117,7 @@ spec = describe "Search.BM25" $ do
                     [ mkActivity "Steak haché 15% MG" "FR" []
                     , mkActivity "Electricity" "FR" []
                     ]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
         head (ranking (score idx (weighted "HACHE"))) `shouldBe` 0
         head (ranking (score idx (weighted "Haché"))) `shouldBe` 0
         head (ranking (score idx (weighted "hache"))) `shouldBe` 0
@@ -130,7 +130,7 @@ spec = describe "Search.BM25" $ do
                     [ mkActivity longTxt "FR" []
                     , mkActivity short "FR" []
                     ]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
             scores = score idx (weighted "bovine steak")
         head (ranking scores) `shouldBe` 1
 
@@ -143,7 +143,7 @@ spec = describe "Search.BM25" $ do
                     , mkActivity "Viande de porc" "FR" []
                     , mkActivity "Electricity, grid" "FR" []
                     ]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
             scores = score idx (weighted "steak viande")
             retrieved = ranking scores
         length retrieved `shouldBe` 2
@@ -159,6 +159,6 @@ spec = describe "Search.BM25" $ do
                     [ mkActivity "Lait demi-écrémé" "FR" []
                     , mkActivity "Electricity grid" "FR" []
                     ]
-            idx = buildIndex acts M.empty
+            idx = indexActivities acts M.empty
             scores = score idx (weighted "FR")
         ranking scores `shouldBe` []

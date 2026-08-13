@@ -9,6 +9,7 @@ the activity vector layout the rest of the engine uses.
 module Search.BM25 (
     BM25Index,
     buildIndex,
+    indexActivities,
     addBM25Index,
     score,
 ) where
@@ -32,7 +33,13 @@ import Types (Activity, Database (..), TechFlowDB, activityName, exchangeFlowId,
 initializeRuntimeFields during database load. Idempotent.
 -}
 addBM25Index :: Database -> Database
-addBM25Index db = db{dbBM25Index = Just (buildIndex (dbActivities db) (dbTechFlows db))}
+addBM25Index db = db{dbBM25Index = Just (indexActivities (dbActivities db) (dbTechFlows db))}
+
+{- | Index the activity corpus: a document is an activity, and its doc id is
+its position in the activity vector the rest of the engine already uses.
+-}
+indexActivities :: V.Vector Activity -> TechFlowDB -> BM25Index
+indexActivities activities flowDb = buildIndex (V.map (documentTokens flowDb) activities)
 
 -- BM25 hyperparameters. Defaults from the canonical Okapi BM25 paper.
 k1 :: Double
@@ -41,16 +48,16 @@ k1 = 1.2
 b :: Double
 b = 0.75
 
-{- | Build the BM25 index for a vector of activities.
-Document text per activity = activity name + reference product name.
-Location is intentionally excluded: it's a structured filter (geoParam),
-not a ranking signal.
+{- | Build the BM25 index from one token list per document.
+
+A document is its position in the vector and nothing else, so any corpus
+can be indexed here as long as the caller keeps the vector it drew the
+tokens from: activity documents resolve back through the activity vector,
+and a second corpus would resolve through its own.
 -}
-buildIndex :: V.Vector Activity -> TechFlowDB -> BM25Index
-buildIndex activities flowDb =
-    let n = V.length activities
-        tokensByDoc :: V.Vector [Text]
-        tokensByDoc = V.map (documentTokens flowDb) activities
+buildIndex :: V.Vector [Text] -> BM25Index
+buildIndex tokensByDoc =
+    let n = V.length tokensByDoc
 
         docLengths :: VU.Vector Int
         docLengths = VU.generate n (\i -> length (tokensByDoc V.! i))
@@ -112,7 +119,10 @@ tokenTrigrams t
             raw = go t
          in M.keys (M.fromList [(tg, ()) | tg <- raw]) -- dedupe
 
--- | Extract searchable tokens for one activity: name + reference product name(s).
+{- | Extract searchable tokens for one activity: name + reference product
+name(s). Location is deliberately excluded: it's a structured filter
+(geoParam), not a ranking signal.
+-}
 documentTokens :: TechFlowDB -> Activity -> [Text]
 documentTokens flowDb a =
     tokenize (activityName a)

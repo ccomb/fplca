@@ -7,7 +7,7 @@ import Data.Text (Text)
 import qualified Data.Vector as V
 import Test.Hspec
 
-import Search.BM25 (buildIndex)
+import Search.BM25 (indexActivities)
 import Search.BM25.Types (BM25Index)
 import Search.Fuzzy (expandTokens)
 import Types
@@ -35,7 +35,7 @@ mkActivity name xs =
 -- Index-builder helper: create a BM25 index over a list of activity names.
 indexOfNames :: [Text] -> BM25Index
 indexOfNames names =
-    buildIndex (V.fromList [mkActivity n [] | n <- names]) M.empty
+    indexActivities (V.fromList [mkActivity n [] | n <- names]) M.empty
 
 spec :: Spec
 spec = describe "Search.Fuzzy" $ do
