@@ -46,7 +46,7 @@ module Database.Edit (
 ) where
 
 import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
-import Control.Exception (SomeException, finally, try)
+import Control.Exception (SomeException, try)
 import Control.Monad (when)
 import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
@@ -90,6 +90,7 @@ import Database.Manager (
     getMergedSynonymDB,
     getMergedUnitConfig,
     relinkDatabase,
+    withReservedName,
  )
 import Database.Rebuild (processKey, renderKey, resolveProcess)
 import Database.Upload (DatabaseFormat (..), slugify)
@@ -134,20 +135,18 @@ copyDatabase manager srcName newName = do
         else
             getDatabase manager srcName >>= \case
                 Nothing -> pure $ Left $ "Database not loaded: " <> srcName
-                Just src -> do
-                    reserved <- atomically $ do
-                        loadedDbs <- readTVar (dmLoadedDbs manager)
-                        availableDbs <- readTVar (dmAvailableDbs manager)
-                        stagingDbs <- readTVar (dmStagingDbs manager)
-                        if M.member slug loadedDbs || M.member slug availableDbs || S.member slug stagingDbs
-                            then pure (Left ("Database already exists: " <> slug))
-                            else Right () <$ modifyTVar' (dmStagingDbs manager) (S.insert slug)
-                    case reserved of
-                        Left err -> pure (Left err)
-                        Right () ->
-                            finally
-                                (registerCopy manager slug src)
-                                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete slug))
+                Just src ->
+                    withReservedName manager slug (nameIsFree slug) $ \() ->
+                        registerCopy manager slug src
+  where
+    nameIsFree slug = do
+        loadedDbs <- readTVar (dmLoadedDbs manager)
+        availableDbs <- readTVar (dmAvailableDbs manager)
+        stagingDbs <- readTVar (dmStagingDbs manager)
+        pure $
+            if M.member slug loadedDbs || M.member slug availableDbs || S.member slug stagingDbs
+                then Left ("Database already exists: " <> slug)
+                else Right ()
 
 {- | Build the copy's solver/index and insert it under @slug@. Caller holds the
 'dmStagingDbs' reservation for @slug@.
@@ -534,17 +533,15 @@ mutateUploadedDatabase manager dbName op = do
     -- the other started from, and both would land in the journal. Reserve the
     -- name (the same reservation copy and staging use) and refuse the second
     -- rather than queue it: edits are interactive and rare.
-    reserved <- atomically $ do
+    withReservedName manager dbName notAlreadyRunning $ \() ->
+        mutateReserved manager dbName op
+  where
+    notAlreadyRunning = do
         staging <- readTVar (dmStagingDbs manager)
-        if S.member dbName staging
-            then pure False
-            else True <$ modifyTVar' (dmStagingDbs manager) (S.insert dbName)
-    if not reserved
-        then pure $ Left $ "An edit of " <> dbName <> " is already in progress. Retry when it finishes."
-        else
-            finally
-                (mutateReserved manager dbName op)
-                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
+        pure $
+            if S.member dbName staging
+                then Left ("An edit of " <> dbName <> " is already in progress. Retry when it finishes.")
+                else Right ()
 
 -- | The mutation proper. The caller holds the 'dmStagingDbs' reservation.
 mutateReserved :: DatabaseManager -> Text -> JournalOp -> IO (Either Text MutationOutcome)
