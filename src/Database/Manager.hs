@@ -124,17 +124,17 @@ import Control.Concurrent.STM
 import Control.Exception (SomeException, try)
 import qualified Control.Exception
 import Control.Lens ((&), (?~))
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (filterM, forM, forM_, unless, void, when)
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
 import qualified Data.Csv as Csv
-import Data.Either (lefts, partitionEithers, rights)
+import Data.Either (fromRight, lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
@@ -1543,8 +1543,46 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
                     )
 
 -- | Detected format of a database directory
-data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatILCD | FormatUnknown
-    deriving (Show, Eq)
+
+{- | What shape of source a path holds, as far as picking the thing to hand
+the loader goes. The distinction that matters is whether the loader wants one
+file (a CSV export, a workbook) or the directory itself (an EcoSpold package,
+an ILCD tree); 'dataFileExtension' is where that is decided.
+-}
+data DirectoryFormat = FormatSpold | FormatXML | FormatCSV | FormatExcel | FormatILCD | FormatUnknown
+    deriving (Show, Eq, Bounded, Enum)
+
+{- | The extension whose file inside a source directory the loader is handed,
+for the formats that name one file rather than a tree. 'Nothing' means hand
+over the directory.
+
+The file branch of 'detectDirectoryFormat' keeps its own extension literals;
+these two lists are not tied together, only the constructor set is.
+-}
+dataFileExtension :: DirectoryFormat -> Maybe String
+dataFileExtension fmt = case fmt of
+    FormatCSV -> Just ".csv"
+    FormatExcel -> Just ".xlsx"
+    FormatSpold -> Nothing
+    FormatXML -> Nothing
+    FormatILCD -> Nothing
+    FormatUnknown -> Nothing
+
+{- | How a refusal names what it would have accepted. Derived from the
+detector rather than written out, so a format added there cannot go missing
+from the sentence a user reads.
+-}
+supportedSourceFormats :: Text
+supportedSourceFormats =
+    T.intercalate ", " (mapMaybe label [minBound .. maxBound])
+  where
+    label f = case f of
+        FormatSpold -> Just "EcoSpold v2 (.spold)"
+        FormatXML -> Just "EcoSpold v1 (.xml)"
+        FormatCSV -> Just "SimaPro CSV (.csv)"
+        FormatExcel -> Just "Brightway Excel (.xlsx)"
+        FormatILCD -> Just "ILCD"
+        FormatUnknown -> Nothing
 
 -- | Detect the format of files in a directory
 detectDirectoryFormat :: FilePath -> IO DirectoryFormat
@@ -1557,6 +1595,7 @@ detectDirectoryFormat path = do
             let ext = map toLower (takeExtension path)
             return $ case ext of
                 ".csv" -> FormatCSV
+                ".xlsx" -> FormatExcel
                 ".spold" -> FormatSpold
                 ".xml" -> FormatXML
                 _ -> FormatUnknown
@@ -1578,15 +1617,28 @@ detectDirectoryFormat path = do
                             if hasSpold
                                 then return FormatSpold
                                 else do
-                                    files <- listDirectory path
-                                    let extensions = map (map toLower . takeExtension) files
-                                    -- Check for remaining formats (in order of preference)
-                                    if ".csv" `elem` extensions
-                                        then return FormatCSV
-                                        else
-                                            if ".xml" `elem` extensions
-                                                then return FormatXML
-                                                else return FormatUnknown
+                                    -- A workbook is probed the same way and for
+                                    -- the same reason: zipping a folder puts it
+                                    -- one level down, and a sheet exported
+                                    -- beside it as CSV would otherwise mask it.
+                                    -- Ahead of .csv, which is the order
+                                    -- 'Database.Upload.detectDatabaseFormat'
+                                    -- uses — the two must agree or a source is
+                                    -- announced as one format and parsed as
+                                    -- another.
+                                    hasXlsx <- containsExtensionDeep ".xlsx" path
+                                    if hasXlsx
+                                        then return FormatExcel
+                                        else do
+                                            files <- listDirectory path
+                                            let extensions = map (map toLower . takeExtension) files
+                                            -- Check for remaining formats (in order of preference)
+                                            if ".csv" `elem` extensions
+                                                then return FormatCSV
+                                                else
+                                                    if ".xml" `elem` extensions
+                                                        then return FormatXML
+                                                        else return FormatUnknown
                 else return FormatUnknown
 
 {- | Recursively test whether the directory tree rooted at @path@ contains at
@@ -1598,12 +1650,48 @@ containsExtensionDeep :: String -> FilePath -> IO Bool
 containsExtensionDeep ext =
     fmap (any ((== ext) . map toLower . takeExtension)) . listDirectoryRecursive
 
--- | Find CSV files in a directory
-findCSVFiles :: FilePath -> IO [FilePath]
-findCSVFiles path = do
-    files <- listDirectory path
-    let csvFiles = filter (\f -> map toLower (takeExtension f) == ".csv") files
-    return $ map (path </>) csvFiles
+-- | Files in a directory carrying the given (lowercased) extension.
+findFilesWithExtension :: String -> FilePath -> IO [FilePath]
+findFilesWithExtension ext path = do
+    entries <- listDirectory path
+    let candidates = [path </> f | f <- entries, map toLower (takeExtension f) == ext]
+    -- A directory named "exports.csv" carries the extension and is not a file;
+    -- handing it to a parser is a crash where a refusal belongs.
+    filterM doesFileExist candidates
+
+{- | The path to hand the loader: the file itself when the source already is
+one, otherwise the single file of this format inside the directory.
+
+A refusal names the extension it looked for rather than saying "no CSV", so a
+workbook source that holds no workbook does not report a missing CSV.
+-}
+narrowToDataFile :: DirectoryFormat -> FilePath -> IO (Either Text FilePath)
+narrowToDataFile fmt path = case dataFileExtension fmt of
+    Nothing -> pure (Right path)
+    Just ext ->
+        doesFileExist path >>= \isFile ->
+            if isFile
+                then pure (Right path)
+                else do
+                    found <- findFilesWithExtension ext path
+                    case found of
+                        [] -> pure $ Left ("No " <> T.pack ext <> " files found in: " <> T.pack path)
+                        [f] -> pure (Right f)
+                        (f : rest) -> do
+                            -- listDirectory is unordered, so which one this is
+                            -- can differ between two machines. Say so rather
+                            -- than let a reload quietly read a different file.
+                            reportProgress Warning $
+                                "Several "
+                                    <> ext
+                                    <> " files in "
+                                    <> path
+                                    <> "; loading "
+                                    <> f
+                                    <> " and ignoring "
+                                    <> show (length rest)
+                                    <> " other(s)"
+                            pure (Right f)
 
 {- | Build activity map from list of activities
 Creates (activityUUID, productUUID) -> Activity mapping
@@ -1678,41 +1766,35 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                 else do
                     format <- detectDirectoryFormat path
                     case format of
-                        FormatCSV -> loadCSV path
+                        FormatCSV -> narrowToDataFile format path >>= either (pure . Left) loadCSV
+                        -- A workbook names one file, like a CSV export, but the
+                        -- parsing itself is Loader's business.
+                        FormatExcel -> narrowToDataFile format path >>= either (pure . Left) loadStructured
                         FormatUnknown ->
                             return $
                                 Left $
                                     "No supported database files found in: "
                                         <> T.pack path
-                                        <> ". Supported formats: EcoSpold v2 (.spold), EcoSpold v1 (.xml), SimaPro CSV (.csv), ILCD"
-                        _ -> loadStructured path
+                                        <> ". Supported formats: "
+                                        <> supportedSourceFormats
+                        FormatSpold -> loadStructured path
+                        FormatXML -> loadStructured path
+                        FormatILCD -> loadStructured path
   where
-    loadCSV path = do
-        mCsvFile <-
-            doesFileExist path >>= \isFileCheck ->
-                if isFileCheck
-                    then return (Right path)
-                    else do
-                        csvFiles <- findCSVFiles path
-                        case csvFiles of
-                            [] -> return $ Left $ "No CSV files found in: " <> T.pack path
-                            (f : _) -> return (Right f)
-        case mCsvFile of
+    loadCSV csvFile = do
+        reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
+        (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
+        reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+        let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
+        linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
+        dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
+        case dbResult of
             Left err -> return $ Left err
-            Right csvFile -> do
-                reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-                (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
-                reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
-                linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
-                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
-                case dbResult of
-                    Left err -> return $ Left err
-                    Right db -> do
-                        unless noCache $
-                            Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
-                        Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                        return $ Right (db, False)
+            Right db -> do
+                unless noCache $
+                    Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
+                Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
+                return $ Right (db, False)
 
     loadStructured path = do
         loadResult <-
@@ -2334,19 +2416,12 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
             let otherIndexes = M.elems indexedDbs
 
-            -- Detect format to find the correct file path (CSV needs file, not directory)
+            -- A CSV export or a workbook names one file; the loader is handed
+            -- that rather than the directory holding it.
             format <- detectDirectoryFormat path
-            loadPath <- case format of
-                FormatCSV -> do
-                    isFile <- doesFileExist path
-                    if isFile
-                        then return path
-                        else do
-                            csvFiles <- findCSVFiles path
-                            case csvFiles of
-                                [] -> return path -- let loader produce the error
-                                (f : _) -> return f
-                _ -> return path
+            -- Either way the loader gets a path: a source that holds no file of
+            -- its own format is left to produce the error it produces anyway.
+            loadPath <- fromRight path <$> narrowToDataFile format path
 
             -- Parse and run cross-DB linking (but don't build matrices)
             synonymDB <- getMergedSynonymDB manager

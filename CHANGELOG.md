@@ -43,6 +43,13 @@
   an older engine.
 
 ### Fixed
+- A Brightway Excel workbook loads from a directory, not only when its own
+  path is named. The engine reads five database formats but the step that
+  decides what a source directory holds knew four, so an uploaded `.xlsx` —
+  which arrives extracted into a directory — was refused with "No supported
+  database files found", listing the four formats it did know. The list in
+  that sentence is now read off the same place the detection is, so a format
+  the engine reads cannot go missing from what it says it reads.
 - A substance is now recognised by its CAS number however the source spelled
   it. A CAS reads `registry-group-check`, and only the registry number is ever
   zero-padded: the group is two digits and the check digit one. One of the two
