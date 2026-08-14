@@ -1219,16 +1219,44 @@ strategyPriority NoMatch = 4
 {- | The medium and subcompartment a characterization factor keys on, or
 'Nothing' when it states no compartment at all.
 
-Every lookup table 'buildMethodTables' fills is keyed on this pair, so it is
-derived once rather than once per table. Eight comprehensions spelled it out
-in three lines each, and eight copies of a key derivation are eight chances
-for one of them to normalize differently from the table it is looked up in.
+The compartment-keyed tables 'buildMethodTables' fills are spelled in terms of
+this — one derivation rather than one per table. (It still runs per table; what
+is shared is the derivation, not its result. 'mtUuidCF' and 'mtRegionalizedCF'
+key on the flow, not on this pair.)
+
+It carries the newtypes rather than a bare pair of 'Text', for the reason its
+read-path twin 'flowMediumSub' does: the two components are both text, so a
+transposed binding would key every table with the medium and the subcompartment
+swapped, and type-check.
+
+The two are not yet interchangeable. 'flowMediumSub' case-folds its input
+before normalizing where this folds the medium after, and neither folds the
+subcompartment the table keys on. On a compartment map whose target columns
+carry a capital — nothing forbids one, and the shipped file simply has none —
+the two sides key differently and every factor for that medium goes silently
+unmatched. Closing that changes which factors resolve, so it wants its own
+change and its own test rather than a quiet edit here.
 -}
-cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (Text, Text)
+
+{- | A subcompartment as the matchers compare them: case-folded and trimmed.
+
+The lookup tables key on the subcompartment as its source spelled it, while
+every predicate that classifies one ('isUnspecifiedSub', 'isForeignMediumSub')
+folds first. That difference is older than this function and is not resolved
+here — folding the table keys too would change which factors resolve, which
+wants its own change and its own test.
+-}
+foldSub :: Subcompartment -> Subcompartment
+foldSub (Subcompartment s) = Subcompartment (T.toLower (T.strip s))
+
+unSub :: Subcompartment -> Text
+unSub (Subcompartment s) = s
+
+cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (Medium, Subcompartment)
 cfMediumSub cmap cf = do
     comp <- mcfCompartment cf
     let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-    pure (normalizeMedium (T.toLower normMedRaw), normSub)
+    pure (Medium (normalizeMedium (T.toLower normMedRaw)), Subcompartment normSub)
 
 buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables methodFamily cmap energyDensities mappings =
@@ -1257,12 +1285,12 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((SR.NormName rawName, Medium normMed), [entryOf cf mflow])
+                    [ ((SR.NormName rawName, medium), [entryOf cf mflow])
                     | (cf, mflow) <- mappings
                     , let rawName = normalizeNameKeepUnit (mcfFlowName cf)
                     , rawName /= normalizeName (mcfFlowName cf)
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just (normMed, _) <- [cfMediumSub cmap cf]
+                    , Just (medium, _) <- [cfMediumSub cmap cf]
                     ]
         , -- The broadcast name tables (exact + fallback) hold only
           -- non-regionalized CFs. Location-specific rows belong to
@@ -1274,10 +1302,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (entryOf cf mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), medium, Subcompartment normSub), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+                    , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
                     , not (T.null normSub)
                     ]
         , mtFallbackCF =
@@ -1295,10 +1323,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), medium), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+                    , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
                     , isUnspecifiedSub normSub
                     ]
         , mtLongTermFallbackCF =
@@ -1311,10 +1339,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             dropRank $
                 M.fromListWith
                     preferBetter
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
+                    [ ((SR.NormName (nameKey cf mflow), medium), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+                    , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
                     , isLongTermUnspecifiedSub normSub
                     ]
         , mtSubBlindCF =
@@ -1325,10 +1353,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             M.mapMaybe agreedValue $
                 M.fromListWith
                     (++)
-                    [ ((SR.NormName (nameKey cf mflow), Medium normMed), [entryOf cf mflow])
+                    [ ((SR.NormName (nameKey cf mflow), medium), [entryOf cf mflow])
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just (normMed, _) <- [cfMediumSub cmap cf]
+                    , Just (medium, _) <- [cfMediumSub cmap cf]
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
@@ -1371,13 +1399,13 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             (`M.withoutKeys` casDiscriminated) . M.map snd $
                 M.fromListWith
                     (preferUnspecifiedBy teCF)
-                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, entryOf cf mflow))
+                    [ ((SR.CASNumber cas, medium), (casSubRank normSub, entryOf cf mflow))
                     | (cf, mflow@(Just (_, ByCAS))) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
                     , Nothing <- [mcfConsumerLocation cf]
                     , (_, Nothing) <- [extractLocationSuffix (mcfFlowName cf)]
-                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+                    , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
                     ]
         , mtRegionalCasCF =
             -- Same unspecified-default preference as 'mtCasCF', applied per
@@ -1395,12 +1423,12 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             (`M.withoutKeys` casDiscriminated) . M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith (preferUnspecifiedBy id))
-                    [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
+                    [ ((SR.CASNumber cas, medium), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
                     , Just loc <- [mcfConsumerLocation cf]
-                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+                    , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
                     ]
         , mtRegionalizedCF =
             -- Filter: a CF whose own compartment carries a specific subcomp
@@ -1473,12 +1501,12 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     casValuesBySub =
         M.fromListWith
             S.union
-            [ ((SR.CASNumber cas, Medium normMed, Subcompartment subClass), S.singleton (mcfValue cf))
+            [ ((SR.CASNumber cas, medium, Subcompartment subClass), S.singleton (mcfValue cf))
             | (cf, _) <- mappings
             , Just cas <- [mcfCAS cf]
             , not (T.null cas)
             , Nothing <- [mcfConsumerLocation cf]
-            , Just (normMed, normSub) <- [cfMediumSub cmap cf]
+            , Just (medium, Subcompartment normSub) <- [cfMediumSub cmap cf]
             , let subClass = if isUnspecifiedSub normSub then "" else normSub
             ]
 
@@ -1503,11 +1531,8 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     seaWaterCFs
         | any namesTheSea mappings = MethodDeclaresSeaWater
         | otherwise = MethodSilentOnSeaWater
-    namesTheSea (cf, _) = case mcfCompartment cf of
-        Nothing -> False
-        Just comp ->
-            let Compartment _ sub _ = normalizeCompartment cmap comp
-             in isForeignMediumSub (Subcompartment (T.toLower (T.strip sub)))
+    namesTheSea (cf, _) =
+        maybe False (isForeignMediumSub . foldSub . snd) (cfMediumSub cmap cf)
 
     -- A CF whose subcomp names no specific subcompartment ('isUnspecifiedSub')
     -- is a wildcard. A CF with a specific subcomp must match the flow's subcomp
@@ -1523,11 +1548,9 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     -- parsed from the compartment name.
     cfSubcompMatchesFlow cf flow = case mcfCompartment cf of
         Nothing -> Just MediumLevelSub
-        Just comp ->
-            let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
-                !cfSubN = T.toLower (T.strip cfSubRaw)
-                (_, Subcompartment flowSubRaw) = flowMediumSub cmap flow
-                !flowSubN = T.toLower (T.strip flowSubRaw)
+        Just _ ->
+            let !cfSubN = maybe T.empty (unSub . foldSub . snd) (cfMediumSub cmap cf)
+                !flowSubN = unSub (foldSub (snd (flowMediumSub cmap flow)))
              in -- A wildcard (unspecified) CF matches any subcompartment except
                 -- the ones the 'lookupCascadeCF' gate excludes on the
                 -- non-regional path — both tiers: a foreign medium (sea/ocean)
