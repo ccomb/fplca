@@ -31,6 +31,7 @@ module Database.Manager (
 
     -- * Initialization
     initDatabaseManager,
+    withReservedName,
 
     -- * Operations
     getDatabase,
@@ -154,7 +155,6 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
 import qualified Database.Quality as Quality
-import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (clearCachedSolver)
 import Method.ChemSynonyms (ChemSynonyms, emptyChemSynonyms, loadChemSynonyms)
 import qualified Method.Coverage as Coverage
@@ -208,7 +208,7 @@ import Progress (ProgressLevel (..), reportError, reportProgress, reportProgress
 import qualified Search.BM25 as BM25
 import SharedSolver (SharedSolver, createSharedSolver)
 import qualified SharedSolver
-import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, parseSubstanceEdges)
+import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, normalizeCAS, parseSubstanceEdges)
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
     Activity (..),
@@ -882,6 +882,44 @@ mapMethodToIndexCached manager dbName collection method = do
             let !idx = buildMethodIndex method
             atomically $ modifyTVar' (dmMethodIndexCache manager) (M.insert key idx)
             pure idx
+
+{- | Hold a database name against concurrent work for the duration of an
+action, and release it whether the action returns or throws.
+
+@decide@ runs in the same transaction as the claim, so a caller refuses for
+its own reasons — a name already taken, an edit already running — with no
+window between finding the name free and taking it. That window is the whole
+reason this is one function: two copies of it, written apart, are two chances
+to widen it.
+
+The reservation lives in 'dmStagingDbs' whatever the slow work is. Staging,
+copying and editing all rewrite the same database under the same name, so
+they contend with each other and not only with their own kind.
+
+'getDatabaseSetupInfo' does not come through here on purpose: it waits for
+whoever holds the name (STM @retry@) instead of refusing, and it has a third
+answer — already staged, nothing to reserve — that this shape has no room for.
+-}
+withReservedName ::
+    DatabaseManager ->
+    Text ->
+    -- | Refuse with the caller's own error, or carry a value into the action
+    STM (Either e a) ->
+    (a -> IO (Either e b)) ->
+    IO (Either e b)
+withReservedName manager dbName decide act = do
+    claimed <- atomically $ do
+        decided <- decide
+        case decided of
+            Left err -> pure (Left err)
+            Right carried ->
+                Right carried <$ modifyTVar' (dmStagingDbs manager) (S.insert dbName)
+    case claimed of
+        Left err -> pure (Left err)
+        Right carried ->
+            Control.Exception.finally
+                (act carried)
+                (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
 
 {- | Clear all cached flow mappings (call when databases, methods, or synonyms change).
 Also drops the merged flow/unit snapshots — both caches depend on the loaded-DB set.

@@ -62,10 +62,10 @@ import qualified Data.Text.Encoding as TE
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 
-import EcoSpold.Parser2 (normalizeCAS)
 import ILCD.Writer (escapeXml, formatDouble)
 import Method.FlowResolver (parseCompartment)
 import Method.Types
+import SubstanceRegistry (normalizeCAS)
 
 --------------------------------------------------------------------------------
 -- Entry points

@@ -12,7 +12,6 @@ module Method.ParserSimaPro (
     parseSimaProMethodCSV,
     parseSimaProMethodCSVBytes,
     isSimaProMethodCSV,
-    normalizeCAS,
 ) where
 
 import qualified Data.ByteString as BS
@@ -25,6 +24,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID.V5 as UUID5
 
 import Method.Types
+import SubstanceRegistry (nonEmptyCAS)
+
 import SimaPro.Parser (
     SimaProConfig (..),
     decodeBS,
@@ -319,7 +320,7 @@ parseCFRow cfg line =
                         , mcfDirection = direction comp
                         , mcfValue = parseAmount (spDecimal cfg) (BS8.strip cfVal)
                         , mcfCompartment = mkCompartment comp sub
-                        , mcfCAS = normalizeCAS (decodeBS (BS8.strip cas))
+                        , mcfCAS = nonEmptyCAS (decodeBS (BS8.strip cas))
                         , mcfUnit = cfUnitT
                         , mcfConsumerLocation = Nothing
                         }
@@ -401,15 +402,3 @@ mkCompartment comp sub =
         if T.null medium
             then Nothing
             else Just (Compartment medium subcomp "")
-
-normalizeCAS :: Text -> Maybe Text
-normalizeCAS cas
-    | T.null cas = Nothing
-    | otherwise =
-        let segments = T.splitOn "-" cas
-            stripped = map (T.dropWhile (== '0')) segments
-            fixed = map (\s -> if T.null s then "0" else s) stripped
-            result = T.intercalate "-" fixed
-         in if T.all (\c -> c == '-' || c == '0') cas
-                then Nothing
-                else Just result

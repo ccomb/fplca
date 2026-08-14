@@ -60,6 +60,21 @@ mkRef p =
         , rdDescription = Nothing
         }
 
+{- | A decoded database and method entry carrying the given paths. Read through
+the real decoders so a required key added to either one fails here rather than
+in whichever test happened to hand-build the record.
+-}
+withParsedPaths :: FilePath -> FilePath -> (DatabaseConfig -> MethodConfig -> Expectation) -> Expectation
+withParsedPaths dbPath methodPath body =
+    case ( TOML.decode (entry "agb" dbPath) :: Either TOML.TOMLError DatabaseConfig
+         , TOML.decode (entry "EF" methodPath) :: Either TOML.TOMLError MethodConfig
+         ) of
+        (Right db, Right method) -> body db method
+        (Left e, _) -> expectationFailure (show e)
+        (_, Left e) -> expectationFailure (show e)
+  where
+    entry name path = "name = \"" <> name <> "\"\npath = \"" <> T.pack path <> "\"\n"
+
 spec :: Spec
 spec = do
     describe "listenOn" $ do
@@ -353,29 +368,40 @@ spec = do
         let cfg =
                 defaultConfig
                     { cfgGeographies = Just "data/geographies.csv"
+                    , cfgChemSynonyms = Just "data/chem.csv"
+                    , cfgSubstanceEdges = Just "data/edges.csv"
                     , cfgFlowSynonyms = [mkRef "data/flows.csv"]
                     , cfgCompartmentMappings = [mkRef "data/compartments.csv"]
                     , cfgUnits = [mkRef "data/units.csv"]
+                    , cfgEnergyDensities = [mkRef "data/energy.csv"]
                     }
 
         it "rewrites every reference-data path when the env var is set" $ do
             let resolved = applyDataDir (Just "/d") cfg
             cfgGeographies resolved `shouldBe` Just "/d/geographies.csv"
+            cfgChemSynonyms resolved `shouldBe` Just "/d/chem.csv"
+            cfgSubstanceEdges resolved `shouldBe` Just "/d/edges.csv"
             map rdPath (cfgFlowSynonyms resolved) `shouldBe` ["/d/flows.csv"]
             map rdPath (cfgCompartmentMappings resolved) `shouldBe` ["/d/compartments.csv"]
             map rdPath (cfgUnits resolved) `shouldBe` ["/d/units.csv"]
+            map rdPath (cfgEnergyDensities resolved) `shouldBe` ["/d/energy.csv"]
+
+        -- Both rewrites walk one enumeration of the path-bearing fields, so
+        -- what keeps them apart is the kind each field is tagged with. The
+        -- fixture paths open with "data/" on purpose: that prefix is the only
+        -- input redirectIntoDataDir acts on, so a database tagged as reference
+        -- data would be visibly redirected here and nowhere else.
+        it "leaves user content where the operator put it" $
+            withParsedPaths "data/agb.CSV" "data/ef.zip" $ \db method -> do
+                let userCfg = cfg{cfgDatabases = [db], cfgMethods = [method]}
+                applyDataDir (Just "/d") userCfg
+                    `shouldBe` (applyDataDir (Just "/d") cfg){cfgDatabases = [db], cfgMethods = [method]}
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
 
     describe "resolveConfigPaths" $ do
-        let decodeDb t = TOML.decode t :: Either TOML.TOMLError DatabaseConfig
-            decodeMethod t = TOML.decode t :: Either TOML.TOMLError MethodConfig
-            withParsed body =
-                case (decodeDb "name = \"agb\"\npath = \"agb.CSV\"\n", decodeMethod "name = \"EF\"\npath = \"ef.zip\"\n") of
-                    (Right db, Right method) -> body db method
-                    (Left e, _) -> expectationFailure (show e)
-                    (_, Left e) -> expectationFailure (show e)
+        let withParsed = withParsedPaths "agb.CSV" "ef.zip"
 
         it "prefixes every relative path with the config file's directory" $
             withParsed $ \db method -> do
