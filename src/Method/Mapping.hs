@@ -1216,6 +1216,20 @@ strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 
+{- | The medium and subcompartment a characterization factor keys on, or
+'Nothing' when it states no compartment at all.
+
+Every lookup table 'buildMethodTables' fills is keyed on this pair, so it is
+derived once rather than once per table. Eight comprehensions spelled it out
+in three lines each, and eight copies of a key derivation are eight chances
+for one of them to normalize differently from the table it is looked up in.
+-}
+cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (Text, Text)
+cfMediumSub cmap cf = do
+    comp <- mcfCompartment cf
+    let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
+    pure (normalizeMedium (T.toLower normMedRaw), normSub)
+
 buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables methodFamily cmap energyDensities mappings =
     MethodTables
@@ -1248,9 +1262,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     , let rawName = normalizeNameKeepUnit (mcfFlowName cf)
                     , rawName /= normalizeName (mcfFlowName cf)
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, _) <- [cfMediumSub cmap cf]
                     ]
         , -- The broadcast name tables (exact + fallback) hold only
           -- non-regionalized CFs. Location-specific rows belong to
@@ -1265,9 +1277,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     [ ((SR.NormName (nameKey cf mflow), Medium normMed, Subcompartment normSub), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
                     , not (T.null normSub)
                     ]
         , mtFallbackCF =
@@ -1288,9 +1298,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
                     , isUnspecifiedSub normSub
                     ]
         , mtLongTermFallbackCF =
@@ -1306,9 +1314,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     [ ((SR.NormName (nameKey cf mflow), Medium normMed), (entryOf cf mflow, rawNameMatches cf mflow))
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
                     , isLongTermUnspecifiedSub normSub
                     ]
         , mtSubBlindCF =
@@ -1322,9 +1328,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     [ ((SR.NormName (nameKey cf mflow), Medium normMed), [entryOf cf mflow])
                     | (cf, mflow) <- mappings
                     , Nothing <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw _ _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, _) <- [cfMediumSub cmap cf]
                     ]
         , mtCasCF =
             -- Keyed by the CF's own CAS + medium (not by a matched flow), so the
@@ -1373,9 +1377,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     , not (T.null cas)
                     , Nothing <- [mcfConsumerLocation cf]
                     , (_, Nothing) <- [extractLocationSuffix (mcfFlowName cf)]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
                     ]
         , mtRegionalCasCF =
             -- Same unspecified-default preference as 'mtCasCF', applied per
@@ -1398,9 +1400,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
                     , Just cas <- [mcfCAS cf]
                     , not (T.null cas)
                     , Just loc <- [mcfConsumerLocation cf]
-                    , Just comp <- [mcfCompartment cf]
-                    , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-                    , let normMed = normalizeMedium (T.toLower normMedRaw)
+                    , Just (normMed, normSub) <- [cfMediumSub cmap cf]
                     ]
         , mtRegionalizedCF =
             -- Filter: a CF whose own compartment carries a specific subcomp
@@ -1478,9 +1478,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             , Just cas <- [mcfCAS cf]
             , not (T.null cas)
             , Nothing <- [mcfConsumerLocation cf]
-            , Just comp <- [mcfCompartment cf]
-            , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-            , let normMed = normalizeMedium (T.toLower normMedRaw)
+            , Just (normMed, normSub) <- [cfMediumSub cmap cf]
             , let subClass = if isUnspecifiedSub normSub then "" else normSub
             ]
 
@@ -1528,16 +1526,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         Just comp ->
             let Compartment _ cfSubRaw _ = normalizeCompartment cmap comp
                 !cfSubN = T.toLower (T.strip cfSubRaw)
-                rawCategory = T.toLower (VT.bfCompartmentName flow)
-                (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-                    (m, rest)
-                        | T.null rest -> (m, T.empty)
-                        | otherwise -> (m, T.drop 1 rest)
-                rawSub =
-                    let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
-                     in if T.null s then rawSubFromCat else s
-                Compartment _ flowSubRaw _ =
-                    normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
+                (_, Subcompartment flowSubRaw) = flowMediumSub cmap flow
                 !flowSubN = T.toLower (T.strip flowSubRaw)
              in -- A wildcard (unspecified) CF matches any subcompartment except
                 -- the ones the 'lookupCascadeCF' gate excludes on the
