@@ -2,14 +2,20 @@
 
 {- | Canonical enumeration of user-facing VoLCA operations.
 
-This module is the single source of truth for naming and metadata across
-all VoLCA user surfaces: MCP tools, CLI subcommands, pyvolca Python client,
-and OpenAPI documentation. Each surface consumes this module via a
-projection function ('mcpName', 'description', 'params').
+This module names every user-facing operation once, and two surfaces read it:
+the MCP tool metadata ("API.MCP") and the published OpenAPI document
+("API.OpenApi"). The Haskell call sites use 'Resource' PascalCase constructors
+directly.
 
-Per-language naming conventions are respected: projections emit the form
-natural to their target (snake_case for MCP/Python, kebab-case for CLI/URLs).
-The Haskell call sites use 'Resource' PascalCase constructors directly.
+The command line does not read it. Its subcommands and their help text are
+written out by hand in "CLI.Parser", and a projection that claimed otherwise
+('cliName') had drifted into naming fifteen commands that do not exist before
+it was removed. Nor does pyvolca: it reads the published spec at runtime.
+
+How much of what is written here actually reaches the OpenAPI document is
+measured by @test\/ResourcesDriftSpec.hs@, and the answer today is: the
+operation names and descriptions, and almost none of the parameter
+descriptions.
 
 Adding a new operation means extending the 'Resource' ADT and adding one
 equation to each projection function. The compiler catches missing cases
@@ -89,8 +95,14 @@ data ParamKind = Required | Optional
 {- | A single parameter accepted by a resource operation.
 
 'paramType' uses JSON Schema type names ("string", "integer", "number",
-"boolean", "array") so the MCP tool schema can emit it directly. The
-CLI and OpenAPI projections use it too.
+"boolean", "array") so the MCP tool schema can emit it directly, and the
+OpenAPI enrichment reads it too.
+
+A 'Param' does not record /where/ the value rides — path capture, query
+parameter, or request body — which is why most of these descriptions never
+reach the published spec: the enrichment matches on the name against a route's
+query parameters, and a path capture is named by Servant while a body field is
+not a parameter at all. @test\/ResourcesDriftSpec.hs@ pins the whole list.
 -}
 data Param = Param
     { paramName :: Text
@@ -275,9 +287,9 @@ webUrlTip page =
 
 {- | Description of the resource operation.
 
-These strings are consumed as-is by the MCP tool metadata and are
-summarised (first sentence) by the CLI --help. They are written for
-LLM tool use, so they're detailed and include usage hints.
+These strings are consumed as-is by the MCP tool metadata and stamped onto
+the published OpenAPI operation. They are written for LLM tool use, so they
+are detailed and include usage hints.
 -}
 description :: Resource -> Text
 description r = case r of

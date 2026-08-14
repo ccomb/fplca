@@ -373,7 +373,6 @@ test-suite lca-tests
                      , network
                      , toml-reader
                      , openapi3
-                     , insert-ordered-containers
                      , lens
   build-tool-depends:  hspec-discover:hspec-discover
 

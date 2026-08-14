@@ -1051,7 +1051,8 @@ over as a file fetches it rather than reimplementing the columns.
 
 These are a second representation of an operation 'API.Resources' already
 names, not operations of their own, so they get no registry entry: one there
-would mint a second MCP tool and a second CLI name for the same question.
+would mint a second MCP tool and a second published operation for the same
+question.
 -}
 qualityReportCsvH :: Text -> Maybe Int -> AppM (Headers '[Header "Content-Disposition" Text] QualityReportAPI)
 qualityReportCsvH dbName mLimit =

@@ -14,10 +14,10 @@ spec is a pure value.
 module ResourcesDriftSpec (spec) where
 
 import Control.Lens ((^.))
-import qualified Data.HashMap.Strict.InsOrd as InsOrd
-import Data.List (sort)
+import Data.Foldable (toList)
+import Data.List ((\\))
 import Data.Maybe (mapMaybe)
-import Data.OpenApi (OpenApi, Operation, Param, PathItem, Referenced (..))
+import Data.OpenApi (OpenApi, Operation, PathItem, Referenced (..))
 import qualified Data.OpenApi.Lens as OA
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -27,20 +27,20 @@ import qualified API.Resources as R
 import API.Routes (volcaOpenApi)
 
 {- | Every operation the published spec carries, by its operationId, paired
-with every parameter name it accepts — the operation's own query parameters
-plus the path captures its route declares, which openapi3 hangs on the path
-rather than on each operation under it.
+with every parameter name it accepts.
+
+servant-openapi3 hangs both query parameters and path captures on the
+operation — its @addParam@ writes @allOperations . parameters@ — and never
+fills a path item's own parameter list, so reading the operation reads all of
+them.
 -}
 operationsById :: OpenApi -> [(Text, [Text])]
 operationsById api =
-    [ (opId, names (op ^. OA.parameters) ++ names (item ^. OA.parameters))
-    | (_, item) <- InsOrd.toList (api ^. OA.paths)
+    [ (opId, [p ^. OA.name | Inline p <- op ^. OA.parameters])
+    | item <- toList (api ^. OA.paths)
     , op <- operationsOf item
     , Just opId <- [op ^. OA.operationId]
     ]
-  where
-    names :: [Referenced Param] -> [Text]
-    names ps = [p ^. OA.name | Inline p <- ps]
 
 operationsOf :: PathItem -> [Operation]
 operationsOf item =
@@ -178,7 +178,10 @@ spec = describe "API.Resources against the published spec" $ do
 
     -- The registry's whole claim. A description stamped onto a name the route
     -- does not carry is a description nobody will ever read.
-    it "describes only parameters the routes accept, beyond the pinned list" $
+    -- Reported as two differences rather than one equality: a wall of ninety
+    -- tuples does not say which one moved. The first list is a name that has
+    -- started diverging, the second one that has stopped.
+    it "describes only parameters the routes accept, beyond the pinned list" $ do
         let divergences =
                 [ (R.mcpName r, R.paramName p)
                 | r <- withPath
@@ -186,19 +189,16 @@ spec = describe "API.Resources against the published spec" $ do
                 , p <- R.params r
                 , R.paramName p `notElem` accepted
                 ]
-         in sort divergences `shouldBe` sort knownDivergences
+        (divergences \\ knownDivergences) `shouldBe` []
+        (knownDivergences \\ divergences) `shouldBe` []
 
-    -- The pinned list is only honest while every entry still diverges;
-    -- otherwise it silently starts excusing names that are fine.
-    it "pins no divergence that has since been fixed" $
-        let stale =
-                [ d
-                | d@(opId, name) <- knownDivergences
-                , Just accepted <- [lookup opId byId]
-                , name `elem` accepted
+    -- paramDesc is what the enrichment carries; an empty one reaches the
+    -- published spec as a parameter with no explanation at all.
+    it "gives every parameter of a published operation a description" $
+        let blank =
+                [ (R.mcpName r, R.paramName p)
+                | r <- withPath
+                , p <- R.params r
+                , T.null (T.strip (R.paramDesc p))
                 ]
-         in stale `shouldBe` []
-
-    it "gives every resource a description, since the spec publishes it" $
-        let blank = [R.mcpName r | r <- R.allResources, T.null (T.strip (R.description r))]
          in blank `shouldBe` []
