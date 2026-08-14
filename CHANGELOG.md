@@ -43,6 +43,13 @@
   an older engine.
 
 ### Fixed
+- A Brightway Excel workbook loads from a directory, not only when its own
+  path is named. The engine reads five database formats but the step that
+  decides what a source directory holds knew four, so an uploaded `.xlsx` —
+  which arrives extracted into a directory — was refused with "No supported
+  database files found", listing the four formats it did know. The list in
+  that sentence is now read off the same place the detection is, so a format
+  the engine reads cannot go missing from what it says it reads.
 - A flow name that finds something in a search now finds the same thing in a
   filter. `get_inventory` and `get_activity` matched the whole query as one
   piece of text, so the name read off a search came back empty as soon as the
