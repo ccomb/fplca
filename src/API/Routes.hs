@@ -343,7 +343,7 @@ mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c)
                 pidText =
                     if depDbName == rootDbName
                         then processIdToText d pid
-                        else depDbName <> "::" <> processIdToText d pid
+                        else qualifyRef depDbName (processIdToText d pid)
                 -- Reference products are technosphere; pull from the dep DB's tech flows.
                 (prodName, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
              in ActivityContribution
@@ -1003,7 +1003,7 @@ computedQualityReportH dbName mCollection mLimit = do
     let simple = toSimpleDatabase db
         entriesByPid =
             M.fromList
-                [ (UUID.toText a <> "_" <> UUID.toText p, act)
+                [ (processRefText (ProcessRef a p), act)
                 | ((a, p), act) <- M.toList (sdbActivities simple)
                 ]
         refProductName act = case filter exchangeIsReference (exchanges act) of
@@ -1425,10 +1425,7 @@ getActivityTree dbName processId = do
     maxTreeDepth <- asks aeMaxTreeDepth
     (db, _) <- requireDatabaseByName dbName
     withValidatedActivity db processId $ \_activity -> do
-        let activityUuidText = case T.splitOn "_" processId of
-                (uuid : _) -> uuid
-                [] -> processId
-        case UUID.fromText activityUuidText of
+        case refActivityUUID processId of
             Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
             Just activityUuid -> do
                 unitCfg <- liftIO $ getMergedUnitConfig dbManager
