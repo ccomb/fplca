@@ -231,10 +231,12 @@ import Types (
     BiosphereFlow (..),
     Database (..),
     GeographyPolicy (..),
+    ProcessRef (..),
     bfCompartmentName,
     bfCompartmentSub,
     blockerReasonDetail,
     getUnitNameForBioFlow,
+    processRefText,
     unresolvedCount,
  )
 
@@ -357,7 +359,7 @@ gapReportToAPI mLimit r =
                 }
     consumerToAPI c =
         GapConsumerAPI
-            { gcaProcessId = UUID.toText (Loader.gcActUUID c) <> "_" <> UUID.toText (Loader.gcProdUUID c)
+            { gcaProcessId = processRefText (ProcessRef (Loader.gcActUUID c) (Loader.gcProdUUID c))
             , gcaActivityName = Loader.gcActivityName c
             , gcaProductName = Loader.gcProductName c
             , gcaLocation = Loader.gcLocation c

@@ -73,6 +73,8 @@ import Types (
     exchangeIsInput,
     exchangeIsReference,
     processIdToText,
+    qualifyRef,
+    supplierRefText,
  )
 import UnitConversion (UnitConfig)
 
@@ -350,7 +352,7 @@ rowsFromConsumption rootRefAmount ((rootDbName, rootDb, rootScaling) :| deps) =
                 pidText = processIdToText db' (fromIntegral supplierIdx)
              in AggRow
                     { rowName = fromMaybe (activityName supplier) (getReferenceProductName (dbTechFlows db') supplier)
-                    , rowFlowId = if qualifyPids then dbN <> "::" <> pidText else pidText
+                    , rowFlowId = if qualifyPids then qualifyRef dbN pidText else pidText
                     , rowUnit = activityUnit supplier
                     , rowQuantity = v * sj * mult
                     , rowIsInput = Nothing
@@ -376,12 +378,7 @@ rowsFromConsumption rootRefAmount ((rootDbName, rootDb, rootScaling) :| deps) =
                     Just
                         AggRow
                             { rowName = cdlFlowName link
-                            , rowFlowId =
-                                cdlSourceDatabase link
-                                    <> "::"
-                                    <> UUID.toText (cdlSupplierActUUID link)
-                                    <> "_"
-                                    <> UUID.toText (cdlSupplierProdUUID link)
+                            , rowFlowId = supplierRefText link
                             , rowUnit = cdlExchangeUnit link
                             , rowQuantity = cdlCoefficient link * sj / activityNormalizationFactor db' consumerPid * mult
                             , rowIsInput = Nothing

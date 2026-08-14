@@ -59,11 +59,13 @@ import Types (
     Database (..),
     Exchange (..),
     ProcessId,
+    ProcessRef (..),
     TechnosphereFlow (..),
     UUID,
     findProcessId,
     findProcessIdByActivityUUID,
-    parseUUIDPair,
+    parseProcessRef,
+    processRefText,
  )
 import UnitConversion (UnitConfig, defaultUnitConfig)
 
@@ -281,7 +283,7 @@ checkKeys intent existing keys = case intent of
 
 -- | @activityUUID_productUUID@, the identity a process is addressed by.
 renderKey :: (UUID, UUID) -> Text
-renderKey (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
+renderKey = processRefText . uncurry ProcessRef
 
 {- | The identity a 'ProcessId' currently stands for. Out of range is a caller
 error and says so, rather than resolving to whichever row is at that index
@@ -302,6 +304,6 @@ silently dropped.
 -}
 resolveProcess :: Database -> Text -> Either Text ProcessId
 resolveProcess db queryText =
-    maybe (Left ("Unknown process id: " <> queryText)) Right $ case parseUUIDPair queryText of
-        Just (a, p) -> findProcessId db a p
+    maybe (Left ("Unknown process id: " <> queryText)) Right $ case parseProcessRef queryText of
+        Just ref -> findProcessId db (prActivity ref) (prProduct ref)
         Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db

@@ -37,6 +37,7 @@ library
                      , Config
                      , Service
                      , Service.Aggregate
+                     , Impact
                      , Tree
                      , Matrix
                      , Matrix.Export
@@ -93,6 +94,7 @@ library
                      , CLI.Parser
                      , CLI.Command
                      , CLI.Client
+                     , CLI.Render
                      , CLI.Repl
                      , EcoSpold.Common
                      , EcoSpold.Cutoff
@@ -324,6 +326,7 @@ test-suite lca-tests
                      , MethodWriterSimaProSpec
                      , AuthSpec
                      , CLISpec
+                     , CLIRenderSpec
                      , RoutesSpec
                      , ScoringKeySpec
                      , NumericEdgesSpec

@@ -442,9 +442,9 @@ handleLogStream req respond = do
 validateCLIConfig :: CLIConfig -> IO ()
 validateCLIConfig (CLIConfig globalOpts mCmd) =
     case (format globalOpts, jsonPath globalOpts) of
-        (Just CSV, Nothing)
-            | not ownCsv ->
-                die "--format csv requires --jsonpath. Examples: --jsonpath 'srResults', --jsonpath 'piActivity.pfaExchanges'"
+        -- --jsonpath is not required: a response that is an array, or holds
+        -- exactly one, needs no naming. CLI.Render asks for the path only when
+        -- the choice is genuinely ambiguous, and says so then.
         (Just CSV, Just _)
             | ownCsv ->
                 die "--jsonpath does not apply here: the engine renders this report's CSV itself"

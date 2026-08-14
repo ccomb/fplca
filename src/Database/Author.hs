@@ -84,6 +84,7 @@ import Types (
     Database (..),
     Exchange (..),
     ProcessId,
+    ProcessRef (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -94,7 +95,7 @@ import Types (
     exchangeIsReference,
     findProcessIdByActivityUUID,
     getUnitNameForExchange,
-    parseUUIDPair,
+    parseProcessRef,
  )
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
 
@@ -561,8 +562,8 @@ import — is still addressable.
 data ProviderKey = ProviderPair UUID UUID | ProviderActivity UUID
 
 parseProvider :: Text -> Maybe ProviderKey
-parseProvider provider = case parseUUIDPair provider of
-    Just (activityId, productId) -> Just (ProviderPair activityId productId)
+parseProvider provider = case parseProcessRef provider of
+    Just ref -> Just (ProviderPair (prActivity ref) (prProduct ref))
     Nothing -> ProviderActivity <$> UUID.fromText provider
 
 matchesProvider :: ProviderKey -> UUID -> UUID -> Bool
@@ -602,11 +603,11 @@ resolveOne ctx ex = case ex of
     AuthoredTechInput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->
             TechnosphereExchange
-                { techFlowId = snd (supKey sup)
+                { techFlowId = prProduct (supKey sup)
                 , techAmount = amount
                 , techUnitId = unitRef
                 , techRole = Input
-                , techActivityLinkId = fst (supKey sup)
+                , techActivityLinkId = prActivity (supKey sup)
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = comment
@@ -615,11 +616,11 @@ resolveOne ctx ex = case ex of
     AuthoredWasteOutput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->
             WasteExchange
-                { waFlowId = snd (supKey sup)
+                { waFlowId = prProduct (supKey sup)
                 , waAmount = amount
                 , waUnitId = unitRef
                 , waIsInput = False
-                , waActivityLinkId = fst (supKey sup)
+                , waActivityLinkId = prActivity (supKey sup)
                 , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = comment
@@ -811,7 +812,7 @@ an embedded one would silently point at whichever row inherits the number.
 in a dependency resolves the same way through cross-database relinking.
 -}
 data Supplier = Supplier
-    { supKey :: (UUID, UUID)
+    { supKey :: ProcessRef
     , supProducedUnit :: Text
     {- ^ unit of the produced reference output, @""@ for a treatment process
     that has only a reference input. Mirrors
@@ -836,7 +837,7 @@ resolveSupplier ctx provider =
         act <- dbActivities db V.!? fromIntegral pid
         pure
             Supplier
-                { supKey = key
+                { supKey = uncurry ProcessRef key
                 , supProducedUnit = refUnitOf db act (\e -> exchangeIsReference e && not (exchangeIsInput e))
                 , supAnyRefUnit = refUnitOf db act exchangeIsReference
                 }
@@ -846,8 +847,8 @@ does: the canonical @activityUUID_productUUID@ pair, or a bare activity UUID
 when that activity has a single product.
 -}
 resolveProcess :: Database -> Text -> Maybe ProcessId
-resolveProcess db queryText = case parseUUIDPair queryText of
-    Just (a, p) -> M.lookup (a, p) (dbProcessIdLookup db)
+resolveProcess db queryText = case parseProcessRef queryText of
+    Just ref -> M.lookup (prActivity ref, prProduct ref) (dbProcessIdLookup db)
     Nothing -> UUID.fromText queryText >>= findProcessIdByActivityUUID db
 
 refUnitOf :: Database -> Activity -> (Exchange -> Bool) -> Text
