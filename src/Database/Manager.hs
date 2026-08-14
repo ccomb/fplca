@@ -130,7 +130,7 @@ import qualified Data.Aeson as A
 import Data.Bifunctor (first)
 import Data.Char (toLower)
 import qualified Data.Csv as Csv
-import Data.Either (lefts, partitionEithers, rights)
+import Data.Either (fromRight, lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -2421,7 +2421,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
             format <- detectDirectoryFormat path
             -- Either way the loader gets a path: a source that holds no file of
             -- its own format is left to produce the error it produces anyway.
-            loadPath <- either (const path) id <$> narrowToDataFile format path
+            loadPath <- fromRight path <$> narrowToDataFile format path
 
             -- Parse and run cross-DB linking (but don't build matrices)
             synonymDB <- getMergedSynonymDB manager
