@@ -49,7 +49,25 @@ spec = describe "detectDirectoryFormat" $ do
             writeFile (dir </> "summary.xlsx") "PK\003\004"
             detectDirectoryFormat dir `shouldReturn` FormatSpold
 
-    it "names every format it knows when it recognises none of them" $
+    -- Zipping a folder puts the workbook one level down, which is how an
+    -- upload usually arrives. The .spold probe has always been recursive for
+    -- the same reason.
+    it "finds a workbook in a subdirectory, as it does .spold datasets" $
+        withSystemTempDirectory "xlsx-nested" $ \dir -> do
+            createDirectoryIfMissing True (dir </> "myinventory")
+            writeFile (dir </> "myinventory" </> "inventory.xlsx") "PK\003\004"
+            detectDirectoryFormat dir `shouldReturn` FormatExcel
+
+    -- Database.Upload.detectDatabaseFormat ranks .xlsx ahead of .csv. If this
+    -- ranked them the other way an upload would be announced as a workbook and
+    -- parsed as SimaPro CSV, yielding an empty database and no warning.
+    it "prefers a workbook to a CSV sitting beside it, as the upload check does" $
+        withSystemTempDirectory "xlsx-vs-csv" $ \dir -> do
+            writeFile (dir </> "inventory.xlsx") "PK\003\004"
+            writeFile (dir </> "units.csv") "name;unit\n"
+            detectDirectoryFormat dir `shouldReturn` FormatExcel
+
+    it "recognises none of them for a directory holding none of them" $
         withSystemTempDirectory "unknown-detect" $ \dir -> do
             writeFile (dir </> "notes.txt") "nothing to load here\n"
             detectDirectoryFormat dir `shouldReturn` FormatUnknown
