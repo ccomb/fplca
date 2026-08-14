@@ -5,7 +5,7 @@
 This module is the single source of truth for naming and metadata across
 all VoLCA user surfaces: MCP tools, CLI subcommands, pyvolca Python client,
 and OpenAPI documentation. Each surface consumes this module via a
-projection function ('mcpName', 'cliName', 'description', 'params').
+projection function ('mcpName', 'description', 'params').
 
 Per-language naming conventions are respected: projections emit the form
 natural to their target (snake_case for MCP/Python, kebab-case for CLI/URLs).
@@ -13,7 +13,7 @@ The Haskell call sites use 'Resource' PascalCase constructors directly.
 
 Adding a new operation means extending the 'Resource' ADT and adding one
 equation to each projection function. The compiler catches missing cases
-for 'mcpName'/'cliName'/'description'/'params'.
+for 'mcpName'/'description'/'params'.
 -}
 module API.Resources (
     Resource (..),
@@ -21,7 +21,6 @@ module API.Resources (
     ParamKind (..),
     allResources,
     mcpName,
-    cliName,
     description,
     params,
     requiredParams,
@@ -258,50 +257,6 @@ mcpName r = case r of
     GetComputedQualityReport -> "get_computed_quality_report"
     GetCoverageReport -> "get_characterization_coverage"
     EditExchanges -> "edit_exchanges"
-
--- ---------------------------------------------------------------------------
--- Projection: CLI subcommand names (kebab-case)
--- ---------------------------------------------------------------------------
-
-{- | Name as exposed on the command line.
-
-Note: some MCP tools don't have a standalone CLI subcommand (e.g.
-'list_databases' is 'database list' under the 'database' namespace,
-not a top-level command). For those, 'cliName' returns the nested form.
--}
-cliName :: Resource -> Text
-cliName r = case r of
-    ListDatabases -> "database list"
-    LoadDatabase -> "database load"
-    UnloadDatabase -> "database unload"
-    ListPresets -> "presets"
-    SearchActivities -> "activities"
-    SearchFlows -> "flows"
-    GetActivity -> "activity"
-    Aggregate -> "aggregate"
-    GetSupplyChain -> "supply-chain"
-    GetInventory -> "inventory"
-    GetImpacts -> "impacts"
-    ComputeSensitivity -> "sensitivity"
-    ListMethods -> "methods"
-    GetFlowMapping -> "flow-mapping"
-    GetCharacterization -> "characterization"
-    ExplainCF -> "explain-cf"
-    GetContributingFlows -> "contributing-flows"
-    GetContributingActivities -> "contributing-activities"
-    ListGeographies -> "geographies"
-    ListClassifications -> "classifications"
-    GetPathTo -> "path-to"
-    GetConsumers -> "consumers"
-    CompareImpacts -> "compare-impacts"
-    ScoreActivity -> "score-activity"
-    ScoreActivities -> "score-activities"
-    ListScoringSets -> "scoring-sets"
-    GetGapReport -> "gap-report"
-    GetQualityReport -> "quality-report"
-    GetComputedQualityReport -> "computed-quality-report"
-    GetCoverageReport -> "characterization-coverage"
-    EditExchanges -> "edit-exchanges"
 
 -- ---------------------------------------------------------------------------
 -- Projection: human-readable description (shared across surfaces)
