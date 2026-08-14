@@ -45,7 +45,6 @@ import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, fi
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeEditRequest (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..), toExchangeEdits)
 import Control.Monad (unless, when)
 import qualified Data.List as L
-import qualified Impact
 import Matrix (applyBiosphereMatrix)
 import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
@@ -1133,14 +1132,12 @@ runImpactsRequest dbManager args req = do
     subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
     unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
     (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-    -- The whole solution, not just its inventory: a regionalized method is
-    -- scored from the per-database scaling vectors it carries.
-    sol <-
+    solvedInventory <-
         ExceptT $
             if null subs
-                then computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName (ldSharedSolver ld) (raPid ra)
+                then fmap (fmap SharedSolver.csInventory) (computeInventoryMatrixWithDepsCached unitCfg (DM.mkDepSolverLookup dbManager) db dbName (ldSharedSolver ld) (raPid ra))
                 else
-                    first (T.pack . show)
+                    either (Left . T.pack . show) (Right . SharedSolver.csInventory)
                         <$> Service.inventoryWithSubsAndDeps
                             unitCfg
                             (DM.mkDepSolverLookup dbManager)
@@ -1150,12 +1147,11 @@ runImpactsRequest dbManager args req = do
                             (raPid ra)
                             subs
     let ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
-        inventory = applyLongTermMode mFlows ltMode (SharedSolver.csInventory sol)
+        inventory = applyLongTermMode mFlows ltMode solvedInventory
     mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collection db method
     tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
-    score <- ExceptT $ Impact.scoreSolution dbManager collection method tables sol inventory
     let stats = computeMappingStats mappings
-        baseOutcome = (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables){loScore = score}
+        baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
         (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
         contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
         (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits (raActivity ra)
@@ -1920,8 +1916,8 @@ callGetContributingFlows dbManager mBaseUrl rid args =
         let ltMode = longTermModeFromExclude (fromMaybe False (boolArg "exclude_long_term" args))
             inventory = applyLongTermMode mFlows ltMode (SharedSolver.csInventory sol)
         tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collection db method
-        score <- ExceptT $ Impact.scoreSolution dbManager collection method tables sol inventory
         let outcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
+            score = loScore outcome
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
             contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
             top = take lim contribs

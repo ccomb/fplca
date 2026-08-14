@@ -2,13 +2,30 @@
 
 {- | Scoring one method against one solved inventory.
 
-The step every surface needs and none of them should own. A method carrying
-regional characterization factors is scored from the per-database scaling
-vectors rather than from the merged inventory, because a factor that depends
-on where a flow occurs cannot be applied to a total that has forgotten. Which
-of the two paths a method takes is a property of the method, not of who is
-asking — so the choice lives here, and the REST routes and the assistant tools
-both come through.
+A method carrying regional characterization factors is scored from the
+per-database scaling vectors rather than from the merged inventory, because a
+factor that depends on where a flow occurs cannot be applied to a total that
+has forgotten. Which of the two paths a method takes is a property of the
+method, not of who is asking, so the choice belongs below every surface rather
+than inside one of them.
+
+It is not yet reached from below every surface. The REST impact routes come
+through here; the assistant tools score regionalized methods with the flat
+path, and so do both contributing-flows endpoints and both
+contributing-activities endpoints. Routing them here is not a matter of
+calling this function: the per-flow contributions each reports are computed
+region-blind by 'Method.Mapping.inventoryContributions', so a surface that
+took its total from here and its shares from there would publish percentages
+that no longer sum. The contributions have to move with the total, and that
+walk does not exist yet.
+
+Two further gaps, both older than this module and neither fixed by it:
+
+  * The dispatch below asks the /root/ database's tables whether the method is
+    regionalized. A root database with no matching regional factors scores its
+    dependencies' regional flows flat.
+  * Long-term-emission filtering applies to the inventory only, so the
+    regionalized path ignores @exclude_long_term@.
 -}
 module Impact (
     scoreSolution,
@@ -35,9 +52,9 @@ import qualified SharedSolver
 {- | The score of one method against a cross-database solution.
 
 @inventory@ is passed separately from @sol@ because a caller may have filtered
-it (long-term emissions) after solving; the regionalized path reads the
-solution's scaling vectors instead and is unaffected by that filtering, as it
-was before this was shared.
+it (long-term emissions) after solving. The regionalized path reads the
+solution's scaling vectors instead, so that filtering does not reach it — see
+the note above.
 
 A 'Left' is a scoring integrity error — a regionalized method with a gap it
 cannot fill. It propagates rather than collapsing to a zero the consumer could
