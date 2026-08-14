@@ -43,6 +43,20 @@
   an older engine.
 
 ### Fixed
+- A substance is now recognised by its CAS number however the source spelled
+  it. A CAS reads `registry-group-check`, and only the registry number is ever
+  zero-padded: the group is two digits and the check digit one. One of the two
+  readers stripped zeros from every segment, turning formaldehyde's `50-00-0`
+  into `50-0-0`, so which spelling a value carried depended on which parser had
+  read it — and the two never met. Every substance whose group segment begins
+  with a zero was affected. Both sides of the bridge now canonicalize, so a
+  padded and an unpadded spelling of one substance meet whichever parser
+  produced them. **Scores change** where a factor was previously missed: an
+  impact that silently counted nothing for such a substance now counts it. A
+  `cas` selector in a method patch written as `50-0-0` no longer matches
+  anything and should be rewritten as `50-00-0`. A CAS made only of zeros and
+  dashes is read as "no CAS stated" rather than as a substance every CAS-less
+  flow shares.
 - A flow name that finds something in a search now finds the same thing in a
   filter. `get_inventory` and `get_activity` matched the whole query as one
   piece of text, so the name read off a search came back empty as soon as the

@@ -23,6 +23,8 @@ import SubstanceRegistry (
     casBindingsFromEdges,
     classesFromEdges,
     equivalenceClasses,
+    nonEmptyCAS,
+    normalizeCAS,
     parseSubstanceEdges,
  )
 
@@ -49,15 +51,8 @@ byName1 n c = M.singleton (NormName (T.pack n)) (CASNumber (T.pack c))
 testNorm :: T.Text -> NormName
 testNorm = NormName . T.toLower . T.strip
 
--- Mirrors EcoSpold.Parser2.normalizeCAS: strip leading zeros from the first
--- segment only. Injected so the parser tests exercise CAS canonicalization
--- without pulling in the parser module.
 testCas :: T.Text -> CASNumber
-testCas c = CASNumber $ case T.splitOn dash (T.strip c) of
-    [a, b, d] -> let a' = T.dropWhile (== '0') a in (if T.null a' then T.pack "0" else a') <> dash <> b <> dash <> d
-    _ -> T.strip c
-  where
-    dash = T.pack "-"
+testCas = CASNumber . normalizeCAS
 
 testNorms :: KeyNormalizers
 testNorms = KeyNormalizers testNorm testCas
@@ -67,8 +62,59 @@ edgesCsv :: String -> BLC.ByteString
 edgesCsv body =
     BLC.pack ("from_keytype,from_source,from_key,to_keytype,to_source,to_key,relation,scale\n" <> body)
 
+-- CAS canonicalization asserted on String, so these read without OverloadedStrings.
+normCas :: String -> String
+normCas = T.unpack . normalizeCAS . T.pack
+
+nonEmptyCas :: String -> Maybe String
+nonEmptyCas = fmap T.unpack . nonEmptyCAS . T.pack
+
 spec :: Spec
 spec = do
+    describe "normalizeCAS" $ do
+        it "strips the zero-padding ecoinvent writes on the registry number" $
+            normCas "001309-36-0" `shouldBe` "1309-36-0"
+
+        it "leaves a canonical CAS alone" $
+            normCas "7732-18-5" `shouldBe` "7732-18-5"
+
+        it "strips a single leading zero from the registry number" $
+            normCas "0074-98-6" `shouldBe` "74-98-6"
+
+        it "keeps the fixed-width group segment padded (formaldehyde is 50-00-0)" $
+            normCas "50-00-0" `shouldBe` "50-00-0"
+
+        it "keeps a zero check digit" $
+            normCas "1309-36-0" `shouldBe` "1309-36-0"
+
+        it "keeps one zero when the registry number is all zeros" $
+            normCas "000-00-0" `shouldBe` "0-00-0"
+
+        it "passes a non-CAS string through stripped rather than mangling it" $
+            normCas "  not-valid  " `shouldBe` "not-valid"
+
+        it "agrees on a CAS however it was padded, so the bridge meets" $
+            normCas "0000050-00-0" `shouldBe` "50-00-0"
+
+    describe "nonEmptyCAS" $ do
+        it "canonicalizes a stated CAS" $
+            nonEmptyCas "001309-36-0" `shouldBe` Just "1309-36-0"
+
+        it "reads an empty field as no CAS" $
+            nonEmptyCas "" `shouldBe` Nothing
+
+        it "reads an all-zeros placeholder as no CAS" $
+            nonEmptyCas "000-00-0" `shouldBe` Nothing
+
+        it "reads a bare dash placeholder as no CAS" $
+            nonEmptyCas "-" `shouldBe` Nothing
+
+        -- A SimaPro-format method used to key formaldehyde as "50-0-0" while
+        -- every flow carried "50-00-0", so the CAS rung compared two spellings
+        -- of the same substance and never bridged.
+        it "keeps the group segment padded, so a method CAS meets a flow CAS" $
+            nonEmptyCas "50-00-0" `shouldBe` Just "50-00-0"
+
     describe "equivalenceClasses" $ do
         it "takes the transitive closure of chained pairs (A=B, B=C ⟹ {A,B,C})" $
             classesOf [("a", "b"), ("b", "c")]

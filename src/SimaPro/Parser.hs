@@ -61,12 +61,11 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
-import EcoSpold.Parser2 (normalizeCAS)
 import qualified Expr
 import GHC.Conc (getNumCapabilities)
 import GHC.Generics (Generic)
 import Progress (ProgressLevel (..), reportProgress)
-import SubstanceRegistry (CASNumber (..), NormName (..), casBindings)
+import SubstanceRegistry (CASNumber (..), NormName (..), casBindings, normalizeCAS)
 import SynonymDB (normalizeName)
 import Text.Printf (printf)
 import Types

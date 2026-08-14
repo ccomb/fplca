@@ -156,6 +156,23 @@ spec = do
         it "returns Nothing for unknown CAS" $
             fmap bfId (findFlowByCAS M.empty "000-00-0" Nothing) `shouldBe` Nothing
 
+        -- The index is keyed canonically; a method whose parser kept the
+        -- source's zero-padding still has to reach the same flow, or its
+        -- factor goes silently missing.
+        it "meets a canonically indexed flow from a zero-padded query" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+                byCAS = M.singleton "124-38-9" [flow]
+            fmap bfId (findFlowByCAS byCAS "000124-38-9" Nothing) `shouldBe` Just fid
+
+        -- An all-zeros placeholder is not a substance anchor: indexing it
+        -- would collide every CAS-less flow onto one key.
+        it "refuses an all-zeros placeholder rather than treating it as a CAS" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "Unknown" "air" Nothing
+                byCAS = M.singleton "0-00-0" [flow]
+            fmap bfId (findFlowByCAS byCAS "000-00-0" Nothing) `shouldBe` Nothing
+
     describe "findFlowByName" $ do
         it "finds a flow by name (case-insensitive via normalization)" $ do
             fid <- nextRandom

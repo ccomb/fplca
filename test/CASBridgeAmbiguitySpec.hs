@@ -110,10 +110,10 @@ spec = describe "CAS bridge ambiguity guard" $ do
         -- already arbitrated to the unspecified default; that arbitration is
         -- not ambiguity.
         let mappings =
-                [ (mkCF 1 "Particulates" "" (Just "0000-00-0") 1.0, Just (mkFlow 1 "Particulates, alias" (Just "0000-00-0"), ByCAS))
-                , (mkCF 2 "Particulates" "indoor" (Just "0000-00-0") 100.0, Just (mkFlow 2 "Particulates, indoor" (Just "0000-00-0"), ByName))
+                [ (mkCF 1 "Particulates" "" (Just "1234-56-7") 1.0, Just (mkFlow 1 "Particulates, alias" (Just "1234-56-7"), ByCAS))
+                , (mkCF 2 "Particulates" "indoor" (Just "1234-56-7") 100.0, Just (mkFlow 2 "Particulates, indoor" (Just "1234-56-7"), ByName))
                 ]
-        score mappings (mkFlow 99 "Dust" (Just "0000-00-0")) `shouldBe` Just 1.0
+        score mappings (mkFlow 99 "Dust" (Just "1234-56-7")) `shouldBe` Just 1.0
 
     describe "a located method against a name-suffixed database" $ do
         -- JRC-style rows (per-country values, consumer-located) meeting

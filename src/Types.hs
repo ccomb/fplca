@@ -37,7 +37,7 @@ import Control.Lens ((&), (?~))
 import Data.List (nub)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
-import SubstanceRegistry (CASNumber (..), NormName (..))
+import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
 
@@ -1042,15 +1042,22 @@ buildFlowNameIndex bioDB =
                 ]
          in [(k, [f]) | k <- nub (primary : synKeys)]
 
--- | Build CAS index from biosphere flows
+{- | Build CAS index from biosphere flows.
+
+Keyed by the canonical spelling, because a flow and the method factor that
+characterizes it are read by different parsers and only one of them
+canonicalizes on the way in. A flow stating no CAS — empty, or a placeholder
+made of zeros and dashes — is left out rather than indexed under a key
+unrelated substances would share.
+-}
 buildFlowCASIndex :: BioFlowDB -> M.Map Text [BiosphereFlow]
 buildFlowCASIndex bioDB =
     M.fromListWith
         (++)
         [ (cas, [f])
         | f <- M.elems bioDB
-        , Just cas <- [bfCAS f]
-        , not (T.null cas)
+        , Just stated <- [bfCAS f]
+        , Just cas <- [nonEmptyCAS stated]
         ]
 
 -- | Add biosphere flow indexes (name + CAS) and search index to a Database

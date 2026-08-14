@@ -90,6 +90,18 @@ spec = do
                 sel = emptyMatch{mpmCAS = Just "007440-61-1"}
             cfMatches sel "any" cfWithCas `shouldBe` True
 
+        -- The other direction: a parser that stores the source spelling as it
+        -- came still has to meet a selector written canonically.
+        it "matches a padded CF CAS against a canonical selector" $ do
+            let cfWithCas = cf{mcfCAS = Just "007440-61-1"}
+                sel = emptyMatch{mpmCAS = Just "7440-61-1"}
+            cfMatches sel "any" cfWithCas `shouldBe` True
+
+        it "never matches an all-zeros placeholder selector" $ do
+            let cfWithCas = cf{mcfCAS = Just "7440-61-1"}
+                sel = emptyMatch{mpmCAS = Just "000-00-0"}
+            cfMatches sel "any" cfWithCas `shouldBe` False
+
     describe "applyMethodPatches" $ do
         let uranium = mkCF "Uranium" 560000
             uraniumOre = mkCF "Uranium ore, 1.11 GJ per kg" 1110

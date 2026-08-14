@@ -45,9 +45,13 @@ import System.FilePath (takeDirectory, takeExtension, (</>))
 import qualified Xeno.SAX as X
 
 import EcoSpold.Common (bsToText, decodeXmlEntitiesFull, distributeFiles, isElement)
-import EcoSpold.Parser2 (normalizeCAS)
 import Method.Types (Compartment (..))
 import Progress (ProgressLevel (..), reportProgress)
+import SubstanceRegistry (normalizeCAS)
+
+-- The on-disk flow cache below serializes a 'UUID', whose 'Store' instance is
+-- an orphan living in "Types". Imported for the instance alone.
+import Types ()
 
 -- | Enrichment data extracted from an ILCD flow XML
 data ILCDFlowInfo = ILCDFlowInfo

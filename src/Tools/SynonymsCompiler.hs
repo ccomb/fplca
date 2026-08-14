@@ -41,7 +41,7 @@ import System.FilePath (takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
-import EcoSpold.Parser2 (normalizeCAS)
+import SubstanceRegistry (normalizeCAS)
 import SynonymDB (fromClassMaps, normalizeName)
 import SynonymDB.Types (SynonymDB (..))
 
