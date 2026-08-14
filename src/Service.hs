@@ -1084,12 +1084,7 @@ crossDBLinkToTarget link =
     TargetRef
         (cdlFlowName link)
         (cdlLocation link)
-        ( cdlSourceDatabase link
-            <> "::"
-            <> UUID.toText (cdlSupplierActUUID link)
-            <> "_"
-            <> UUID.toText (cdlSupplierProdUUID link)
-        )
+        (supplierRefText link)
 
 -- | EcoSpold path: resolve a target by activity UUID.
 resolveByActivityUUID :: Database -> UUID -> Maybe TargetRef
@@ -1302,12 +1297,7 @@ exchange-details endpoint.
 crossDBLinkToSummary :: CrossDBLink -> ActivitySummary
 crossDBLinkToSummary link =
     ActivitySummary
-        { prsProcessId =
-            cdlSourceDatabase link
-                <> "::"
-                <> UUID.toText (cdlSupplierActUUID link)
-                <> "_"
-                <> UUID.toText (cdlSupplierProdUUID link)
+        { prsProcessId = supplierRefText link
         , prsActivityName = cdlFlowName link
         , prsLocation = cdlLocation link
         , prsProductName = cdlFlowName link
@@ -1597,7 +1587,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
              in nameOk && locOk && productOk && classOk && depthOk
 
         qualify pid
-            | qualifyPids = dbName <> "::" <> processIdToText db pid
+            | qualifyPids = qualifyRef dbName (processIdToText db pid)
             | otherwise = processIdToText db pid
 
         mkEntry (pid, scalingFactor) =

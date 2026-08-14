@@ -603,11 +603,11 @@ resolveOne ctx ex = case ex of
     AuthoredTechInput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->
             TechnosphereExchange
-                { techFlowId = snd (supKey sup)
+                { techFlowId = prProduct (supKey sup)
                 , techAmount = amount
                 , techUnitId = unitRef
                 , techRole = Input
-                , techActivityLinkId = fst (supKey sup)
+                , techActivityLinkId = prActivity (supKey sup)
                 , techProcessLinkId = Nothing
                 , techLocation = ""
                 , techComment = comment
@@ -616,11 +616,11 @@ resolveOne ctx ex = case ex of
     AuthoredWasteOutput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->
             WasteExchange
-                { waFlowId = snd (supKey sup)
+                { waFlowId = prProduct (supKey sup)
                 , waAmount = amount
                 , waUnitId = unitRef
                 , waIsInput = False
-                , waActivityLinkId = fst (supKey sup)
+                , waActivityLinkId = prActivity (supKey sup)
                 , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = comment
@@ -812,7 +812,7 @@ an embedded one would silently point at whichever row inherits the number.
 in a dependency resolves the same way through cross-database relinking.
 -}
 data Supplier = Supplier
-    { supKey :: (UUID, UUID)
+    { supKey :: ProcessRef
     , supProducedUnit :: Text
     {- ^ unit of the produced reference output, @""@ for a treatment process
     that has only a reference input. Mirrors
@@ -837,7 +837,7 @@ resolveSupplier ctx provider =
         act <- dbActivities db V.!? fromIntegral pid
         pure
             Supplier
-                { supKey = key
+                { supKey = uncurry ProcessRef key
                 , supProducedUnit = refUnitOf db act (\e -> exchangeIsReference e && not (exchangeIsInput e))
                 , supAnyRefUnit = refUnitOf db act exchangeIsReference
                 }

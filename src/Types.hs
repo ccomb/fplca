@@ -1029,6 +1029,24 @@ processRefText r = UUID.toText (prActivity r) <> refSeparator <> UUID.toText (pr
 refSeparator :: Text
 refSeparator = "_"
 
+{- | A process reference qualified by the database that holds it,
+@db::activityUUID_productUUID@ — how a cross-database supplier is named on the
+wire, and what a substitution endpoint accepts back. Its reader is
+@API.Types.parseSubRef@.
+-}
+qualifyRef :: Text -> Text -> Text
+qualifyRef dbName ref = dbName <> "::" <> ref
+
+{- | How a cross-database supplier is named on the wire: the reference to the
+supplying process, qualified by the database that holds it. One renderer, so
+the several payloads carrying a link's identity cannot spell it three ways.
+-}
+supplierRefText :: CrossDBLink -> Text
+supplierRefText link =
+    qualifyRef
+        (cdlSourceDatabase link)
+        (processRefText (ProcessRef (cdlSupplierActUUID link) (cdlSupplierProdUUID link)))
+
 -- | Text form of the process a 'ProcessId' indexes, for display.
 processIdToText :: Database -> ProcessId -> Text
 processIdToText db pid =

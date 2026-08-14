@@ -343,7 +343,7 @@ mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c)
                 pidText =
                     if depDbName == rootDbName
                         then processIdToText d pid
-                        else depDbName <> "::" <> processIdToText d pid
+                        else qualifyRef depDbName (processIdToText d pid)
                 -- Reference products are technosphere; pull from the dep DB's tech flows.
                 (prodName, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
              in ActivityContribution
