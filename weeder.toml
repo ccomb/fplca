@@ -28,7 +28,7 @@ roots = [
   # an external consumer looks dead. Rooting them keeps the API stable; revisit
   # if a symbol is confirmed to have no consumer anywhere.
   # ---------------------------------------------------------------------------
-  "^API\\.Resources\\.(requiredParams|optionalParams|cliName)$",
+  "^API\\.Resources\\.(requiredParams|optionalParams)$",
   "^API\\.Types\\.(apiFlowId|apiFlowSynonyms)$",
   "^Database\\.Loader\\.(validateCacheFile|loadDatabaseFromCacheFile|loadUncompressedCacheFile)$",
   "^Database\\.Manager\\.(loadDatabaseFromConfig|loadDatabaseFromConfigWithCrossDB|getStagedDatabase)$",
