@@ -5,7 +5,6 @@ module FlowResolverSpec (spec) where
 import Data.ByteString (ByteString)
 import qualified Data.UUID as UUID
 import EcoSpold.Common (decodeXmlEntities, decodeXmlEntitiesFull)
-import EcoSpold.Parser2 (normalizeCAS)
 import Method.FlowResolver (ILCDFlowInfo (..), parseFlowXML, splitIlcdSynonyms)
 import Method.Types (Compartment (..))
 import Test.Hspec
@@ -50,25 +49,6 @@ spec = do
 
         it "splits on the 'othernames' pseudo-delimiter the source glues names with" $
             splitIlcdSynonyms "a;b othernames c" `shouldBe` ["a", "b", "c"]
-
-    -- -----------------------------------------------------------------------
-    -- normalizeCAS (pure, from EcoSpold.Parser2)
-    -- -----------------------------------------------------------------------
-    describe "normalizeCAS" $ do
-        it "strips leading zeros from first segment" $
-            normalizeCAS "001309-36-0" `shouldBe` "1309-36-0"
-
-        it "preserves canonical CAS (no leading zeros)" $
-            normalizeCAS "7732-18-5" `shouldBe` "7732-18-5"
-
-        it "handles single zero in first segment" $
-            normalizeCAS "0074-98-6" `shouldBe` "74-98-6"
-
-        it "preserves the zero when segment is all zeros" $
-            normalizeCAS "000-00-0" `shouldBe` "0-00-0"
-
-        it "passes through non-3-segment format stripped" $
-            normalizeCAS "  not-valid  " `shouldBe` "not-valid"
 
     -- -----------------------------------------------------------------------
     -- parseFlowXML — well-formed elementary flow

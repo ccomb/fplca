@@ -1018,8 +1018,14 @@ spec = do
             case parseSimaProMethodCSVBytes csv of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right coll -> do
-                    let nh3 = head (methodFactors (mcMethods coll !! 1))
-                    mcfCAS nh3 `shouldBe` Just "7664-41-7"
+                    let factors = methodFactors (mcMethods coll !! 1)
+                    mcfCAS (head factors) `shouldBe` Just "7664-41-7"
+                    -- Only the registry number is zero-padded. Stripping the
+                    -- fixed-width group segment too would key this substance as
+                    -- "7446-9-5", which no flow carries, and the CAS rung would
+                    -- never bridge it.
+                    [mcfCAS cf | cf <- factors, mcfFlowName cf == "Sulfur dioxide"]
+                        `shouldBe` [Just "7446-09-5"]
 
         it "produces deterministic UUIDs" $ do
             csv <- BS.readFile "test/data/simapro_method.csv"

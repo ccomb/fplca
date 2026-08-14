@@ -275,9 +275,11 @@ data MethodPatchMatch = MethodPatchMatch
     , mpmFlowNamePrefix :: !(Maybe Text)
     -- ^ Flow name prefix (TOML: @flow-name-prefix@), matched with 'Data.Text.isPrefixOf'.
     , mpmCAS :: !(Maybe Text)
-    {- ^ CAS registry number (TOML: @cas@), matched against 'Method.mcfCAS' after
-    normalizing both sides the same way (leading zeros in each dash-separated
-    segment are insignificant), so either the raw or the normalized form works.
+    {- ^ CAS registry number (TOML: @cas@), matched against 'Method.mcfCAS' with
+    both sides canonicalized, so a selector matches whichever way the method's
+    source spelled the padding. Only the registry number (the first segment) is
+    ever zero-padded, so @0000050-00-0@ and @50-00-0@ are the same substance
+    while @50-0-0@ is not one at all.
     -}
     , mpmSubcompartmentContains :: !(Maybe Text)
     {- ^ Case-insensitive substring of the subcompartment (TOML:
@@ -760,55 +762,77 @@ redirectIntoDataDir (Just dataDir) p
         | last d == '/' || last d == '\\' = d ++ r
         | otherwise = d ++ "/" ++ r
 
-{- | Apply redirectIntoDataDir to every reference-data path on the Config.
-Other fields (databases, methods, plugins) are user content that lives
-outside the shipped data bundle and is left untouched.
+{- | What a path in a configuration file points at.
+
+'applyDataDir' is the one rewrite that treats them differently:
+@VOLCA_DATA_DIR@ names where the shipped data bundle was installed, so it
+redirects reference data and leaves the operator's own files where they are.
+'resolveConfigPaths' resolves every kind alike. Which field is which is
+recorded in 'overPaths' and nowhere else.
 -}
-applyDataDir :: Maybe FilePath -> Config -> Config
-applyDataDir mDataDir cfg =
+data PathKind
+    = ReferenceDataPath
+    | UserContentPath
+    deriving (Show, Eq)
+
+{- | Rewrite every path a configuration carries.
+
+The one place that enumerates the path-bearing fields. Both rewrites below run
+through here, so a new path-bearing setting is added to this list rather than
+to each of them — a config whose @[[databases]]@ path followed the file while
+its @[[methods]]@ path followed the process was the bug that taught this.
+-}
+overPaths :: (PathKind -> FilePath -> FilePath) -> Config -> Config
+overPaths f cfg =
     cfg
-        { cfgGeographies = fmap resolve (cfgGeographies cfg)
-        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
-        , cfgSubstanceEdges = fmap resolve (cfgSubstanceEdges cfg)
-        , cfgFlowSynonyms = map (mapPath resolve) (cfgFlowSynonyms cfg)
-        , cfgCompartmentMappings = map (mapPath resolve) (cfgCompartmentMappings cfg)
-        , cfgUnits = map (mapPath resolve) (cfgUnits cfg)
-        , cfgEnergyDensities = map (mapPath resolve) (cfgEnergyDensities cfg)
+        { cfgDatabases = map (\d -> d{dcPath = content (dcPath d)}) (cfgDatabases cfg)
+        , cfgMethods = map (\m -> m{mcPath = content (mcPath m)}) (cfgMethods cfg)
+        , cfgFlowSynonyms = map refData (cfgFlowSynonyms cfg)
+        , cfgCompartmentMappings = map refData (cfgCompartmentMappings cfg)
+        , cfgUnits = map refData (cfgUnits cfg)
+        , cfgEnergyDensities = map refData (cfgEnergyDensities cfg)
+        , cfgGeographies = fmap reference (cfgGeographies cfg)
+        , cfgChemSynonyms = fmap reference (cfgChemSynonyms cfg)
+        , cfgSubstanceEdges = fmap reference (cfgSubstanceEdges cfg)
         }
   where
-    resolve = redirectIntoDataDir mDataDir
-    mapPath f r = r{rdPath = f (rdPath r)}
+    reference = f ReferenceDataPath
+    content = f UserContentPath
+    refData r = r{rdPath = reference (rdPath r)}
+
+{- | Apply redirectIntoDataDir to every reference-data path on the Config.
+Database and method paths are the operator's own and are left untouched,
+which is what keeps a database kept at @data\/agb.7z@ from being redirected
+into the shipped bundle.
+-}
+applyDataDir :: Maybe FilePath -> Config -> Config
+applyDataDir mDataDir = overPaths $ \kind path -> case kind of
+    ReferenceDataPath -> redirectIntoDataDir mDataDir path
+    UserContentPath -> path
 
 {- | Resolve every relative path a config carries against the directory the
 config file sits in, so one file describes the same setup from any working
 directory. An absolute path is already unambiguous and is left alone; 'Nothing'
 (no config file) means the process directory, which is all there is to go on.
 
-Every path-bearing field is listed here, and nothing resolves paths anywhere
-else: a config whose @[[databases]]@ path followed the file while its
-@[[methods]]@ path followed the process was the bug this replaces.
+Every path a config file carries is listed in 'overPaths', and nothing else
+resolves one: a config whose @[[databases]]@ path followed the file while its
+@[[methods]]@ path followed the process was the bug this replaces. Both kinds
+are resolved the same way — a reference path @VOLCA_DATA_DIR@ already made
+absolute is left alone by the @isAbsolute@ test, and one it did not touch
+(the variable unset, or naming a relative directory) still needs anchoring.
 
 'loadConfigOrDefault' composes this after 'applyDataDir', which is what
 recognises a leading @data/@ as the shipped bundle - prefixing it with a
 directory first would hide it.
 -}
 resolveConfigPaths :: Maybe FilePath -> Config -> Config
-resolveConfigPaths mConfigPath cfg =
-    cfg
-        { cfgDatabases = map (\d -> d{dcPath = resolve (dcPath d)}) (cfgDatabases cfg)
-        , cfgMethods = map (\m -> m{mcPath = resolve (mcPath m)}) (cfgMethods cfg)
-        , cfgFlowSynonyms = map refData (cfgFlowSynonyms cfg)
-        , cfgCompartmentMappings = map refData (cfgCompartmentMappings cfg)
-        , cfgUnits = map refData (cfgUnits cfg)
-        , cfgEnergyDensities = map refData (cfgEnergyDensities cfg)
-        , cfgGeographies = fmap resolve (cfgGeographies cfg)
-        , cfgChemSynonyms = fmap resolve (cfgChemSynonyms cfg)
-        , cfgSubstanceEdges = fmap resolve (cfgSubstanceEdges cfg)
-        }
+resolveConfigPaths mConfigPath = overPaths $ \kind path -> case kind of
+    ReferenceDataPath -> resolve path
+    UserContentPath -> resolve path
   where
     configDir = maybe "." takeDirectory mConfigPath
     resolve p = normalise $ if isAbsolute p then p else configDir </> p
-    refData r = r{rdPath = resolve (rdPath r)}
 
 -- | Validate configuration
 validateConfig :: Config -> Either Text Config

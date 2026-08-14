@@ -21,7 +21,6 @@ import Control.Monad (forM, forM_, mfilter, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
-import Data.Bifunctor (first)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Char (isAscii, isControl)
 import Data.Foldable (asum)
@@ -45,9 +44,10 @@ import qualified Database.Manager as DM
 import qualified Expr
 import GHC.Generics
 import qualified GHC.Stats
+import qualified Impact
 import Matrix (Inventory, Vector)
 import qualified Method.Explain as Explain
-import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupEntryForFlow, strategyToText, sumRegionalizedLCIAScoreCrossDB)
+import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupEntryForFlow, strategyToText)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -343,7 +343,7 @@ mkCrossDBContrib dbManager rootDbName _flowDB unitDB score ((depDbName, pid), c)
                 pidText =
                     if depDbName == rootDbName
                         then processIdToText d pid
-                        else depDbName <> "::" <> processIdToText d pid
+                        else qualifyRef depDbName (processIdToText d pid)
                 -- Reference products are technosphere; pull from the dep DB's tech flows.
                 (prodName, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
              in ActivityContribution
@@ -669,17 +669,7 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
     -- 'resolveBatchedScore'; only the locally computed one is labeled here.
     scoreE <- case precomputedScore of
         Just e -> traverse evaluate e
-        Nothing ->
-            fmap (first (("[LCIA " <> methodName method <> "] ") <>)) $
-                if M.null (mtRegionalizedCF tables)
-                    then Right <$> evaluate (loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables))
-                    else do
-                        let hier = DM.dmLocationHierarchy dbManager
-                        perDb <-
-                            forM (NE.toList (SharedSolver.csScalings sol)) $ \(n, d, sv) -> do
-                                tbls <- DM.mapMethodToTablesCached dbManager n collection d method
-                                pure (d, sv, tbls)
-                        traverse evaluate (sumRegionalizedLCIAScoreCrossDB unitCfg mUnits mFlows hier perDb)
+        Nothing -> Impact.scoreSolution dbManager collection method tables sol inventory
     case scoreE of
         Left err -> pure (Left err)
         Right score -> buildResult unitCfg mFlows mUnits inventory tables stats score
@@ -1003,7 +993,7 @@ computedQualityReportH dbName mCollection mLimit = do
     let simple = toSimpleDatabase db
         entriesByPid =
             M.fromList
-                [ (UUID.toText a <> "_" <> UUID.toText p, act)
+                [ (processRefText (ProcessRef a p), act)
                 | ((a, p), act) <- M.toList (sdbActivities simple)
                 ]
         refProductName act = case filter exchangeIsReference (exchanges act) of
@@ -1426,10 +1416,7 @@ getActivityTree dbName processId = do
     maxTreeDepth <- asks aeMaxTreeDepth
     (db, _) <- requireDatabaseByName dbName
     withValidatedActivity db processId $ \_activity -> do
-        let activityUuidText = case T.splitOn "_" processId of
-                (uuid : _) -> uuid
-                [] -> processId
-        case UUID.fromText activityUuidText of
+        case refActivityUUID processId of
             Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
             Just activityUuid -> do
                 unitCfg <- liftIO $ getMergedUnitConfig dbManager

@@ -161,7 +161,7 @@ resolveActivityAndProcessId db queryText =
     -- A syntactically valid identifier that does not resolve is not-found, not
     -- a format error. Only genuinely malformed input is 'InvalidProcessId'.
     findPid
-        | Just (a, p) <- parseUUIDPair queryText = maybe (Left notFound) Right (findProcessId db a p)
+        | Just ref <- parseProcessRef queryText = maybe (Left notFound) Right (findProcessId db (prActivity ref) (prProduct ref))
         -- Bare activity UUID fallback (EcoInvent compatibility).
         | Just uuid <- UUID.fromText queryText = maybe (Left notFound) Right (findProcessIdByActivityUUID db uuid)
         | otherwise =
@@ -373,7 +373,7 @@ getTreeNodeId db (TreeLoop uuid _ _) =
     -- Use ProcessId format for consistency, maintain UUID_UUID format even in fallback
     case findProcessIdByActivityUUID db uuid of
         Just processId -> processIdToText db processId
-        Nothing -> UUID.toText uuid <> "_" <> UUID.toText uuid -- Fallback maintains ProcessId format
+        Nothing -> processRefText (ProcessRef uuid uuid) -- Fallback maintains ProcessId format
 getTreeNodeId db (TreeNode activity _) =
     case findProcessIdForActivity db activity of
         Just processId -> processIdToText db processId
@@ -579,11 +579,7 @@ convertToTreeExport db _rootProcessId maxDepth tree =
 getActivityTree :: Database -> Text -> Int -> Maybe Text -> Either ServiceError Value
 getActivityTree db queryText maxDepth nameFilter = do
     (_processId, _activity) <- resolveActivityAndProcessId db queryText
-    -- Get the activity UUID from the processIdText (which is activityUUID_productUUID)
-    let activityUuidText = case T.splitOn "_" queryText of
-            (uuid : _) -> uuid
-            [] -> queryText -- Fallback
-    case UUID.fromText activityUuidText of
+    case refActivityUUID queryText of
         Just activityUuid ->
             let loopAwareTree = buildLoopAwareTree defaultUnitConfig db activityUuid maxDepth
                 treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
@@ -591,7 +587,7 @@ getActivityTree db queryText maxDepth nameFilter = do
                     Nothing -> treeExport
                     Just pat -> filterTreeExport pat treeExport
              in Right $ toJSON filtered
-        Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
+        Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> queryText
 
 {- | Post-filter a TreeExport by name: keep matching nodes plus all their ancestors up to root.
 Uses the enParentId chain already stored in each ExportNode — no extra graph traversal.
@@ -669,7 +665,7 @@ mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col 
         tgt <- M.lookup targetPid nodeIdMap
         let matchingExchange = do
                 srcAct <- activities V.!? fromIntegral row
-                (targetUUID, _) <- processIdToUUIDs db targetPid
+                targetUUID <- prActivity <$> processIdToRef db targetPid
                 L.find (isInputLinkTo targetUUID) (exchanges srcAct)
             flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
             uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
@@ -960,9 +956,9 @@ matrix path). Empty when the activity has no entry in the process-id table.
 -}
 crossDBResolvedFlowIds :: Database -> Activity -> S.Set UUID
 crossDBResolvedFlowIds db activity =
-    case findProcessIdForActivity db activity >>= processIdToUUIDs db of
+    case prActivity <$> (findProcessIdForActivity db activity >>= processIdToRef db) of
         Nothing -> S.empty
-        Just (actUUID, _) ->
+        Just actUUID ->
             S.fromList
                 [ cdlConsumerFlowId link
                 | link <- dbCrossDBLinks db
@@ -1048,8 +1044,8 @@ Note: This function requires the ProcessId to get the activity UUID
 -}
 convertActivityForAPI :: UnitConfig -> Database -> ProcessId -> Activity -> ActivityForAPI
 convertActivityForAPI unitCfg db processId activity =
-    let allProducts = case processIdToUUIDs db processId of
-            Just (activityUUID, _) -> getAllProductsForActivity db (activityGroupKey activityUUID activity)
+    let allProducts = case processIdToRef db processId of
+            Just ref -> getAllProductsForActivity db (activityGroupKey (prActivity ref) activity)
             Nothing -> []
         (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
         linkMap = buildCrossDBLinkMap db processId
@@ -1088,12 +1084,7 @@ crossDBLinkToTarget link =
     TargetRef
         (cdlFlowName link)
         (cdlLocation link)
-        ( cdlSourceDatabase link
-            <> "::"
-            <> UUID.toText (cdlSupplierActUUID link)
-            <> "_"
-            <> UUID.toText (cdlSupplierProdUUID link)
-        )
+        (supplierRefText link)
 
 -- | EcoSpold path: resolve a target by activity UUID.
 resolveByActivityUUID :: Database -> UUID -> Maybe TargetRef
@@ -1152,8 +1143,8 @@ UUIDs are unique across flow kinds, so a tech and a waste link on the same
 activity cannot collide here.
 -}
 buildCrossDBLinkMap :: Database -> ProcessId -> M.Map UUID CrossDBLink
-buildCrossDBLinkMap db pid = case processIdToUUIDs db pid of
-    Just (actUUID, _) ->
+buildCrossDBLinkMap db pid = case prActivity <$> processIdToRef db pid of
+    Just actUUID ->
         M.fromList
             [ (cdlConsumerFlowId link, link)
             | link <- dbCrossDBLinks db
@@ -1306,12 +1297,7 @@ exchange-details endpoint.
 crossDBLinkToSummary :: CrossDBLink -> ActivitySummary
 crossDBLinkToSummary link =
     ActivitySummary
-        { prsProcessId =
-            cdlSourceDatabase link
-                <> "::"
-                <> UUID.toText (cdlSupplierActUUID link)
-                <> "_"
-                <> UUID.toText (cdlSupplierProdUUID link)
+        { prsProcessId = supplierRefText link
         , prsActivityName = cdlFlowName link
         , prsLocation = cdlLocation link
         , prsProductName = cdlFlowName link
@@ -1601,7 +1587,7 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
              in nameOk && locOk && productOk && classOk && depthOk
 
         qualify pid
-            | qualifyPids = dbName <> "::" <> processIdToText db pid
+            | qualifyPids = qualifyRef dbName (processIdToText db pid)
             | otherwise = processIdToText db pid
 
         mkEntry (pid, scalingFactor) =
@@ -2842,11 +2828,8 @@ exportMatrixDebugData database processIdText opts = do
     case resolveActivityAndProcessId database processIdText of
         Left err -> return $ Left err
         Right (_processId, targetActivity) -> do
-            let activityUuidText = case T.splitOn "_" processIdText of
-                    (uuid : _) -> uuid
-                    [] -> processIdText
-            case UUID.fromText activityUuidText of
-                Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> activityUuidText
+            case refActivityUUID processIdText of
+                Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> processIdText
                 Just activityUuid -> do
                     matrixData <- MatrixExport.extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
                     let inventoryList = MatrixExport.mdInventoryVector matrixData

@@ -76,7 +76,7 @@ globalOptionsParser = do
             option
                 outputFormatReader
                 (long "format" <> metavar "FORMAT" <> help "Output format: json|csv|table|pretty (default depends on command)")
-    jsonPath <- optTextOpt "jsonpath" Nothing "PATH" "JSONPath for CSV extraction (required with --format csv). Examples: 'results', 'activity.exchanges'"
+    jsonPath <- optTextOpt "jsonpath" Nothing "PATH" "Field holding the array to flatten for --format csv; only needed when a response carries several. Examples: 'results', 'activity.exchanges'"
     noCache <- switch (long "no-cache" <> help "Disable caching for testing and development")
     serverUrl <- optStrOpt "url" Nothing "URL" "Server URL for HTTP client mode (or set VOLCA_URL env var)"
     serverPassword <- optStrOpt "password" Nothing "PASSWORD" "Password for authentication (or set VOLCA_PASSWORD env var)"

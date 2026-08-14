@@ -48,6 +48,7 @@ import Types (
     Exchange (..),
     FormulaCheck (..),
     LocationSource (..),
+    ProcessRef (..),
     Severity (..),
     SimpleDatabase (..),
     TechRole (..),
@@ -60,6 +61,7 @@ import Types (
     exchangeIsReference,
     exchangePedigree,
     exchangeUnitId,
+    processRefText,
  )
 
 -- | One finding: the activity it was found on, and what is wrong with it.
@@ -243,7 +245,7 @@ qualityReport dbName db =
   where
     entries = M.toList (sdbActivities db)
     acts = map snd entries
-    pidText (actUUID, prodUUID) = UUID.toText actUUID <> "_" <> UUID.toText prodUUID
+    pidText = processRefText . uncurry ProcessRef
     worstFirst = sortOn (\o -> (qoSeverity o, qoActivityName o))
     offender sev key act = QualityOffender sev (pidText key) (activityName act) (activityLocation act)
 

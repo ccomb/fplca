@@ -57,7 +57,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, lookupExchangeFlow, processIdToText, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, lookupExchangeFlow, processIdToText, qualifyRef, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -1745,7 +1745,7 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText unitDB scor
                     txt =
                         if depDbName == rootDbName
                             then processIdToText d pid
-                            else depDbName <> "::" <> processIdToText d pid
+                            else qualifyRef depDbName (processIdToText d pid)
                     -- Reference products are technosphere; pull the supplier's tech flow map.
                     (pn, _, _) = maybe ("", 0, "") (Service.getReferenceProductInfo (dbTechFlows d) unitDB) mAct
                  in (maybe "" activityName mAct, maybe "" activityLocation mAct, pn, txt)

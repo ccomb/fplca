@@ -215,7 +215,7 @@ checkEcoSpold2Exportable db =
 -- | Canonical filename for an activity: @{actUUID}_{prodUUID}.spold@.
 activityFileName :: UUID.UUID -> UUID.UUID -> FilePath
 activityFileName actUUID prodUUID =
-    T.unpack (UUID.toText actUUID <> "_" <> UUID.toText prodUUID <> ".spold")
+    T.unpack (processRefText (ProcessRef actUUID prodUUID) <> ".spold")
 
 {- | Resolver for the registry-held data the parser writes onto exchanges.
 Passed in so 'renderActivity' stays a pure function of its inputs.

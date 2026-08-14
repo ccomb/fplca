@@ -24,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Hspec
 
-import EcoSpold.Parser2 (normalizeCAS)
+import SubstanceRegistry (normalizeCAS)
 import SynonymDB (
     BridgeDirection (..),
     RegistryRow (..),

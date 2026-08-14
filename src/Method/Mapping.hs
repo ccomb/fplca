@@ -136,11 +136,11 @@ import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
-import EcoSpold.Parser2 (normalizeCAS)
 import Matrix (Inventory, Vector, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Progress (ProgressLevel (..), reportProgress)
+import SubstanceRegistry (nonEmptyCAS, normalizeCAS)
 import qualified SubstanceRegistry as SR
 import SynonymDB
 import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
@@ -481,10 +481,14 @@ strategyFromText t = case T.toLower t of
 findFlowByUUID :: M.Map UUID BiosphereFlow -> UUID -> Maybe BiosphereFlow
 findFlowByUUID flowsByUUID uuid = M.lookup uuid flowsByUUID
 
--- | Find flow by CAS number with compartment preference
+{- | Find flow by CAS number with compartment preference. Canonicalizes on the
+way in, as 'findFlowByNameComp' does for names: the index is keyed canonically,
+and a method that states a padded CAS must still meet the flow that states it
+unpadded.
+-}
 findFlowByCAS :: M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
 findFlowByCAS flowsByCAS cas mComp =
-    M.lookup cas flowsByCAS >>= \flows -> pickByCompartment flows mComp
+    nonEmptyCAS cas >>= (`M.lookup` flowsByCAS) >>= \flows -> pickByCompartment flows mComp
 
 -- | Find flow by normalized name match (compartment-aware)
 findFlowByName :: M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
@@ -1367,10 +1371,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             (`M.withoutKeys` casDiscriminated) . M.map snd $
                 M.fromListWith
                     (preferUnspecifiedBy teCF)
-                    [ ((SR.CASNumber cas, Medium normMed), (casSubRank normSub, entryOf cf mflow))
+                    [ ((casNo, Medium normMed), (casSubRank normSub, entryOf cf mflow))
                     | (cf, mflow@(Just (_, ByCAS))) <- mappings
                     , Just cas <- [mcfCAS cf]
-                    , not (T.null cas)
+                    , Just casNo <- [SR.casKey cas]
                     , Nothing <- [mcfConsumerLocation cf]
                     , (_, Nothing) <- [extractLocationSuffix (mcfFlowName cf)]
                     , Just comp <- [mcfCompartment cf]
@@ -1393,10 +1397,10 @@ buildMethodTables methodFamily cmap energyDensities mappings =
             (`M.withoutKeys` casDiscriminated) . M.map (M.map snd) $
                 M.fromListWith
                     (M.unionWith (preferUnspecifiedBy id))
-                    [ ((SR.CASNumber cas, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
+                    [ ((casNo, Medium normMed), M.singleton (Location loc) (casSubRank normSub, cfOf cf))
                     | (cf, Just (_, ByCAS)) <- mappings
                     , Just cas <- [mcfCAS cf]
-                    , not (T.null cas)
+                    , Just casNo <- [SR.casKey cas]
                     , Just loc <- [mcfConsumerLocation cf]
                     , Just comp <- [mcfCompartment cf]
                     , let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
@@ -1861,7 +1865,8 @@ fillRegionalActivityWeights unitCfg unitDB flowDB db hier tables
                 M.lookup fid perFlow
                     <|> ( M.lookup fid flowDB >>= \flow ->
                             bfCAS flow
-                                >>= \cas -> M.lookup (SR.CASNumber cas, fst (flowMediumSub cmap flow)) regionalCas
+                                >>= SR.casKey
+                                >>= \casNo -> M.lookup (casNo, fst (flowMediumSub cmap flow)) regionalCas
                         )
          in V.map lookupRow bioFlows
 
@@ -2311,7 +2316,9 @@ cascadeTrail tables flowDB fid =
 
         casOutcome = case bfCAS flow of
             Nothing -> RungNotApplicable
-            Just cas -> gated (M.lookup (SR.CASNumber cas, baseMed) (mtCasCF tables))
+            Just cas -> case SR.casKey cas of
+                Nothing -> RungNotApplicable
+                Just casNo -> gated (M.lookup (casNo, baseMed) (mtCasCF tables))
 
         -- A SimaPro region-suffixed flow ("Ammonia, FR") whose region the method
         -- doesn't tag falls back to the base substance's CF: an unregionalized CF
