@@ -37,6 +37,7 @@ library
                      , Config
                      , Service
                      , Service.Aggregate
+                     , Impact
                      , Tree
                      , Matrix
                      , Matrix.Export
