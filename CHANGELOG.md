@@ -13,14 +13,20 @@
   where a number comes from had to open the source file. Each section keeps the
   name its format gives it, and a section the dataset left blank is not
   reported.
-  Two things it does not do. The full title of an ecoinvent report lives in
+  Three things it does not do. The full title of an ecoinvent report lives in
   `MasterData/Sources.xml`, which is not read, so an EcoSpold 2 dataset reports
-  its author, year and pages rather than the report's title. And the machine
-  validation log some ecoinvent reviews carry (mass-balance warnings, property
-  deviations) is left out: it is kilobytes per dataset addressed to the
-  database's own build process. Exporting a database does not write these
-  sections back, the same way it has never written anything the general comment
-  does not hold.
+  its author, year and pages rather than the report's title. The report the
+  ecoinvent build process files as a review under the name `[System]` is left
+  out, because it is kilobytes of mass-balance warnings per dataset written for
+  that process rather than for a reader; a review signed by a person is kept
+  whether or not they wrote anything beyond their name and the date. And a
+  field an exporter filled with its own placeholder for absence counts as
+  blank: openLCA writes the literal `<null>`, and reporting that as what a
+  dataset says about its geography would be worse than saying nothing. Only the
+  placeholder alone is read that way, since "none" and "not known" are
+  statements a person wrote.
+  Exporting a database does not write these sections back, the same way it has
+  never written anything the general comment does not hold.
 - The two quality reports of a database can now be taken as a CSV file, from
   the command line or from a plain web address. Load a database with one
   command and take its report with the next:
