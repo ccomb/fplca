@@ -55,6 +55,12 @@
   `VOLCA_PASSWORD` is read only when neither `--password` nor the file sets
   one, so it cannot rotate a password written there, and `api_access` is
   reported for whatever fronts the server rather than enforced by it.
+- Asking for a method collection that is not loaded now tells you which ones
+  are. The refusal used to read "Collection not loaded: methods" and nothing
+  more, which looks like a broken engine when it is really the wrong name: a
+  collection is named in the configuration file (`[[methods]] name`), and the
+  caller had no way to learn those names from the refusal itself. They now
+  follow on a second line, as the assistant tools already said them.
 - Startup now says which keys of the configuration file nothing reads. A
   configuration is a list of things the engine looks for, so anything it does
   not look for was dropped without a word, however it got that way: written

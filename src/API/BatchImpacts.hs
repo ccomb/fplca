@@ -159,13 +159,16 @@ loadedCollectionNames dbm = M.keys <$> readTVarIO (dmLoadedMethods dbm)
 
 The match is by HTTP status + body prefix. The prefix constants are
 imported from "API.Routes" so the throw site and the translator move
-together; changing one without the other breaks compilation here.
+together; changing one without the other breaks compilation here. The
+collection body names the loaded collections on a second line
+('API.Routes.collectionNotLoadedBody'), so only its first line is the
+requested name.
 -}
 translateError :: [Text] -> ServerError -> BatchError
 translateError availableCollections se
     | code == 404
     , Just rest <- T.stripPrefix collectionNotLoadedPrefix body =
-        CollectionNotLoaded rest availableCollections
+        CollectionNotLoaded (T.takeWhile (/= '\n') rest) availableCollections
     | code == 404
     , Just rest <- T.stripPrefix databaseNotLoadedPrefix body =
         DatabaseNotLoaded rest

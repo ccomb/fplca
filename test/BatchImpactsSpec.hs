@@ -19,6 +19,7 @@ Two layers :
 module BatchImpactsSpec (spec) where
 
 import API.BatchImpacts (BatchError (..), runActivityLCIABatch, runBatchImpacts)
+import API.Routes (collectionNotLoadedBody)
 import Config (defaultConfig)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text.Encoding as TE
@@ -50,6 +51,11 @@ spec = do
         it "maps 404 + 'Collection not loaded: X' to CollectionNotLoaded" $
             translateError' ["a", "b"] 404 "Collection not loaded: EF-3.1"
                 `shouldBe` CollectionNotLoaded "EF-3.1" ["a", "b"]
+
+        it "reads the name off the real body, which also names the loaded collections" $
+            let body = TE.decodeUtf8 (BSL.toStrict (collectionNotLoadedBody "methods" ["EF-3.1", "plain-indicators"]))
+             in translateError' ["EF-3.1", "plain-indicators"] 404 body
+                    `shouldBe` CollectionNotLoaded "methods" ["EF-3.1", "plain-indicators"]
 
         it "maps 404 + 'Database not loaded: X' to DatabaseNotLoaded" $
             translateError' [] 404 "Database not loaded: agribalyse"

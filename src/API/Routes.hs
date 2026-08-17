@@ -223,6 +223,21 @@ collectionNotLoadedPrefix = "Collection not loaded: "
 notLoadedBody :: Text -> Text -> BSL.ByteString
 notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
 
+{- | 404 body for a collection that is not loaded, naming the ones that are on
+a second line. A caller on plain HTTP has no other way to learn what to ask
+for, and the MCP path already says it ('API.MCP.batchErrorMsg'). The first
+line ends at the requested name, which is what 'API.BatchImpacts.translateError'
+reads back.
+-}
+collectionNotLoadedBody :: Text -> [Text] -> BSL.ByteString
+collectionNotLoadedBody name loaded =
+    BSL.fromStrict . T.encodeUtf8 $
+        collectionNotLoadedPrefix <> name <> "\nAvailable collections: " <> available
+  where
+    available
+        | null loaded = "none loaded"
+        | otherwise = T.intercalate ", " loaded
+
 -- | Get database by name, throw 404 if not loaded
 requireDatabaseByName :: Text -> AppM (Database, SharedSolver)
 requireDatabaseByName dbName = do
@@ -531,7 +546,7 @@ loadCollection collectionName = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
         Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
-        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+        Nothing -> throwError err404{errBody = collectionNotLoadedBody collectionName (M.keys loadedCollections)}
 
 {- | Cross-DB inventory solution for an activity. 'Nothing' takes the cached
 no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
@@ -902,7 +917,7 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     collection <- case M.lookup collectionName loadedCollections of
         Just mc -> pure mc
-        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+        Nothing -> throwError err404{errBody = collectionNotLoadedBody collectionName (M.keys loadedCollections)}
     let resolved =
             [ (pidText, Service.resolveActivityAndProcessId db pidText)
             | pidText <- birProcessIds req
