@@ -338,6 +338,32 @@ datedPeriodXml bounds =
         , "</ecoSpold>"
         ]
 
+{- | A dataset written by an exporter that fills what it has nothing for with
+the literal @\<null\>@, as openLCA does across a third of the BAFU export.
+-}
+nullMarkerXml :: BC.ByteString
+nullMarkerXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"11\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"null process\" category=\"c\" subCategory=\"s\" unit=\"kg\"/>"
+        , "        <geography location=\"CH\" text=\"&lt;null&gt;\"/>"
+        , "        <technology text=\"Port distances.\"/>"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"11\" name=\"null product\" category=\"c\" subCategory=\"s\""
+        , "                unit=\"kg\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 -- | The documentation section under that label, if the parser recorded one.
 sectionNamed :: Text -> Activity -> Maybe Text
 sectionNamed label act = lookup label [(docLabel s, docText s) | s <- activityDocumentation act]
@@ -391,6 +417,13 @@ spec = do
         it "names the proof reader by the person number the validation points at" $
             withDocumented $ \act ->
                 sectionNamed "Review" act `shouldBe` Just "Passed. (Niels Jungbluth)"
+
+        it "reads an exporter's null placeholder as an unfilled rubric" $
+            case parseWithXeno nullMarkerXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> do
+                    sectionNamed "Geography" act `shouldBe` Nothing
+                    sectionNamed "Technology" act `shouldBe` Just "Port distances."
 
         it "records no section for a dataset that states none" $
             case parseWithXeno minimalXml of
