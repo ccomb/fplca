@@ -262,6 +262,94 @@ spec = describe "per-exchange comments" $ do
                     activityLocation act `shouldBe` "GLO"
                     activityLocationSource act `shouldBe` LocationUnspecified
 
+    describe "dataset documentation" $ do
+        let sectionNamed label act = lookup label [(docLabel s, docText s) | s <- activityDocumentation act]
+            onDocumented k = withSystemTempDirectory "es2-docs" $ \dir -> do
+                let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+                BS.writeFile path documentedXml
+                result <- streamParseActivityAndFlowsFromFile path
+                case result of
+                    Left err -> expectationFailure $ "Parse failed: " ++ err
+                    Right (act, _, _, _, _) -> k act
+
+        it "assembles the published source from the three attributes it is spread over" $
+            onDocumented $ \act ->
+                sectionNamed "Published in" act `shouldBe` Just "Spielmann M. (2007), Water Transport"
+
+        it "reads a comment through its <text> children, in English and in order" $
+            onDocumented $ \act ->
+                sectionNamed "Technology" act
+                    `shouldBe` Just "Conditions at the Port of Rotterdam.\nMaterial composition from Maibach et al."
+
+        it "keeps a review the reviewer wrote, and drops the machine validation log" $
+            onDocumented $ \act ->
+                sectionNamed "Review" act
+                    `shouldBe` Just "Carl Vadenbo (2012-06-29): The amounts of the exchanges were reviewed."
+
+        it "reads a comment written straight into the element, with no <text> child" $
+            withFixture $ \(act, _, _, _, _) -> do
+                sectionNamed "Technology" act `shouldBe` Just "Coal-fired power plant"
+                sectionNamed "Geography" act `shouldBe` Just "Test geography"
+
+        it "reads the period as its dates followed by what the dataset says about them" $
+            withFixture $ \(act, _, _, _, _) ->
+                sectionNamed "Time period" act `shouldBe` Just "2020-01-01 - 2020-12-31 Test time period"
+
+        it "reads what the dataset includes, and how it was sampled" $
+            withFixture $ \(act, _, _, _, _) -> do
+                sectionNamed "Included activities" act `shouldBe` Just "Coal combustion Electricity generation"
+                sectionNamed "System model" act `shouldBe` Just "Test system model"
+                sectionNamed "Sampling procedure" act `shouldBe` Just "Test sampling"
+                sectionNamed "Extrapolations" act `shouldBe` Just "Test extrapolation"
+
+{- | Synthetic dataset in the shape a real ecoinvent file uses: every free text
+wrapped in @\<comment\>\<text\>@, a published source spread over three
+attributes, one review with details, and one @[System]@ review whose only
+content is the machine validation log.
+-}
+documentedXml :: BS.ByteString
+documentedXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+    \  <activityDataset>\n\
+    \    <activityDescription>\n\
+    \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"doc-test\" activityType=\"1\">\n\
+    \        <activityName xml:lang=\"en\">port facilities construction</activityName>\n\
+    \      </activity>\n\
+    \      <geography geographyId=\"RER\"><shortname xml:lang=\"en\">RER</shortname></geography>\n\
+    \      <technology technologyLevel=\"3\">\n\
+    \        <comment>\n\
+    \          <text xml:lang=\"en\" index=\"0\">Conditions at the Port of Rotterdam.</text>\n\
+    \          <text xml:lang=\"de\" index=\"1\">Bedingungen im Hafen von Rotterdam.</text>\n\
+    \          <text xml:lang=\"en\" index=\"2\">Material composition from Maibach et al.</text>\n\
+    \        </comment>\n\
+    \      </technology>\n\
+    \    </activityDescription>\n\
+    \    <flowData>\n\
+    \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
+    \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+    \        <name xml:lang=\"en\">port facilities</name>\n\
+    \        <unitName xml:lang=\"en\">unit</unitName>\n\
+    \        <outputGroup>0</outputGroup>\n\
+    \      </intermediateExchange>\n\
+    \    </flowData>\n\
+    \    <modellingAndValidation>\n\
+    \      <review reviewerName=\"Carl Vadenbo\" reviewDate=\"2012-06-29\">\n\
+    \        <details>\n\
+    \          <text xml:lang=\"en\" index=\"0\">The amounts of the exchanges were reviewed.</text>\n\
+    \        </details>\n\
+    \      </review>\n\
+    \      <review reviewerName=\"[System]\" reviewDate=\"2012-06-29\">\n\
+    \        <otherDetails xml:lang=\"en\">Validation warnings: mass deficit of 22% in activity dataset.</otherDetails>\n\
+    \      </review>\n\
+    \    </modellingAndValidation>\n\
+    \    <administrativeInformation>\n\
+    \      <dataGeneratorAndPublication personId=\"p\" publishedSourceFirstAuthor=\"Spielmann M.\"\n\
+    \                                  publishedSourceYear=\"2007\" pageNumbers=\"Water Transport\"/>\n\
+    \    </administrativeInformation>\n\
+    \  </activityDataset>\n\
+    \</ecoSpold>\n"
+
 {- | Synthetic ecospold2 dataset parameterised on the activityType code and
 optional specialActivityType code. One reference output, no other exchanges.
 -}

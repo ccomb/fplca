@@ -23,6 +23,7 @@ import Control.Monad (forM_)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import Data.Either (lefts, rights)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
@@ -30,7 +31,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToIntMaybe, bsToText, isElement, nonEmptyText)
+import EcoSpold.Common (bsToDouble, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
 import EcoSpold.Cutoff (applyCutoffStrategy)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
@@ -131,6 +132,53 @@ data ExchangeData = ExchangeData
 emptyExchangeData :: ExchangeData
 emptyExchangeData = ExchangeData 0 "" "" "" "" "" 0.0 "" "" "" "" False ""
 
+{- | One @\<source\>@ of the dataset's own bibliography. EcoSpold1 numbers them
+within the dataset, and @dataGeneratorAndPublication\@referenceToPublishedSource@
+names the one the dataset was published in - the methodological report.
+-}
+data Source1 = Source1
+    { s1Number :: !Int
+    , s1FirstAuthor :: !Text
+    , s1AdditionalAuthors :: !Text
+    , s1Year :: !Text
+    , s1Title :: !Text
+    , s1TitleOfAnthology :: !Text -- Where ecoinvent puts "ecoinvent report No. 1"
+    , s1Publisher :: !Text
+    , s1Place :: !Text
+    }
+    deriving (Eq)
+
+emptySource1 :: Source1
+emptySource1 = Source1 0 "" "" "" "" "" "" ""
+
+{- | The provenance a dataset states about itself, accumulated as the metadata
+elements go by. Sources and persons are keyed by the number the dataset gives
+them, because the elements referring to them (the published source, the
+validator) may be read before or after the thing they name.
+-}
+data DatasetDocs = DatasetDocs
+    { ddIncludedProcesses :: !Text
+    , ddGeography :: !Text
+    , ddTechnology :: !Text
+    , ddTimePeriod :: !Text
+    , ddStartYear :: !Text
+    , ddEndYear :: !Text
+    , ddSampling :: !Text
+    , ddExtrapolations :: !Text
+    , ddProductionVolume :: !Text
+    , ddProofReading :: !Text
+    , ddValidator :: !Int -- <person> number of the proof reader
+    , ddPublishedSource :: !Int -- <source> number the dataset was published in
+    , ddSources :: !(IM.IntMap Source1)
+    , ddPersons :: !(IM.IntMap Text)
+    , ddPendingSource :: !Source1 -- attributes of the open <source>
+    , ddPendingPersonNumber :: !Int -- attributes of the open <person>
+    , ddPendingPersonName :: !Text
+    }
+
+emptyDatasetDocs :: DatasetDocs
+emptyDatasetDocs = DatasetDocs "" "" "" "" "" "" "" "" "" "" 0 0 IM.empty IM.empty emptySource1 0 ""
+
 -- | Parsing state accumulator
 data ParseState = ParseState
     { psDatasetNumber :: !Int
@@ -149,6 +197,7 @@ data ParseState = ParseState
     , psContext :: !ElementContext
     , psTextAccum :: ![BS.ByteString]
     , psSupplierLinks :: !(M.Map UUID Int) -- flowId → supplier dataset number (technosphere inputs)
+    , psDocs :: !DatasetDocs -- Provenance the dataset states about itself
     , psCompletedActivities :: ![Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
     }
 
@@ -172,6 +221,7 @@ initialParseState =
         , psContext = Other
         , psTextAccum = []
         , psSupplierLinks = M.empty
+        , psDocs = emptyDatasetDocs
         , psCompletedActivities = []
         }
 
@@ -212,12 +262,14 @@ onAttribute state name value = case psContext state of
     InReferenceFunction -> setRefFunctionAttr name value state
     InGeography
         | isElement name "location" -> state{psLocation = Just (bsToText value)}
+        | isElement name "text" -> setDocs (\d -> d{ddGeography = bsToText value})
         | otherwise -> state
     InExchange edata -> state{psContext = InExchange (setExchangeAttr name value edata)}
     InInputGroup _ -> datasetNumberAttr
     InOutputGroup _ -> datasetNumberAttr
-    Other -> datasetNumberAttr
+    Other -> docAttr name value datasetNumberAttr
   where
+    setDocs f = state{psDocs = f (psDocs state)}
     -- The dataset's numeric id lives on the <dataset> element itself, which is
     -- the head of the path. Accepting it anywhere under <dataset> let the
     -- metadata's own numbered elements (<source>, <person>) overwrite it, so
@@ -234,6 +286,44 @@ onAttribute state name value = case psContext state of
             state{psDatasetNumber = fromMaybe 0 (bsToIntMaybe value)}
         | otherwise = state
 
+{- | Attributes of the metadata elements a dataset states its provenance on.
+EcoSpold1 writes each of them as one self-closing element carrying everything
+in attributes, so the element currently open is what tells them apart - the
+attribute names alone collide (@text@ is on both @\<geography\>@ and
+@\<technology\>@, @number@ is on @\<dataset\>@, @\<source\>@ and @\<person\>@).
+-}
+docAttr :: BS.ByteString -> BS.ByteString -> ParseState -> ParseState
+docAttr name value state
+    | on "technology" "text" = setDocs (\d -> d{ddTechnology = txt})
+    | on "timePeriod" "text" = setDocs (\d -> d{ddTimePeriod = txt})
+    | on "representativeness" "samplingProcedure" = setDocs (\d -> d{ddSampling = txt})
+    | on "representativeness" "extrapolations" = setDocs (\d -> d{ddExtrapolations = txt})
+    | on "representativeness" "productionVolume" = setDocs (\d -> d{ddProductionVolume = txt})
+    | on "validation" "proofReadingDetails" = setDocs (\d -> d{ddProofReading = txt})
+    | on "validation" "proofReadingValidator" = setDocs (\d -> d{ddValidator = num})
+    | on "dataGeneratorAndPublication" "referenceToPublishedSource" = setDocs (\d -> d{ddPublishedSource = num})
+    | on "source" "number" = setSource (\s -> s{s1Number = num})
+    | on "source" "firstAuthor" = setSource (\s -> s{s1FirstAuthor = txt})
+    | on "source" "additionalAuthors" = setSource (\s -> s{s1AdditionalAuthors = txt})
+    | on "source" "year" = setSource (\s -> s{s1Year = txt})
+    | on "source" "title" = setSource (\s -> s{s1Title = txt})
+    | on "source" "titleOfAnthology" = setSource (\s -> s{s1TitleOfAnthology = txt})
+    | on "source" "publisher" = setSource (\s -> s{s1Publisher = txt})
+    | on "source" "placeOfPublications" = setSource (\s -> s{s1Place = txt})
+    | on "person" "number" = setDocs (\d -> d{ddPendingPersonNumber = num})
+    | on "person" "name" = setDocs (\d -> d{ddPendingPersonName = txt})
+    | otherwise = state
+  where
+    txt = bsToText value
+    -- A number that will not parse leaves the reference at 0, which resolves to
+    -- no source and no person rather than killing the load.
+    num = fromMaybe 0 (bsToIntMaybe value)
+    on element attr = case psPath state of
+        current : _ -> isElement current element && isElement name attr
+        [] -> False
+    setDocs f = state{psDocs = f (psDocs state)}
+    setSource f = setDocs (\d -> d{ddPendingSource = f (ddPendingSource d)})
+
 -- | Apply a single referenceFunction attribute to the parse state.
 setRefFunctionAttr :: BS.ByteString -> BS.ByteString -> ParseState -> ParseState
 setRefFunctionAttr name value st
@@ -244,6 +334,8 @@ setRefFunctionAttr name value st
     | isElement name "generalComment"
     , not (BS.null value) =
         st{psDescription = bsToText value : psDescription st}
+    | isElement name "includedProcesses" =
+        st{psDocs = (psDocs st){ddIncludedProcesses = bsToText value}}
     | otherwise = st
 
 -- | Apply a single exchange attribute to the in-progress exchange.
@@ -285,8 +377,40 @@ onCloseTag state tagName
     | isElement tagName "exchange" = closeExchange state
     | isElement tagName "referenceFunction" = (popElement state){psContext = Other}
     | isElement tagName "geography" = (popElement state){psContext = Other}
+    | isElement tagName "source" = closeSource state
+    | isElement tagName "person" = closePerson state
+    | isElement tagName "startYear" = closeDocText (\d t -> d{ddStartYear = t}) state
+    | isElement tagName "endYear" = closeDocText (\d t -> d{ddEndYear = t}) state
     | isElement tagName "dataset" = closeDataset state
     | otherwise = popPath state
+
+{- | Close a @\<source\>@: file it under the number the dataset gave it, so
+@referenceToPublishedSource@ can name it whichever order the two were read in.
+An unnumbered source is dropped - nothing can refer to it, and it would
+overwrite the previous one at key 0.
+-}
+closeSource :: ParseState -> ParseState
+closeSource state =
+    let docs = psDocs state
+        pending = ddPendingSource docs
+        filed
+            | s1Number pending == 0 = ddSources docs
+            | otherwise = IM.insert (s1Number pending) pending (ddSources docs)
+     in (popElement state){psDocs = docs{ddSources = filed, ddPendingSource = emptySource1}}
+
+-- | Close a @\<person\>@: file their name under their number, same as a source.
+closePerson :: ParseState -> ParseState
+closePerson state =
+    let docs = psDocs state
+        filed
+            | ddPendingPersonNumber docs == 0 = ddPersons docs
+            | otherwise = IM.insert (ddPendingPersonNumber docs) (ddPendingPersonName docs) (ddPersons docs)
+     in (popElement state){psDocs = docs{ddPersons = filed, ddPendingPersonNumber = 0, ddPendingPersonName = ""}}
+
+-- | Close an element whose documentation value is its text rather than an attribute.
+closeDocText :: (DatasetDocs -> Text -> DatasetDocs) -> ParseState -> ParseState
+closeDocText setField state =
+    (popElement state){psDocs = setField (psDocs state) (T.strip $ T.concat $ reverse $ map bsToText (psTextAccum state))}
 
 {- | Close an input/output group: fold its accumulated text into the parent
 exchange's matching group field and return to the exchange context.
@@ -387,6 +511,7 @@ resetDataset state =
         , psContext = Other
         , psTextAccum = []
         , psSupplierLinks = M.empty
+        , psDocs = emptyDatasetDocs
         }
 
 {- | Build exchange, flow, and unit from exchange data.
@@ -481,6 +606,43 @@ buildExchange activityLoc edata
             , techPedigree = Nothing
             }
 
+{- | One bibliographic line for a @\<source\>@. ecoinvent files put the
+methodological report in @titleOfAnthology@ ("ecoinvent report No. 1"), which is
+usually the piece a reader is after, so it follows the title directly.
+-}
+renderSource :: Source1 -> Text
+renderSource s = case joinParts ". " [authors, s1Title s, s1TitleOfAnthology s, publisher] of
+    "" -> ""
+    line -> line <> "."
+  where
+    authors = joinParts " " [joinParts ", " [s1FirstAuthor s, s1AdditionalAuthors s], year]
+    year = maybe "" (\y -> "(" <> y <> ")") (nonEmptyText (s1Year s))
+    publisher = joinParts ", " [s1Publisher s, s1Place s]
+
+{- | The provenance sections of one dataset, in the order a reader wants them:
+what the dataset covers, then how it was built, then where it was published and
+who vouched for it.
+-}
+documentationSections :: DatasetDocs -> [DocSection]
+documentationSections d =
+    concat
+        [ docSection "Included processes" (ddIncludedProcesses d)
+        , docSection "Geography" (ddGeography d)
+        , docSection "Technology" (ddTechnology d)
+        , docSection "Time period" (joinParts " " [years, ddTimePeriod d])
+        , docSection "Sampling procedure" (ddSampling d)
+        , docSection "Extrapolations" (ddExtrapolations d)
+        , docSection "Production volume" (ddProductionVolume d)
+        , docSection "Published in" (maybe "" renderSource publishedIn)
+        , docSection "Sources" (joinParts "\n" (map renderSource otherSources))
+        , docSection "Review" (joinParts " " [ddProofReading d, reviewer])
+        ]
+  where
+    years = joinParts "-" [ddStartYear d, ddEndYear d]
+    publishedIn = IM.lookup (ddPublishedSource d) (ddSources d)
+    otherSources = IM.elems (IM.delete (ddPublishedSource d) (ddSources d))
+    reviewer = maybe "" (\p -> "(" <> p <> ")") (IM.lookup (ddValidator d) (ddPersons d) >>= nonEmptyText)
+
 -- | Build the final per-dataset result, applying the cut-off strategy.
 buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
 buildResult st =
@@ -496,7 +658,25 @@ buildResult st =
                 filter
                     (not . T.null . snd)
                     [("Category", psActivityCategory st), ("SubCategory", psActivitySubCategory st)]
-        activity = Activity name description M.empty classifications location locationSource refUnit (reverse $ psExchanges st) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+        activity =
+            Activity
+                { activityName = name
+                , activityDescription = description
+                , activityDocumentation = documentationSections (psDocs st)
+                , activitySynonyms = M.empty
+                , activityClassification = classifications
+                , activityLocation = location
+                , activityLocationSource = locationSource
+                , activityUnit = refUnit
+                , exchanges = reverse (psExchanges st)
+                , activityParams = M.empty
+                , activityParamExprs = M.empty
+                , activityAllocationPercent = Nothing
+                , activityAllocationFormula = Nothing
+                , activityNativeType = Nothing
+                , activityNativeId = Nothing
+                , activityFormulaCheck = Nothing
+                }
         pack act =
             ( act
             , reverse (psTechFlows st)

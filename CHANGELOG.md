@@ -3,6 +3,24 @@
 ## [Unreleased]
 
 ### Added
+- An activity now carries the provenance its dataset states about itself, and
+  `GET /api/v1/activity/{id}` reports it as `documentation`: the source it was
+  published in, the technology and period it describes, how it was sampled, and
+  the reviews it passed. EcoSpold files carry a whole dossier next to the
+  general comment - an EcoSpold 1 dataset names its bibliography and the report
+  it came from ("ecoinvent report No. 1"), an EcoSpold 2 dataset names its
+  author, year and reviewers - and none of it was read, so an analyst asking
+  where a number comes from had to open the source file. Each section keeps the
+  name its format gives it, and a section the dataset left blank is not
+  reported.
+  Two things it does not do. The full title of an ecoinvent report lives in
+  `MasterData/Sources.xml`, which is not read, so an EcoSpold 2 dataset reports
+  its author, year and pages rather than the report's title. And the machine
+  validation log some ecoinvent reviews carry (mass-balance warnings, property
+  deviations) is left out: it is kilobytes per dataset addressed to the
+  database's own build process. Exporting a database does not write these
+  sections back, the same way it has never written anything the general comment
+  does not hold.
 - The two quality reports of a database can now be taken as a CSV file, from
   the command line or from a plain web address. Load a database with one
   command and take its report with the next:

@@ -524,6 +524,7 @@ importedActivity =
     Activity
         { activityName = "cheese production"
         , activityDescription = ["Imported from a database file, never authored."]
+        , activityDocumentation = []
         , activitySynonyms = M.singleton "en" (S.fromList ["cheese making"])
         , activityClassification = M.singleton "ISIC rev.4" "1050:Manufacture of dairy products"
         , activityLocation = "FR"
@@ -728,6 +729,7 @@ treatmentActivity =
     Activity
         { activityName = "waste oil incineration"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"
@@ -760,6 +762,7 @@ supplierActivityAt actId prodId =
     Activity
         { activityName = "milk production"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"

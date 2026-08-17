@@ -137,6 +137,7 @@ supplierDB offset =
             Activity
                 { activityName = "supplier-of-shared-product"
                 , activityDescription = []
+                , activityDocumentation = []
                 , activitySynonyms = M.empty
                 , activityClassification = M.empty
                 , activityLocation = "GLO"
@@ -216,6 +217,7 @@ consumerDB offset n =
                     Activity
                         { activityName = "consumer"
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"

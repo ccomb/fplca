@@ -523,12 +523,30 @@ declaredLocationSource loc
     | T.null (T.strip loc) = LocationUnspecified
     | otherwise = LocationDeclared
 
+{- | One labelled section of the documentation a dataset carries about itself:
+where it was published, the technology it describes, how it was sampled, who
+reviewed it. The label is what the source format calls the section, so the
+consumer renders whatever the database happened to record rather than a fixed
+list this type would have to keep in step with five formats.
+
+Kept as an ordered list rather than a map because the order is the source's
+own reading order (what the dataset covers, then how, then who vouched for
+it), which a map would sort away.
+-}
+data DocSection = DocSection
+    { docLabel :: !Text -- What the source format calls this section ("Technology", "Published in")
+    , docText :: !Text -- Its text, already assembled from whatever fields the format spreads it over
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DocSection)
+
 {- | Base LCA activity
 Note: ProcessId is the index in dbActivities vector, UUIDs stored in dbProcessIdTable
 -}
 data Activity = Activity
     { activityName :: !Text -- Name
     , activityDescription :: ![Text] -- General description (generalComment) by paragraphs
+    , activityDocumentation :: ![DocSection] -- Provenance the dataset states about itself, in the source's own order; empty when the format records none
     , activitySynonyms :: !(M.Map Text (S.Set Text)) -- Synonyms by language, same structure as flows
     , activityClassification :: !(M.Map Text Text) -- Classifications (ISIC, CPC, etc.)
     , activityLocation :: !Text -- Location code (e.g. FR, RER)

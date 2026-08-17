@@ -1053,6 +1053,7 @@ convertActivityForAPI unitCfg db processId activity =
             { pfaProcessId = processIdToText db processId
             , pfaActivityName = activityName activity
             , pfaDescription = activityDescription activity
+            , pfaDocumentation = activityDocumentation activity
             , pfaSynonyms = activitySynonyms activity
             , pfaClassifications = activityClassification activity
             , pfaLocation = activityLocation activity

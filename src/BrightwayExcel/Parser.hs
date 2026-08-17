@@ -326,6 +326,7 @@ rawToActivity cfg ra =
         Activity
             { activityName = raName ra
             , activityDescription = maybeToList (metaText meta "comment")
+            , activityDocumentation = [] -- A workbook records no source dossier
             , activitySynonyms = M.empty
             , activityClassification = M.empty
             , activityLocation = location

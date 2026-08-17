@@ -275,6 +275,7 @@ supplierDB offset products =
                     Activity
                         { activityName = "supplier-of-" <> name
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"

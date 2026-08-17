@@ -442,6 +442,7 @@ mkActivityAt loc =
     Activity
         { activityName = "test product"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc

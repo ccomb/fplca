@@ -68,6 +68,7 @@ targetDB =
             Activity
                 { activityName = "wheat production"
                 , activityDescription = []
+                , activityDocumentation = []
                 , activitySynonyms = M.empty
                 , activityClassification = M.empty
                 , activityLocation = loc

@@ -106,6 +106,7 @@ fixtureSimple =
         Activity
             "production of A & B <café> ☕"
             ["First fixture activity: a & b <c> — ünïcödé"]
+            []
             M.empty
             (M.fromList [("ISIC rev.4 ecoinvent", "2011:Manufacture of food products"), ("CPC", "2399: Other food products n.e.c.")])
             "GLO"
@@ -125,6 +126,7 @@ fixtureSimple =
     activityB =
         Activity
             "production of B"
+            []
             []
             M.empty
             M.empty
@@ -165,6 +167,7 @@ fixtureDupBio =
         Activity
             "production of A"
             []
+            []
             M.empty
             M.empty
             "GLO"
@@ -199,6 +202,7 @@ fixtureWithExchange ex =
     activity =
         Activity
             "adversarial activity"
+            []
             []
             M.empty
             M.empty
@@ -237,6 +241,7 @@ fixtureWithBioSynonyms =
     activity =
         Activity
             "synonym activity"
+            []
             []
             M.empty
             M.empty
@@ -284,6 +289,7 @@ fixtureWasteCoproduct =
     activity =
         Activity
             "waste and coproduct activity"
+            []
             []
             M.empty
             M.empty

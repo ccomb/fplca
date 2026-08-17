@@ -499,6 +499,7 @@ milkActivity =
     Activity
         { activityName = "milk production"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"

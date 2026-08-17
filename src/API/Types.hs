@@ -34,7 +34,7 @@ import Database.Author (
  )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -1526,6 +1526,7 @@ data ActivityForAPI = ActivityForAPI
     { pfaProcessId :: Text -- ProcessId format: "activityUUID_productUUID"
     , pfaActivityName :: Text
     , pfaDescription :: [Text] -- Description par paragraphes
+    , pfaDocumentation :: [DocSection] -- Provenance the dataset states about itself (source, technology, review); empty when the format records none
     , pfaSynonyms :: M.Map Text (S.Set Text) -- Synonymes par langue
     , pfaClassifications :: M.Map Text Text -- Classifications (ISIC, CPC, etc.)
     , pfaLocation :: Text
