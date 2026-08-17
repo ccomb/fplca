@@ -215,13 +215,35 @@ from the wire body without the two ends silently drifting apart.
 databaseNotLoadedPrefix :: Text
 databaseNotLoadedPrefix = "Database not loaded: "
 
--- | Same idea for "collection not loaded" 404 bodies.
+-- | Same idea for "collection not loaded" bodies and messages.
 collectionNotLoadedPrefix :: Text
 collectionNotLoadedPrefix = "Collection not loaded: "
 
--- | Build the 404 body for a not-loaded database / collection by name.
-notLoadedBody :: Text -> Text -> BSL.ByteString
-notLoadedBody prefix name = BSL.fromStrict (T.encodeUtf8 (prefix <> name))
+-- | Build the 404 body for a database that is not loaded.
+databaseNotLoadedBody :: Text -> BSL.ByteString
+databaseNotLoadedBody name = BSL.fromStrict (T.encodeUtf8 (databaseNotLoadedPrefix <> name))
+
+{- | What every surface says when a collection is not loaded: the name asked
+for, then the ones that are, since a caller cannot guess names that come from
+the operator's configuration file. The one wording, used by the HTTP body
+below and by the MCP messages ('API.MCP.batchErrorMsg',
+'API.MCP.callListScoringSets'), so a single refusal does not read three ways.
+
+The names go on a second line because 'API.BatchImpacts.translateError' reads
+the first one back as the requested name; 'BatchImpactsSpec' builds a message
+here and parses it there, which is what keeps the two halves honest.
+-}
+collectionNotLoadedMessage :: Text -> [Text] -> Text
+collectionNotLoadedMessage name loaded =
+    collectionNotLoadedPrefix <> name <> "\nAvailable collections: " <> available
+  where
+    available
+        | null loaded = "none loaded"
+        | otherwise = T.intercalate ", " loaded
+
+-- | The same message as a 404 body.
+collectionNotLoadedBody :: Text -> [Text] -> BSL.ByteString
+collectionNotLoadedBody name = BSL.fromStrict . T.encodeUtf8 . collectionNotLoadedMessage name
 
 -- | Get database by name, throw 404 if not loaded
 requireDatabaseByName :: Text -> AppM (Database, SharedSolver)
@@ -230,7 +252,7 @@ requireDatabaseByName dbName = do
     maybeLoaded <- liftIO $ getDatabase dbManager dbName
     case maybeLoaded of
         Just loaded -> return (ldDatabase loaded, ldSharedSolver loaded)
-        Nothing -> throwError err404{errBody = notLoadedBody databaseNotLoadedPrefix dbName}
+        Nothing -> throwError err404{errBody = databaseNotLoadedBody dbName}
 
 {- | Refuse LCIA when the DB still has unresolved cross-DB products. Forces
 the user to load the missing dep DBs (or POST {} to /relink) rather than
@@ -531,7 +553,7 @@ loadCollection collectionName = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     case M.lookup collectionName loadedCollections of
         Just mc -> return (mcMethods mc, mcDamageCategories mc, mcNormWeightSets mc, mcScoringSets mc)
-        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+        Nothing -> throwError err404{errBody = collectionNotLoadedBody collectionName (M.keys loadedCollections)}
 
 {- | Cross-DB inventory solution for an activity. 'Nothing' takes the cached
 no-substitution path ('requireFullyLinked' runs inside 'solutionWithDeps');
@@ -902,7 +924,7 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
     loadedCollections <- liftIO $ readTVarIO (dmLoadedMethods dbManager)
     collection <- case M.lookup collectionName loadedCollections of
         Just mc -> pure mc
-        Nothing -> throwError err404{errBody = notLoadedBody collectionNotLoadedPrefix collectionName}
+        Nothing -> throwError err404{errBody = collectionNotLoadedBody collectionName (M.keys loadedCollections)}
     let resolved =
             [ (pidText, Service.resolveActivityAndProcessId db pidText)
             | pidText <- birProcessIds req

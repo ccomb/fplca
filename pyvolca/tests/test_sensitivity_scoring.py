@@ -12,6 +12,10 @@ import pytest
 
 from volca.types import BatchScores, SensitivityResult
 
+# A method id travels the URL as a UUID; anything else is a name the client
+# resolves against the engine first (see TestMethodResolution).
+_METHOD_ID = "00000000-0000-0000-0000-000000000001"
+
 
 def _lcia(score: float) -> dict:
     return {
@@ -45,13 +49,14 @@ class TestComputeSensitivity:
         )
         result = client.compute_sensitivity(
             "proc_a",
-            "method-uuid",
+            _METHOD_ID,
             [{"consumer": "c", "supplier": "s", "delta": -0.05, "label": "cut"}],
+            collection="methods",
         )
         session.post.assert_called_once()
         session.get.assert_not_called()
         url = session.post.call_args[0][0]
-        assert url == "http://test.local/api/v1/db/testdb/activity/proc_a/sensitivity/methods/method-uuid"
+        assert url == f"http://test.local/api/v1/db/testdb/activity/proc_a/sensitivity/methods/{_METHOD_ID}"
         assert session.post.call_args[1]["json"] == {
             "perturbations": [{"consumer": "c", "supplier": "s", "delta": -0.05, "label": "cut"}]
         }
@@ -75,7 +80,9 @@ class TestScoreActivities:
                 "invalid": ["bogus"],
             }
         )
-        result = client.score_activities(["p1", "p2", "p3"], top_flows=5, exclude_long_term=True)
+        result = client.score_activities(
+            ["p1", "p2", "p3"], collection="methods", top_flows=5, exclude_long_term=True
+        )
         session.post.assert_called_once()
         session.get.assert_not_called()
         assert session.post.call_args[0][0] == "http://test.local/api/v1/db/testdb/impacts/methods"
@@ -92,7 +99,7 @@ class TestScoreActivities:
     def test_optional_query_params_omitted_by_default(self, mocked_client, make_response):
         client, session = mocked_client
         session.post.return_value = make_response({"results": [], "notFound": [], "invalid": []})
-        client.score_activities(["p1"])
+        client.score_activities(["p1"], collection="methods")
         params = dict(session.post.call_args[1]["params"])
         assert "top-flows" not in params
         assert "exclude-long-term" not in params

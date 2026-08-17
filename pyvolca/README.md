@@ -186,11 +186,13 @@ print(f"  {inv.statistics.emission_quantity:.4g} emissions / "
 > *What's the carbon footprint of this product? Which emissions dominate the score?*
 
 ```python
-score = c.get_impacts(plants[0].process_id, method_id="EF3.1-climate-change", top_flows=5)
+score = c.get_impacts(plants[0].process_id, method_id="Climate change", top_flows=5)
 print(f"{score.score:.4g} {score.unit}")
 for c_flow in score.top_contributors:
     print(f"  {c_flow.share_pct:.1f}%  {c_flow.flow_name}")
 ```
+
+`method_id` takes a method UUID or its name: a name is resolved against the loaded methods, which also settles which collection carries it. Pass `collection=` only to pin one when several are loaded.
 
 `LCIAResult` carries the score, unit, optional `normalized_score` / `weighted_score` (in Pt), and the top contributing biosphere flows with their `share_pct`.
 
@@ -204,6 +206,8 @@ if batch.single_score is not None:
     print(f"PEF single score: {batch.single_score:.4g} {batch.single_score_unit}")
 ```
 
+There is no method to name here, so the collection has to come from somewhere: with one loaded it is that one, and with several the call refuses and names them, rather than scoring against a collection you did not pick. Pass `collection=` to say which.
+
 `LCIABatchResult` also surfaces formula-based scoring sets (PEF, ECS…) via `scoring_results` and `scoring_indicators`, so you can render a per-indicator chart alongside the aggregate single score.
 
 ## Drill into what drives a single impact
@@ -215,7 +219,7 @@ if batch.single_score is not None:
 ```python
 flows = c.get_contributing_flows(
     plants[0].process_id,
-    method_id="EF3.1-climate-change",
+    method_id="Climate change",
     limit=10,
 )
 for f in flows.top_flows:
@@ -223,7 +227,7 @@ for f in flows.top_flows:
 
 acts = c.get_contributing_activities(
     plants[0].process_id,
-    method_id="EF3.1-climate-change",
+    method_id="Climate change",
     limit=10,
 )
 for a in acts.activities:
@@ -235,7 +239,7 @@ for a in acts.activities:
 > *Which characterization factors does a method apply, and to which database flows?*
 
 ```python
-char = c.get_characterization(method_id="EF3.1-climate-change", limit=20)
+char = c.get_characterization(method_id="Climate change", limit=20)
 ```
 
 Useful for sanity-checking method coverage or building custom indicators on top of the engine's mapping.
@@ -284,7 +288,7 @@ subs = [{
     "to":   "new-supplier-pid",      # the replacement
     "consumer": "consumer-pid",      # the activity that directly uses the old supplier
 }]
-score = c.get_impacts(plants[0].process_id, method_id="EF3.1-climate-change", substitutions=subs)
+score = c.get_impacts(plants[0].process_id, method_id="Climate change", substitutions=subs)
 ```
 
 Multiple substitutions chain in one call — the `consumer` field disambiguates *where* in the chain each swap applies.
@@ -297,12 +301,12 @@ Multiple substitutions chain in one call — the `consumer` field disambiguates 
 from volca import VoLCAError
 
 try:
-    score = c.get_impacts("nonexistent-pid", method_id="EF3.1-climate-change")
+    score = c.get_impacts("nonexistent-pid", method_id="Climate change")
 except VoLCAError as e:
-    print(f"  failed: {e.status_code} — {e.body[:80]}")
+    print(f"  failed: {e}")
 ```
 
-`VoLCAError.status_code` is the HTTP status when the engine returned one; `body` is the raw response body.
+`VoLCAError.status_code` is the HTTP status when the engine returned one, and `body` the raw response body. Both are empty when the client refuses on its own, which is what happens to a method name nothing carries or a collection you had to choose: print the exception itself and you get either explanation.
 
 ## Switch databases
 
@@ -434,7 +438,7 @@ Returns the raw JSON (no dataclass wrapping). Use this for
 operations that don't have an ergonomic wrapper yet, or for new
 endpoints added after the installed pyvolca was released.
 
-##### `Client.compute_sensitivity(process_id: str, method_id: str, perturbations: list[dict], *, collection: str = 'methods') -> SensitivityResult`
+##### `Client.compute_sensitivity(process_id: str, method_id: str, perturbations: list[dict], *, collection: str | None = None) -> SensitivityResult`
 
 How much one impact score moves when technosphere links are perturbed.
 
@@ -444,7 +448,9 @@ Each perturbation is a dict
 so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
 plus one :class:`PerturbedResult` per perturbation — each carrying
 either the perturbed impact and its delta, or an ``error`` string when
-that perturbation could not be resolved.
+that perturbation could not be resolved. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
 ##### `Client.copy_database(new_name: str, db_name: str | None = None) -> dict`
 
@@ -665,22 +671,26 @@ a :class:`SearchResults[ConsumerResult]` (iterate it to walk every
 consumer across all pages) and whose ``edges`` attribute carries
 the traversal subgraph (empty by default).
 
-##### `Client.get_contributing_activities(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> ContributingActivities`
+##### `Client.get_contributing_activities(process_id: str, method_id: str, *, collection: str | None = None, limit: int | None = None) -> ContributingActivities`
 
 Which upstream activities drive a given impact category.
 
 Same engine-side limitation as :meth:`get_contributing_flows`: no
 total exposed, so ``has_more`` cannot be derived. Inspect
-``share_pct`` totals to gauge coverage.
+``share_pct`` totals to gauge coverage. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
-##### `Client.get_contributing_flows(process_id: str, method_id: str, *, collection: str = 'methods', limit: int | None = None) -> ContributingFlows`
+##### `Client.get_contributing_flows(process_id: str, method_id: str, *, collection: str | None = None, limit: int | None = None) -> ContributingFlows`
 
 Which elementary flows drive a given impact category.
 
 Returns a :class:`ContributingFlows`. Caveat: the engine does not
 report the total flow count, so pyvolca cannot derive ``has_more``
 from the response. Pass a generous ``limit`` if you need exhaustive
-coverage and inspect ``share_pct`` totals.
+coverage and inspect ``share_pct`` totals. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
 ##### `Client.get_flow(flow_id: str, db_name: str | None = None) -> FlowDetail`
 
@@ -698,7 +708,7 @@ Get the characterization-factor-to-database-flow mapping coverage.
 biosphere flows the method has a CF for; ``flows`` is the per-flow
 breakdown including unmatched rows (``cf_value=None``).
 
-##### `Client.get_impacts(process_id: str, method_id: str, *, collection: str = 'methods', top_flows: int | None = None, substitutions: list[SubstitutionLike] | None = None) -> LCIAResult`
+##### `Client.get_impacts(process_id: str, method_id: str, *, collection: str | None = None, top_flows: int | None = None, substitutions: list[SubstitutionLike] | None = None) -> LCIAResult`
 
 Compute the LCIA score for a single impact category on an activity.
 
@@ -706,12 +716,13 @@ Use :meth:`get_impacts_batch` to retrieve every category in a method
 collection at once (and any configured scoring sets).
 
 Args:
-    collection: Method collection name. Defaults to ``"methods"`` for
-        single-method calls; most engines expose methods under a
-        single collection.
+    method_id: A method UUID, or the method's name ("Water use") —
+        a name is resolved against the engine's loaded methods.
+    collection: Method collection name. Left out, it is read off the
+        resolved method, so the caller needs to know only the method.
     top_flows: Max top contributing flows to return (default 5).
 
-##### `Client.get_impacts_batch(process_id: str, *, collection: str = 'methods', substitutions: list[SubstitutionLike] | None = None, exclude_long_term: bool | None = None) -> LCIABatchResult`
+##### `Client.get_impacts_batch(process_id: str, *, collection: str | None = None, substitutions: list[SubstitutionLike] | None = None, exclude_long_term: bool | None = None) -> LCIABatchResult`
 
 Compute LCIA for every impact category in a collection, in one call.
 
@@ -721,6 +732,9 @@ formula-based scoring sets declared in the engine config (PEF, ECS…).
 scoring set, pre-multiplied by the set's ``displayMultiplier``.
 ``exclude_long_term`` drops long-term emissions before scoring, the
 same switch :meth:`score_activities` carries.
+
+Left without a ``collection``, the call runs against the only loaded
+one, and refuses when several are loaded rather than picking one.
 
 Uses a direct HTTP call: the batch endpoint has no operationId in the
 OpenAPI spec (the dispatcher primary is the single-method variant), so
@@ -863,8 +877,9 @@ Each entry carries ``name``, ``displayName``, ``status``,
 List every LCIA method available in the engine.
 
 Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
-``factor_count``, and the parent ``collection``. Pass ``m.id`` to
-:meth:`get_impacts` as ``method_id``.
+``factor_count``, and the parent ``collection``. Every ``method_id``
+argument takes either, so this list is for browsing, not for looking
+up an id before a call.
 
 ##### `Client.list_presets()`
 
@@ -973,7 +988,7 @@ Args:
 Returns:
     ``{name: matches}`` for every input name, in input order.
 
-##### `Client.score_activities(process_ids: list[str], *, collection: str = 'methods', top_flows: int | None = None, exclude_long_term: bool | None = None) -> BatchScores`
+##### `Client.score_activities(process_ids: list[str], *, collection: str | None = None, top_flows: int | None = None, exclude_long_term: bool | None = None) -> BatchScores`
 
 Score many processes in one call (every category of a collection each).
 
@@ -982,7 +997,9 @@ Returns a :class:`BatchScores`: ``results`` holds one
 ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
 them, a partial result is not an error. ``top_flows`` caps the top
 contributors per category; ``exclude_long_term`` drops long-term
-emissions from the totals.
+emissions from the totals. Left without a ``collection``, the call runs
+against the only loaded one, and refuses when several are loaded rather
+than picking one.
 
 ##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None, exact: bool = False) -> SearchResults[Activity]`
 
@@ -1937,10 +1954,11 @@ survive the generic camelCase→snake_case conversion.
 
 One LCIA method, returned by :meth:`Client.list_methods`.
 
-Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
-is the parent method collection (e.g. ``"ef-31"``), forwarded to
-:meth:`Client.get_impacts` / :meth:`Client.get_impacts_batch` as their
-``collection`` argument.
+Pass ``id`` — or ``name``, which the client resolves against the loaded
+methods — wherever a ``method_id`` is asked for. ``collection`` is the
+parent method collection (e.g. ``"ef-31"``); the client reads it off the
+resolved method, so it is worth passing to :meth:`Client.get_impacts` /
+:meth:`Client.get_impacts_batch` only to pin one of several loaded.
 
 | Field | Type | Default |
 |-------|------|---------|

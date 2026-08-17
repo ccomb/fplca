@@ -40,6 +40,7 @@ variants in the Servant API.
 from __future__ import annotations
 
 import urllib.parse
+import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -120,6 +121,20 @@ def _snake_to_camel(s: str) -> str:
 def _snake_to_kebab(s: str) -> str:
     """``min_quantity`` → ``min-quantity``."""
     return s.replace("_", "-")
+
+
+def _is_uuid(s: str) -> bool:
+    """Whether ``s`` is a UUID written the way the engine's URLs accept it.
+
+    Canonical dashed form only: Python also reads ``{...}``, ``urn:uuid:...``
+    and the undashed 32 characters, which the engine's parser refuses, and
+    letting those through would send the caller a 400 from the far end
+    instead of a message naming what is wrong.
+    """
+    try:
+        return str(uuid.UUID(s)) == s.casefold()
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def _candidate_wire_names(py_name: str) -> list[str]:
@@ -427,6 +442,12 @@ class Client:
         # gates (_require_wire) don't refetch it.
         self._checked = False
         self._server_wire: int | None = None
+        # Loaded methods, fetched on the first call that has to resolve a
+        # method or a collection (see _resolve_method), emptied whenever a
+        # collection is loaded or unloaded. Emptied and refilled in place,
+        # never rebound: methods belong to the engine, not to a database, so
+        # the clones use() hands out share this one list and one invalidation.
+        self._methods_cache: list[Method] = []
 
     # -- Spec / dispatch plumbing --
 
@@ -494,6 +515,109 @@ class Client:
         self._operations = _parse_spec(spec)
         from . import _stub_gen
         _stub_gen.write_stubs_for_spec(spec)
+
+    # -- Method resolution --
+    #
+    # Every LCIA URL carries a collection *and* a method: the engine keys its
+    # CF caches by collection, since one UUID can live in several. Callers
+    # rarely know or care which collection carries "Water use", so these two
+    # helpers answer it from the engine instead of making the caller guess.
+
+    def _loaded_methods(self, refresh: bool = False) -> list[Method]:
+        """Every method the engine has loaded, cached on the client.
+
+        Empty means "not looked yet", so an engine that answered nothing once
+        is asked again rather than refusing every later call for the life of
+        the client.
+        """
+        # ponytail: no lock, so a thread fan-out warming a cold cache repeats
+        # the request rather than waiting; add one if the extra GETs ever show.
+        if refresh or not self._methods_cache:
+            self._methods_cache[:] = self.list_methods()
+        return self._methods_cache
+
+    def _resolve_method(
+        self, method_id: str, collection: str | None
+    ) -> tuple[str, str]:
+        """Map a method UUID *or name* to the ``(collection, uuid)`` a URL needs.
+
+        A UUID with an explicit collection is passed straight through — no
+        lookup, no round-trip. Anything else is matched against the engine's
+        loaded methods, which is what lets ``get_impacts(pid, "Water use")``
+        work without the caller knowing the collection. An unknown or
+        ambiguous name is an error naming the candidates, never a guess.
+        """
+        if not isinstance(method_id, str):
+            raise VoLCAError(
+                "method_id must be a method UUID or a method name, got "
+                f"{type(method_id).__name__}."
+            )
+        if collection is not None and _is_uuid(method_id):
+            return collection, method_id
+
+        needle = method_id.strip().casefold()
+
+        def match(methods: list[Method]) -> list[Method]:
+            return [
+                m
+                for m in methods
+                # The engine writes UUIDs in lower case and reads them in
+                # either, so an id is compared the way a name is.
+                if (m.id.casefold() == needle or m.name.casefold() == needle)
+                and (collection is None or m.collection == collection)
+            ]
+
+        warm = bool(self._methods_cache)
+        hits = match(self._loaded_methods())
+        if not hits and warm:
+            # A collection may have been loaded since we last looked.
+            hits = match(self._loaded_methods(refresh=True))
+        if not hits:
+            where = "" if collection is None else f" in collection {collection!r}"
+            raise VoLCAError(
+                f"No loaded method named or identified by {method_id!r}{where}. "
+                "See list_methods()."
+            )
+        if len({(m.collection, m.id) for m in hits}) > 1:
+            candidates = ", ".join(sorted(f"{m.collection}/{m.id}" for m in hits))
+            raise VoLCAError(
+                f"{method_id!r} matches several loaded methods ({candidates}). "
+                "Pass collection= to choose one."
+            )
+        return hits[0].collection, hits[0].id
+
+    def _method_uuid(self, method_id: str) -> str:
+        """The UUID of a method given by UUID or name, for URLs with no collection.
+
+        A UUID goes straight to the URL: these routes look a method up across
+        every loaded collection themselves, so resolving here would only add a
+        round-trip and turn the engine's own answer into a client-side refusal.
+        """
+        if _is_uuid(method_id):
+            return method_id
+        return self._resolve_method(method_id, None)[1]
+
+    def _resolve_collection(self, collection: str | None) -> str:
+        """The collection a whole-collection call runs against.
+
+        With a single collection loaded there is nothing to choose; with
+        several, the choice is the caller's, and refusing names them rather
+        than picking one.
+        """
+        if collection is not None:
+            return collection
+        names = sorted({m.collection for m in self._loaded_methods()})
+        if len(names) == 1:
+            return names[0]
+        if not names:
+            raise VoLCAError(
+                "No loaded collection carries a method. See "
+                "list_method_collections() and load_method_collection()."
+            )
+        raise VoLCAError(
+            f"Several method collections are loaded ({', '.join(names)}); "
+            "pass collection= to choose one."
+        )
 
     def _call(
         self,
@@ -1752,7 +1876,7 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         top_flows: int | None = None,
         substitutions: list[SubstitutionLike] | None = None,
     ) -> LCIAResult:
@@ -1762,11 +1886,13 @@ class Client:
         collection at once (and any configured scoring sets).
 
         Args:
-            collection: Method collection name. Defaults to ``"methods"`` for
-                single-method calls; most engines expose methods under a
-                single collection.
+            method_id: A method UUID, or the method's name ("Water use") —
+                a name is resolved against the engine's loaded methods.
+            collection: Method collection name. Left out, it is read off the
+                resolved method, so the caller needs to know only the method.
             top_flows: Max top contributing flows to return (default 5).
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return LCIAResult.from_json(
             self._call(
                 "get_impacts",
@@ -1782,7 +1908,7 @@ class Client:
         self,
         process_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         substitutions: list[SubstitutionLike] | None = None,
         exclude_long_term: bool | None = None,
     ) -> LCIABatchResult:
@@ -1795,6 +1921,9 @@ class Client:
         ``exclude_long_term`` drops long-term emissions before scoring, the
         same switch :meth:`score_activities` carries.
 
+        Left without a ``collection``, the call runs against the only loaded
+        one, and refuses when several are loaded rather than picking one.
+
         Uses a direct HTTP call: the batch endpoint has no operationId in the
         OpenAPI spec (the dispatcher primary is the single-method variant), so
         this wrapper bypasses ``_call`` and builds the URL itself.
@@ -1803,6 +1932,7 @@ class Client:
             raise VoLCAError(
                 "get_impacts_batch requires a database; construct Client(db=...)."
             )
+        collection = self._resolve_collection(collection)
         url = (
             f"{self.base_url}/api/v1/db/{self.db}/activity/{process_id}"
             f"/impacts/{collection}"
@@ -1826,7 +1956,7 @@ class Client:
         method_id: str,
         perturbations: list[dict],
         *,
-        collection: str = "methods",
+        collection: str | None = None,
     ) -> SensitivityResult:
         """How much one impact score moves when technosphere links are perturbed.
 
@@ -1836,8 +1966,11 @@ class Client:
         so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
         plus one :class:`PerturbedResult` per perturbation — each carrying
         either the perturbed impact and its delta, or an ``error`` string when
-        that perturbation could not be resolved.
+        that perturbation could not be resolved. ``method_id`` takes a method
+        name as well as a UUID, and ``collection`` is read off the resolved
+        method unless you pin it.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return SensitivityResult.from_json(
             self._call(
                 "compute_sensitivity",
@@ -1852,7 +1985,7 @@ class Client:
         self,
         process_ids: list[str],
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         top_flows: int | None = None,
         exclude_long_term: bool | None = None,
     ) -> BatchScores:
@@ -1863,8 +1996,11 @@ class Client:
         ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
         them, a partial result is not an error. ``top_flows`` caps the top
         contributors per category; ``exclude_long_term`` drops long-term
-        emissions from the totals.
+        emissions from the totals. Left without a ``collection``, the call runs
+        against the only loaded one, and refuses when several are loaded rather
+        than picking one.
         """
+        collection = self._resolve_collection(collection)
         return BatchScores.from_json(
             self._call(
                 "score_activities",
@@ -1881,8 +2017,9 @@ class Client:
         """List every LCIA method available in the engine.
 
         Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
-        ``factor_count``, and the parent ``collection``. Pass ``m.id`` to
-        :meth:`get_impacts` as ``method_id``.
+        ``factor_count``, and the parent ``collection``. Every ``method_id``
+        argument takes either, so this list is for browsing, not for looking
+        up an id before a call.
         """
         return [Method.from_json(m) for m in self._call("list_methods")]
 
@@ -1893,7 +2030,9 @@ class Client:
         biosphere flows the method has a CF for; ``flows`` is the per-flow
         breakdown including unmatched rows (``cf_value=None``).
         """
-        return FlowMapping.from_json(self._call("get_flow_mapping", method_id=method_id))
+        return FlowMapping.from_json(
+            self._call("get_flow_mapping", method_id=self._method_uuid(method_id))
+        )
 
     def get_characterization(
         self,
@@ -1909,7 +2048,12 @@ class Client:
         ``limit``). Check ``result.has_more`` to detect truncation.
         """
         return CharacterizationResult.from_json(
-            self._call("get_characterization", method_id=method_id, flow=flow, limit=limit)
+            self._call(
+                "get_characterization",
+                method_id=self._method_uuid(method_id),
+                flow=flow,
+                limit=limit,
+            )
         )
 
     def explain_cf(self, method_id: str, flow_id: str) -> ExplainCFResult:
@@ -1921,7 +2065,9 @@ class Client:
         rungs the cascade walked before the one that answered.
         """
         return ExplainCFResult.from_json(
-            self._call("explain_cf", method_id=method_id, flow_id=flow_id)
+            self._call(
+                "explain_cf", method_id=self._method_uuid(method_id), flow_id=flow_id
+            )
         )
 
     def get_contributing_flows(
@@ -1929,7 +2075,7 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         limit: int | None = None,
     ) -> ContributingFlows:
         """Which elementary flows drive a given impact category.
@@ -1937,8 +2083,11 @@ class Client:
         Returns a :class:`ContributingFlows`. Caveat: the engine does not
         report the total flow count, so pyvolca cannot derive ``has_more``
         from the response. Pass a generous ``limit`` if you need exhaustive
-        coverage and inspect ``share_pct`` totals.
+        coverage and inspect ``share_pct`` totals. ``method_id`` takes a method
+        name as well as a UUID, and ``collection`` is read off the resolved
+        method unless you pin it.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return ContributingFlows.from_json(
             self._call(
                 "get_contributing_flows",
@@ -1954,15 +2103,18 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         limit: int | None = None,
     ) -> ContributingActivities:
         """Which upstream activities drive a given impact category.
 
         Same engine-side limitation as :meth:`get_contributing_flows`: no
         total exposed, so ``has_more`` cannot be derived. Inspect
-        ``share_pct`` totals to gauge coverage.
+        ``share_pct`` totals to gauge coverage. ``method_id`` takes a method
+        name as well as a UUID, and ``collection`` is read off the resolved
+        method unless you pin it.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return ContributingActivities.from_json(self._call(
             "get_contributing_activities",
             process_id=process_id,
@@ -1993,6 +2145,7 @@ class Client:
         payload = self._json(
             self._session.post(f"{self.base_url}/api/v1/method-collections/{name}/load")
         )
+        self._methods_cache.clear()
         return self._require_success(payload, "load_method_collection")
 
     def unload_method_collection(self, name: str) -> dict:
@@ -2002,6 +2155,7 @@ class Client:
                 f"{self.base_url}/api/v1/method-collections/{name}/unload"
             )
         )
+        self._methods_cache.clear()
         return self._require_success(payload, "unload_method_collection")
 
     def delete_method_collection(self, name: str) -> dict:
@@ -2009,6 +2163,7 @@ class Client:
         payload = self._json(
             self._session.delete(f"{self.base_url}/api/v1/method-collections/{name}")
         )
+        self._methods_cache.clear()
         return self._require_success(payload, "delete_method_collection")
 
     def upload_method_collection(
@@ -2174,13 +2329,19 @@ class Client:
     def get_method(self, method_id: str) -> MethodDetail:
         """Detail of one LCIA method: unit, category, methodology, factor count."""
         return MethodDetail.from_json(
-            self._json(self._session.get(f"{self.base_url}/api/v1/method/{method_id}"))
+            self._json(
+                self._session.get(
+                    f"{self.base_url}/api/v1/method/{self._method_uuid(method_id)}"
+                )
+            )
         )
 
     def get_method_factors(self, method_id: str) -> list[MethodFactor]:
         """The characterization factors of a method (flow, direction, value)."""
         raw = self._json(
-            self._session.get(f"{self.base_url}/api/v1/method/{method_id}/factors")
+            self._session.get(
+                f"{self.base_url}/api/v1/method/{self._method_uuid(method_id)}/factors"
+            )
         )
         return [MethodFactor.from_json(f) for f in raw]
 
@@ -2196,7 +2357,8 @@ class Client:
         return MappingStatus.from_json(
             self._json(
                 self._session.get(
-                    f"{self.base_url}/api/v1/db/{target}/method/{method_id}/mapping"
+                    f"{self.base_url}/api/v1/db/{target}"
+                    f"/method/{self._method_uuid(method_id)}/mapping"
                 )
             )
         )

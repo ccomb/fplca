@@ -19,6 +19,7 @@ Two layers :
 module BatchImpactsSpec (spec) where
 
 import API.BatchImpacts (BatchError (..), runActivityLCIABatch, runBatchImpacts)
+import API.Routes (collectionNotLoadedMessage)
 import Config (defaultConfig)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text.Encoding as TE
@@ -50,6 +51,14 @@ spec = do
         it "maps 404 + 'Collection not loaded: X' to CollectionNotLoaded" $
             translateError' ["a", "b"] 404 "Collection not loaded: EF-3.1"
                 `shouldBe` CollectionNotLoaded "EF-3.1" ["a", "b"]
+
+        it "reads the name off the real message, which also names the loaded collections" $
+            translateError' ["EF-3.1", "plain-indicators"] 404 (collectionNotLoadedMessage "methods" ["EF-3.1", "plain-indicators"])
+                `shouldBe` CollectionNotLoaded "methods" ["EF-3.1", "plain-indicators"]
+
+        it "reads it back the same way when nothing is loaded" $
+            translateError' [] 404 (collectionNotLoadedMessage "methods" [])
+                `shouldBe` CollectionNotLoaded "methods" []
 
         it "maps 404 + 'Database not loaded: X' to DatabaseNotLoaded" $
             translateError' [] 404 "Database not loaded: agribalyse"
