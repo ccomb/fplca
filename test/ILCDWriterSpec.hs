@@ -521,6 +521,7 @@ multiOutputDb =
         Activity
             nm
             []
+            []
             M.empty
             M.empty
             "GLO"
@@ -593,6 +594,7 @@ oneActivityDb bios exs =
         Activity
             { activityName = specialText
             , activityDescription = []
+            , activityDocumentation = []
             , activitySynonyms = M.empty
             , activityClassification = M.empty
             , activityLocation = "GLO"

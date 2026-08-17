@@ -100,6 +100,7 @@ mkActivity _ loc =
     Activity
         { activityName = "act-" <> loc
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = loc

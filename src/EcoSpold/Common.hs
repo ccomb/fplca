@@ -12,18 +12,21 @@ module EcoSpold.Common (
     isElement,
     distributeFiles,
     nonEmptyText,
+    docSection,
+    joinParts,
     showFFloatTrim,
 ) where
 
 import Amount (readAmount)
 import qualified Data.ByteString as BS
 import Data.Char (chr)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import Numeric (showFFloat)
+import Types (DocSection (..))
 
 -- | ByteString to Text conversion with UTF-8 decoding and XML entity decoding
 bsToText :: BS.ByteString -> Text
@@ -137,6 +140,29 @@ nonEmptyText :: Text -> Maybe Text
 nonEmptyText t =
     let s = T.strip t
      in if T.null s then Nothing else Just s
+
+{- | One documentation section, or none at all when the dataset left the field
+blank. Both EcoSpold parsers assemble their sections through this, so "a rubric
+the source did not fill is not a rubric" is decided once.
+
+A field an exporter filled with its own placeholder for absence counts as
+blank: openLCA writes the literal @\<null\>@ where it has nothing, 3794 of the
+11947 datasets of the BAFU export among them, and reporting that to a reader as
+what the dataset says about its geography would be worse than saying nothing.
+Only the placeholder alone is read that way - "none" and "not known" are
+statements a person wrote, and they are reported as written.
+-}
+docSection :: Text -> Text -> [DocSection]
+docSection label = maybe [] (pure . DocSection label) . nonEmptyText . dropNullMarker
+  where
+    dropNullMarker t = if T.strip t == "<null>" then "" else t
+
+{- | Join the pieces a format spreads one section over, dropping the blanks:
+a publisher with no place of publication reads as the publisher alone, not as
+a dangling separator.
+-}
+joinParts :: Text -> [Text] -> Text
+joinParts sep = T.intercalate sep . mapMaybe nonEmptyText
 
 -- | Distribute a list evenly across N buckets (for parallel workers)
 distributeFiles :: Int -> [a] -> [[a]]

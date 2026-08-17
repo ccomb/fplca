@@ -324,6 +324,7 @@ buildActivity a unitLabel exchangeList =
     Activity
         { activityName = aaName a
         , activityDescription = aaDescription a
+        , activityDocumentation = [] -- An authored activity states no source of its own
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = aaLocation a

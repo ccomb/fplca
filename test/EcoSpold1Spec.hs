@@ -5,6 +5,7 @@ module EcoSpold1Spec (spec) where
 
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.Map.Strict as M
+import Data.Text (Text)
 import Data.UUID (nil)
 import Test.Hspec
 
@@ -22,6 +23,7 @@ emptyActivity =
     Activity
         { activityName = "Test Activity"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
@@ -261,12 +263,173 @@ wasteFlowXml =
         , "</ecoSpold>"
         ]
 
+{- | Fixture carrying the provenance blocks a real export writes: two numbered
+sources of which only the second is the one the dataset was published in, a
+numbered person who proof-read it, and the free texts of the process
+information. Shaped after the ESU/BAFU and ecoinvent 2.x exports.
+-}
+documentedXml :: BC.ByteString
+documentedXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"9\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"natural gas, liquefied\" category=\"natural gas\""
+        , "                           subCategory=\"production\" unit=\"Nm3\""
+        , "                           includedProcesses=\"Transport on a freight ship.\"/>"
+        , "        <geography location=\"KW\" text=\"not known\"/>"
+        , "        <technology text=\"Distances based on port distances.\"/>"
+        , "        <timePeriod text=\"Transport modes investigated for 2023.\">"
+        , "          <startYear>2023</startYear>"
+        , "          <endYear>2024</endYear>"
+        , "        </timePeriod>"
+        , "      </processInformation>"
+        , "      <modellingAndValidation>"
+        , "        <representativeness samplingProcedure=\"Literature.\" extrapolations=\"none\""
+        , "                            productionVolume=\"not known\"/>"
+        , "        <source number=\"1\" firstAuthor=\"Frischknecht R.\" year=\"2007\""
+        , "                title=\"Overview and Methodology\""
+        , "                titleOfAnthology=\"ecoinvent report No. 1\""
+        , "                publisher=\"Swiss Centre for LCI\" placeOfPublications=\"Duebendorf, CH\"/>"
+        , "        <source number=\"2\" firstAuthor=\"Bussa M.\" additionalAuthors=\"Jungbluth N.\""
+        , "                year=\"2025\" title=\"LCI long-distance transport of natural gas\""
+        , "                publisher=\"ESU-services Ltd.\" placeOfPublications=\"Schaffhausen, CH\"/>"
+        , "        <validation proofReadingDetails=\"Passed.\" proofReadingValidator=\"41\"/>"
+        , "      </modellingAndValidation>"
+        , "      <administrativeInformation>"
+        , "        <dataGeneratorAndPublication person=\"41\" referenceToPublishedSource=\"2\"/>"
+        , "        <person number=\"41\" name=\"Niels Jungbluth\" companyCode=\"ESU\"/>"
+        , "      </administrativeInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"9\" name=\"natural gas, liquefied\" category=\"natural gas\""
+        , "                subCategory=\"production\" unit=\"Nm3\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
+{- | A dataset whose only documentation is the period, stated with the bounds
+given. EcoSpold1 has two ways to write them and a real export uses both.
+-}
+datedPeriodXml :: BC.ByteString -> BC.ByteString
+datedPeriodXml bounds =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"10\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"dated process\" category=\"c\" subCategory=\"s\" unit=\"kg\"/>"
+        , "        <timePeriod>" <> bounds <> "</timePeriod>"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"10\" name=\"dated product\" category=\"c\" subCategory=\"s\""
+        , "                unit=\"kg\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
+{- | A dataset written by an exporter that fills what it has nothing for with
+the literal @\<null\>@, as openLCA does across a third of the BAFU export.
+-}
+nullMarkerXml :: BC.ByteString
+nullMarkerXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"11\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"null process\" category=\"c\" subCategory=\"s\" unit=\"kg\"/>"
+        , "        <geography location=\"CH\" text=\"&lt;null&gt;\"/>"
+        , "        <technology text=\"Port distances.\"/>"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"11\" name=\"null product\" category=\"c\" subCategory=\"s\""
+        , "                unit=\"kg\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
+-- | The documentation section under that label, if the parser recorded one.
+sectionNamed :: Text -> Activity -> Maybe Text
+sectionNamed label act = lookup label [(docLabel s, docText s) | s <- activityDocumentation act]
+
+{- | Parse 'documentedXml' and hand the activity to an expectation, failing the
+example rather than the whole run when the fixture stops parsing.
+-}
+withDocumented :: (Activity -> Expectation) -> Expectation
+withDocumented k = case parseWithXeno documentedXml of
+    Left err -> expectationFailure $ "Parse failed: " ++ err
+    Right (act, _, _, _, _, _, _) -> k act
+
 -- ---------------------------------------------------------------------------
 -- Spec
 -- ---------------------------------------------------------------------------
 
 spec :: Spec
 spec = do
+    describe "dataset documentation" $ do
+        it "names the source the dataset was published in, not the first one read" $
+            withDocumented $ \act ->
+                sectionNamed "Published in" act
+                    `shouldBe` Just "Bussa M., Jungbluth N. (2025). LCI long-distance transport of natural gas. ESU-services Ltd., Schaffhausen, CH."
+
+        it "keeps the methodological report the other source names" $
+            withDocumented $ \act ->
+                sectionNamed "Sources" act
+                    `shouldBe` Just "Frischknecht R. (2007). Overview and Methodology. ecoinvent report No. 1. Swiss Centre for LCI, Duebendorf, CH."
+
+        it "reads the free texts of the process information" $
+            withDocumented $ \act -> do
+                sectionNamed "Included processes" act `shouldBe` Just "Transport on a freight ship."
+                sectionNamed "Technology" act `shouldBe` Just "Distances based on port distances."
+                sectionNamed "Geography" act `shouldBe` Just "not known"
+                sectionNamed "Sampling procedure" act `shouldBe` Just "Literature."
+
+        it "reads the period as its years followed by what the dataset says about them" $
+            withDocumented $ \act ->
+                sectionNamed "Time period" act `shouldBe` Just "2023 - 2024 Transport modes investigated for 2023."
+
+        it "prefers the dates over the years when a dataset states both" $
+            case parseWithXeno (datedPeriodXml "<startYear>2000</startYear><endYear>2020</endYear><startDate>2000-01</startDate><endDate>2020-01</endDate>") of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
+
+        it "reads a period stated only as dates, the form most of a real export uses" $
+            case parseWithXeno (datedPeriodXml "<startDate>2000-01</startDate><endDate>2020-01</endDate>") of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
+
+        it "names the proof reader by the person number the validation points at" $
+            withDocumented $ \act ->
+                sectionNamed "Review" act `shouldBe` Just "Passed. (Niels Jungbluth)"
+
+        it "reads an exporter's null placeholder as an unfilled rubric" $
+            case parseWithXeno nullMarkerXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> do
+                    sectionNamed "Geography" act `shouldBe` Nothing
+                    sectionNamed "Technology" act `shouldBe` Just "Port distances."
+
+        it "records no section for a dataset that states none" $
+            case parseWithXeno minimalXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> activityDocumentation act `shouldBe` []
+
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
             generateFlowUUID 1 "CO2" "air" "" "kg"

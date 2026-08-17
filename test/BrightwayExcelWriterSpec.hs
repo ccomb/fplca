@@ -258,6 +258,7 @@ elec =
     Activity
         { activityName = "Electricity production, natural gas"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"

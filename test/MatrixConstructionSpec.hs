@@ -160,6 +160,7 @@ spec = do
                     Activity
                         { activityName = "high-canonical-unit power process"
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
@@ -234,6 +235,7 @@ spec = do
                     Activity
                         { activityName = "process with empty biosphere row"
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
@@ -303,6 +305,7 @@ spec = do
                     Activity
                         { activityName = "treatment of waste W"
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
@@ -345,6 +348,7 @@ spec = do
                     Activity
                         { activityName = "producer of Y"
                         , activityDescription = []
+                        , activityDocumentation = []
                         , activitySynonyms = M.empty
                         , activityClassification = M.empty
                         , activityLocation = "GLO"

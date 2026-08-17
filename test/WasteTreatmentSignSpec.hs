@@ -57,6 +57,7 @@ emptyActivity =
     Activity
         { activityName = ""
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"

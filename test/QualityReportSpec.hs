@@ -83,6 +83,7 @@ mkActivity name exs =
     Activity
         { activityName = name
         , activityDescription = ["A described activity"]
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.singleton "ISIC" "1071"
         , activityLocation = "FR"

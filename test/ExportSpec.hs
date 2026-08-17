@@ -105,6 +105,7 @@ buildFixture comp = do
         Activity
             "maker"
             []
+            []
             M.empty
             M.empty
             "GLO"

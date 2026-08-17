@@ -17,6 +17,7 @@ mkActivity name xs =
     Activity
         { activityName = name
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "FR"

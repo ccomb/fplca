@@ -1063,6 +1063,7 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
                 Activity
                     { activityName = effectiveActivityName
                     , activityDescription = descriptionLines
+                    , activityDocumentation = [] -- SimaPro states its provenance too; not read yet
                     , activitySynonyms = M.empty
                     , activityClassification =
                         M.fromList $

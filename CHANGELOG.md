@@ -3,6 +3,30 @@
 ## [Unreleased]
 
 ### Added
+- An activity now carries the provenance its dataset states about itself, and
+  `GET /api/v1/activity/{id}` reports it as `documentation`: the source it was
+  published in, the technology and period it describes, how it was sampled, and
+  the reviews it passed. EcoSpold files carry a whole dossier next to the
+  general comment - an EcoSpold 1 dataset names its bibliography and the report
+  it came from ("ecoinvent report No. 1"), an EcoSpold 2 dataset names its
+  author, year and reviewers - and none of it was read, so an analyst asking
+  where a number comes from had to open the source file. Each section keeps the
+  name its format gives it, and a section the dataset left blank is not
+  reported.
+  Three things it does not do. The full title of an ecoinvent report lives in
+  `MasterData/Sources.xml`, which is not read, so an EcoSpold 2 dataset reports
+  its author, year and pages rather than the report's title. The report the
+  ecoinvent build process files as a review under the name `[System]` is left
+  out, because it is kilobytes of mass-balance warnings per dataset written for
+  that process rather than for a reader; a review signed by a person is kept
+  whether or not they wrote anything beyond their name and the date. And a
+  field an exporter filled with its own placeholder for absence counts as
+  blank: openLCA writes the literal `<null>`, and reporting that as what a
+  dataset says about its geography would be worse than saying nothing. Only the
+  placeholder alone is read that way, since "none" and "not known" are
+  statements a person wrote.
+  Exporting a database does not write these sections back, the same way it has
+  never written anything the general comment does not hold.
 - The two quality reports of a database can now be taken as a CSV file, from
   the command line or from a plain web address. Load a database with one
   command and take its report with the next:

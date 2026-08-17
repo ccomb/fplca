@@ -29,6 +29,7 @@ activityWithRefExchange fid =
     Activity
         { activityName = "test"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"
@@ -62,6 +63,7 @@ activityWithInputExchange fid =
     Activity
         { activityName = "consumer"
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.empty
         , activityLocation = "GLO"

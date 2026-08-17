@@ -16,7 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, isElement, nonEmptyText)
+import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
 import EcoSpold.Cutoff (applyCutoffStrategy)
 import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
@@ -133,6 +133,42 @@ data PendingParam = PendingParam
 emptyPendingParam :: PendingParam
 emptyPendingParam = PendingParam "" Nothing ""
 
+-- | One @\<review\>@ of the dataset: who read it, when, and what they said.
+data Review = Review
+    { rvReviewer :: !Text
+    , rvDate :: !Text
+    , rvText :: !Text
+    }
+
+emptyReview :: Review
+emptyReview = Review "" "" ""
+
+{- | The provenance a dataset states about itself, accumulated as the metadata
+elements go by. Reviews are held in reverse arrival order and flipped back at
+the end, the same way exchanges are.
+-}
+data DatasetDocs = DatasetDocs
+    { ddIncludedStart :: !Text
+    , ddIncludedEnd :: !Text
+    , ddGeography :: !Text
+    , ddTechnology :: !Text
+    , ddTimePeriod :: !Text
+    , ddStartDate :: !Text
+    , ddEndDate :: !Text
+    , ddSystemModel :: !Text
+    , ddSampling :: !Text
+    , ddExtrapolations :: !Text
+    , ddPublishedAuthor :: !Text
+    , ddPublishedYear :: !Text
+    , ddPublishedPages :: !Text
+    , ddReviews :: ![Review]
+    , ddPendingReview :: !Review -- the open <review>, filed when it closes
+    , ddElementLang :: !Text -- xml:lang of the element currently open, whichever it is
+    }
+
+emptyDatasetDocs :: DatasetDocs
+emptyDatasetDocs = DatasetDocs "" "" "" "" "" "" "" "" "" "" "" "" "" [] emptyReview ""
+
 {- | Update a comment slot with a newly seen `<comment xml:lang="…">` text.
 Prefer English; otherwise keep the first non-empty entry. Empty / blank
 incoming text never overwrites an existing slot.
@@ -173,6 +209,7 @@ data ParseState = ParseState
     , psParams :: !(M.Map Text Double) -- <parameter> variableName → amount (amounts are pre-evaluated in the source)
     , psParamExprs :: !(M.Map Text Text) -- <parameter> variableName → mathematicalRelation (raw formula, for inspection)
     , psPendingParam :: !PendingParam -- attribute accumulator for the open <parameter>
+    , psDocs :: !DatasetDocs -- Provenance the dataset states about itself
     }
 
 -- | Initial parsing state
@@ -202,6 +239,7 @@ initialParseState =
         , psParams = M.empty
         , psParamExprs = M.empty
         , psPendingParam = emptyPendingParam
+        , psDocs = emptyDatasetDocs
         }
 
 {- | Build the source-native activity-type record from the ecospold2
@@ -328,6 +366,131 @@ inGeneralComment st = case psContext st of
     InActivityName -> False
     InGeographyShortname -> False
     Other -> False
+
+{- | Attributes of the metadata elements that carry the dataset's provenance:
+the period it covers, where it was published, who reviewed it. Routed by the
+element currently open, since the same attribute names appear in several blocks.
+-}
+docAttr :: BS.ByteString -> BS.ByteString -> ParseState -> ParseState
+docAttr name value state
+    | on "timePeriod" "startDate" = setDocs (\d -> d{ddStartDate = txt})
+    | on "timePeriod" "endDate" = setDocs (\d -> d{ddEndDate = txt})
+    | on "dataGeneratorAndPublication" "publishedSourceFirstAuthor" = setDocs (\d -> d{ddPublishedAuthor = txt})
+    | on "dataGeneratorAndPublication" "publishedSourceYear" = setDocs (\d -> d{ddPublishedYear = txt})
+    | on "dataGeneratorAndPublication" "pageNumbers" = setDocs (\d -> d{ddPublishedPages = txt})
+    | on "review" "reviewerName" = setReview (\r -> r{rvReviewer = txt})
+    | on "review" "reviewDate" = setReview (\r -> r{rvDate = txt})
+    -- ecospold2 states the language on the element carrying the text, not on
+    -- the <comment> around it, which is why 'psPendingCommentLang' does not
+    -- see it. Kept for whichever element is open, since the multilingual ones
+    -- are not only the <text> children.
+    | isElement name "xml:lang" = setDocs (\d -> d{ddElementLang = txt})
+    | otherwise = state
+  where
+    txt = bsToText value
+    on element attr = pathAt 0 element state && isElement name attr
+    setDocs f = state{psDocs = f (psDocs state)}
+    setReview f = setDocs (\d -> d{ddPendingReview = f (ddPendingReview d)})
+
+{- | Which documentation field the element now closing belongs to, if any,
+given how far up the path the element it documents sits. ecospold2 wraps a free
+text in @\<comment\>\<text\>@ and a review's words in @\<details\>\<text\>@, so
+closing a @\<text\>@ looks two levels up; files that write the text straight
+into the @\<comment\>@ (the shape the exchange comments already accept) look
+one level up.
+-}
+docTextTarget :: Int -> ParseState -> Maybe (DatasetDocs -> Text -> DatasetDocs)
+docTextTarget depth state
+    | documents "geography" = Just (\d t -> d{ddGeography = paragraph (ddGeography d) t})
+    | documents "technology" = Just (\d t -> d{ddTechnology = paragraph (ddTechnology d) t})
+    | documents "timePeriod" = Just (\d t -> d{ddTimePeriod = paragraph (ddTimePeriod d) t})
+    | documents "review" = Just (\d t -> d{ddPendingReview = appendReview (ddPendingReview d) t})
+    | otherwise = Nothing
+  where
+    documents element = pathAt depth element state
+    appendReview r t = r{rvText = paragraph (rvText r) t}
+
+-- | Successive @\<text index="…"\>@ elements are the paragraphs of one field.
+paragraph :: Text -> Text -> Text
+paragraph existing t = joinParts "\n" [existing, t]
+
+{- | Capture a metadata text into the field it documents. A text stating a
+language other than English is skipped, the same preference 'pickComment'
+applies to exchange comments; ecospold2 states it on the @\<text\>@ when there
+is one and on the @\<comment\>@ otherwise, so the caller passes whichever it
+read.
+-}
+captureDocText :: Int -> Text -> ParseState -> ParseState
+captureDocText depth lang state = case docTextTarget depth state of
+    Just setField | readableAsEnglish lang -> state{psDocs = setField (psDocs state) (accumText state)}
+    _ -> state
+
+{- | Is a stated language one this reader keeps? An element stating none is
+taken at its word; ecospold2 repeats a translated element once per language,
+and keeping them all would leave whichever came last.
+-}
+readableAsEnglish :: Text -> Bool
+readableAsEnglish lang = lang `elem` ["", "en"]
+
+{- | Close an element whose whole text content is one documentation field.
+
+@samplingProcedure@, @extrapolations@ and the rest state their language on
+themselves rather than on a @\<text\>@ child, and a dataset that says the same
+thing twice writes the element twice. Skipping the other languages is what
+stops the German version from replacing the English one; refusing a blank is
+what stops an empty repeat from erasing the section.
+-}
+closeDocText :: (DatasetDocs -> Text -> DatasetDocs) -> ParseState -> ParseState
+closeDocText setField state = case nonEmptyText (accumText state) of
+    Just txt | readableAsEnglish (ddElementLang (psDocs state)) -> popText state{psDocs = setField (psDocs state) txt}
+    _ -> popText state
+
+{- | Close a @\<review\>@, keeping what a person signed and dropping what the
+database's own checker filed.
+
+ecoinvent runs an automated check and files its report as a review under the
+reviewer name @[System]@: mass-balance warnings and property deviations,
+kilobytes per dataset addressed to the build process rather than to a reader.
+Which of the two a review is cannot be read off its content - measured over
+1500 ecoinvent datasets, 488 of those machine reports are written in
+@\<details\>@ exactly like a person's, and 578 reviews signed by a named person
+carry no text at all, only who passed the dataset and when. So the reviewer's
+name is what decides, and the only other review dropped is one that says
+nothing whatsoever.
+-}
+closeReview :: ParseState -> ParseState
+closeReview state =
+    let docs = psDocs state
+        pending = ddPendingReview docs
+        automated = T.strip (rvReviewer pending) == "[System]"
+        saysNothing = T.null (joinParts " " [rvReviewer pending, rvDate pending, rvText pending])
+        kept
+            | automated || saysNothing = ddReviews docs
+            | otherwise = pending : ddReviews docs
+     in popText state{psDocs = docs{ddReviews = kept, ddPendingReview = emptyReview}}
+
+{- | The provenance sections of one dataset, in the order a reader wants them:
+what the dataset covers, then how it was built, then where it was published and
+who vouched for it.
+-}
+documentationSections :: DatasetDocs -> [DocSection]
+documentationSections d =
+    concat
+        [ docSection "Included activities" (joinParts " " [ddIncludedStart d, ddIncludedEnd d])
+        , docSection "Geography" (ddGeography d)
+        , docSection "Technology" (ddTechnology d)
+        , docSection "Time period" (joinParts " " [period, ddTimePeriod d])
+        , docSection "System model" (ddSystemModel d)
+        , docSection "Sampling procedure" (ddSampling d)
+        , docSection "Extrapolations" (ddExtrapolations d)
+        , docSection "Published in" (joinParts ", " [publishedBy, ddPublishedPages d])
+        , docSection "Review" (joinParts "\n" (map renderReview (reverse (ddReviews d))))
+        ]
+  where
+    period = joinParts " - " [ddStartDate d, ddEndDate d]
+    publishedBy = joinParts " " [ddPublishedAuthor d, parenthesised (ddPublishedYear d)]
+    renderReview r = joinParts ": " [joinParts " " [rvReviewer r, parenthesised (rvDate r)], rvText r]
+    parenthesised = maybe "" (\t -> "(" <> t <> ")") . nonEmptyText
 
 -- | Build a 'Unit', substituting placeholders for a missing unit name.
 mkUnit :: UUID -> Text -> Unit
@@ -459,7 +622,15 @@ parseWithXeno xmlContent processId = do
                 -- Switching context here would destroy InIntermediateExchange when classifications appear inside exchanges.
                 -- DON'T switch context for child elements (synonym, compartment, etc) - keep parent exchange context
                 | otherwise = psContext cleanState
-         in cleanState{psPath = newPath, psContext = newContext, psTextAccum = []}
+         in -- The language is forgotten at every open tag, so an element
+            -- stating none is read as unstated rather than as its
+            -- predecessor's.
+            cleanState
+                { psPath = newPath
+                , psContext = newContext
+                , psTextAccum = []
+                , psDocs = (psDocs cleanState){ddElementLang = ""}
+                }
 
     -- Attribute handler - extract attributes
     attribute state name value =
@@ -517,7 +688,7 @@ parseWithXeno xmlContent processId = do
                                 state{psPendingParam = pending{ppAmount = readAmount (bsToText value)}}
                             | onParameter && isElement name "mathematicalRelation" =
                                 state{psPendingParam = pending{ppMathRel = bsToText value}}
-                            | otherwise = state
+                            | otherwise = docAttr name value state
                      in withLang captured
 
     -- End of opening tag - no action needed for SAX
@@ -544,7 +715,9 @@ parseWithXeno xmlContent processId = do
                     onExchange
                         (\d -> if pathAt 1 "intermediateExchange" state then d{idComment = pickComment (idComment d) lang txt} else d)
                         (\d -> if pathAt 1 "elementaryExchange" state then d{edComment = pickComment (edComment d) lang txt} else d)
-                        state
+                        -- A metadata comment written without a <text> child is
+                        -- captured here, before onExchange pops the path.
+                        (captureDocText 1 lang state)
              in st'{psPendingCommentLang = ""}
         | isElement tagName "shortname" && psContext state == InGeographyShortname =
             (popText state){psLocation = Just (accumText state), psContext = Other}
@@ -688,13 +861,18 @@ parseWithXeno xmlContent processId = do
                             then addExchange wasteExchange formula (addWasteFlow wasteFlow base)
                             else addExchange bioExchange formula (addBioFlow bioFlow base)
         | isElement tagName "text" =
-            -- The generalComment <text> branch deliberately does NOT pop the path.
             if inGeneralComment state
                 then
                     let txt = accumText state
                         withDesc = if T.null txt then state else state{psDescription = txt : psDescription state}
-                     in withDesc{psContext = Other, psTextAccum = []}
-                else popText state
+                     in (popText withDesc){psContext = Other}
+                else popText (captureDocText 2 (ddElementLang (psDocs state)) state)
+        | isElement tagName "includedActivitiesStart" = closeDocText (\d t -> d{ddIncludedStart = t}) state
+        | isElement tagName "includedActivitiesEnd" = closeDocText (\d t -> d{ddIncludedEnd = t}) state
+        | isElement tagName "systemModelName" = closeDocText (\d t -> d{ddSystemModel = t}) state
+        | isElement tagName "samplingProcedure" = closeDocText (\d t -> d{ddSampling = t}) state
+        | isElement tagName "extrapolations" = closeDocText (\d t -> d{ddExtrapolations = t}) state
+        | isElement tagName "review" = closeReview state
         | isElement tagName "name" =
             let txt = accumText state
              in if pathAt 1 "property" state
@@ -776,7 +954,25 @@ parseWithXeno xmlContent processId = do
             pairs = reverse (psExchanges st)
             formulaCheck = checkFormulas (psParams st) pairs
             -- Apply cutoff strategy to exchanges
-            activity = Activity name description M.empty (psClassifications st) location locationSource refUnit (map fst pairs) (psParams st) (psParamExprs st) Nothing Nothing nativeType Nothing formulaCheck
+            activity =
+                Activity
+                    { activityName = name
+                    , activityDescription = description
+                    , activityDocumentation = documentationSections (psDocs st)
+                    , activitySynonyms = M.empty
+                    , activityClassification = psClassifications st
+                    , activityLocation = location
+                    , activityLocationSource = locationSource
+                    , activityUnit = refUnit
+                    , exchanges = map fst pairs
+                    , activityParams = psParams st
+                    , activityParamExprs = psParamExprs st
+                    , activityAllocationPercent = Nothing
+                    , activityAllocationFormula = Nothing
+                    , activityNativeType = nativeType
+                    , activityNativeId = Nothing
+                    , activityFormulaCheck = formulaCheck
+                    }
             techs = reverse (psTechFlows st)
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)

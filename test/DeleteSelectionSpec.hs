@@ -500,6 +500,7 @@ mkActivity name loc classif exs =
     Activity
         { activityName = name
         , activityDescription = []
+        , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = classif
         , activityLocation = loc

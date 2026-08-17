@@ -246,6 +246,10 @@ History of manual bumps:
      so one substance is one flow across the export. Old caches hold one flow
      per (dataset, substance) pair — a value change with no type change, which
      the fingerprint alone would accept.
+- 15: Activity record gained activityDocumentation (the provenance a dataset
+     states about itself: published source, technology, review). Old caches
+     miss the field; the Store layout is positional, so decoding them would
+     misread every field after it.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -253,7 +257,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 14
+     in hi `xor` lo `xor` 15
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

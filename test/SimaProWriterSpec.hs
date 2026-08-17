@@ -610,6 +610,7 @@ emissionDb comp =
         Activity
             "thing maker"
             []
+            []
             M.empty
             M.empty
             "GLO"
@@ -658,6 +659,7 @@ allocationDb =
         Activity
             "alloc maker"
             []
+            []
             M.empty
             M.empty
             "GLO"
@@ -700,6 +702,7 @@ zeroAllocationDb =
     act =
         Activity
             "zero alloc maker"
+            []
             []
             M.empty
             M.empty
@@ -747,6 +750,7 @@ commentDb ped cmt =
         Activity
             "comment maker"
             []
+            []
             M.empty
             M.empty
             "GLO"
@@ -783,6 +787,7 @@ namedDb name =
     act =
         Activity
             name
+            []
             []
             M.empty
             M.empty
@@ -850,7 +855,7 @@ guardDb alloc ntype exs =
         }
   where
     act =
-        Activity "guard maker" [] M.empty M.empty "GLO" LocationDeclared "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing
+        Activity "guard maker" [] [] M.empty M.empty "GLO" LocationDeclared "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing
 
 -- | The baseline guard fixture, carrying the given description paragraphs.
 describedDb :: [Text] -> SimpleDatabase

@@ -557,6 +557,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
     Activity
         { activityName = iprName p
         , activityDescription = []
+        , activityDocumentation = [] -- ILCD states its provenance too; not read yet
         , activitySynonyms = M.empty
         , activityClassification = iprClassifications p
         , activityLocation = iprLocation p
