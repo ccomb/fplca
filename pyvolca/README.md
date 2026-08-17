@@ -206,6 +206,8 @@ if batch.single_score is not None:
     print(f"PEF single score: {batch.single_score:.4g} {batch.single_score_unit}")
 ```
 
+There is no method to name here, so the collection has to come from somewhere: with one loaded it is that one, and with several the call refuses and names them, rather than scoring against a collection you did not pick. Pass `collection=` to say which.
+
 `LCIABatchResult` also surfaces formula-based scoring sets (PEF, ECS…) via `scoring_results` and `scoring_indicators`, so you can render a per-indicator chart alongside the aggregate single score.
 
 ## Drill into what drives a single impact
@@ -301,10 +303,10 @@ from volca import VoLCAError
 try:
     score = c.get_impacts("nonexistent-pid", method_id="Climate change")
 except VoLCAError as e:
-    print(f"  failed: {e.status_code} — {e.body[:80]}")
+    print(f"  failed: {e}")
 ```
 
-`VoLCAError.status_code` is the HTTP status when the engine returned one; `body` is the raw response body.
+`VoLCAError.status_code` is the HTTP status when the engine returned one, and `body` the raw response body. Both are empty when the client refuses on its own, which is what happens to a method name nothing carries or a collection you had to choose: print the exception itself and you get either explanation.
 
 ## Switch databases
 
@@ -446,7 +448,9 @@ Each perturbation is a dict
 so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
 plus one :class:`PerturbedResult` per perturbation — each carrying
 either the perturbed impact and its delta, or an ``error`` string when
-that perturbation could not be resolved.
+that perturbation could not be resolved. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
 ##### `Client.copy_database(new_name: str, db_name: str | None = None) -> dict`
 
@@ -673,7 +677,9 @@ Which upstream activities drive a given impact category.
 
 Same engine-side limitation as :meth:`get_contributing_flows`: no
 total exposed, so ``has_more`` cannot be derived. Inspect
-``share_pct`` totals to gauge coverage.
+``share_pct`` totals to gauge coverage. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
 ##### `Client.get_contributing_flows(process_id: str, method_id: str, *, collection: str | None = None, limit: int | None = None) -> ContributingFlows`
 
@@ -682,7 +688,9 @@ Which elementary flows drive a given impact category.
 Returns a :class:`ContributingFlows`. Caveat: the engine does not
 report the total flow count, so pyvolca cannot derive ``has_more``
 from the response. Pass a generous ``limit`` if you need exhaustive
-coverage and inspect ``share_pct`` totals.
+coverage and inspect ``share_pct`` totals. ``method_id`` takes a method
+name as well as a UUID, and ``collection`` is read off the resolved
+method unless you pin it.
 
 ##### `Client.get_flow(flow_id: str, db_name: str | None = None) -> FlowDetail`
 
@@ -989,8 +997,9 @@ Returns a :class:`BatchScores`: ``results`` holds one
 ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
 them, a partial result is not an error. ``top_flows`` caps the top
 contributors per category; ``exclude_long_term`` drops long-term
-emissions from the totals. ``collection`` defaults to the only loaded
-one.
+emissions from the totals. Left without a ``collection``, the call runs
+against the only loaded one, and refuses when several are loaded rather
+than picking one.
 
 ##### `Client.search_activities(name: str | None = None, *, geo: str | None = None, product: str | None = None, preset: str | None = None, classification: str | None = None, classification_value: str | None = None, classification_match: MatchModeLike | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None, exact: bool = False) -> SearchResults[Activity]`
 

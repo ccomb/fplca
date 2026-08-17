@@ -468,44 +468,103 @@ class TestMethodResolution:
 
     def test_name_resolves_to_its_collection_and_id(self, mocked_client, make_response):
         client, session = mocked_client
-        client._methods_cache = [_method("Water use", "EF3.1")]
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
         session.get.return_value = make_response(_minimal_lcia_result())
         client.get_impacts("abc_def", method_id="water USE")
         assert session.get.call_args[0][0].endswith(f"/impacts/EF3.1/{_WATER_USE_ID}")
 
     def test_unknown_method_never_reaches_the_engine(self, mocked_client, make_response):
         client, session = mocked_client
-        client._methods_cache = [_method("Water use", "EF3.1")]
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
         session.get.return_value = make_response([])
         with pytest.raises(VoLCAError, match="No loaded method"):
             client.get_impacts("abc_def", method_id="EF3.1-water-use")
 
     def test_same_name_in_two_collections_refuses_to_guess(self, mocked_client):
         client, _ = mocked_client
-        client._methods_cache = [
+        client._methods_cache[:] = [
             _method("Water use", "EF3.1"),
             _method("Water use", "EF3.0", id="00000000-0000-0000-0000-000000000003"),
         ]
         with pytest.raises(VoLCAError, match="matches several loaded methods"):
             client.get_impacts("abc_def", method_id="Water use")
 
+    def test_a_uuid_reaches_a_collection_less_url_without_a_lookup(self, mocked_client, make_response):
+        """These routes search every collection themselves; asking first would
+        only add a round-trip and turn their answer into a client refusal."""
+        client, session = mocked_client
+        session.get.return_value = make_response({"id": _WATER_USE_ID, "name": "Water use", "unit": "m3", "category": "Water use", "factorCount": 1})
+        client.get_method(_WATER_USE_ID)
+        assert session.get.call_count == 1
+        assert session.get.call_args[0][0].endswith(f"/api/v1/method/{_WATER_USE_ID}")
+
+    def test_an_upper_case_uuid_resolves_like_the_engine_reads_it(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response(_minimal_lcia_result())
+        client.get_impacts("abc_def", method_id=_WATER_USE_ID.upper())
+        assert session.get.call_args[0][0].endswith(f"/impacts/EF3.1/{_WATER_USE_ID}")
+
+    def test_a_uuid_the_engine_cannot_read_is_not_forwarded(self, mocked_client, make_response):
+        """Python reads urn: and brace forms the engine's parser refuses."""
+        client, session = mocked_client
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response([])
+        with pytest.raises(VoLCAError, match="No loaded method"):
+            client.get_impacts("abc_def", method_id=f"urn:uuid:{_WATER_USE_ID}", collection="EF3.1")
+        assert not [c for c in session.get.call_args_list if "/impacts/" in c[0][0]]
+
+    def test_a_method_id_that_is_not_text_says_so(self, mocked_client):
+        client, _ = mocked_client
+        with pytest.raises(VoLCAError, match="must be a method UUID or a method name"):
+            client.get_impacts("abc_def", method_id=None)
+
+    def test_a_cold_cache_is_read_once_before_refusing(self, mocked_client, make_response):
+        client, session = mocked_client
+        session.get.return_value = make_response([])
+        with pytest.raises(VoLCAError, match="No loaded method"):
+            client.get_impacts("abc_def", method_id="Water use")
+        assert session.get.call_count == 1
+
+    def test_an_empty_answer_is_not_kept(self, mocked_client, make_response):
+        """An engine still loading must not silence the client for good."""
+        client, session = mocked_client
+        session.get.side_effect = [
+            make_response([]),
+            make_response([{"id": _WATER_USE_ID, "name": "Water use", "category": "Water use", "unit": "m3", "factorCount": 1, "collection": "EF3.1"}]),
+            make_response({"results": []}),
+        ]
+        with pytest.raises(VoLCAError, match="No loaded collection carries a method"):
+            client.get_impacts_batch("abc_def")
+        client.get_impacts_batch("abc_def")
+        assert session.get.call_args[0][0].endswith("/impacts/EF3.1")
+
+    def test_a_clone_shares_the_lookup_and_its_invalidation(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
+        other = client.use("otherdb")
+        _resp = make_response({"success": True, "message": "loaded"})
+        session.post.return_value = _resp
+        other.load_method_collection("EF3.0")
+        assert client._methods_cache == []
+
     def test_a_url_without_a_collection_still_takes_a_name(self, mocked_client, make_response):
         client, session = mocked_client
-        client._methods_cache = [_method("Water use", "EF3.1")]
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
         session.get.return_value = make_response({"id": _WATER_USE_ID, "name": "Water use", "unit": "m3", "category": "Water use", "factorCount": 1})
         client.get_method("Water use")
         assert session.get.call_args[0][0].endswith(f"/api/v1/method/{_WATER_USE_ID}")
 
     def test_batch_uses_the_only_loaded_collection(self, mocked_client, make_response):
         client, session = mocked_client
-        client._methods_cache = [_method("Water use", "EF3.1")]
+        client._methods_cache[:] = [_method("Water use", "EF3.1")]
         session.get.return_value = make_response({"results": [_minimal_lcia_result()]})
         client.get_impacts_batch("abc_def")
         assert session.get.call_args[0][0].endswith("/impacts/EF3.1")
 
     def test_batch_refuses_to_choose_between_collections(self, mocked_client):
         client, _ = mocked_client
-        client._methods_cache = [
+        client._methods_cache[:] = [
             _method("Water use", "EF3.1"),
             _method("Land use", "plain-indicators", id="00000000-0000-0000-0000-000000000004"),
         ]
@@ -515,7 +574,7 @@ class TestMethodResolution:
     def test_a_miss_refetches_before_giving_up(self, mocked_client, make_response):
         """A collection loaded since the client last looked must still be seen."""
         client, session = mocked_client
-        client._methods_cache = []
+        client._methods_cache.clear()
         session.get.side_effect = [
             make_response([
                 {
