@@ -158,11 +158,12 @@ loadedCollectionNames dbm = M.keys <$> readTVarIO (dmLoadedMethods dbm)
 {- | Translate a Servant 'ServerError' back to the typed 'BatchError' sum.
 
 The match is by HTTP status + body prefix. The prefix constants are
-imported from "API.Routes" so the throw site and the translator move
-together; changing one without the other breaks compilation here. The
-collection body names the loaded collections on a second line
-('API.Routes.collectionNotLoadedBody'), so only its first line is the
-requested name.
+imported from "API.Routes", so a renamed prefix breaks compilation here
+rather than drifting. The rest of the shape is a convention the compiler
+cannot hold: the collection body names the loaded collections on a
+second line ('API.Routes.collectionNotLoadedMessage'), so only its first
+line is the requested name. What actually guards that is 'BatchImpactsSpec',
+which writes a message with that function and parses it with this one.
 -}
 translateError :: [Text] -> ServerError -> BatchError
 translateError availableCollections se

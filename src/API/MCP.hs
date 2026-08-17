@@ -42,6 +42,7 @@ import qualified API.BatchImpacts as BI
 import API.DatabaseHandlers (coverageReportToAPI, editReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
+import API.Routes (collectionNotLoadedMessage)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeEditRequest (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..), toExchangeEdits)
 import Control.Monad (unless, when)
 import qualified Data.List as L
@@ -2057,11 +2058,7 @@ callListGeographies dbManager rid args = runTool rid $ do
 -- | Translate a 'BI.BatchError' into the MCP 'toolError' payload.
 batchErrorMsg :: BI.BatchError -> Text
 batchErrorMsg err = case err of
-    BI.CollectionNotLoaded name available ->
-        "Collection not loaded: "
-            <> name
-            <> ". Available collections: "
-            <> T.intercalate ", " available
+    BI.CollectionNotLoaded name available -> collectionNotLoadedMessage name available
     BI.DatabaseNotLoaded name -> "Database not loaded: " <> name
     BI.ActivityResolutionFailed msg -> msg
     BI.LinkingIncomplete msg -> msg
@@ -2187,14 +2184,7 @@ callListScoringSets dbManager rid args = do
         Right Nothing -> return $ toolSuccessJson rid (encodeAll loaded)
         Right (Just collName) -> case M.lookup collName loaded of
             Nothing ->
-                return $
-                    toolError
-                        rid
-                        ( "Collection not loaded: "
-                            <> collName
-                            <> ". Available collections: "
-                            <> T.intercalate ", " (M.keys loaded)
-                        )
+                return $ toolError rid (collectionNotLoadedMessage collName (M.keys loaded))
             Just mc -> return $ toolSuccessJson rid (encodeAll (M.singleton collName mc))
   where
     encodeAll :: M.Map Text MethodCollection -> Value
