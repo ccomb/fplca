@@ -272,6 +272,18 @@ spec = describe "per-exchange comments" $ do
                     Left err -> expectationFailure $ "Parse failed: " ++ err
                     Right (act, _, _, _, _) -> k act
 
+        it "reads the sections of a dataset whose general comment runs to several paragraphs" $
+            -- The shape four ecoinvent datasets in five have. Each paragraph of
+            -- a general comment used to leave its <text> on the element path,
+            -- so every later <text> in the file read as more general comment.
+            onDocumented $ \act -> do
+                activityDescription act
+                    `shouldBe` [ "The dataset represents the construction of one port."
+                               , "Its life time is assumed to be 100 years."
+                               ]
+                sectionNamed "Technology" act
+                    `shouldBe` Just "Conditions at the Port of Rotterdam.\nMaterial composition from Maibach et al."
+
         it "assembles the published source from the three attributes it is spread over" $
             onDocumented $ \act ->
                 sectionNamed "Published in" act `shouldBe` Just "Spielmann M. (2007), Water Transport"
@@ -289,10 +301,14 @@ spec = describe "per-exchange comments" $ do
                 sectionNamed "Sampling procedure" act `shouldBe` Just "Literature studies."
                 sectionNamed "Extrapolations" act `shouldBe` Just "none"
 
-        it "keeps a review the reviewer wrote, and drops the machine validation log" $
+        it "keeps what a person signed, whether or not they wrote anything, and drops the checker's report" $
+            -- The [System] review writes its log in <details> like a person's,
+            -- and the second person signed without writing: neither the shape
+            -- nor the presence of a text tells the two apart, only the name.
             onDocumented $ \act ->
                 sectionNamed "Review" act
-                    `shouldBe` Just "Carl Vadenbo (2012-06-29): The amounts of the exchanges were reviewed."
+                    `shouldBe` Just
+                        "Carl Vadenbo (2012-06-29): The amounts of the exchanges were reviewed.\nGregor Wernet (2014-06-03)"
 
         it "reads a comment written straight into the element, with no <text> child" $
             withFixture $ \(act, _, _, _, _) -> do
@@ -323,6 +339,10 @@ documentedXml =
     \    <activityDescription>\n\
     \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"doc-test\" activityType=\"1\">\n\
     \        <activityName xml:lang=\"en\">port facilities construction</activityName>\n\
+    \        <generalComment>\n\
+    \          <text xml:lang=\"en\" index=\"0\">The dataset represents the construction of one port.</text>\n\
+    \          <text xml:lang=\"en\" index=\"1\">Its life time is assumed to be 100 years.</text>\n\
+    \        </generalComment>\n\
     \      </activity>\n\
     \      <geography geographyId=\"RER\"><shortname xml:lang=\"en\">RER</shortname></geography>\n\
     \      <technology technologyLevel=\"3\">\n\
@@ -354,8 +374,11 @@ documentedXml =
     \        </details>\n\
     \      </review>\n\
     \      <review reviewerName=\"[System]\" reviewDate=\"2012-06-29\">\n\
-    \        <otherDetails xml:lang=\"en\">Validation warnings: mass deficit of 22% in activity dataset.</otherDetails>\n\
+    \        <details>\n\
+    \          <text xml:lang=\"en\" index=\"0\">Validation warnings: mass deficit of 22% in activity dataset.</text>\n\
+    \        </details>\n\
     \      </review>\n\
+    \      <review reviewerName=\"Gregor Wernet\" reviewDate=\"2014-06-03\" reviewedMajorRelease=\"3\"/>\n\
     \    </modellingAndValidation>\n\
     \    <administrativeInformation>\n\
     \      <dataGeneratorAndPublication personId=\"p\" publishedSourceFirstAuthor=\"Spielmann M.\"\n\

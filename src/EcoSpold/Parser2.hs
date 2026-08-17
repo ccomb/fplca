@@ -445,17 +445,28 @@ closeDocText setField state = case nonEmptyText (accumText state) of
     Just txt | readableAsEnglish (ddElementLang (psDocs state)) -> popText state{psDocs = setField (psDocs state) txt}
     _ -> popText state
 
-{- | Close a @\<review\>@, keeping it only when the reviewer wrote something.
-ecoinvent files also carry @[System]@ reviews whose only content is the machine
-validation log (@\<otherDetails\>@) - kilobytes of mass-balance warnings per
-dataset that no reader wants. Not reading that element is what leaves those
-reviews empty, and empty is what drops them here.
+{- | Close a @\<review\>@, keeping what a person signed and dropping what the
+database's own checker filed.
+
+ecoinvent runs an automated check and files its report as a review under the
+reviewer name @[System]@: mass-balance warnings and property deviations,
+kilobytes per dataset addressed to the build process rather than to a reader.
+Which of the two a review is cannot be read off its content - measured over
+1500 ecoinvent datasets, 488 of those machine reports are written in
+@\<details\>@ exactly like a person's, and 578 reviews signed by a named person
+carry no text at all, only who passed the dataset and when. So the reviewer's
+name is what decides, and the only other review dropped is one that says
+nothing whatsoever.
 -}
 closeReview :: ParseState -> ParseState
 closeReview state =
     let docs = psDocs state
         pending = ddPendingReview docs
-        kept = maybe (ddReviews docs) (const (pending : ddReviews docs)) (nonEmptyText (rvText pending))
+        automated = T.strip (rvReviewer pending) == "[System]"
+        saysNothing = T.null (joinParts " " [rvReviewer pending, rvDate pending, rvText pending])
+        kept
+            | automated || saysNothing = ddReviews docs
+            | otherwise = pending : ddReviews docs
      in popText state{psDocs = docs{ddReviews = kept, ddPendingReview = emptyReview}}
 
 {- | The provenance sections of one dataset, in the order a reader wants them:
@@ -850,12 +861,11 @@ parseWithXeno xmlContent processId = do
                             then addExchange wasteExchange formula (addWasteFlow wasteFlow base)
                             else addExchange bioExchange formula (addBioFlow bioFlow base)
         | isElement tagName "text" =
-            -- The generalComment <text> branch deliberately does NOT pop the path.
             if inGeneralComment state
                 then
                     let txt = accumText state
                         withDesc = if T.null txt then state else state{psDescription = txt : psDescription state}
-                     in withDesc{psContext = Other, psTextAccum = []}
+                     in (popText withDesc){psContext = Other}
                 else popText (captureDocText 2 (ddElementLang (psDocs state)) state)
         | isElement tagName "includedActivitiesStart" = closeDocText (\d t -> d{ddIncludedStart = t}) state
         | isElement tagName "includedActivitiesEnd" = closeDocText (\d t -> d{ddIncludedEnd = t}) state
