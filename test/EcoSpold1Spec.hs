@@ -313,6 +313,31 @@ documentedXml =
         , "</ecoSpold>"
         ]
 
+{- | A dataset whose only documentation is the period, stated with the bounds
+given. EcoSpold1 has two ways to write them and a real export uses both.
+-}
+datedPeriodXml :: BC.ByteString -> BC.ByteString
+datedPeriodXml bounds =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"10\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <referenceFunction name=\"dated process\" category=\"c\" subCategory=\"s\" unit=\"kg\"/>"
+        , "        <timePeriod>" <> bounds <> "</timePeriod>"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"10\" name=\"dated product\" category=\"c\" subCategory=\"s\""
+        , "                unit=\"kg\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
 -- | The documentation section under that label, if the parser recorded one.
 sectionNamed :: Text -> Activity -> Maybe Text
 sectionNamed label act = lookup label [(docLabel s, docText s) | s <- activityDocumentation act]
@@ -351,7 +376,17 @@ spec = do
 
         it "reads the period as its years followed by what the dataset says about them" $
             withDocumented $ \act ->
-                sectionNamed "Time period" act `shouldBe` Just "2023-2024 Transport modes investigated for 2023."
+                sectionNamed "Time period" act `shouldBe` Just "2023 - 2024 Transport modes investigated for 2023."
+
+        it "prefers the dates over the years when a dataset states both" $
+            case parseWithXeno (datedPeriodXml "<startYear>2000</startYear><endYear>2020</endYear><startDate>2000-01</startDate><endDate>2020-01</endDate>") of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
+
+        it "reads a period stated only as dates, the form most of a real export uses" $
+            case parseWithXeno (datedPeriodXml "<startDate>2000-01</startDate><endDate>2020-01</endDate>") of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
 
         it "names the proof reader by the person number the validation points at" $
             withDocumented $ \act ->

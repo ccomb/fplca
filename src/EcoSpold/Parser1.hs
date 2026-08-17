@@ -161,8 +161,8 @@ data DatasetDocs = DatasetDocs
     , ddGeography :: !Text
     , ddTechnology :: !Text
     , ddTimePeriod :: !Text
-    , ddStartYear :: !Text
-    , ddEndYear :: !Text
+    , ddPeriodStart :: !Text -- <startYear> or the more precise <startDate>
+    , ddPeriodEnd :: !Text
     , ddSampling :: !Text
     , ddExtrapolations :: !Text
     , ddProductionVolume :: !Text
@@ -379,8 +379,10 @@ onCloseTag state tagName
     | isElement tagName "geography" = (popElement state){psContext = Other}
     | isElement tagName "source" = closeSource state
     | isElement tagName "person" = closePerson state
-    | isElement tagName "startYear" = closeDocText (\d t -> d{ddStartYear = t}) state
-    | isElement tagName "endYear" = closeDocText (\d t -> d{ddEndYear = t}) state
+    | isElement tagName "startYear" = closeDocText (\d t -> d{ddPeriodStart = statedAsYear (ddPeriodStart d) t}) state
+    | isElement tagName "endYear" = closeDocText (\d t -> d{ddPeriodEnd = statedAsYear (ddPeriodEnd d) t}) state
+    | isElement tagName "startDate" = closeDocText (\d t -> d{ddPeriodStart = statedAsDate (ddPeriodStart d) t}) state
+    | isElement tagName "endDate" = closeDocText (\d t -> d{ddPeriodEnd = statedAsDate (ddPeriodEnd d) t}) state
     | isElement tagName "dataset" = closeDataset state
     | otherwise = popPath state
 
@@ -406,6 +408,23 @@ closePerson state =
             | ddPendingPersonNumber docs == 0 = ddPersons docs
             | otherwise = IM.insert (ddPendingPersonNumber docs) (ddPendingPersonName docs) (ddPersons docs)
      in (popElement state){psDocs = docs{ddPersons = filed, ddPendingPersonNumber = 0, ddPendingPersonName = ""}}
+
+{- | A period bound the dataset states as a year. EcoSpold1 has both a
+@\<startYear\>@ / @\<endYear\>@ pair and a @\<startDate\>@ / @\<endDate\>@ one
+(the ESU/BAFU export writes dates on 338 of its 400 datasets, years on the
+rest), so a dataset writing both states the same period twice and the year does
+not overwrite a date already read.
+-}
+statedAsYear :: Text -> Text -> Text
+statedAsYear existing t
+    | T.null (T.strip existing) = T.strip t
+    | otherwise = existing
+
+-- | The same bound stated as a full date: the precise form, so it wins.
+statedAsDate :: Text -> Text -> Text
+statedAsDate existing t
+    | T.null (T.strip t) = existing
+    | otherwise = T.strip t
 
 -- | Close an element whose documentation value is its text rather than an attribute.
 closeDocText :: (DatasetDocs -> Text -> DatasetDocs) -> ParseState -> ParseState
@@ -629,7 +648,7 @@ documentationSections d =
         [ docSection "Included processes" (ddIncludedProcesses d)
         , docSection "Geography" (ddGeography d)
         , docSection "Technology" (ddTechnology d)
-        , docSection "Time period" (joinParts " " [years, ddTimePeriod d])
+        , docSection "Time period" (joinParts " " [period, ddTimePeriod d])
         , docSection "Sampling procedure" (ddSampling d)
         , docSection "Extrapolations" (ddExtrapolations d)
         , docSection "Production volume" (ddProductionVolume d)
@@ -638,7 +657,7 @@ documentationSections d =
         , docSection "Review" (joinParts " " [ddProofReading d, reviewer])
         ]
   where
-    years = joinParts "-" [ddStartYear d, ddEndYear d]
+    period = joinParts " - " [ddPeriodStart d, ddPeriodEnd d]
     publishedIn = IM.lookup (ddPublishedSource d) (ddSources d)
     otherSources = IM.elems (IM.delete (ddPublishedSource d) (ddSources d))
     reviewer = maybe "" (\p -> "(" <> p <> ")") (IM.lookup (ddValidator d) (ddPersons d) >>= nonEmptyText)
