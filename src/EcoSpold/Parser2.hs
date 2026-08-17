@@ -163,7 +163,7 @@ data DatasetDocs = DatasetDocs
     , ddPublishedPages :: !Text
     , ddReviews :: ![Review]
     , ddPendingReview :: !Review -- the open <review>, filed when it closes
-    , ddTextLang :: !Text -- xml:lang of the open <text>, which is where ecospold2 puts it
+    , ddElementLang :: !Text -- xml:lang of the element currently open, whichever it is
     }
 
 emptyDatasetDocs :: DatasetDocs
@@ -380,9 +380,11 @@ docAttr name value state
     | on "dataGeneratorAndPublication" "pageNumbers" = setDocs (\d -> d{ddPublishedPages = txt})
     | on "review" "reviewerName" = setReview (\r -> r{rvReviewer = txt})
     | on "review" "reviewDate" = setReview (\r -> r{rvDate = txt})
-    -- ecospold2 states the language on the <text> itself, not on the <comment>
-    -- around it, which is why 'psPendingCommentLang' does not see it.
-    | on "text" "xml:lang" = setDocs (\d -> d{ddTextLang = txt})
+    -- ecospold2 states the language on the element carrying the text, not on
+    -- the <comment> around it, which is why 'psPendingCommentLang' does not
+    -- see it. Kept for whichever element is open, since the multilingual ones
+    -- are not only the <text> children.
+    | isElement name "xml:lang" = setDocs (\d -> d{ddElementLang = txt})
     | otherwise = state
   where
     txt = bsToText value
@@ -420,12 +422,28 @@ read.
 -}
 captureDocText :: Int -> Text -> ParseState -> ParseState
 captureDocText depth lang state = case docTextTarget depth state of
-    Just setField | lang `elem` ["", "en"] -> state{psDocs = setField (psDocs state) (accumText state)}
+    Just setField | readableAsEnglish lang -> state{psDocs = setField (psDocs state) (accumText state)}
     _ -> state
 
--- | Close an element whose whole text content is one documentation field.
+{- | Is a stated language one this reader keeps? An element stating none is
+taken at its word; ecospold2 repeats a translated element once per language,
+and keeping them all would leave whichever came last.
+-}
+readableAsEnglish :: Text -> Bool
+readableAsEnglish lang = lang `elem` ["", "en"]
+
+{- | Close an element whose whole text content is one documentation field.
+
+@samplingProcedure@, @extrapolations@ and the rest state their language on
+themselves rather than on a @\<text\>@ child, and a dataset that says the same
+thing twice writes the element twice. Skipping the other languages is what
+stops the German version from replacing the English one; refusing a blank is
+what stops an empty repeat from erasing the section.
+-}
 closeDocText :: (DatasetDocs -> Text -> DatasetDocs) -> ParseState -> ParseState
-closeDocText setField state = popText state{psDocs = setField (psDocs state) (accumText state)}
+closeDocText setField state = case nonEmptyText (accumText state) of
+    Just txt | readableAsEnglish (ddElementLang (psDocs state)) -> popText state{psDocs = setField (psDocs state) txt}
+    _ -> popText state
 
 {- | Close a @\<review\>@, keeping it only when the reviewer wrote something.
 ecoinvent files also carry @[System]@ reviews whose only content is the machine
@@ -578,10 +596,6 @@ parseWithXeno xmlContent processId = do
                     state{psPendingInputGroup = "", psPendingOutputGroup = ""}
                 | isElement tagName "comment" =
                     state{psPendingCommentLang = ""}
-                | isElement tagName "text" =
-                    -- Forget the previous <text>'s language, so a text stating
-                    -- none is read as unstated rather than as its neighbour's.
-                    state{psDocs = (psDocs state){ddTextLang = ""}}
                 | isElement tagName "parameter" =
                     state{psPendingParam = emptyPendingParam}
                 | otherwise = state
@@ -597,7 +611,15 @@ parseWithXeno xmlContent processId = do
                 -- Switching context here would destroy InIntermediateExchange when classifications appear inside exchanges.
                 -- DON'T switch context for child elements (synonym, compartment, etc) - keep parent exchange context
                 | otherwise = psContext cleanState
-         in cleanState{psPath = newPath, psContext = newContext, psTextAccum = []}
+         in -- The language is forgotten at every open tag, so an element
+            -- stating none is read as unstated rather than as its
+            -- predecessor's.
+            cleanState
+                { psPath = newPath
+                , psContext = newContext
+                , psTextAccum = []
+                , psDocs = (psDocs cleanState){ddElementLang = ""}
+                }
 
     -- Attribute handler - extract attributes
     attribute state name value =
@@ -834,7 +856,7 @@ parseWithXeno xmlContent processId = do
                     let txt = accumText state
                         withDesc = if T.null txt then state else state{psDescription = txt : psDescription state}
                      in withDesc{psContext = Other, psTextAccum = []}
-                else popText (captureDocText 2 (ddTextLang (psDocs state)) state)
+                else popText (captureDocText 2 (ddElementLang (psDocs state)) state)
         | isElement tagName "includedActivitiesStart" = closeDocText (\d t -> d{ddIncludedStart = t}) state
         | isElement tagName "includedActivitiesEnd" = closeDocText (\d t -> d{ddIncludedEnd = t}) state
         | isElement tagName "systemModelName" = closeDocText (\d t -> d{ddSystemModel = t}) state

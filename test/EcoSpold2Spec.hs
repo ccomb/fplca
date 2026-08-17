@@ -281,6 +281,14 @@ spec = describe "per-exchange comments" $ do
                 sectionNamed "Technology" act
                     `shouldBe` Just "Conditions at the Port of Rotterdam.\nMaterial composition from Maibach et al."
 
+        it "keeps the English of a field the dataset repeats per language" $
+            onDocumented $ \act -> do
+                -- The German repeat comes second: taking the last one read
+                -- would answer "Literaturstudien.", and an empty repeat would
+                -- erase the rubric altogether.
+                sectionNamed "Sampling procedure" act `shouldBe` Just "Literature studies."
+                sectionNamed "Extrapolations" act `shouldBe` Just "none"
+
         it "keeps a review the reviewer wrote, and drops the machine validation log" $
             onDocumented $ \act ->
                 sectionNamed "Review" act
@@ -334,6 +342,12 @@ documentedXml =
     \      </intermediateExchange>\n\
     \    </flowData>\n\
     \    <modellingAndValidation>\n\
+    \      <representativeness systemModelId=\"m\">\n\
+    \        <samplingProcedure xml:lang=\"en\">Literature studies.</samplingProcedure>\n\
+    \        <samplingProcedure xml:lang=\"de\">Literaturstudien.</samplingProcedure>\n\
+    \        <extrapolations xml:lang=\"en\">none</extrapolations>\n\
+    \        <extrapolations xml:lang=\"de\"></extrapolations>\n\
+    \      </representativeness>\n\
     \      <review reviewerName=\"Carl Vadenbo\" reviewDate=\"2012-06-29\">\n\
     \        <details>\n\
     \          <text xml:lang=\"en\" index=\"0\">The amounts of the exchanges were reviewed.</text>\n\
