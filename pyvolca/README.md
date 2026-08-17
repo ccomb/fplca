@@ -869,8 +869,9 @@ Each entry carries ``name``, ``displayName``, ``status``,
 List every LCIA method available in the engine.
 
 Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
-``factor_count``, and the parent ``collection``. Pass ``m.id`` to
-:meth:`get_impacts` as ``method_id``.
+``factor_count``, and the parent ``collection``. Every ``method_id``
+argument takes either, so this list is for browsing, not for looking
+up an id before a call.
 
 ##### `Client.list_presets()`
 
@@ -1944,10 +1945,11 @@ survive the generic camelCase→snake_case conversion.
 
 One LCIA method, returned by :meth:`Client.list_methods`.
 
-Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
-is the parent method collection (e.g. ``"ef-31"``), forwarded to
-:meth:`Client.get_impacts` / :meth:`Client.get_impacts_batch` as their
-``collection`` argument.
+Pass ``id`` — or ``name``, which the client resolves against the loaded
+methods — wherever a ``method_id`` is asked for. ``collection`` is the
+parent method collection (e.g. ``"ef-31"``); the client reads it off the
+resolved method, so it is worth passing to :meth:`Client.get_impacts` /
+:meth:`Client.get_impacts_batch` only to pin one of several loaded.
 
 | Field | Type | Default |
 |-------|------|---------|

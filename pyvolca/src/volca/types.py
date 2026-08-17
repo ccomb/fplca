@@ -1289,10 +1289,11 @@ class Substitution:
 class Method(FromJson):
     """One LCIA method, returned by :meth:`Client.list_methods`.
 
-    Pass ``id`` to :meth:`Client.get_impacts` as ``method_id``. ``collection``
-    is the parent method collection (e.g. ``"ef-31"``), forwarded to
-    :meth:`Client.get_impacts` / :meth:`Client.get_impacts_batch` as their
-    ``collection`` argument.
+    Pass ``id`` — or ``name``, which the client resolves against the loaded
+    methods — wherever a ``method_id`` is asked for. ``collection`` is the
+    parent method collection (e.g. ``"ef-31"``); the client reads it off the
+    resolved method, so it is worth passing to :meth:`Client.get_impacts` /
+    :meth:`Client.get_impacts_batch` only to pin one of several loaded.
     """
 
     id: str

@@ -562,6 +562,10 @@ class Client:
             )
         return hits[0].collection, hits[0].id
 
+    def _method_uuid(self, method_id: str) -> str:
+        """The UUID of a method given by UUID or name, for URLs with no collection."""
+        return self._resolve_method(method_id, None)[1]
+
     def _resolve_collection(self, collection: str | None) -> str:
         """The collection a whole-collection call runs against.
 
@@ -1979,8 +1983,9 @@ class Client:
         """List every LCIA method available in the engine.
 
         Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
-        ``factor_count``, and the parent ``collection``. Pass ``m.id`` to
-        :meth:`get_impacts` as ``method_id``.
+        ``factor_count``, and the parent ``collection``. Every ``method_id``
+        argument takes either, so this list is for browsing, not for looking
+        up an id before a call.
         """
         return [Method.from_json(m) for m in self._call("list_methods")]
 
@@ -1991,7 +1996,9 @@ class Client:
         biosphere flows the method has a CF for; ``flows`` is the per-flow
         breakdown including unmatched rows (``cf_value=None``).
         """
-        return FlowMapping.from_json(self._call("get_flow_mapping", method_id=method_id))
+        return FlowMapping.from_json(
+            self._call("get_flow_mapping", method_id=self._method_uuid(method_id))
+        )
 
     def get_characterization(
         self,
@@ -2007,7 +2014,12 @@ class Client:
         ``limit``). Check ``result.has_more`` to detect truncation.
         """
         return CharacterizationResult.from_json(
-            self._call("get_characterization", method_id=method_id, flow=flow, limit=limit)
+            self._call(
+                "get_characterization",
+                method_id=self._method_uuid(method_id),
+                flow=flow,
+                limit=limit,
+            )
         )
 
     def explain_cf(self, method_id: str, flow_id: str) -> ExplainCFResult:
@@ -2019,7 +2031,9 @@ class Client:
         rungs the cascade walked before the one that answered.
         """
         return ExplainCFResult.from_json(
-            self._call("explain_cf", method_id=method_id, flow_id=flow_id)
+            self._call(
+                "explain_cf", method_id=self._method_uuid(method_id), flow_id=flow_id
+            )
         )
 
     def get_contributing_flows(
@@ -2277,13 +2291,19 @@ class Client:
     def get_method(self, method_id: str) -> MethodDetail:
         """Detail of one LCIA method: unit, category, methodology, factor count."""
         return MethodDetail.from_json(
-            self._json(self._session.get(f"{self.base_url}/api/v1/method/{method_id}"))
+            self._json(
+                self._session.get(
+                    f"{self.base_url}/api/v1/method/{self._method_uuid(method_id)}"
+                )
+            )
         )
 
     def get_method_factors(self, method_id: str) -> list[MethodFactor]:
         """The characterization factors of a method (flow, direction, value)."""
         raw = self._json(
-            self._session.get(f"{self.base_url}/api/v1/method/{method_id}/factors")
+            self._session.get(
+                f"{self.base_url}/api/v1/method/{self._method_uuid(method_id)}/factors"
+            )
         )
         return [MethodFactor.from_json(f) for f in raw]
 
@@ -2299,7 +2319,8 @@ class Client:
         return MappingStatus.from_json(
             self._json(
                 self._session.get(
-                    f"{self.base_url}/api/v1/db/{target}/method/{method_id}/mapping"
+                    f"{self.base_url}/api/v1/db/{target}"
+                    f"/method/{self._method_uuid(method_id)}/mapping"
                 )
             )
         )

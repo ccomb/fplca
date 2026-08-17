@@ -489,6 +489,13 @@ class TestMethodResolution:
         with pytest.raises(VoLCAError, match="matches several loaded methods"):
             client.get_impacts("abc_def", method_id="Water use")
 
+    def test_a_url_without_a_collection_still_takes_a_name(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response({"id": _WATER_USE_ID, "name": "Water use", "unit": "m3", "category": "Water use", "factorCount": 1})
+        client.get_method("Water use")
+        assert session.get.call_args[0][0].endswith(f"/api/v1/method/{_WATER_USE_ID}")
+
     def test_batch_uses_the_only_loaded_collection(self, mocked_client, make_response):
         client, session = mocked_client
         client._methods_cache = [_method("Water use", "EF3.1")]

@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import pytest
 
-from volca.types import CollectionCoverage, FlowDetail, MappingStatus, MethodDetail, MethodFactor
+from volca.types import CollectionCoverage, FlowDetail, MappingStatus, Method, MethodDetail, MethodFactor
 
 
 def _resp(session_attr, json_body: dict) -> None:
     from tests.conftest import _make_response
 
     session_attr.return_value = _make_response(json_body)
+
+
+def _knows_m1(client) -> None:
+    """Seed the loaded methods so a method_id needs no lookup round-trip."""
+    client._methods_cache = [
+        Method(id="m1", name="Climate change", category="Climate", unit="kg CO2 eq",
+               factor_count=200, collection="EF3.1")
+    ]
 
 
 class TestFlowDetail:
@@ -37,6 +45,7 @@ class TestMethodDetail:
     def test_method_detail_optional_fields(self, mocked_client):
         client, session = mocked_client
         _resp(session.get, {"id": "m1", "name": "Climate change", "unit": "kg CO2 eq", "category": "Climate", "factorCount": 200})
+        _knows_m1(client)
         out = client.get_method("m1")
         assert session.get.call_args[0][0] == "http://test.local/api/v1/method/m1"
         assert isinstance(out, MethodDetail)
@@ -46,6 +55,7 @@ class TestMethodDetail:
     def test_method_factors_parsed(self, mocked_client):
         client, session = mocked_client
         _resp(session.get, [{"flowRef": "f1", "flowName": "CO2", "direction": "Output", "value": 1.0}])
+        _knows_m1(client)
         out = client.get_method_factors("m1")
         assert session.get.call_args[0][0] == "http://test.local/api/v1/method/m1/factors"
         assert isinstance(out[0], MethodFactor)
@@ -69,6 +79,7 @@ class TestMappingStatus:
             "uniqueDbFlowsMatched": 75,
             "unmappedFlows": [{"flowRef": "f9", "flowName": "Unobtanium", "direction": "Input"}],
         })
+        _knows_m1(client)
         out = client.get_mapping_status("m1")
         assert session.get.call_args[0][0] == "http://test.local/api/v1/db/testdb/method/m1/mapping"
         assert isinstance(out, MappingStatus)
