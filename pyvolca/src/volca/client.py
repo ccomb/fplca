@@ -40,6 +40,7 @@ variants in the Servant API.
 from __future__ import annotations
 
 import urllib.parse
+import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -120,6 +121,15 @@ def _snake_to_camel(s: str) -> str:
 def _snake_to_kebab(s: str) -> str:
     """``min_quantity`` → ``min-quantity``."""
     return s.replace("_", "-")
+
+
+def _is_uuid(s: str) -> bool:
+    """Whether ``s`` is a UUID, the only method id the engine's URLs accept."""
+    try:
+        uuid.UUID(s)
+    except ValueError:
+        return False
+    return True
 
 
 def _candidate_wire_names(py_name: str) -> list[str]:
@@ -427,6 +437,10 @@ class Client:
         # gates (_require_wire) don't refetch it.
         self._checked = False
         self._server_wire: int | None = None
+        # Loaded methods, fetched on the first call that has to resolve a
+        # method or a collection (see _resolve_method). Dropped whenever this
+        # client loads or unloads a collection.
+        self._methods_cache: list[Method] | None = None
 
     # -- Spec / dispatch plumbing --
 
@@ -494,6 +508,81 @@ class Client:
         self._operations = _parse_spec(spec)
         from . import _stub_gen
         _stub_gen.write_stubs_for_spec(spec)
+
+    # -- Method resolution --
+    #
+    # Every LCIA URL carries a collection *and* a method: the engine keys its
+    # CF caches by collection, since one UUID can live in several. Callers
+    # rarely know or care which collection carries "Water use", so these two
+    # helpers answer it from the engine instead of making the caller guess.
+
+    def _loaded_methods(self, refresh: bool = False) -> list[Method]:
+        """Every method the engine has loaded, cached on the client."""
+        if refresh or self._methods_cache is None:
+            self._methods_cache = self.list_methods()
+        return self._methods_cache
+
+    def _resolve_method(
+        self, method_id: str, collection: str | None
+    ) -> tuple[str, str]:
+        """Map a method UUID *or name* to the ``(collection, uuid)`` a URL needs.
+
+        A UUID with an explicit collection is passed straight through — no
+        lookup, no round-trip. Anything else is matched against the engine's
+        loaded methods, which is what lets ``get_impacts(pid, "Water use")``
+        work without the caller knowing the collection. An unknown or
+        ambiguous name is an error naming the candidates, never a guess.
+        """
+        if collection is not None and _is_uuid(method_id):
+            return collection, method_id
+
+        def match(methods: list[Method]) -> list[Method]:
+            return [
+                m
+                for m in methods
+                if (m.id == method_id or m.name.casefold() == method_id.casefold())
+                and (collection is None or m.collection == collection)
+            ]
+
+        hits = match(self._loaded_methods())
+        if not hits:
+            # A collection may have been loaded since we last looked.
+            hits = match(self._loaded_methods(refresh=True))
+        if not hits:
+            where = "" if collection is None else f" in collection {collection!r}"
+            raise VoLCAError(
+                f"No loaded method named or identified by {method_id!r}{where}. "
+                "See list_methods()."
+            )
+        if len({(m.collection, m.id) for m in hits}) > 1:
+            candidates = ", ".join(sorted(f"{m.collection}/{m.id}" for m in hits))
+            raise VoLCAError(
+                f"{method_id!r} matches several loaded methods ({candidates}). "
+                "Pass collection= or the method id."
+            )
+        return hits[0].collection, hits[0].id
+
+    def _resolve_collection(self, collection: str | None) -> str:
+        """The collection a whole-collection call runs against.
+
+        With a single collection loaded there is nothing to choose; with
+        several, the choice is the caller's, and refusing names them rather
+        than picking one.
+        """
+        if collection is not None:
+            return collection
+        names = sorted({m.collection for m in self._loaded_methods()})
+        if len(names) == 1:
+            return names[0]
+        if not names:
+            raise VoLCAError(
+                "No method collection loaded. See list_method_collections() "
+                "and load_method_collection()."
+            )
+        raise VoLCAError(
+            f"Several method collections are loaded ({', '.join(names)}); "
+            "pass collection= to choose one."
+        )
 
     def _call(
         self,
@@ -1752,7 +1841,7 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         top_flows: int | None = None,
         substitutions: list[SubstitutionLike] | None = None,
     ) -> LCIAResult:
@@ -1762,11 +1851,13 @@ class Client:
         collection at once (and any configured scoring sets).
 
         Args:
-            collection: Method collection name. Defaults to ``"methods"`` for
-                single-method calls; most engines expose methods under a
-                single collection.
+            method_id: A method UUID, or the method's name ("Water use") —
+                a name is resolved against the engine's loaded methods.
+            collection: Method collection name. Left out, it is read off the
+                resolved method, so the caller needs to know only the method.
             top_flows: Max top contributing flows to return (default 5).
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return LCIAResult.from_json(
             self._call(
                 "get_impacts",
@@ -1782,7 +1873,7 @@ class Client:
         self,
         process_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         substitutions: list[SubstitutionLike] | None = None,
         exclude_long_term: bool | None = None,
     ) -> LCIABatchResult:
@@ -1795,6 +1886,9 @@ class Client:
         ``exclude_long_term`` drops long-term emissions before scoring, the
         same switch :meth:`score_activities` carries.
 
+        Left without a ``collection``, the call runs against the only loaded
+        one, and refuses when several are loaded rather than picking one.
+
         Uses a direct HTTP call: the batch endpoint has no operationId in the
         OpenAPI spec (the dispatcher primary is the single-method variant), so
         this wrapper bypasses ``_call`` and builds the URL itself.
@@ -1803,6 +1897,7 @@ class Client:
             raise VoLCAError(
                 "get_impacts_batch requires a database; construct Client(db=...)."
             )
+        collection = self._resolve_collection(collection)
         url = (
             f"{self.base_url}/api/v1/db/{self.db}/activity/{process_id}"
             f"/impacts/{collection}"
@@ -1826,7 +1921,7 @@ class Client:
         method_id: str,
         perturbations: list[dict],
         *,
-        collection: str = "methods",
+        collection: str | None = None,
     ) -> SensitivityResult:
         """How much one impact score moves when technosphere links are perturbed.
 
@@ -1838,6 +1933,7 @@ class Client:
         either the perturbed impact and its delta, or an ``error`` string when
         that perturbation could not be resolved.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return SensitivityResult.from_json(
             self._call(
                 "compute_sensitivity",
@@ -1852,7 +1948,7 @@ class Client:
         self,
         process_ids: list[str],
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         top_flows: int | None = None,
         exclude_long_term: bool | None = None,
     ) -> BatchScores:
@@ -1863,8 +1959,10 @@ class Client:
         ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
         them, a partial result is not an error. ``top_flows`` caps the top
         contributors per category; ``exclude_long_term`` drops long-term
-        emissions from the totals.
+        emissions from the totals. ``collection`` defaults to the only loaded
+        one.
         """
+        collection = self._resolve_collection(collection)
         return BatchScores.from_json(
             self._call(
                 "score_activities",
@@ -1929,7 +2027,7 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         limit: int | None = None,
     ) -> ContributingFlows:
         """Which elementary flows drive a given impact category.
@@ -1939,6 +2037,7 @@ class Client:
         from the response. Pass a generous ``limit`` if you need exhaustive
         coverage and inspect ``share_pct`` totals.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return ContributingFlows.from_json(
             self._call(
                 "get_contributing_flows",
@@ -1954,7 +2053,7 @@ class Client:
         process_id: str,
         method_id: str,
         *,
-        collection: str = "methods",
+        collection: str | None = None,
         limit: int | None = None,
     ) -> ContributingActivities:
         """Which upstream activities drive a given impact category.
@@ -1963,6 +2062,7 @@ class Client:
         total exposed, so ``has_more`` cannot be derived. Inspect
         ``share_pct`` totals to gauge coverage.
         """
+        collection, method_id = self._resolve_method(method_id, collection)
         return ContributingActivities.from_json(self._call(
             "get_contributing_activities",
             process_id=process_id,
@@ -1993,6 +2093,7 @@ class Client:
         payload = self._json(
             self._session.post(f"{self.base_url}/api/v1/method-collections/{name}/load")
         )
+        self._methods_cache = None
         return self._require_success(payload, "load_method_collection")
 
     def unload_method_collection(self, name: str) -> dict:
@@ -2002,6 +2103,7 @@ class Client:
                 f"{self.base_url}/api/v1/method-collections/{name}/unload"
             )
         )
+        self._methods_cache = None
         return self._require_success(payload, "unload_method_collection")
 
     def delete_method_collection(self, name: str) -> dict:
@@ -2009,6 +2111,7 @@ class Client:
         payload = self._json(
             self._session.delete(f"{self.base_url}/api/v1/method-collections/{name}")
         )
+        self._methods_cache = None
         return self._require_success(payload, "delete_method_collection")
 
     def upload_method_collection(

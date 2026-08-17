@@ -10,6 +10,16 @@ from __future__ import annotations
 import pytest
 
 from volca.client import Client, VoLCAError, _candidate_wire_names, _Operation, _parse_spec, _resolve_wire_name
+from volca.types import Method
+
+_WATER_USE_ID = "00000000-0000-0000-0000-000000000002"
+
+
+def _method(name: str, collection: str, id: str = _WATER_USE_ID) -> Method:
+    """One loaded method, as :meth:`Client.list_methods` would return it."""
+    return Method(
+        id=id, name=name, category=name, unit="m3", factor_count=1, collection=collection
+    )
 
 
 def _minimal_lcia_result() -> dict:
@@ -295,9 +305,9 @@ class TestDispatcher:
     def test_get_impacts_uses_all_four_path_captures(self, mocked_client, make_response):
         client, session = mocked_client
         session.get.return_value = make_response(_minimal_lcia_result())
-        result = client.get_impacts("abc_def", method_id="method-uuid", collection="EF3.1")
+        result = client.get_impacts("abc_def", method_id=_WATER_USE_ID, collection="EF3.1")
         called_url = session.get.call_args[0][0]
-        assert called_url == "http://test.local/api/v1/db/testdb/activity/abc_def/impacts/EF3.1/method-uuid"
+        assert called_url == f"http://test.local/api/v1/db/testdb/activity/abc_def/impacts/EF3.1/{_WATER_USE_ID}"
         assert result.score == 1.23
 
     def test_substitutions_upgrade_to_post(self, mocked_client, make_response):
@@ -305,7 +315,8 @@ class TestDispatcher:
         session.post.return_value = make_response(_minimal_lcia_result())
         client.get_impacts(
             "abc_def",
-            method_id="method-uuid",
+            method_id=_WATER_USE_ID,
+            collection="EF3.1",
             substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
         )
         session.post.assert_called_once()
@@ -351,6 +362,7 @@ class TestDispatcher:
         })
         client.get_impacts_batch(
             "abc_def",
+            collection="EF3.1",
             substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
         )
         session.post.assert_called_once()
@@ -374,17 +386,18 @@ class TestDispatcher:
             "scoringIndicators": {},
         }
         session.get.return_value = make_response(empty)
-        client.get_impacts_batch("abc_def", exclude_long_term=True)
+        client.get_impacts_batch("abc_def", collection="EF3.1", exclude_long_term=True)
         assert session.get.call_args[1]["params"] == {"exclude-long-term": "true"}
 
         # Left unsaid, the engine keeps its own default: no query parameter at all.
         session.get.return_value = make_response(empty)
-        client.get_impacts_batch("abc_def")
+        client.get_impacts_batch("abc_def", collection="EF3.1")
         assert session.get.call_args[1]["params"] == {}
 
         session.post.return_value = make_response(empty)
         client.get_impacts_batch(
             "abc_def",
+            collection="EF3.1",
             substitutions=[{"from": "a", "to": "b", "consumer": "c"}],
             exclude_long_term=True,
         )
@@ -448,3 +461,66 @@ class TestDispatcher:
         params = dict(session.get.call_args[1]["params"])
         assert params.get("is_input") == "true"
         assert params.get("max_depth") == "2"
+
+
+class TestMethodResolution:
+    """A caller knows the method; which collection carries it is the engine's business."""
+
+    def test_name_resolves_to_its_collection_and_id(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response(_minimal_lcia_result())
+        client.get_impacts("abc_def", method_id="water USE")
+        assert session.get.call_args[0][0].endswith(f"/impacts/EF3.1/{_WATER_USE_ID}")
+
+    def test_unknown_method_never_reaches_the_engine(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response([])
+        with pytest.raises(VoLCAError, match="No loaded method"):
+            client.get_impacts("abc_def", method_id="EF3.1-water-use")
+
+    def test_same_name_in_two_collections_refuses_to_guess(self, mocked_client):
+        client, _ = mocked_client
+        client._methods_cache = [
+            _method("Water use", "EF3.1"),
+            _method("Water use", "EF3.0", id="00000000-0000-0000-0000-000000000003"),
+        ]
+        with pytest.raises(VoLCAError, match="matches several loaded methods"):
+            client.get_impacts("abc_def", method_id="Water use")
+
+    def test_batch_uses_the_only_loaded_collection(self, mocked_client, make_response):
+        client, session = mocked_client
+        client._methods_cache = [_method("Water use", "EF3.1")]
+        session.get.return_value = make_response({"results": [_minimal_lcia_result()]})
+        client.get_impacts_batch("abc_def")
+        assert session.get.call_args[0][0].endswith("/impacts/EF3.1")
+
+    def test_batch_refuses_to_choose_between_collections(self, mocked_client):
+        client, _ = mocked_client
+        client._methods_cache = [
+            _method("Water use", "EF3.1"),
+            _method("Land use", "plain-indicators", id="00000000-0000-0000-0000-000000000004"),
+        ]
+        with pytest.raises(VoLCAError, match="Several method collections"):
+            client.get_impacts_batch("abc_def")
+
+    def test_a_miss_refetches_before_giving_up(self, mocked_client, make_response):
+        """A collection loaded since the client last looked must still be seen."""
+        client, session = mocked_client
+        client._methods_cache = []
+        session.get.side_effect = [
+            make_response([
+                {
+                    "id": _WATER_USE_ID,
+                    "name": "Water use",
+                    "category": "Water use",
+                    "unit": "m3",
+                    "factorCount": 1,
+                    "collection": "EF3.1",
+                }
+            ]),
+            make_response(_minimal_lcia_result()),
+        ]
+        client.get_impacts("abc_def", method_id="Water use")
+        assert session.get.call_args[0][0].endswith(f"/impacts/EF3.1/{_WATER_USE_ID}")
