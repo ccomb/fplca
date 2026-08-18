@@ -1,6 +1,6 @@
 """Engine wire-compatibility gate: volca._compat plus its client hooks.
 
-All offline — no engine binary. The gate's logic is exercised directly on
+All offline, with no engine binary. The gate's logic is exercised directly on
 synthetic :class:`ServerVersion` values, and the client integration through a
 mocked session.
 """
@@ -49,7 +49,7 @@ def test_check_rejects_too_old_wire(wire: int | None) -> None:
 
 
 def test_check_message_distinguishes_absent_from_zero() -> None:
-    """wire 0 is a real value, not 'absent' — the messages must differ."""
+    """wire 0 is a real value, not 'absent': the messages must differ."""
     with pytest.raises(VoLCAError) as none_exc:
         _compat.check(_sv(None))
     with pytest.raises(VoLCAError) as zero_exc:
@@ -91,7 +91,7 @@ def _client_with_version(make_response, wire: int | None) -> tuple[Client, Magic
 
 
 def test_get_version_stays_ungated(make_response) -> None:
-    """A bad engine must remain inspectable — get_version never gates."""
+    """A bad engine must remain inspectable: get_version never gates."""
     c, _ = _client_with_version(make_response, wire=None)
     sv = c.get_version()  # must not raise despite the missing wireVersion
     assert sv.wire_version is None
@@ -135,7 +135,7 @@ def test_ensure_compatible_is_one_shot(make_response) -> None:
 
 def test_preloaded_operations_skip_the_gate(mocked_client) -> None:
     """Clients handed a preloaded operation table (the offline fixtures) must
-    never trigger a version fetch — that is what keeps the dispatch tests
+    never trigger a version fetch; that is what keeps the dispatch tests
     engine-free."""
     client, session = mocked_client
     client._load_operations()

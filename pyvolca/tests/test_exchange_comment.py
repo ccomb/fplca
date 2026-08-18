@@ -3,8 +3,8 @@
 The engine surfaces the source-format ``generalComment`` / ``<comment>`` /
 SimaPro free-text on every exchange. It appears in two wire shapes:
 
-* ``ExchangeWithUnit`` — flat ``exComment`` next to the inner ``exchange``.
-* ``ExchangeDetail``   — nested ``exchange.comment`` only.
+* ``ExchangeWithUnit``: flat ``exComment`` next to the inner ``exchange``.
+* ``ExchangeDetail``:   nested ``exchange.comment`` only.
 
 pyvolca surfaces both as ``Exchange.comment`` so callers don't have to know
 which envelope they got.
@@ -125,7 +125,7 @@ class TestExchangeDetailComment:
     def test_flat_excomment_wins_if_engine_ever_adds_it(self):
         """ExchangeDetail doesn't expose exComment today, but if the backend
         gains it for symmetry, pyvolca already prefers it over the nested
-        copy — same precedence as ExchangeWithUnit."""
+        copy, same precedence as ExchangeWithUnit."""
         payload = _ed("TechnosphereExchange", inner_comment="other", ex_comment="canonical")
         ex = parse_exchange_detail(payload)
         assert ex.comment == "canonical"

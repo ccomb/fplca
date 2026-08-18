@@ -31,7 +31,7 @@ SMOKE_URL = os.environ.get("VOLCA_SMOKE_URL")
 @pytest.fixture(scope="module")
 def live_client() -> Client:
     if not SMOKE_URL:
-        pytest.skip("VOLCA_SMOKE_URL not set — smoke test needs a running engine.")
+        pytest.skip("VOLCA_SMOKE_URL not set: smoke test needs a running engine.")
     c = Client(base_url=SMOKE_URL, db="")
     # Force spec load up-front so failures surface here instead of inside
     # individual operation tests.

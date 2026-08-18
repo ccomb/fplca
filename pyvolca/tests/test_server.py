@@ -1,6 +1,6 @@
 """Offline tests for volca.server.Server binary resolution.
 
-No engine is spawned — these exercise _find_binary's resolution order,
+No engine is spawned: these exercise _find_binary's resolution order,
 which must not be fooled by a directory that happens to share the binary
 name (the common case: running a script from a source checkout that has a
 ``volca/`` package directory in the working tree).
@@ -105,7 +105,7 @@ def test_await_bound_port_reports_early_exit():
 
 
 def test_await_bound_port_early_exit_hints_config_less():
-    # port="auto" is the canonical config-less invocation — an engine too old
+    # port="auto" is the canonical config-less invocation; an engine too old
     # to run without --config must get the version hint on this path too.
     process = mock.Mock()
     process.stdout = io.StringIO("")
@@ -167,7 +167,7 @@ def test_start_refuses_a_missing_config_path(monkeypatch):
 
 def test_start_reports_early_engine_exit_with_config_hint(monkeypatch):
     # Fixed-port path: the engine dies at once (e.g. an engine too old for
-    # config-less startup) — start() must fail now with the hint, not hang
+    # config-less startup); start() must fail now with the hint, not hang
     # until the readiness timeout.
     process = mock.Mock()
     process.poll.return_value = 1

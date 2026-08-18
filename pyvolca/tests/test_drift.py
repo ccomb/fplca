@@ -1,7 +1,7 @@
 """Drift test: every hand-written wrapper's operationId exists in the live spec.
 
 This test fails when the engine renames or removes an operation that a
-pyvolca wrapper still references — which would produce a 404 at runtime
+pyvolca wrapper still references, which would produce a 404 at runtime
 otherwise. Skipped when the engine binary isn't available (e.g. on a
 Python-only dev machine).
 """
@@ -66,7 +66,7 @@ def test_all_resources_have_operationid(live_spec):
     """Sanity check: the engine's enrichment layer actually stamps operationIds.
 
     Regression guard against the enrichment code in API/OpenApi.hs silently
-    losing its way — e.g. if a Resource constructor is added without updating
+    losing its way, e.g. if a Resource constructor is added without updating
     apiPath, or if the lens plumbing breaks.
     """
     if live_spec is None:

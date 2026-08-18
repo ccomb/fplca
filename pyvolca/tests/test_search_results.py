@@ -1,4 +1,4 @@
-"""Tests for :class:`volca.SearchResults` — the lazy-paginated wire envelope."""
+"""Tests for :class:`volca.SearchResults`: the lazy-paginated wire envelope."""
 
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ class TestSearchResultsIteration:
             )
 
     def test_iteration_raises_on_empty_page_with_has_more(self):
-        """Server claims hasMore=True but returns no items — surface the broken
+        """Server claims hasMore=True but returns no items: surface the broken
         pagination contract loudly. Silently stopping would let callers consume
         an incomplete result set without ever learning the engine misbehaved.
         """
@@ -143,7 +143,7 @@ class TestSearchResultsIteration:
             list(sr)
 
     def test_reiteration_replays_from_cache(self):
-        """A second iteration must not re-hit the server — fetched pages are cached."""
+        """A second iteration must not re-hit the server: fetched pages are cached."""
         calls: list[tuple[int, int | None]] = []
 
         def fetch(offset: int, limit: int | None) -> dict:
@@ -159,7 +159,7 @@ class TestSearchResultsIteration:
         second = [a.activity_name for a in sr]
         assert first == ["a", "b", "c", "d"]
         assert second == first
-        # Exactly one follow-up fetch — the second iteration replays the cache.
+        # Exactly one follow-up fetch: the second iteration replays the cache.
         assert len(calls) == 1
 
 

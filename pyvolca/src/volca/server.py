@@ -39,7 +39,7 @@ class Server:
         Args:
             config: Path to the engine TOML, read for ``server.port`` and
                 ``server.password``. ``None`` starts the engine without any
-                config file — built-in defaults, no databases (needs an
+                config file: built-in defaults, no databases (needs an
                 engine >= v0.9.3). A path that does not exist makes
                 :meth:`start` fail loudly: a typo must never silently become
                 "all defaults".
@@ -61,7 +61,7 @@ class Server:
 
     @property
     def base_url(self) -> str:
-        """``http://localhost:<port>`` — pass to :class:`Client(base_url=…)`.
+        """``http://localhost:<port>``, pass to :class:`Client(base_url=…)`.
 
         Always loopback: the managed server only listens locally.
         """
@@ -70,8 +70,8 @@ class Server:
     def _read_config(self) -> dict:
         """Read the TOML config file; ``{}`` when running config-less.
 
-        A missing file also reads as ``{}`` here — port and password get
-        their defaults — but :meth:`start` still refuses to spawn against a
+        A missing file also reads as ``{}`` here (port and password get
+        their defaults), but :meth:`start` still refuses to spawn against a
         path that does not exist.
         """
         if self.config is None:
@@ -92,10 +92,10 @@ class Server:
 
         Resolution order:
           1. ``self.binary`` if it is an existing file.
-          2. The shared install root (``platformdirs.user_data_dir``) —
+          2. The shared install root (``platformdirs.user_data_dir``),
              populated by :func:`volca.download`, ``install.sh``, or
              ``install.ps1`` interchangeably.
-          3. ``shutil.which(self.binary)`` — PATH lookup, including the
+          3. ``shutil.which(self.binary)``: PATH lookup, including the
              ``~/.local/bin/volca`` shim that ``install.sh`` drops.
           4. ``./volca`` / ``./dist/volca`` for ad-hoc dev trees.
 
@@ -134,7 +134,7 @@ class Server:
         return env
 
     def is_alive(self) -> bool:
-        """Health check — GET /api/v1/db, return True if 200."""
+        """Health check: GET /api/v1/db, return True if 200."""
         try:
             r = requests.get(
                 f"{self.base_url}/api/v1/db",
@@ -214,7 +214,7 @@ class Server:
         """
         dynamic_port = self.port == 0
         if not dynamic_port and self.is_alive():
-            # A server is already up — we didn't spawn it, so verify the wire
+            # A server is already up; we didn't spawn it, so verify the wire
             # but leave it running on a mismatch; it isn't ours to stop.
             self._check_wire()
             return

@@ -1,4 +1,4 @@
-"""WasteExchange parsing — third top-level Exchange variant.
+"""WasteExchange parsing: third top-level Exchange variant.
 
 The engine emits waste flows as their own kind (PR #83): they share the
 technosphere matrix with product flows but are tagged separately so callers
@@ -8,10 +8,10 @@ for SimaPro "Final waste flows".
 
 This module covers the wire shape for both envelopes:
 
-* ``ExchangeWithUnit`` — inner ``{tag: "WasteExchange", isInput, ...}`` plus
+* ``ExchangeWithUnit``: inner ``{tag: "WasteExchange", isInput, ...}`` plus
   target fields at the envelope level when the cross-DB linker resolved the
   waste output to a treatment activity.
-* ``ExchangeDetail`` — same inner shape, but the flow is carried as a
+* ``ExchangeDetail``: same inner shape, but the flow is carried as a
   ``{kind: "waste", flow: <wasteFlow>}`` tagged sum.
 """
 
@@ -92,7 +92,7 @@ class TestParseExchangeWaste:
         ex = parse_exchange(_waste_ewu(is_input=False))
         assert ex.is_waste is True
         assert ex.is_biosphere is False
-        # is_reference is always False on waste — there's no reference-waste concept.
+        # is_reference is always False on waste: there's no reference-waste concept.
         assert ex.is_reference is False
 
     def test_other_variants_are_not_waste(self):
@@ -159,7 +159,7 @@ class TestParseExchangeDetailWaste:
 
     def test_waste_flow_envelope_rejected_on_technosphere_tag(self):
         """A waste-kind flow paired with a TechnosphereExchange tag is a
-        wire-format bug — refuse it rather than parsing as a product input."""
+        wire-format bug: refuse it rather than parsing as a product input."""
         bad = {
             "exchange": {"tag": "TechnosphereExchange", "amount": 1.0, "role": "Input"},
             "exchangeUnitName": "kg",

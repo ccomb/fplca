@@ -33,7 +33,7 @@ Substitutions
 If a wrapper is called with ``substitutions=[{...}]``, ``_call`` upgrades
 the operation from GET to POST and sends the substitution body. Works
 transparently for ``get_inventory``, ``get_supply_chain``, and
-``get_impacts`` — all the endpoints that have POST-with-substitutions
+``get_impacts``: all the endpoints that have POST-with-substitutions
 variants in the Servant API.
 """
 
@@ -143,7 +143,7 @@ def _candidate_wire_names(py_name: str) -> list[str]:
     The same Python name may map to different wire forms depending on
     whether the spec places it in ``path`` (Servant uses camelCase) or in
     ``query`` (Servant sometimes uses snake_case, sometimes kebab-case,
-    sometimes camelCase — the aggregate endpoint is snake_case, for
+    sometimes camelCase: the aggregate endpoint is snake_case, for
     example). Return every plausible form; the caller matches against
     the spec's parameter list.
     """
@@ -167,7 +167,7 @@ shape the engine would have returned."""
 _METHOD_EXPORT_FORMATS = frozenset({"simapro", "csv", "openlca", "ilcd"})
 """Target keywords accepted by ``POST /api/v1/method-collections/{name}/export``.
 
-Mirrors the engine's ``parseMethodExportFormat`` — a space of its own,
+Mirrors the engine's ``parseMethodExportFormat``: a space of its own,
 smaller than the database export formats."""
 
 
@@ -258,7 +258,7 @@ def _resolve_page_args(
 ) -> tuple[int | None, int]:
     """Reconcile the page/page_size convenience kwargs with wire-level limit/offset.
 
-    Returns ``(wire_limit, wire_offset)``. ``wire_limit`` may be None — that
+    Returns ``(wire_limit, wire_offset)``. ``wire_limit`` may be None, which
     leaves it off the request entirely so the engine applies its own
     default page size (matching what the web UI gets).
 
@@ -277,7 +277,7 @@ def _resolve_page_args(
         )
     if page is not None and page_size is None:
         raise VoLCAError(
-            "page=N requires an explicit page_size=M — offset cannot be derived "
+            "page=N requires an explicit page_size=M: offset cannot be derived "
             "from page alone without committing to a page size."
         )
     if page is not None and page < 1:
@@ -293,7 +293,7 @@ def _resolve_page_args(
 SubstitutionLike = Substitution | dict
 """A :class:`Substitution` or a legacy ``{"from", "to", "consumer"}`` dict.
 
-``consumer`` is optional — omit it for a global swap. The dict form is
+``consumer`` is optional: omit it for a global swap. The dict form is
 accepted for backwards-compat one-liner ergonomics; the typed form is
 preferred (catches typos at construction time)."""
 
@@ -309,7 +309,7 @@ def _substitution_body(substitutions: list[SubstitutionLike]) -> dict:
     def coerce(s: SubstitutionLike) -> dict:
         if isinstance(s, Substitution):
             return s.to_wire()
-        # dict form — validate the required keys here so typos like
+        # dict form: validate the required keys here so typos like
         # ``"comsumer"`` fail with a clear error rather than at the engine.
         missing = {"from", "to"} - set(s)
         if missing:
@@ -407,7 +407,7 @@ class Client:
 
     Substitutions can be passed to ``get_supply_chain``, ``get_inventory``,
     and ``get_impacts`` to compute results with a different upstream
-    supplier — fast::
+    supplier, fast::
 
         subs = [{"from": old_pid, "to": new_pid, "consumer": consumer_pid}]
         result = c.get_impacts(pid, method_id=mid, substitutions=subs)
@@ -465,7 +465,7 @@ class Client:
         Placed inside the spec-fetch branch so it fires once per client, right
         before we first depend on the engine's wire. A client handed a
         preloaded operation table (the offline fixtures) never reaches it
-        through dispatch — only a wire-gated capability (:meth:`_require_wire`)
+        through dispatch; only a wire-gated capability (:meth:`_require_wire`)
         forces the check, since it must ask the live engine.
         ``get_version`` is a direct GET, so this does not recurse.
         """
@@ -501,8 +501,8 @@ class Client:
         package directory so IDE autocomplete reflects the current engine.
         Useful when the engine is upgraded without reinstalling pyvolca.
 
-        This is the explicit "the engine was upgraded" path — the likeliest
-        place to meet a wire *change* — so it forgets the cached wire and
+        This is the explicit "the engine was upgraded" path, the likeliest
+        place to meet a wire *change*, so it forgets the cached wire and
         re-runs the gate against the live engine before fetching a spec
         pyvolca can't decode. Without the reset, a client that first met an
         older engine would keep refusing wire-gated capabilities after an
@@ -541,7 +541,7 @@ class Client:
     ) -> tuple[str, str]:
         """Map a method UUID *or name* to the ``(collection, uuid)`` a URL needs.
 
-        A UUID with an explicit collection is passed straight through — no
+        A UUID with an explicit collection is passed straight through: no
         lookup, no round-trip. Anything else is matched against the engine's
         loaded methods, which is what lets ``get_impacts(pid, "Water use")``
         work without the caller knowing the collection. An unknown or
@@ -638,7 +638,7 @@ class Client:
         ``body`` is the JSON request body for operations the spec declares
         as POST (e.g. ``compute_sensitivity``, ``score_activities``). If
         ``substitutions`` is given instead, the operation is upgraded from
-        GET to POST with a ``SubstitutionRequest`` body — the two are
+        GET to POST with a ``SubstitutionRequest`` body; the two are
         mutually exclusive and ``substitutions`` wins.
         """
         ops = self._load_operations()
@@ -660,7 +660,7 @@ class Client:
                 )
             kwargs["db_name"] = self.db
 
-        # Drop None-valued kwargs — they shouldn't become query string entries.
+        # Drop None-valued kwargs: they shouldn't become query string entries.
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
         # Split kwargs into path captures vs. query params, canonicalizing names.
@@ -758,11 +758,11 @@ class Client:
             if "<!DOCTYPE" in r.text[:50] or "<html" in r.text[:50]:
                 if r.history:
                     hint = (
-                        f" (redirected from {r.history[0].url} — "
+                        f" (redirected from {r.history[0].url}; "
                         "auth headers are dropped on redirect, try using https://)"
                     )
                 else:
-                    hint = " (got HTML — is the URL correct?)"
+                    hint = " (got HTML: is the URL correct?)"
             raise VoLCAError(
                 f"Non-JSON response for {r.request.method} {r.url} "
                 f"(status {r.status_code}){hint}",
@@ -776,7 +776,7 @@ class Client:
         """Return a new client targeting a different database.
 
         Shares the underlying HTTP session, dispatch table, and any other
-        Client-level state with the original — only ``db`` is overridden.
+        Client-level state with the original; only ``db`` is overridden.
         New fields added to :meth:`Client.__init__` propagate automatically
         (no manual mirror to keep in sync).
         """
@@ -788,7 +788,7 @@ class Client:
     def get_version(self) -> ServerVersion:
         """Return server build metadata: version, git hash/tag, build target.
 
-        Uses a direct HTTP call — ``/api/v1/version`` has no operationId
+        Uses a direct HTTP call: ``/api/v1/version`` has no operationId
         since it predates the Resources ADT.
         """
         return ServerVersion.from_json(
@@ -808,7 +808,7 @@ class Client:
     #   - IDE autocomplete for the common operations
     #
     # Operations without a hand-written wrapper are still reachable via
-    # ``client.call(operation_id, **kw)`` — see the ``call`` method below.
+    # ``client.call(operation_id, **kw)``, see the ``call`` method below.
 
     def call(self, operation_id: str, **kwargs: Any) -> Any:
         """Escape hatch: call any OpenAPI operation by operationId.
@@ -862,7 +862,7 @@ class Client:
         """Resolve the target database, falling back to ``self.db``.
 
         Raises VoLCAError when neither an explicit ``db_name`` nor a
-        client-level default is available — never silently targets ``""``.
+        client-level default is available, and never silently targets ``""``.
         """
         name = db_name or self.db
         if not name:
@@ -898,8 +898,8 @@ class Client:
 
         ``source`` is a filesystem path (streamed from disk by ``requests``,
         never fully read into memory) or raw ``bytes``. Shared by every
-        upload endpoint — databases, method collections, and each reference
-        data family — since they all take the same query-param + streamed
+        upload endpoint (databases, method collections, and each reference
+        data family), since they all take the same query-param + streamed
         body shape.
 
         The engine reports rejections in-band (HTTP 200 with
@@ -950,7 +950,7 @@ class Client:
         ids: list[str] | None = None,
         db_name: str | None = None,
     ) -> dict:
-        """Delete activities selected by filter — or exactly the ``ids`` list.
+        """Delete activities selected by filter, or exactly the ``ids`` list.
 
         Builds a ``DeleteSelectionRequest``: the filter fields select the whole
         matching set, ``keep`` spares matched process ids, and ``extra`` adds
@@ -959,10 +959,10 @@ class Client:
         tuples.
 
         ``ids`` names the selection verbatim instead of filtering; the filter
-        arguments (and ``exact``) must then stay unset — the two modes are
+        arguments (and ``exact``) must then stay unset: the two modes are
         exclusive, mirroring the engine. Needs an engine speaking wire
         revision 3 (>= v0.9.3): an older one would silently drop the unknown
-        ``ids`` key and read the request as an empty filter — "everything" —
+        ``ids`` key and read the request as an empty filter ("everything"),
         so pyvolca refuses to send it rather than let the engine guess.
 
         Returns the ``DeleteSelectionResponse`` dict
@@ -1007,7 +1007,7 @@ class Client:
         """Write new activities into a database that can hold them.
 
         Each activity's ``process_id`` is minted by the engine from its name,
-        location, product name and product unit — you do not choose it — and
+        location, product name and product unit (you do not choose it), and
         comes back in ``written``. Writing the same activity twice is therefore
         a conflict, not a second row; use :meth:`replace_activity` to correct
         one that is already there.
@@ -1047,7 +1047,7 @@ class Client:
     ) -> dict:
         """Rewrite one activity the database already holds, keeping its identity.
 
-        ``process_id`` must be the identity ``activity`` mints to — that is,
+        ``process_id`` must be the identity ``activity`` mints to; that is,
         the name, location, product name and product unit must be the ones the
         row already has. Change any of those and you are describing a different
         activity, which the engine refuses rather than writing to a second row;
@@ -1079,7 +1079,7 @@ class Client:
 
         This reaches what :meth:`replace_activity` cannot: an activity that came
         in from a database file. Its identity was minted by whichever parser
-        read it, so no description addresses it — and a description could not
+        read it, so no description addresses it, and a description could not
         carry back its classification, synonyms, parameters, pedigree or
         coproducts anyway. Here you name only the lines that change, and
         everything else stays as it was.
@@ -1095,7 +1095,7 @@ class Client:
             {"removed": [2], "amountsSet": [], "added": 1,
              "transient": False, "warnings": [...]}
 
-        Only a database of your own accepts edits — copy a configured one first.
+        Only a database of your own accepts edits: copy a configured one first.
 
         Needs an engine speaking wire revision 7.
         """
@@ -1142,7 +1142,7 @@ class Client:
     def export_database(self, fmt: str, db_name: str | None = None) -> bytes:
         """Export a loaded database, returning the serialized bytes.
 
-        ``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway`` —
+        ``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway``,
         validated client-side; an unknown value raises VoLCAError before any
         request. Single-file formats carry their bytes directly; EcoSpold 2 /
         ILCD multi-file trees come back zipped.
@@ -1235,7 +1235,7 @@ class Client:
         :meth:`finalize_database` to build matrices and load it.
 
         Raises VoLCAError on any rejection (uploads disabled on the plan, size
-        cap exceeded, unreadable archive) — the engine reports these in-band
+        cap exceeded, unreadable archive); the engine reports these in-band
         with HTTP 200 and ``success=false``.
         """
         return self._upload(
@@ -1248,12 +1248,12 @@ class Client:
         The one-call form of the upload lifecycle: match by display name
         (default: the file's stem), upload only when absent, finalize the
         staged copy, load if unloaded. Returns the slug every later call
-        targets — run it at the top of a script and it converges on the same
+        targets: run it at the top of a script and it converges on the same
         loaded database every time instead of re-uploading. A match that is
-        already loaded — even partially linked — is left untouched.
+        already loaded, even partially linked, is left untouched.
 
         A staged copy that is not ready to finalize raises VoLCAError naming
-        the blocker (missing suppliers, no activities parsed) — fix it with
+        the blocker (missing suppliers, no activities parsed); fix it with
         :meth:`add_dependency` or :meth:`set_data_path`, then
         :meth:`finalize_database`. The gate also holds on re-runs: an upload
         left staged by an earlier failed run goes through the same readiness
@@ -1282,7 +1282,7 @@ class Client:
 
         Finalizing builds the matrices and loads the database, so a staged
         copy that ``get_setup`` reports not ready raises with the concrete
-        blocker instead — a half-linked database silently undercounts and
+        blocker instead: a half-linked database silently undercounts and
         the consumer can't tell.
         """
         setup = self.get_setup(slug)
@@ -1292,23 +1292,23 @@ class Client:
         missing = setup.get("missingSuppliers") or []
         if missing:
             blocker = (
-                f"missing suppliers {missing!r} — wire them with "
+                f"missing suppliers {missing!r}; wire them with "
                 "add_dependency, then finalize_database"
             )
         elif not setup.get("activityCount"):
             blocker = (
-                "no activities parsed — pick the data file with "
+                "no activities parsed; pick the data file with "
                 "set_data_path (see availablePaths in get_setup), "
                 "then finalize_database"
             )
         else:
             blocker = (
-                f"{setup.get('unresolvedLinks')} unresolved links — "
+                f"{setup.get('unresolvedLinks')} unresolved links; "
                 "inspect get_setup"
             )
         raise VoLCAError(
             f"ensure_database: {name!r} (slug {slug!r}) is not ready to "
-            f"finalize — {blocker}."
+            f"finalize: {blocker}."
         )
 
     def get_setup(self, db_name: str | None = None) -> dict:
@@ -1317,7 +1317,7 @@ class Client:
         Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
         and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
         (declared deps), ``dataPath`` / ``availablePaths`` (the selected data
-        file and the alternatives — see :meth:`set_data_path`), ``completeness``.
+        file and the alternatives, see :meth:`set_data_path`), ``completeness``.
         """
         target = self._db(db_name)
         return self._json(self._session.get(f"{self.base_url}/api/v1/db/{target}/setup"))
@@ -1393,7 +1393,7 @@ class Client:
         All filters are AND-combined and case-insensitive. ``name`` and
         ``product`` match by substring unless ``exact=True``.
 
-        Returns a paginated :class:`SearchResults` — iterate it to walk
+        Returns a paginated :class:`SearchResults`: iterate it to walk
         every match across all pages (subsequent pages fetched on demand),
         or use ``.page(n)`` for explicit page access. ``len(results)`` is
         the server-reported total across all pages.
@@ -1405,23 +1405,23 @@ class Client:
             preset: Apply a named classification preset configured in the engine.
             classification: System name (``"ISIC rev.4 ecoinvent"``).
             classification_value: Substring within that system's value.
-            classification_match: How ``classification_value`` is compared —
+            classification_match: How ``classification_value`` is compared:
                 :class:`MatchMode.CONTAINS` (default, substring) or
                 :class:`MatchMode.EXACT` (case-insensitive equality). Ignored
                 when ``classification`` is unset.
-            page: 1-based page number. Must be paired with ``page_size`` —
+            page: 1-based page number. Must be paired with ``page_size``:
                 offset cannot be derived from page alone.
             page_size: Items per page (becomes the wire-level ``limit``).
                 Alone (no ``page``) means "page 1 with this size".
             limit: Wire-level cap on returned items. Prefer ``page_size``.
             offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
-            sort: Sort key — ``"name"`` or ``"location"``. When set, results
+            sort: Sort key: ``"name"`` or ``"location"``. When set, results
                 are ordered lexicographically instead of by relevance.
             order: ``"desc"`` to reverse; ascending otherwise.
             exact: When True, ``name`` and ``product`` are matched exactly.
 
         Returns:
-            :class:`SearchResults[Activity]` — iterable across all pages.
+            :class:`SearchResults[Activity]`, iterable across all pages.
         """
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
         common: dict[str, Any] = dict(
@@ -1464,12 +1464,12 @@ class Client:
         two patterns scripts keep hand-rolling: downloading the whole
         database to build a name→process_id dict, and per-name thread pools.
 
-        The result maps every input name to its matches — the mapping is
+        The result maps every input name to its matches: the mapping is
         total, so misses are visible, never silently dropped:
 
-        * ``[]`` — no match; the name does not resolve.
-        * one :class:`Activity` — unambiguous; ``matches[0].process_id``.
-        * several — ambiguous (same name across geographies or products);
+        * ``[]``: no match; the name does not resolve.
+        * one :class:`Activity`: unambiguous; ``matches[0].process_id``.
+        * several: ambiguous (same name across geographies or products);
           disambiguate with ``geo=`` or inspect the candidates.
 
         With ``exact=False`` matches are relevance-ranked (best first), so
@@ -1522,7 +1522,7 @@ class Client:
     ) -> SearchResults[Flow]:
         """Search flows (technosphere products and biosphere flows) in the current database.
 
-        Returns a paginated :class:`SearchResults[Flow]` — iterate to walk
+        Returns a paginated :class:`SearchResults[Flow]`: iterate to walk
         every match across all pages, or use ``.page(n)`` for explicit
         access. See :meth:`search_activities` for the pagination contract.
 
@@ -1537,7 +1537,7 @@ class Client:
             page / page_size: Web-style pagination; convert to wire-level
                 ``offset`` / ``limit``.
             limit / offset: Wire-level escape hatch.
-            sort: Sort key — ``"name"`` (default), ``"category"``, or ``"unit"``.
+            sort: Sort key: ``"name"`` (default), ``"category"``, or ``"unit"``.
             order: ``"desc"`` to reverse; ascending otherwise.
         """
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
@@ -1554,7 +1554,7 @@ class Client:
         """List classification systems and their values for the current database.
 
         ``ClassificationSystem.activity_count`` tells how widely each system
-        is populated — useful for picking a filter dimension with enough
+        is populated, useful for picking a filter dimension with enough
         signal.
         """
         return [ClassificationSystem.from_json(c) for c in self._call("list_classifications")]
@@ -1613,7 +1613,7 @@ class Client:
         """Get the flat supply chain of an activity.
 
         Returns a :class:`SupplyChain`. Check ``result.has_more`` to detect
-        when ``limit`` truncated ``entries`` below ``filtered_activities`` —
+        when ``limit`` truncated ``entries`` below ``filtered_activities``:
         further downstream analysis on a truncated chain would be wrong
         without flagging the gap.
 
@@ -1622,7 +1622,7 @@ class Client:
             classification_filters: Restrict entries to those matching any
                 of the given ClassificationFilter triples. Multiple filters
                 are AND-combined by the server.
-            sort: Sort key — ``"name"``, ``"location"``, ``"unit"``,
+            sort: Sort key: ``"name"``, ``"location"``, ``"unit"``,
                 ``"depth"``, ``"consumers"``, or ``"amount"``. Default
                 orders by descending absolute quantity.
             order: ``"desc"`` to reverse; ascending otherwise.
@@ -1630,7 +1630,7 @@ class Client:
                 the scaling vector is recomputed with the substituted
                 suppliers. Accepts :class:`Substitution` (preferred) or the
                 legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
-                is optional — omit it for a global swap.
+                is optional: omit it for a global swap.
         """
         classifications = [f.system for f in classification_filters or []]
         classification_values = [f.value for f in classification_filters or []]
@@ -1682,7 +1682,7 @@ class Client:
                 / ``BIOSPHERE`` / ``CONSUMPTION``) or the equivalent wire
                 string. Strings are accepted for one-liner ergonomics but
                 bypass static checking. ``CONSUMPTION`` rows are scaled
-                technosphere edges — use it for "total X consumed upstream"
+                technosphere edges: use it for "total X consumed upstream"
                 questions. Net electricity without grid double counting::
 
                     aggregate(pid, "consumption", filter_name="electricity",
@@ -1698,7 +1698,7 @@ class Client:
                 any of these substrings (list or comma-separated string).
                 Items always split on commas on the wire, so a name that
                 itself contains a comma ("electricity production, hard
-                coal") becomes two independent substrings — use a
+                coal") becomes two independent substrings; use a
                 comma-free fragment of the name instead.
             group_by: omit for a single-bucket result (just the totals).
                 Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
@@ -1706,7 +1706,7 @@ class Client:
                 ``"consumer_name"`` (``CONSUMPTION`` scope),
                 ``"classification.<system>"``.
             aggregate: :class:`AggregateOp` member or wire string
-                (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
+                (``"sum_quantity"`` by default, ``"count"``, or ``"share"``).
         """
         # filter_classification goes over the wire as "System=Value[:exact]" strings.
         if filter_classification:
@@ -1772,7 +1772,7 @@ class Client:
             classification_filters: ClassificationFilter entries restricting
                 the results. Multiple filters are AND-combined by the server.
                 Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
-            sort: Sort key — ``"name"``, ``"location"``, ``"product"``,
+            sort: Sort key: ``"name"``, ``"location"``, ``"product"``,
                 ``"amount"``, or ``"unit"``. Default orders by depth.
             order: ``"desc"`` to reverse; ascending otherwise.
             include_edges: When True, the response carries every technosphere
@@ -1821,12 +1821,12 @@ class Client:
             self._call("get_path_to", process_id=process_id, target=target)
         )
 
-    # -- Tree (SPA-only endpoint, no operationId — direct HTTP) --
+    # -- Tree (SPA-only endpoint, no operationId, direct HTTP) --
 
     def get_tree(self, process_id: str) -> dict:
         """Fetch the recursive activity tree used by the analysis SPA.
 
-        ``/tree`` has no operationId in the OpenAPI spec — it's kept for the
+        ``/tree`` has no operationId in the OpenAPI spec; it's kept for the
         SPA's lazy-expanding graph widget and intentionally not exposed as
         a Resource. Included here as a direct HTTP call for scripts that
         need the same shape.
@@ -1858,7 +1858,7 @@ class Client:
         Args:
             flow: Substring filter on flow name.
             limit: Cap on returned flow rows. (Server returns full inventory
-                otherwise — the engine doesn't paginate this endpoint.)
+                otherwise; the engine doesn't paginate this endpoint.)
             substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
         """
         return InventoryResult.from_json(
@@ -1886,7 +1886,7 @@ class Client:
         collection at once (and any configured scoring sets).
 
         Args:
-            method_id: A method UUID, or the method's name ("Water use") —
+            method_id: A method UUID, or the method's name ("Water use");
                 a name is resolved against the engine's loaded methods.
             collection: Method collection name. Left out, it is read off the
                 resolved method, so the caller needs to know only the method.
@@ -1964,7 +1964,7 @@ class Client:
         ``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
         ``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
         so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
-        plus one :class:`PerturbedResult` per perturbation — each carrying
+        plus one :class:`PerturbedResult` per perturbation, each carrying
         either the perturbed impact and its delta, or an ``error`` string when
         that perturbation could not be resolved. ``method_id`` takes a method
         name as well as a UUID, and ``collection`` is read off the resolved
@@ -1993,7 +1993,7 @@ class Client:
 
         Returns a :class:`BatchScores`: ``results`` holds one
         :class:`ScoredActivity` per process the engine could compute, while
-        ``not_found`` / ``invalid`` list the ids it could not resolve — inspect
+        ``not_found`` / ``invalid`` list the ids it could not resolve; inspect
         them, a partial result is not an error. ``top_flows`` caps the top
         contributors per category; ``exclude_long_term`` drops long-term
         emissions from the totals. Left without a ``collection``, the call runs
@@ -2191,9 +2191,9 @@ class Client:
         """Export a loaded method collection, returning the serialized bytes.
 
         ``fmt`` names the target format: ``simapro`` (SimaPro method CSV),
-        ``csv`` (columnar CSV — one column per impact category, the
+        ``csv`` (columnar CSV, one column per impact category, the
         spreadsheet view), ``openlca`` (a zip of openLCA JSON-LD impact
-        categories), or ``ilcd`` (a zip of an ILCD LCIA-method package —
+        categories), or ``ilcd`` (a zip of an ILCD LCIA-method package,
         one method dataset per impact category plus its flow datasets).
         Projection warnings (anything the format cannot
         carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
@@ -2226,7 +2226,7 @@ class Client:
     #
     # Three families, one URL scheme (/api/v1/{kind}/...), so these methods
     # take the family as a ``kind`` argument. ``kind`` is one of
-    # "flow-synonyms", "compartment-mappings", "units" — validated up front.
+    # "flow-synonyms", "compartment-mappings", "units", validated up front.
 
     def list_reference_data(self, kind: RefDataKind) -> list[dict]:
         """List reference-data sets of one ``kind`` (loaded, staged, or built-in).
@@ -2370,7 +2370,7 @@ class Client:
 
         Counts the distinct emission and resource flows at least one of the
         collection's methods resolves a factor for, with the same lookup
-        scoring uses. Distinct across methods — their factors overlap, so the
+        scoring uses. Distinct across methods: their factors overlap, so the
         per-method figures from :meth:`get_mapping_status` do not add up to
         this number.
         """

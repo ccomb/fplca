@@ -7,7 +7,7 @@ examples exercise real attribute access against the real ``volca.types``
 classes.
 
 Blocks whose first non-whitespace line starts with ``# no-test`` are
-skipped — used for the Quick start, which needs an actual engine via
+skipped: used for the Quick start, which needs an actual engine via
 :class:`volca.Server`.
 """
 
@@ -50,7 +50,7 @@ def test_all_runnable_blocks_execute(readme_namespace: dict) -> None:
     for i, block in enumerate(blocks, start=1):
         try:
             exec(compile(block, f"<README:block{i}>", "exec"), readme_namespace)
-        except Exception as exc:  # noqa: BLE001 — surface the offending block
+        except Exception as exc:  # noqa: BLE001, surface the offending block
             raise AssertionError(
                 f"README block #{i} failed to execute: {exc!r}\n"
                 f"--- block source ---\n{block}\n--- end ---"

@@ -45,7 +45,7 @@ def test_equality_across_construction_forms() -> None:
 
 def test_mode_json_serialises_as_string() -> None:
     """MatchMode inherits from str, so it must round-trip through json as the
-    bare wire value — not as ``"MatchMode.EXACT"`` or the enum repr."""
+    bare wire value, not as ``"MatchMode.EXACT"`` or the enum repr."""
     assert json.dumps(MatchMode.EXACT) == '"exact"'
     payload = dataclasses.asdict(ClassificationFilter("s", "v", "exact"))
     assert json.dumps(payload) == '{"system": "s", "value": "v", "mode": "exact"}'

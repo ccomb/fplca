@@ -38,7 +38,7 @@ def _minimal_lcia_result() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Pure helpers — no mocking required
+# Pure helpers: no mocking required
 # ---------------------------------------------------------------------------
 
 
@@ -89,7 +89,7 @@ class TestResolveWireName:
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher integration — uses mocked session
+# Dispatcher integration: uses mocked session
 # ---------------------------------------------------------------------------
 
 

@@ -92,7 +92,7 @@ def test_staged_leftover_goes_through_readiness_gate(client: Client):
     """An upload left staged by an earlier failed run must not be blind-loaded.
 
     Uploads register in the engine's database list immediately, before
-    finalize — so the name match finds them as unloaded. Loading one with
+    finalize, so the name match finds them as unloaded. Loading one with
     unresolved suppliers would silently produce a half-linked database.
     """
     client.list_databases.return_value = [

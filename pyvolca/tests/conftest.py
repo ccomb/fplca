@@ -150,7 +150,7 @@ def fixture_spec() -> dict[str, Any]:
 def mocked_client(fixture_spec) -> tuple[Client, MagicMock]:
     """A Client whose session is mocked out, preloaded with ``fixture_spec``.
 
-    Returns ``(client, session_mock)`` — tests assert on session calls
+    Returns ``(client, session_mock)``: tests assert on session calls
     to verify the dispatcher built the correct URL / method / params.
     """
     client = Client(base_url="http://test.local", db="testdb", password="secret")
@@ -207,7 +207,7 @@ def empty_envelope() -> Callable[..., dict]:
 def readme_namespace() -> dict[str, Any]:
     """A namespace pre-populated for README example tests.
 
-    Provides ``c`` — a mocked Client whose every public method returns a
+    Provides ``c``: a mocked Client whose every public method returns a
     realistic typed value built from the dataclasses in :mod:`volca.types`.
     The README executes against this without touching the network.
 
@@ -216,7 +216,7 @@ def readme_namespace() -> dict[str, Any]:
     every readme example to round-trip through ``_call``'s URL assembly.
     The point of the README test is to catch breakage of the *typed
     surface* (renamed methods, removed dataclass fields), not to retest
-    the dispatcher — that is covered by ``test_dispatch.py`` and
+    the dispatcher; that is covered by ``test_dispatch.py`` and
     ``test_drift.py``.
     """
     from unittest.mock import MagicMock
@@ -534,7 +534,7 @@ def readme_namespace() -> dict[str, Any]:
 def live_spec() -> dict[str, Any] | None:
     """The OpenAPI spec dumped from the currently-built engine binary.
 
-    Returns None if the binary isn't built — callers should skip their
+    Returns None if the binary isn't built; callers should skip their
     drift test rather than fail CI hard in that case.
     """
     # Walk up from pyvolca/tests/ to find the cabal dist-newstyle dir.
