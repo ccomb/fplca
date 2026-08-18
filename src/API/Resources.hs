@@ -45,7 +45,7 @@ import Network.HTTP.Types.Method (StdMethod (..))
 What belongs here is what an analyst does. That covers the analysis operations,
 and loading or unloading a database: those change which databases are in the
 working set rather than the data itself. It also covers editing the inventory
-of an activity — adjusting an imported dataset to the study at hand is analysis
+of an activity: adjusting an imported dataset to the study at hand is analysis
 work, done on a database of one's own, and the engine refuses it on the
 background data it reads from its configuration.
 
@@ -98,8 +98,8 @@ data ParamKind = Required | Optional
 "boolean", "array") so the MCP tool schema can emit it directly, and the
 OpenAPI enrichment reads it too.
 
-A 'Param' does not record /where/ the value rides — path capture, query
-parameter, or request body — which is why most of these descriptions never
+A 'Param' does not record /where/ the value rides (path capture, query
+parameter, or request body), which is why most of these descriptions never
 reach the published spec: the enrichment matches on the name against a route's
 query parameters, and a path capture is named by Servant while a body field is
 not a parameter at all. @test\/ResourcesDriftSpec.hs@ pins the whole list.
@@ -282,7 +282,7 @@ webUrlTip :: Text -> Text
 webUrlTip page =
     " The response includes a 'web_url' deep link to the "
         <> page
-        <> " page in the VoLCA web UI — render it as a clickable markdown \
+        <> " page in the VoLCA web UI: render it as a clickable markdown \
            \link when presenting results to a human."
 
 {- | Description of the resource operation.
@@ -294,44 +294,44 @@ are detailed and include usage hints.
 description :: Resource -> Text
 description r = case r of
     ListDatabases ->
-        "LCA / ACV — list all loaded LCA databases (Agribalyse, ecoinvent, …). \
+        "LCA / ACV: list all loaded LCA databases (Agribalyse, ecoinvent, …). \
         \Call this first to discover which databases are available before searching."
     LoadDatabase ->
-        "LCA / ACV — load a configured database into memory so it can be queried. \
+        "LCA / ACV: load a configured database into memory so it can be queried. \
         \Its declared dependencies are loaded first (needed for cross-database flow \
         \linking). A database must be loaded before search/score/impact tools can \
         \target it; use list_databases to see which are configured. No effect if it \
         \is already loaded."
     UnloadDatabase ->
-        "LCA / ACV — unload a database from memory to free RAM. The on-disk data is \
+        "LCA / ACV: unload a database from memory to free RAM. The on-disk data is \
         \kept and the database can be reloaded later with load_database. Refuses if \
-        \another loaded database still depends on it — unload the dependents first."
+        \another loaded database still depends on it: unload the dependents first."
     ListPresets ->
-        "LCA / ACV — list named classification filter presets configured in this \
+        "LCA / ACV: list named classification filter presets configured in this \
         \instance. Each preset bundles multiple (system, value, mode) classification \
         \filters under a human-readable label. Use the filter values from a preset as \
         \inputs to search_activities classification parameters."
     SearchActivities ->
-        "LCA / ACV — search for activities (processes) by name, geography, product, \
+        "LCA / ACV: search for activities (processes) by name, geography, product, \
         \classification, or preset. Returns a paginated list of matching activities \
         \with their process IDs. Entry point for any LCA/ACV question about a \
-        \specific product or process — food (yaourt, steak, pain, lait, fromage), \
+        \specific product or process: food (yaourt, steak, pain, lait, fromage), \
         \packaging (PET, verre, carton), matériaux, énergie, transport. Accepts \
         \non-technical synonyms: empreinte carbone, empreinte environnementale, \
         \impact environnemental, occupation des sols, surface agricole, prairie, \
         \pâturage, intrants, filière, chaîne amont."
     SearchFlows ->
-        "LCA / ACV — search for biosphere flows (emissions, resources) by name. \
+        "LCA / ACV: search for biosphere flows (emissions, resources) by name. \
         \Use this to locate specific substances (CO2, CH4, water, land occupation) \
         \before querying characterization factors or inventory contributions."
     GetActivity ->
-        "LCA / ACV — get detailed information about an activity: name, location, \
+        "LCA / ACV: get detailed information about an activity: name, location, \
         \exchanges, reference product, metadata. Use exchange_type / is_input / flow \
         \to filter exchanges and reduce response size."
     Aggregate ->
-        "LCA / ACV — aggregate exchanges, supply chain entries, or biosphere flows \
+        "LCA / ACV: aggregate exchanges, supply chain entries, or biosphere flows \
         \with SQL group-by-style filters. One primitive replaces ad-hoc decomposition \
-        \tools — express any 'how much X is in Y' question as one call. Also the \
+        \tools: express any 'how much X is in Y' question as one call. Also the \
         \right tool for 'combien de surface agricole / d'eau / d'énergie dans un \
         \produit ?' style questions via scope=biosphere or scope=supply_chain. \
         \Examples:\n\
@@ -346,42 +346,42 @@ description r = case r of
         \feeds another filtered product (electricity high→medium→low voltage), their \
         \sum double-counts the chain. scope=consumption has one row per scaled \
         \technosphere edge (product, supplier, consumer), so its sums are actual \
-        \consumption events; the default total is gross throughput — exclude \
+        \consumption events; the default total is gross throughput; exclude \
         \intra-family edges with filter_consumer_not to get the amount delivered \
         \outside the filtered family. Byproduct edges keep their negative sign.\n\
         \\n\
         \The filter_classification parameter accepts a list of strings in \"System=Value[:exact]\" form (default mode is 'contains')."
     GetSupplyChain ->
-        "LCA / ACV — get a flat list of all upstream activities in the supply chain \
+        "LCA / ACV: get a flat list of all upstream activities in the supply chain \
         \(chaîne amont, filière, intrants). The 'quantity' field is the cumulative \
         \scaled amount relative to the functional unit (scaling_factor × root \
         \reference product amount). To get the per-step yield ratio between two \
         \connected entries, divide the supplier's scaling_factor by the consumer's \
         \scaling_factor. Summing quantities across entries that feed each other \
-        \(electricity high→medium→low voltage) double-counts the chain — use \
+        \(electricity high→medium→low voltage) double-counts the chain, so use \
         \aggregate with scope=consumption for upstream totals."
     GetInventory ->
-        "LCA / ACV — compute the Life Cycle Inventory (LCI): biosphere flows \
+        "LCA / ACV: compute the Life Cycle Inventory (LCI): biosphere flows \
         \(emissions and resource extractions) for an activity's full supply chain. \
         \Returns statistics and top flows by quantity. Use this (not get_impacts) \
         \when the question targets raw physical flows rather than weighted scores: \
         \land / pasture occupation (m²·year), water withdrawal (m³), specific \
         \emissions (kg CO₂, kg CH₄, kg N), resource extraction."
     GetImpacts ->
-        "LCA / ACV — compute Life Cycle Impact Assessment (LCIA) scores for an \
+        "LCA / ACV: compute Life Cycle Impact Assessment (LCIA) scores for an \
         \activity. Returns the score, functional unit, and top contributing \
         \elementary flows. Answers 'empreinte carbone / environmental footprint' \
         \questions. Covers all LCIA categories: climate change, acidification, \
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
         \over web estimates for grounded, database-backed answers. Each \
-        \contributing flow carries 'match_kind' — how its factor was found, in \
+        \contributing flow carries 'match_kind': how its factor was found, in \
         \the rung names documented on explain_cf; null means the method's \
         \tables never walked this flow (it arrived from a dependency database), \
         \not that it is uncharacterized. Ask explain_cf for the full story on \
         \one flow."
             <> webUrlTip "impacts"
     ComputeSensitivity ->
-        "LCA / ACV — sensitivity analysis: sweep relative perturbations of \
+        "LCA / ACV: sensitivity analysis: sweep relative perturbations of \
         \technosphere coefficients A_ij and report the resulting impact for each. \
         \Each perturbation specifies (consumer, supplier, delta) where 'delta' is \
         \relative: A_ij is multiplied by (1+delta). delta=+0.05 → +5%; delta=-1 \
@@ -392,18 +392,18 @@ description r = case r of
         \factorization (~4 ms per perturbation). V1: root DB only."
             <> webUrlTip "sensitivity"
     ListMethods ->
-        "LCA / ACV — list all loaded LCIA methods (impact assessment methods like \
+        "LCA / ACV: list all loaded LCIA methods (impact assessment methods like \
         \climate change, acidification, eutrophication, land use, water scarcity)."
     GetFlowMapping ->
-        "LCA / ACV — get the mapping between a method's characterization factors \
+        "LCA / ACV: get the mapping between a method's characterization factors \
         \and database flows, showing match coverage."
     GetCharacterization ->
-        "LCA / ACV — look up characterization factors for a method matched against \
+        "LCA / ACV: look up characterization factors for a method matched against \
         \database flows. Without 'flow' filter, returns top factors by absolute \
         \value. With 'flow', searches by name. Shows CF value, direction, matched \
         \database flow, and match strategy."
     ExplainCF ->
-        "LCA / ACV — explain why one elementary flow scores with the \
+        "LCA / ACV: explain why one elementary flow scores with the \
         \characterization factor it does. Answers 'why this factor, and which \
         \line of the method was used?'. The 'explanation' field is a list of \
         \sentences written by the engine: relay them as they are rather than \
@@ -438,83 +438,83 @@ description r = case r of
         \emission must not borrow a surface-fate factor)."
             <> webUrlTip "explain-cf"
     GetContributingFlows ->
-        "LCA / ACV — identify which elementary flows (emissions/resources) \
+        "LCA / ACV: identify which elementary flows (emissions/resources) \
         \contribute most to a specific impact category. Answers 'which emissions \
-        \drive my climate change score?'. Each flow carries 'match_kind' — how \
+        \drive my climate change score?'. Each flow carries 'match_kind': how \
         \its factor was found, in the rung names documented on explain_cf; null \
         \means the method's tables never walked this flow (it arrived from a \
         \dependency database), not that it is uncharacterized. Ask explain_cf \
         \for the full story on one flow."
             <> webUrlTip "contributing-flows"
     GetContributingActivities ->
-        "LCA / ACV — identify which upstream activities contribute most to a \
+        "LCA / ACV: identify which upstream activities contribute most to a \
         \specific impact category. Answers 'which suppliers drive my climate change \
         \score?' Uses exact matrix-based computation, valid even for cyclic supply \
         \chains. Each contributing activity carries a 'web_url' deep link to its \
-        \page in the VoLCA web UI — render these as clickable markdown links when \
+        \page in the VoLCA web UI: render these as clickable markdown links when \
         \presenting results to a human so they can drill into a specific supplier."
     ListGeographies ->
-        "LCA / ACV — list all geography codes present in a database, with display \
+        "LCA / ACV: list all geography codes present in a database, with display \
         \names and parent regions. Use the 'geo' value as the geography filter in \
         \search_activities."
     ListClassifications ->
-        "LCA / ACV — list classification systems in a database. Without 'system': \
+        "LCA / ACV: list classification systems in a database. Without 'system': \
         \returns system names and activity counts only (lightweight). With 'system': \
         \returns all values for that system. Add 'filter' to narrow values by \
         \substring."
     GetPathTo ->
-        "LCA / ACV — find the shortest supply chain path from a process to the \
+        "LCA / ACV: find the shortest supply chain path from a process to the \
         \first upstream activity whose name matches a pattern. Each step includes \
         \cumulative_quantity, scaling_factor, and local_step_ratio (upstream ÷ \
         \downstream scaling factors). total_ratio is the product of all \
-        \local_step_ratio values — the end-to-end conversion factor."
+        \local_step_ratio values: the end-to-end conversion factor."
     GetConsumers ->
-        "LCA / ACV — find all activities that transitively consume (depend on) a \
+        "LCA / ACV: find all activities that transitively consume (depend on) a \
         \given supplier. Returns a flat list, each with a crDepth field: 1 = direct \
         \consumer, 2 = consumer of consumer, etc. Useful for tracing downstream \
-        \use of a raw material — e.g. finding transformed food products in \
+        \use of a raw material, e.g. finding transformed food products in \
         \Agribalyse that use a raw ingredient."
     CompareImpacts ->
-        "LCA / ACV audit — score the same logical activity on two (database, \
+        "LCA / ACV audit: score the same logical activity on two (database, \
         \method) pairs and return the per-impact-category delta plus a per-flow \
         \drill-down. Built for cross-database mapping audits: e.g. compare BAFU + \
         \EF3.1 vs SimaPro + EF3.1 to surface flows whose contributions diverge \
         \because of mapping gaps, not because of underlying chemistry. Headline \
-        \field is delta.relative_pct — the metric to drive down by adding \
+        \field is delta.relative_pct: the metric to drive down by adding \
         \synonym pairs to data/flows.csv or by regenerating the chem_synonyms \
         \snapshot."
     ScoreActivity ->
-        "LCA / ACV — compute the full LCIA panel + every configured scoring \
+        "LCA / ACV: compute the full LCIA panel + every configured scoring \
         \set for an activity in one call. Returns per-method impact scores, \
         \per-scoring-set aggregate scores, per-scoring-set indicator \
         \breakdown (one entry per scoring variable), display units, and a \
         \'web_url' to the matching view. Use this when you would otherwise \
-        \call get_impacts N times across every method of a collection — \
+        \call get_impacts N times across every method of a collection: \
         \replaces N round-trips with one batched solve. Discover available \
         \scoring sets with list_scoring_sets. Render the 'web_url' as a \
         \clickable markdown link when presenting results to a human."
     ScoreActivities ->
-        "LCA / ACV — rank N activities against one scoring set in one call. \
+        "LCA / ACV: rank N activities against one scoring set in one call. \
         \Returns a columnar JSON shape: {scoring_set, scoring_unit, \
         \functional_unit?, columns, rows, not_found, invalid}. 'columns' is the \
         \header (['name', 'process_id', 'web_url', 'total', <indicator keys...>]) \
-        \and 'rows' is a 2D array of scalars — one row per resolved activity. \
+        \and 'rows' is a 2D array of scalars: one row per resolved activity. \
         \Hoisting the constant metadata once and packing each activity as a flat \
         \array of scalars makes this shape ~6× smaller than a row-shaped JSON \
         \for batches of 24+ activities. The top-level 'functional_unit' is only \
         \emitted when every resolved row shares the same one; otherwise it is \
         \dropped and 'functional_unit' appears as a per-row column instead (the \
         \'columns' header reflects which shape was emitted). Per-method scores \
-        \are NOT included — call score_activity on a specific process_id for \
+        \are NOT included: call score_activity on a specific process_id for \
         \that drill-down. Unresolved process IDs land in not_found / invalid. \
         \\n\n\
         \The chosen scoring set must be unambiguous: pass scoring_sets: \
         \[\"<one>\"] when the collection has more than one scoring set \
         \configured. The 'web_url' column on each row is a deep link to the \
-        \activity's impacts page in the VoLCA web UI — render it as a clickable \
+        \activity's impacts page in the VoLCA web UI: render it as a clickable \
         \markdown link when presenting results to a human."
     ListScoringSets ->
-        "LCA / ACV — list formula-based scoring sets defined in loaded \
+        "LCA / ACV: list formula-based scoring sets defined in loaded \
         \method collections. A scoring set is a configured aggregation of \
         \LCIA category scores into one or more weighted/normalized 'score' \
         \values (e.g. an overall single score plus per-area-of-protection \
@@ -526,16 +526,16 @@ description r = case r of
         \formulas. Use the returned set names as keys when interpreting \
         \score_activity / score_activities responses."
     GetGapReport ->
-        "LCA / ACV — supplier-gap report of a database: every input demand \
+        "LCA / ACV: supplier-gap report of a database: every input demand \
         \still unsupplied after internal resolution and cross-database \
         \linking, aggregated per (product, location, unit) and ranked by \
         \demanding edges. Each gap carries the blocking reason, the number of \
         \consumer edges and distinct consumers, the total demanded amount, \
         \and the top consuming processes. Answers 'what is missing to switch \
-        \or complete this database's background dependency?' — typically read \
+        \or complete this database's background dependency?': typically read \
         \right after a relink."
     GetQualityReport ->
-        "LCA / ACV — dataset-soundness report of a database, for the people \
+        "LCA / ACV: dataset-soundness report of a database, for the people \
         \who build or repair one: the structural defects a score cannot \
         \reveal. All checks run on staged and loaded databases alike: \
         \entries without exactly one reference exchange, coproduct allocation \
@@ -544,9 +544,9 @@ description r = case r of
         \(same name, location and reference product), non-finite amounts or a \
         \zero reference amount, missing metadata (description, \
         \classification, location, units absent from the registry), \
-        \geography the source never declared — read off the dataset name \
+        \geography the source never declared, read off the dataset name \
         \(SimaPro writes 'Unspecified' in whole databases) or filled in by the \
-        \loader — stored \
+        \loader; stored \
         \amounts that disagree with the formulas documenting them \
         \(mathematicalRelation, checked at parse time), distinct names \
         \that merge under SimaPro's 80-character truncation, exchanges \
@@ -560,29 +560,29 @@ description r = case r of
         \percentages outside the 0-100% range. Each \
         \finding carries a severity (danger, warning, info), the activity it \
         \was found on, and a readable detail. Answers 'is this dataset well \
-        \formed?' — the complement of the supplier-gap report, which answers \
+        \formed?': the complement of the supplier-gap report, which answers \
         \'what is this database missing?'"
     GetComputedQualityReport ->
-        "LCA / ACV — computed-checks report of a LOADED database: what the \
+        "LCA / ACV: computed-checks report of a LOADED database: what the \
         \data computes, judged against the catalogue's own norms. Scores \
         \every (activity, product) entry against one method collection (the \
         \single loaded one, or the 'collection' parameter) and reports: \
         \per-category score outliers, judged on a log scale within \
-        \(category, reference-unit) groups by median/MAD — a mg-read-as-kg \
+        \(category, reference-unit) groups by median/MAD: a mg-read-as-kg \
         \unit slip lands three orders of magnitude out; entries whose every \
         \category score is zero (empty or uncharacterized inventory); and \
-        \negative category scores (info — legitimate where avoided-production \
+        \negative category scores (info: legitimate where avoided-production \
         \credits or waste treatment dominate). Complements get_quality_report, \
         \which checks what the database STORES and runs on staged databases \
         \too; this one needs the matrices and a loaded method collection. \
         \Same finding shape: severity, the entry, a readable detail."
     GetCoverageReport ->
-        "LCA / ACV — characterization-coverage report of a database against the \
+        "LCA / ACV: characterization-coverage report of a database against the \
         \loaded LCIA method collections, for the people who maintain databases. \
         \Surfaces the flows a method scores ONLY through a name bridge: VoLCA \
         \matches a factor to a flow that carries a different name for the same \
         \substance (via synonym or CAS number), so the flow is characterized \
-        \here — but a tool that matches factors by their exact name has no such \
+        \here, but a tool that matches factors by their exact name has no such \
         \bridge and scores it as zero, silently. Each \
         \bridged flow is grouped under the name the method itself uses (its \
         \rename target). One entry per loaded collection, so two method versions \
@@ -590,12 +590,12 @@ description r = case r of
         \collection. Answers 'which of this database's flow names would an \
         \exact-name tool fail to characterize?'"
     EditExchanges ->
-        "LCA / ACV — change what one activity consumes and emits, keeping the \
+        "LCA / ACV: change what one activity consumes and emits, keeping the \
         \activity itself. The only tool that writes data. Use it to adjust an \
         \imported dataset to the study at hand: drop a substance the scope \
         \excludes, correct an amount, add a supplier the dataset is missing. \
-        \Everything the edit does not name stays as it is — classification, \
-        \synonyms, parameters, pedigree, coproducts — which is why this exists \
+        \Everything the edit does not name stays as it is (classification, \
+        \synonyms, parameters, pedigree, coproducts), which is why this exists \
         \rather than rewriting the activity. Only the inventory side is \
         \addressable: an input by its provider's process_id, a waste output by \
         \its treatment's process_id, a biosphere line by its flow id (from \
@@ -677,7 +677,7 @@ pExcludeLongTerm =
         "boolean"
         Optional
         "When true, drop delayed long-term (> 100 yr) emissions before \
-        \characterization — the score is computed as if those emissions were \
+        \characterization: the score is computed as if those emissions were \
         \out of scope. Long-term flows are emissions (never resources), so \
         \regionalized water/land categories are unaffected. Default false \
         \(keep them, per the ecoinvent/EF convention)."
@@ -685,11 +685,11 @@ pExcludeLongTerm =
 {- | The 'scoring_sets' parameter, shared by 'score_activity' and
 'score_activities' but with slightly different semantics:
 
-  * 'score_activity' (single activity) — when supplied, restricts the
+  * 'score_activity' (single activity): when supplied, restricts the
     response's scoringResults / scoringUnits / scoringIndicators to
     these scoring set names. Omitted or empty keeps every set
     configured on the collection.
-  * 'score_activities' (batch) — picks the single scoring set the
+  * 'score_activities' (batch): picks the single scoring set the
     columnar response is projected against (one unit, one column list).
     Pass exactly one name in the array. When omitted and the collection
     has a single scoring set configured, that one is auto-picked; with
@@ -721,7 +721,7 @@ pSummaryOnly =
         Optional
         "When true, score_activities replaces the per-indicator columns with \
         \a single 'dominant_indicator' column whose cells are objects \
-        \{key, share_pct} (e.g. {\"key\": \"ldu\", \"share_pct\": 82.3}) — \
+        \{key, share_pct} (e.g. {\"key\": \"ldu\", \"share_pct\": 82.3}): \
         \the indicator with the largest absolute share of each activity's \
         \total. Use this when ranking large batches before drilling into a \
         \single PID with score_activity. Default false."
@@ -739,7 +739,7 @@ params r = case r of
         , Param "geo" "string" Optional "Geography/location filter (e.g. 'FR', 'DE', 'GLO')"
         , Param "product" "string" Optional "Product name filter"
         , Param "exact" "boolean" Optional "If true, name and geo must match exactly (case-insensitive equality) instead of substring search"
-        , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expands to its bundled filters. Can be combined with explicit classification filters."
+        , Param "preset" "string" Optional "Name of a classification preset (from list_presets): expands to its bundled filters. Can be combined with explicit classification filters."
         , Param "classification" "string" Optional "Classification system name to filter by (e.g. 'ISIC rev.4 ecoinvent', 'CPC'). Use list_classifications to see available systems."
         , Param "classification_value" "string" Optional "Value within the classification system to match"
         , Param "classification_match" "string" Optional "Match mode: \"equals\" (case-insensitive equality) or \"contains\" (substring, default)"
@@ -761,16 +761,16 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , Param "scope" "string" Required "direct | supply_chain | biosphere | consumption"
-        , Param "is_input" "boolean" Optional "Only for scope=direct — true=inputs only, false=outputs only"
-        , Param "max_depth" "integer" Optional "Only for scope=supply_chain — max hops from the root activity"
+        , Param "is_input" "boolean" Optional "Only for scope=direct: true=inputs only, false=outputs only"
+        , Param "max_depth" "integer" Optional "Only for scope=supply_chain: max hops from the root activity"
         , Param "filter_name" "string" Optional "Case-insensitive substring on flow/activity name"
         , Param "filter_name_not" "string" Optional "Comma-separated substring exclude list"
         , Param "filter_unit" "string" Optional "Exact unit name"
-        , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expanded and merged into filter_classification."
+        , Param "preset" "string" Optional "Name of a classification preset (from list_presets): expanded and merged into filter_classification."
         , Param "filter_classification" "array" Optional "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode"
-        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption — filter by supplier activity name"
-        , Param "filter_consumer" "string" Optional "Only for scope=consumption — case-insensitive substring on the consuming activity's name"
-        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption — comma-separated consumer-name exclude list (each item is a substring; a name containing a comma cannot be expressed)"
+        , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption: filter by supplier activity name"
+        , Param "filter_consumer" "string" Optional "Only for scope=consumption: case-insensitive substring on the consuming activity's name"
+        , Param "filter_consumer_not" "string" Optional "Only for scope=consumption: comma-separated consumer-name exclude list (each item is a substring; a name containing a comma cannot be expressed)"
         , Param "filter_is_reference" "boolean" Optional "Filter by reference-product flag (typically for outputs)"
         , Param "group_by" "string" Optional "name | flow_id | name_prefix | unit | classification.<system> | location | target_name | consumer_name"
         , Param "aggregate" "string" Optional "sum_quantity | count | share (default: sum_quantity)"
@@ -783,7 +783,7 @@ params r = case r of
         , pLimit "Max results (default 100)"
         , Param "min_quantity" "number" Optional "Min scaled quantity threshold"
         , Param "max_depth" "integer" Optional "Max depth from root (1 = direct inputs only)"
-        , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expands to its bundled filters. Unioned with any explicit classification / classification_value / classification_mode parameters."
+        , Param "preset" "string" Optional "Name of a classification preset (from list_presets): expands to its bundled filters. Unioned with any explicit classification / classification_value / classification_mode parameters."
         , Param "classification" "string" Optional "Classification system name (e.g. 'Category', 'Category type')"
         , Param "classification_value" "string" Optional "Value within the classification system"
         , Param "classification_match" "string" Optional "Match mode: \"exact\" (case-insensitive equality) or \"contains\" (substring, default)"
@@ -881,7 +881,7 @@ params r = case r of
         , Param "name" "string" Optional "Filter by name (case-insensitive substring)"
         , Param "location" "string" Optional "Filter by geography/location (case-insensitive substring, e.g. 'FR', 'DE')"
         , Param "product" "string" Optional "Filter by product name (case-insensitive substring)"
-        , Param "preset" "string" Optional "Name of a classification preset (from list_presets) — expands to its bundled filters"
+        , Param "preset" "string" Optional "Name of a classification preset (from list_presets): expands to its bundled filters"
         , Param "classification" "string" Optional "Classification system name (e.g. 'ISIC rev.4 ecoinvent')"
         , Param "classification_value" "string" Optional "Classification value substring to match"
         , pLimit "Max results (default 1000)"
