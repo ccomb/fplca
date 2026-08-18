@@ -36,6 +36,7 @@ dev = ["pytest", "pyright==1.1.411"]
 
 [project.urls]
 Documentation = "https://volca.run/docs/python/"
+Changelog = "https://github.com/ccomb/volca/blob/main/pyvolca/CHANGELOG.md"
 Repository = "https://github.com/ccomb/volca/tree/main/pyvolca"
 Issues = "https://github.com/ccomb/volca/issues"
 

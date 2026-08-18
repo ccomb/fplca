@@ -4,6 +4,7 @@ Python client for [VoLCA](https://github.com/ccomb/volca) — Life Cycle Assessm
 
 > **Full guide and tutorials**: <https://volca.run/docs/python/>
 > **Issues / source**: <https://github.com/ccomb/volca>
+> **Changelog**: <https://github.com/ccomb/volca/blob/main/pyvolca/CHANGELOG.md>
 
 ## Install
 
