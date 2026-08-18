@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Pre-release gate for pyvolca — run before tagging ``pyvolca-v<version>``.
+"""Pre-release gate for pyvolca, run before tagging ``pyvolca-v<version>``.
 
 Answers, locally and automatically, "can I release pyvolca right now?". It
 checks that the version is new, the changelog records it, the tree is clean,
-and — the decisive one — that the engine release this pyvolca requires (its
+and, the decisive one, that the engine release this pyvolca requires (its
 wire floor, from :data:`volca._compat.MIN_ENGINE_HINT`) is already tagged. The
 last point is what would have answered "no, not yet" when the engine carrying
 the wire hadn't shipped.
@@ -116,7 +116,7 @@ def check_engine_released() -> Row:
         newest = ".".join(map(str, max(tags)))
         return PASS, "engine released", f"v{newest} >= v{MIN_ENGINE_HINT}"
     return FAIL, "engine released", (
-        f"needs engine >= v{MIN_ENGINE_HINT}; no such tag yet — release the engine first"
+        f"needs engine >= v{MIN_ENGINE_HINT}; no such tag yet: release the engine first"
     )
 
 
@@ -135,14 +135,14 @@ def check_tests_and_build(no_tests: bool, v: str) -> list[Row]:
     if _have("pytest"):
         rows.append(_leg("pytest", [sys.executable, "-m", "pytest", "-q"]))
     else:
-        rows.append((WARN, "pytest", "not installed — `pip install pytest`"))
+        rows.append((WARN, "pytest", "not installed, run `pip install pytest`"))
     if _have("build"):
         rows.append(_leg("python -m build", [sys.executable, "-m", "build"]))
     else:
-        rows.append((WARN, "python -m build", "not installed — `pip install build`"))
+        rows.append((WARN, "python -m build", "not installed, run `pip install build`"))
     artifacts = sorted((ROOT / "dist").glob(f"pyvolca-{v}*"))
     if not _have("twine"):
-        rows.append((WARN, "twine check", "not installed — `pip install twine`"))
+        rows.append((WARN, "twine check", "not installed, run `pip install twine`"))
     elif not artifacts:
         rows.append((WARN, "twine check", "no built artifacts for this version in dist/"))
     else:
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         print("FAIL  could not read version from pyproject.toml")
         return 1
 
-    print(f"pyvolca release precheck — version {v}\n")
+    print(f"pyvolca release precheck, version {v}\n")
     rows: list[Row] = [
         check_tag_absent(v),
         check_newer_than_pypi(v),
@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {status}  {name.ljust(width)}  {detail}")
 
     if any(s == FAIL for s, _, _ in rows):
-        print("\nNOT READY — fix the FAILs above before tagging.")
+        print("\nNOT READY: fix the FAILs above before tagging.")
         return 1
     print(f"\nREADY. To publish pyvolca {v}:")
     print(f"    git tag pyvolca-v{v}")

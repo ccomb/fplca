@@ -1,7 +1,7 @@
 """Offline tests for the database upload + staged-database lifecycle.
 
 These endpoints (upload / setup / set-data-path / finalize / delete) carry no
-operationId — they bypass the OpenAPI dispatcher and build their URLs
+operationId: they bypass the OpenAPI dispatcher and build their URLs
 directly. The tests mock ``Client._session`` and assert on the wire shape
 (URL, query params, streamed body, in-band-failure surfacing).
 """

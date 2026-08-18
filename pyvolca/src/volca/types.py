@@ -53,14 +53,14 @@ class SearchResults(Generic[T]):
 
     Carries one page of results plus pagination metadata. Iterating walks
     every page lazily, fetching subsequent pages on demand via the
-    ``_fetch`` callback. ``len()`` returns ``total`` — the server-reported
+    ``_fetch`` callback. ``len()`` returns ``total``: the server-reported
     count across *all* pages, not just the items currently held.
 
     Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
     ``search_time_ms``) mirror the server type exactly. Page-style helpers
     (``page_size``, ``page(n)``) are client conveniences computed from them.
 
-    Pages fetched during iteration are cached on the instance — re-iterating
+    Pages fetched during iteration are cached on the instance, so re-iterating
     replays the cache without hitting the server. Wrap in ``list(...)`` to
     materialise eagerly if you prefer.
     """
@@ -96,7 +96,7 @@ class SearchResults(Generic[T]):
         """Index or slice the *current* page only.
 
         Use ``list(sr)`` first when you need indexing/slicing across all
-        pages — ``__getitem__`` deliberately stays local to avoid hidden
+        pages; ``__getitem__`` deliberately stays local to avoid hidden
         round trips.
         """
         return self.results[i]
@@ -109,7 +109,7 @@ class SearchResults(Generic[T]):
         iterations replay from the cache.
 
         Raises :class:`RuntimeError` if the server returns ``hasMore=True``
-        with no items — that means the pagination contract is broken and
+        with no items: that means the pagination contract is broken and
         silently stopping would let callers consume an incomplete result
         set without ever learning the engine misbehaved.
         """
@@ -126,7 +126,7 @@ class SearchResults(Generic[T]):
             if not items:
                 raise RuntimeError(
                     f"Server returned hasMore=True with no items at offset={offset}, "
-                    f"limit={limit}. Pagination contract broken — refusing to truncate "
+                    f"limit={limit}. Pagination contract broken, refusing to truncate "
                     "silently. Report this to the engine team."
                 )
             self._fetched.extend(items)
@@ -147,7 +147,7 @@ class SearchResults(Generic[T]):
             raise ValueError(f"page must be >= 1, got {n}")
         if self._fetch is None or self._parse is None:
             raise RuntimeError(
-                "SearchResults has no fetcher attached — cannot fetch additional pages. "
+                "SearchResults has no fetcher attached, cannot fetch additional pages. "
                 "This SearchResults was likely constructed in-memory (e.g. a test fixture)."
             )
         ps = page_size if page_size is not None else self.limit
@@ -168,7 +168,7 @@ class SearchResults(Generic[T]):
         Wire keys: ``results``, ``total``, ``offset``, ``limit``, ``hasMore``,
         ``searchTimeMs``. ``fetch`` is the callback used by iteration and
         ``page(n)`` to retrieve further pages. Omit only when the envelope
-        is a single-page snapshot (``hasMore=False``) — otherwise iteration
+        is a single-page snapshot (``hasMore=False``); otherwise iteration
         would silently truncate and the constructor raises.
 
         When ``fetch`` is provided (the production path), every wire key is
@@ -220,10 +220,10 @@ class SearchResults(Generic[T]):
 class DatabaseStatus(_StrEnum):
     """Lifecycle state of a database in the engine.
 
-    ``UNLOADED`` — declared in the engine config but not yet loaded.
-    ``PARTIALLY_LINKED`` — loaded, but some cross-DB flow references could
+    ``UNLOADED``: declared in the engine config but not yet loaded.
+    ``PARTIALLY_LINKED``: loaded, but some cross-DB flow references could
     not be resolved against currently-loaded dependencies.
-    ``LOADED`` — loaded and fully linked.
+    ``LOADED``: loaded and fully linked.
 
     Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
     serialises as the bare wire string.
@@ -239,7 +239,7 @@ class DatabaseInfo(FromJson):
     """One entry of :meth:`Client.list_databases`.
 
     ``depends_on`` names the databases this one links against for cross-DB
-    flow resolution — mirrors the ``dependsOn`` list surfaced by the relink
+    flow resolution, mirroring the ``dependsOn`` list surfaced by the relink
     endpoint. Derived from the engine's declared topology, not runtime state.
     """
 
@@ -341,7 +341,7 @@ class LCIABatchResult:
     engine TOML (PEF, ECS, or any named set).
 
     ``scoring_indicators`` gives the per-variable normalized-weighted
-    breakdown of each scoring set — already multiplied by the set's
+    breakdown of each scoring set, already multiplied by the set's
     ``displayMultiplier`` and expressed in its display unit (see
     :class:`ScoringIndicator`). Lets callers render per-indicator charts
     alongside the aggregate ``scoring_results``.
@@ -381,7 +381,7 @@ class PerturbedResult:
     The engine flattens an ``Either`` on the wire: a success carries
     ``impact`` and ``delta_impact`` (with ``error`` None), a failure carries
     ``error`` (with the other two None). ``perturbation`` echoes the request
-    entry — including its ``label`` if one was supplied — so results correlate
+    entry (including its ``label`` if one was supplied), so results correlate
     without an out-of-band index.
     """
 
@@ -466,7 +466,7 @@ class BatchScores:
 class MatchMode(_StrEnum):
     """How a :class:`ClassificationFilter` value is compared against the entry.
 
-    ``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
+    ``EXACT``: case-insensitive equality. ``CONTAINS``: case-insensitive
     substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
     and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
     string ``"exact"`` / ``"contains"``.
@@ -520,7 +520,7 @@ class ClassificationFilter:
 
 @dataclass
 class Activity(FromJson):
-    """One activity in a database — the row returned by /activities search.
+    """One activity in a database: the row returned by /activities search.
 
     ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
     and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
@@ -530,10 +530,10 @@ class Activity(FromJson):
     ``product_amount`` and ``product_unit`` describe the functional unit
     (typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
     geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
-    its own — compose a label from ``activity_name`` + ``product_name``.
+    its own; compose a label from ``activity_name`` + ``product_name``.
 
     ``allocation_percent`` is this product's share (0..100) of the parent
-    activity's exchanges in a multi-output (allocated) process — e.g. a
+    activity's exchanges in a multi-output (allocated) process, e.g. a
     cheese activity that also yields whey, cream and permeate gives each
     product its own share, summing to ~100. It is ``None`` for single-output
     processes. ``allocation_formula`` carries the raw symbolic formula when
@@ -590,7 +590,7 @@ class SupplyChainEntry(FromJson):
     ``quantity`` is the cumulative amount of this activity's reference
     product consumed per functional unit of the root activity, in ``unit``.
     ``scaling_factor`` is the multiplier the solver applied to this
-    activity to produce ``quantity`` — i.e. ``quantity = ref_output * scaling_factor``.
+    activity to produce ``quantity``, i.e. ``quantity = ref_output * scaling_factor``.
     ``classifications`` mirrors the producing activity's classifications
     (ISIC, CPC, Category, …) so callers can filter by taxonomy without a
     second :meth:`Client.get_activity` round trip.
@@ -690,7 +690,7 @@ class SupplyChain:
     ``total_activities`` is the unfiltered upstream count; ``filtered_activities``
     is what remains after the server applies ``classification_filters`` /
     ``min_quantity`` / ``preset``. ``entries`` is the slice the server actually
-    returned — it may be shorter than ``filtered_activities`` when ``limit``
+    returned; it may be shorter than ``filtered_activities`` when ``limit``
     truncates. Use :attr:`has_more` to detect that case rather than comparing
     lengths by hand.
     """
@@ -724,11 +724,11 @@ class SupplyChain:
 
 @dataclass
 class ConsumersResponse:
-    """Reverse supply chain (/consumers) — paginated consumer list plus
+    """Reverse supply chain (/consumers): paginated consumer list plus
     optional edge set. Mirrors :class:`SupplyChain` so callers have a
     uniform {entries, edges} shape in both traversal directions.
 
-    ``consumers`` is a :class:`SearchResults[ConsumerResult]` — iterate it
+    ``consumers`` is a :class:`SearchResults[ConsumerResult]`: iterate it
     to walk every consumer across all pages. ``edges`` is populated only
     when ``include_edges=True``.
     """
@@ -745,7 +745,7 @@ class ConsumersResponse:
         """Parse the /consumers wire envelope.
 
         ``fetch`` is a page fetcher returning the inner ``results`` envelope
-        for ``(offset, limit)`` — used by ``SearchResults`` for lazy
+        for ``(offset, limit)``, used by ``SearchResults`` for lazy
         iteration. The client wires this so users get pagination for free;
         callers building ConsumersResponse manually (e.g. tests) can omit
         it and the resulting SearchResults is "detached" (one page only).
@@ -791,7 +791,7 @@ def _exchange_comment(ewu: dict | None, inner: dict) -> str | None:
 class Compartment:
     """Biosphere compartment (medium + optional subcompartment).
 
-    Frozen so it's hashable and immutable — callers can use it as a dict key
+    Frozen so it's hashable and immutable, so callers can use it as a dict key
     when grouping flows by compartment, and accidental mutation is rejected.
     """
 
@@ -808,10 +808,10 @@ class Compartment:
 class TechRole(_StrEnum):
     """Role a technosphere exchange plays within its host activity.
 
-    ``REFERENCE_PRODUCT`` — the activity's reference output product.
-    ``COPRODUCT`` — a secondary output (in allocated activities).
-    ``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
-    ``INPUT`` — any other technosphere input.
+    ``REFERENCE_PRODUCT``: the activity's reference output product.
+    ``COPRODUCT``: a secondary output (in allocated activities).
+    ``REFERENCE_INPUT``: the reference input (in waste-treatment activities).
+    ``INPUT``: any other technosphere input.
     """
 
     REFERENCE_PRODUCT = "ReferenceProduct"
@@ -830,7 +830,7 @@ def _role_is_reference(role: TechRole) -> bool:
 
 @dataclass
 class TechnosphereExchange:
-    """An exchange with another activity. Carries no compartment — the
+    """An exchange with another activity. Carries no compartment: the
     producing activity's classifications describe the product taxonomy.
     """
 
@@ -860,7 +860,7 @@ class TechnosphereExchange:
         """True for reference roles (``REFERENCE_PRODUCT`` / ``REFERENCE_INPUT``).
 
         The reference exchange is the one that defines the activity's
-        functional unit — the basis the LCA result is normalised to.
+        functional unit, the basis the LCA result is normalised to.
         """
         return _role_is_reference(self.role)
 
@@ -882,8 +882,8 @@ class TechnosphereExchange:
 class BioDirection(_StrEnum):
     """Direction of a biosphere exchange.
 
-    ``RESOURCE`` — extraction from the environment (input).
-    ``EMISSION`` — release to the environment (output).
+    ``RESOURCE``: extraction from the environment (input).
+    ``EMISSION``: release to the environment (output).
 
     Lookup is case-insensitive (``BioDirection("emission")`` works): the
     engine reads the wire value that way, so the client should not be
@@ -931,7 +931,7 @@ class BiosphereExchange:
 
     @property
     def is_reference(self) -> bool:
-        """Always False — biosphere exchanges cannot be reference flows.
+        """Always False: biosphere exchanges cannot be reference flows.
 
         The reference flow defines the functional unit and is always a
         technosphere product (see :class:`TechnosphereExchange.is_reference`).
@@ -957,8 +957,8 @@ class WasteExchange:
 
     Shares the technosphere matrix with product flows but tracked as its own
     kind so callers can tell a "waste sent to landfill" output apart from a
-    product input. Orphan waste (no linked treatment) contributes zero impact
-    — same cut-off semantics as an orphan technosphere input.
+    product input. Orphan waste (no linked treatment) contributes zero impact,
+    the same cut-off semantics as an orphan technosphere input.
     """
 
     flow_name: str
@@ -975,7 +975,7 @@ class WasteExchange:
 
     @property
     def is_reference(self) -> bool:
-        """Always False — waste flows never define an activity's functional unit.
+        """Always False: waste flows never define an activity's functional unit.
 
         Treatment activities have a ``ReferenceInput`` instead, exposed
         via :class:`TechnosphereExchange`.
@@ -1124,7 +1124,7 @@ class ActivityDetail:
 
     @property
     def inputs(self) -> list[Exchange]:
-        """Every input exchange — technosphere inputs and biosphere resources.
+        """Every input exchange: technosphere inputs and biosphere resources.
 
         Equivalent to filtering :attr:`exchanges` by ``e.is_input``. Mixed
         kinds: callers needing only one variant should use
@@ -1134,7 +1134,7 @@ class ActivityDetail:
 
     @property
     def outputs(self) -> list[Exchange]:
-        """Every output exchange — products and biosphere emissions.
+        """Every output exchange: products and biosphere emissions.
 
         Includes the reference product, coproducts (in allocated
         activities), and all biosphere emissions.
@@ -1160,8 +1160,8 @@ class ActivityDetail:
 
         A multi-output process splits the parent activity's burden across its
         co-products; every :attr:`all_products` entry carries its share. This
-        returns the share of *this* process — the entry whose ``process_id``
-        matches — and ``None`` for single-output processes.
+        returns the share of *this* process (the entry whose ``process_id``
+        matches), and ``None`` for single-output processes.
         """
         return next(
             (p.allocation_percent for p in self.all_products
@@ -1189,9 +1189,9 @@ class ActivityDetail:
 class AggregateScope(_StrEnum):
     """What the ``/aggregate`` primitive groups over.
 
-    ``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
-    upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
-    biosphere flows in the supply chain. ``CONSUMPTION`` — every scaled
+    ``DIRECT``: direct exchanges of the activity. ``SUPPLY_CHAIN``: the
+    upstream activities reachable via cumulative flow. ``BIOSPHERE``: only
+    biosphere flows in the supply chain. ``CONSUMPTION``: every scaled
     technosphere edge (who consumes what, in scaled units); the scope that
     answers "total X consumed upstream" without double counting, via
     ``filter_consumer_not``.
@@ -1206,8 +1206,8 @@ class AggregateScope(_StrEnum):
 class AggregateOp(_StrEnum):
     """How values are reduced within a bucket.
 
-    ``SUM_QUANTITY`` — sum of quantities (default). ``COUNT`` — number of
-    matching entries. ``SHARE`` — each bucket's percentage of the filtered
+    ``SUM_QUANTITY``: sum of quantities (default). ``COUNT``: number of
+    matching entries. ``SHARE``: each bucket's percentage of the filtered
     total (0..100).
     """
 
@@ -1260,7 +1260,7 @@ class Substitution:
     """Replace one supplier with another in the upstream supply chain.
 
     All fields are process_ids. ``consumer`` identifies which downstream
-    consumer's input to rewrite, scoping the swap to one edge — the same
+    consumer's input to rewrite, scoping the swap to one edge: the same
     upstream supplier can be replaced by different alternatives in different
     parts of the tree. Omit it (leave ``None``) to apply the swap globally,
     replacing the supplier on every consumer at once.
@@ -1289,8 +1289,8 @@ class Substitution:
 class Method(FromJson):
     """One LCIA method, returned by :meth:`Client.list_methods`.
 
-    Pass ``id`` — or ``name``, which the client resolves against the loaded
-    methods — wherever a ``method_id`` is asked for. ``collection`` is the
+    Pass ``id`` (or ``name``, which the client resolves against the loaded
+    methods) wherever a ``method_id`` is asked for. ``collection`` is the
     parent method collection (e.g. ``"ef-31"``); the client reads it off the
     resolved method, so it is worth passing to :meth:`Client.get_impacts` /
     :meth:`Client.get_impacts_batch` only to pin one of several loaded.
@@ -1388,7 +1388,7 @@ class FlowMappingEntry(FromJson):
     """One DB biosphere flow and the CF (if any) assigned to it.
 
     ``cf_value`` is ``None`` when this DB flow has no characterization factor
-    in the method — that flow contributes 0 to the score for the method.
+    in the method: that flow contributes 0 to the score for the method.
     ``match_strategy`` records how the mapping was resolved (``"uuid"``,
     ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
     """
@@ -1606,7 +1606,7 @@ class ActivityContribution(FromJson):
 class ContributingFlows:
     """Top elementary flows driving an LCIA score.
 
-    Note: the engine does not report a total — ``top_flows`` is whatever the
+    Note: the engine does not report a total: ``top_flows`` is whatever the
     server returned under ``limit``, but pyvolca cannot tell whether more
     flows were truncated. If you need exhaustive coverage, pass a generous
     ``limit`` and inspect ``share_pct`` totals.
@@ -1726,7 +1726,7 @@ class InventoryStatistics:
 class InventoryResult:
     """Life-cycle inventory of an activity: cumulative biosphere flows.
 
-    Returned by :meth:`Client.get_inventory`. The engine does not paginate —
+    Returned by :meth:`Client.get_inventory`. The engine does not paginate:
     ``flows`` is the full inventory (filtered by ``flow=`` substring when
     requested). ``statistics`` carries the per-direction roll-ups and the
     most-populated categories.
@@ -1759,9 +1759,9 @@ class InventoryResult:
 class FlowDetail:
     """Detail of one flow, returned by :meth:`Client.get_flow`.
 
-    ``flow`` is the raw flow record — a tagged union (technosphere product,
+    ``flow`` is the raw flow record: a tagged union (technosphere product,
     biosphere flow, waste flow, or unresolved) whose shape depends on its
-    kind — kept as a dict rather than forced into one dataclass.
+    kind, kept as a dict rather than forced into one dataclass.
     ``usage_count`` is how many exchanges reference it.
     """
 
@@ -1801,8 +1801,8 @@ class MethodFactor(FromJson):
 
     ``direction`` is the flow direction the factor applies to; ``value`` is the
     factor in the method's unit per the flow's unit. A method routinely holds
-    several factors sharing one ``flow_name`` — the same substance emitted to
-    air vs. water, or one regionalized factor per ``location`` — so
+    several factors sharing one ``flow_name`` (the same substance emitted to
+    air vs. water, or one regionalized factor per ``location``), so
     ``compartment``, ``location`` and ``unit`` are what tell them apart.
     Each is ``None`` when the source method does not carry that axis, or
     when the engine predates these fields.
@@ -1878,7 +1878,7 @@ class CollectionCoverage(FromJson):
     Returned by :meth:`Client.get_collection_coverage`.
     ``characterized_flows`` counts distinct emission and resource flows that
     at least one of the collection's methods resolves a factor for, with the
-    same lookup scoring uses — a figure no sum over the per-method
+    same lookup scoring uses, a figure no sum over the per-method
     :class:`MappingStatus` values can recover, since the methods overlap.
     """
 
@@ -1892,7 +1892,7 @@ class CollectionCoverage(FromJson):
 # Authoring: what you send when you write an activity
 # ---------------------------------------------------------------------------
 #
-# These are the only input types in this module — everything above describes a
+# These are the only input types in this module; everything above describes a
 # response. They mirror what the engine accepts and validate what it can check
 # locally, so an obviously malformed line fails before a round trip rather than
 # after one.
@@ -1903,7 +1903,7 @@ class TechInput:
     """One product an activity consumes, named by the process that supplies it.
 
     ``provider`` is a ``process_id`` (``activityUUID_productUUID``, or a bare
-    activity UUID when that activity has a single product) — the same address
+    activity UUID when that activity has a single product), the same address
     every read endpoint hands out. The flow follows from the supplier, so it is
     never stated separately. ``unit`` defaults to the supplier's own reference
     unit; another one is fine as long as it converts.
@@ -1931,8 +1931,8 @@ class BioExchange:
 
     Name the flow one way or the other, never both: ``flow`` addresses one the
     database already has, and ``name`` + ``compartment`` introduce a new one.
-    Use the two constructors rather than the fields —
-    :meth:`existing` and :meth:`introducing` — which is why passing both or
+    Use the two constructors rather than the fields,
+    :meth:`existing` and :meth:`introducing`, which is why passing both or
     neither raises here instead of at the server.
 
     A biosphere amount is never converted, so an exchange on an existing flow
@@ -2052,7 +2052,7 @@ class WasteOutput:
 
 @dataclass(frozen=True)
 class ActivityInput:
-    """An activity as you write it — the body of :meth:`Client.create_activities`.
+    """An activity as you write it: the body of :meth:`Client.create_activities`.
 
     The inventory is three lists rather than one, so a field that means
     something on a supplier link cannot be sent on an emission.
@@ -2097,7 +2097,7 @@ class ExchangeSelector:
     is no kind for the reference product or a coproduct: changing those changes
     what the activity *is*, which is not what an inventory edit does.
 
-    A selector may name several lines, and then it applies to all of them —
+    A selector may name several lines, and then it applies to all of them;
     :meth:`Client.edit_exchanges` reports how many. Naming none is refused by
     the engine rather than passed off as done.
     """

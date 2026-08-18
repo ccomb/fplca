@@ -11,7 +11,7 @@ Usage:
     python scripts/gen_api_md.py --write    # splice them into README.md in place
     python scripts/gen_api_md.py --check    # exit non-zero if README.md is stale
 
-Stdlib only — pyvolca's only dependency stays ``requests``.
+Stdlib only: pyvolca's only dependency stays ``requests``.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _first_line(doc: str | None) -> str:
 def _format_type(t: object) -> str:
     """Render a type annotation for a markdown table cell."""
     if isinstance(t, type):
-        # Bare class — render its bare name (`str`, not `<class 'str'>`).
+        # Bare class: render its bare name (`str`, not `<class 'str'>`).
         return t.__name__
     s = str(t)
     s = s.replace("typing.", "")
@@ -127,7 +127,7 @@ def _public_members(cls: type) -> tuple[list[tuple[str, str, str]], list[tuple[s
     properties: (name, full docstring)
 
     Full docstrings (not just first line) so the rendered reference carries
-    Args / Returns / Raises blocks — the original purpose of the docstring.
+    Args / Returns / Raises blocks, the original purpose of the docstring.
     """
     methods: list[tuple[str, str, str]] = []
     properties: list[tuple[str, str]] = []
@@ -150,7 +150,7 @@ def _public_members(cls: type) -> tuple[list[tuple[str, str, str]], list[tuple[s
 
 
 def _render_properties(properties: list[tuple[str, str]], buf: io.StringIO) -> None:
-    """Append the Properties section — shared by class and dataclass rendering."""
+    """Append the Properties section, shared by class and dataclass rendering."""
     if not properties:
         return
     buf.write("#### Properties\n\n")
@@ -165,7 +165,7 @@ def render_class(cls: type, buf: io.StringIO) -> None:
     Methods and properties get one h4 subsection each, with the full
     docstring rendered as markdown body (so multi-paragraph Args/Returns
     blocks survive into the site reference). Aliasing methods to inline
-    bullets — the original layout — truncated to the first line and lost
+    bullets (the original layout) truncated to the first line and lost
     every parameter description; this layout keeps them.
     """
     buf.write(f"### `{cls.__name__}`\n\n")
@@ -209,7 +209,7 @@ def render_dataclass(cls: type, buf: io.StringIO) -> None:
             elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
                 default = f"{f.default_factory.__name__}()"  # type: ignore[union-attr]
             else:
-                default = "—"
+                default = "_required_"
             buf.write(f"| `{f.name}` | `{type_str}` | {default} |\n")
         buf.write("\n")
     # Dataclasses carry computed @property members too (e.g.
@@ -250,7 +250,7 @@ def render_alias(name: str, alias: object, buf: io.StringIO) -> None:
 def categorize(name: str) -> tuple[str, object]:
     """Return ``(kind, value)`` for a public name in volca."""
     value = getattr(volca, name)
-    # Check typing constructs (Union, etc.) first — they pass `callable()`
+    # Check typing constructs (Union, etc.) first; they pass `callable()`
     # but are not functions in any user-meaningful sense.
     if typing.get_origin(value) is typing.Union or hasattr(value, "__args__"):
         return "alias", value
@@ -323,8 +323,8 @@ def render_reference() -> str:
 def render_compatibility() -> str:
     """Render the generated compatibility line from ``volca._compat``.
 
-    Its own README block so the one code-derived fact — which wire this build
-    speaks and the minimum engine it needs — can't drift from the policy in
+    Its own README block so the one code-derived fact (which wire this build
+    speaks and the minimum engine it needs) can't drift from the policy in
     :mod:`volca._compat`. The static history table beside it is hand-written.
     """
     from importlib.metadata import version
@@ -337,7 +337,7 @@ def render_compatibility() -> str:
         else f"formats **{_compat.REQUIRED_WIRE} to {_compat.KNOWN_WIRE}**"
     )
     return (
-        "_Generated from `volca._compat` — run "
+        "_Generated from `volca._compat`: run "
         "`python scripts/gen_api_md.py` to regenerate._\n\n"
         f"This build of **pyvolca {version('pyvolca')}** speaks wire "
         f"{wires} and requires a VoLCA engine "
@@ -399,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     if ns.check:
         if updated != current:
             sys.stderr.write(
-                "README.md generated blocks are stale — run "
+                "README.md generated blocks are stale; run "
                 "`python scripts/gen_api_md.py --write` and commit the result.\n"
             )
             return 1

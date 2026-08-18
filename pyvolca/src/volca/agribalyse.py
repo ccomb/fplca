@@ -3,7 +3,7 @@
 Every helper here is database-specific (text matching on flow names, regex
 on pfaDescription, pattern detection from input shapes). The volca core
 engine knows nothing about any of this. To add Ginko/WFLDB support, create
-sibling modules — do not factor.
+sibling modules; do not factor.
 
 The split:
 - Pure helpers (no Client) operate on already-loaded data: ``parse_allocation``,
@@ -132,7 +132,7 @@ def parse_allocation(description: list[str]) -> Allocation | None:
             continue
         factors[clean] = round(float(pct) / 100.0, 4)
 
-    # A "100%" single factor is essentially no allocation — skip.
+    # A "100%" single factor is essentially no allocation, so skip.
     if not factors or (len(factors) == 1 and list(factors.values())[0] >= 0.99):
         return None
     return Allocation(method=method, factors=factors)
@@ -174,7 +174,7 @@ def classify_exchange(exchange: Exchange) -> str:
     cleaning, infrastructure, raw_material, other.
 
     Used as a building block for ad-hoc inspection. ``decompose`` does not
-    call this — it issues targeted ``/aggregate`` queries instead.
+    call this: it issues targeted ``/aggregate`` queries instead.
     """
     name = (exchange.flow_name or "").lower()
     unit = (exchange.unit or "").lower()
@@ -406,7 +406,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
         raw_name = raw.groups[0].key if raw.groups else None
         raw_kg = raw.groups[0].quantity if raw.groups else 0.0
 
-    # Technosphere outputs only — the /aggregate primitive lumps biosphere
+    # Technosphere outputs only: the /aggregate primitive lumps biosphere
     # emissions (NOx, water, heat waste…) into "direct" exchanges, so walk
     # the typed exchange list and discriminate by class instead.
     grouped: dict[tuple[str, str], float] = {}
@@ -421,7 +421,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
     co_products = [(name, qty, unit) for (name, unit), qty in grouped.items()]
 
     # Agribalyse uses allocation-based modelling, so co-products rarely
-    # appear as technosphere outputs — the engine records each co-product's
+    # appear as technosphere outputs; the engine records each co-product's
     # allocation share on all_products instead. Prefer that authoritative
     # split (allocation_percent); the description text is rounded and can
     # drift from the applied factor, so it's only a fallback for older
@@ -480,7 +480,7 @@ def is_allocated(activity: ActivityDetail) -> bool:
     Prefers the structured allocation shares on ``all_products``
     (:attr:`ActivityDetail.is_allocated`), falling back to an allocation block
     in the description text for older Agribalyse databases that carry no
-    structured shares — the same precedence :func:`decompose` uses to
+    structured shares, the same precedence :func:`decompose` uses to
     enumerate co-products.
     """
     return activity.is_allocated or parse_allocation(activity.description) is not None

@@ -4,7 +4,7 @@ Public surface: :func:`download`. ``Server`` calls ``installed_binary`` and
 ``installed_data_dir`` to pick up artefacts when no explicit binary path is
 configured.
 
-The install layout is shared with ``install.sh`` and ``install.ps1`` —
+The install layout is shared with ``install.sh`` and ``install.ps1``:
 running any of the three installers populates the same root::
 
     <platformdirs.user_data_dir("volca", appauthor=False)>/
@@ -70,7 +70,7 @@ class Installed:
 
 
 def _platform_slug() -> tuple[str, str]:
-    """Return (slug, asset_ext) — e.g. ('linux-amd64', 'tar.gz')."""
+    """Return (slug, asset_ext), e.g. ('linux-amd64', 'tar.gz')."""
     sysname = platform.system()
     machine = platform.machine().lower()
     if sysname == "Linux":
@@ -102,7 +102,7 @@ def _install_root() -> Path:
     """Resolve the volca install root.
 
     ``$VOLCA_HOME`` overrides everything (full path). Otherwise falls back
-    to ``platformdirs.user_data_dir("volca", appauthor=False)`` — same root
+    to ``platformdirs.user_data_dir("volca", appauthor=False)``, the same root
     as install.sh / install.ps1.
     """
     if home := os.environ.get("VOLCA_HOME"):
@@ -143,8 +143,8 @@ def installed_binary(version: Optional[str] = None) -> Optional[Path]:
     """Return the binary path for ``version`` if extracted, else ``None``.
 
     With ``version=None``, prefers the version recorded in ``latest.json``
-    by the most recent :func:`download` call. If that file is missing — e.g.
-    the user ran install.sh / install.ps1, which don't write a manifest —
+    by the most recent :func:`download` call. If that file is missing (e.g.
+    the user ran install.sh / install.ps1, which don't write a manifest),
     falls back to scanning the install root for the highest-semver dir that
     contains the binary.
     """
@@ -187,7 +187,7 @@ def installed_data_dir() -> Optional[Path]:
 
 
 def _http_get(url: str, accept: str = "application/octet-stream") -> bytes:
-    """Plain GET. No auth — releases are public. Token lifted from env if
+    """Plain GET. No auth: releases are public. Token lifted from env if
     present (avoids public-API rate limits in CI loops)."""
     req = urllib.request.Request(url, headers={"Accept": accept})
     token = os.environ.get("GITHUB_TOKEN")
@@ -261,7 +261,7 @@ def _exclusive_lock(path: Path) -> Iterator[None]:
         if sys.platform == "win32":
             # LK_LOCK retries every 1s up to 10× then raises. Wrap in our own
             # loop so we wait indefinitely without surfacing OSError to the
-            # caller — this lock is intentionally blocking.
+            # caller; this lock is intentionally blocking.
             while True:
                 try:
                     msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
@@ -391,8 +391,8 @@ def _download_locked(
     _link_current(data_dir, root / "data" / "current")
 
     # Manifest lets Server.start() find the binary without knowing which
-    # version was downloaded. install.sh / install.ps1 don't write this file
-    # — installed_binary() falls back to a semver scan in that case.
+    # version was downloaded. install.sh / install.ps1 don't write this file,
+    # so installed_binary() falls back to a semver scan in that case.
     _manifest_path().write_text(
         json.dumps(
             {"version": plain_version, "data_version": data_version, "binary": str(bin_path)},

@@ -1,7 +1,7 @@
 """Pure-logic tests for volca._download.
 
 Network-dependent paths (the actual download() entry point) are not
-exercised here — they're covered by the install.sh integration tests
+exercised here: they're covered by the install.sh integration tests
 and by manual verification after a real release.
 """
 
@@ -164,7 +164,7 @@ def test_installed_binary_via_manifest(tmp_path: Path):
 
 
 def test_installed_binary_scan_fallback_when_no_manifest(tmp_path: Path):
-    """install.sh / install.ps1 don't write latest.json — fall back to a
+    """install.sh / install.ps1 don't write latest.json, so fall back to a
     semver scan and pick the highest version that contains the binary."""
     for ver in ("0.6.0", "0.7.0", "0.10.1"):
         d = tmp_path / ver

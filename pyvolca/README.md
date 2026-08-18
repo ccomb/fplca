@@ -1,9 +1,10 @@
 # pyvolca
 
-Python client for [VoLCA](https://github.com/ccomb/volca) — Life Cycle Assessment engine over Agribalyse and ecoinvent.
+Python client for [VoLCA](https://github.com/ccomb/volca), the Life Cycle Assessment engine over Agribalyse and ecoinvent.
 
-> **Full guide and tutorials**: <https://volca.run/docs/python/>
-> **Issues / source**: <https://github.com/ccomb/volca>
+> **Full guide and tutorials**: <https://volca.run/docs/python/>  
+> **Issues / source**: <https://github.com/ccomb/volca>  
+> **Changelog**: <https://github.com/ccomb/volca/blob/main/pyvolca/CHANGELOG.md>
 
 ## Install
 
@@ -15,7 +16,7 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 ## Compatibility
 
-pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine — too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
+pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine: too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
 | pyvolca | wire | compatible engine |
 |---------|------|-------------------|
@@ -26,7 +27,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 <!-- BEGIN: compatibility -->
 
-_Generated from `volca._compat` — run `python scripts/gen_api_md.py` to regenerate._
+_Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
 This build of **pyvolca 0.9.2** speaks wire formats **2 to 8** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
@@ -44,7 +45,7 @@ Most users should start with one of these two modes:
 For a hosted server, the minimal connection looks like this:
 
 ```python
-# no-test  — replace with your real hosted VoLCA server URL and credentials.
+# no-test: replace with your real hosted VoLCA server URL and credentials.
 from volca import Client
 
 c = Client(
@@ -59,7 +60,7 @@ print(c.list_databases())
 Use `download()` + `Server` only when you deliberately want to download and launch the engine from Python:
 
 ```python
-# no-test  — downloads the engine and needs a real engine config/database.
+# no-test: downloads the engine and needs a real engine config/database.
 from volca import Client, Server, download
 
 installed = download()  # cached after the first run
@@ -88,7 +89,7 @@ If you ran `install.sh` or `install.ps1` first, `Server()` finds the installed e
 ## Local managed-server quick start
 
 ```python
-# no-test  — needs a real engine; the snippets below run against a mocked Client.
+# no-test: needs a real engine; the snippets below run against a mocked Client.
 from volca import Client, Server
 
 with Server(config="volca.toml") as srv:
@@ -100,7 +101,7 @@ with Server(config="volca.toml") as srv:
 
 This example starts a local engine process from Python. `Server` reads `port` and `password` from the TOML config. The engine self-stops after `idle_timeout` seconds without traffic (default 5 min).
 
-> Examples below assume `c` is a `Client` instance — construct it with the snippet above, or against an already-running server: `c = Client(base_url="http://localhost:8080", db="agribalyse-3.2", password="…")`.
+> Examples below assume `c` is a `Client` instance: construct it with the snippet above, or against an already-running server: `c = Client(base_url="http://localhost:8080", db="agribalyse-3.2", password="…")`.
 
 ## Discover what's available
 
@@ -127,7 +128,7 @@ for a in plants:
     print(f"{a.process_id}  {a.activity_name} → {a.product_name} ({a.location})")
 ```
 
-`search_activities` returns a `SearchResults[Activity]` — a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together — `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` is a process — an `(activity, product)` pair — carrying `process_id`, `activity_name`, `location`, `product_name`, `product_amount`, `product_unit`. A process has no name of its own; compose a label from `activity_name` + `product_name`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
+`search_activities` returns a `SearchResults[Activity]`: a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together; `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` is a process, an `(activity, product)` pair, carrying `process_id`, `activity_name`, `location`, `product_name`, `product_amount`, `product_unit`. A process has no name of its own; compose a label from `activity_name` + `product_name`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
 
 ## Inspect an activity
 
@@ -139,11 +140,11 @@ for ex in detail.technosphere_inputs:
     print(f"{ex.amount:.4g} {ex.unit} of {ex.flow_name} ← {ex.target_activity_name}")
 ```
 
-`get_activity` returns a typed `ActivityDetail`. Use `.inputs` / `.outputs` / `.technosphere_inputs` to filter the exchanges; each entry is an `Exchange` — either a `TechnosphereExchange` (an input or output of an intermediate product) or a `BiosphereExchange` (resource extracted or pollutant emitted).
+`get_activity` returns a typed `ActivityDetail`. Use `.inputs` / `.outputs` / `.technosphere_inputs` to filter the exchanges; each entry is an `Exchange`: either a `TechnosphereExchange` (an input or output of an intermediate product) or a `BiosphereExchange` (resource extracted or pollutant emitted).
 
 ## Trace the upstream supply chain
 
-> *What's the full upstream chain — every ingredient, recursively, down to the farm or mine?*
+> *What's the full upstream chain: every ingredient, recursively, down to the farm or mine?*
 
 ```python
 chain = c.get_supply_chain(plants[0].process_id, name="at farm", limit=20)
@@ -152,7 +153,7 @@ for entry in chain.entries[:5]:
     print(f"  {entry.quantity:.4g} {entry.unit} of {entry.activity_name} ({entry.location})")
 ```
 
-For *"how exactly does this root reach a specific upstream supplier?"*, use `get_path_to(process_id, target=...)` — returns a `PathResult` of ordered `PathStep`s root → target with cumulative quantities and step ratios.
+For *"how exactly does this root reach a specific upstream supplier?"*, use `get_path_to(process_id, target=...)`, which returns a `PathResult` of ordered `PathStep`s root → target with cumulative quantities and step ratios.
 
 ## Find downstream consumers
 
@@ -164,7 +165,7 @@ for cons in result.consumers:
     print(f"  depth={cons.depth}  {cons.activity_name} ({cons.location})")
 ```
 
-Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[ConsumerResult]` — same paginated iterator semantics as `search_activities`. When `include_edges=True`, `result.edges` carries the technosphere edges so callers can reconstruct supplier→consumer paths without a second round trip. Pass `classification_filters=[...]` to restrict to a category.
+Returns a `ConsumersResponse` whose `consumers` field is a `SearchResults[ConsumerResult]`, with the same paginated iterator semantics as `search_activities`. When `include_edges=True`, `result.edges` carries the technosphere edges so callers can reconstruct supplier→consumer paths without a second round trip. Pass `classification_filters=[...]` to restrict to a category.
 
 ## Compute the life-cycle inventory
 
@@ -179,7 +180,7 @@ print(f"  {inv.statistics.emission_quantity:.4g} emissions / "
 # Substitutions are accepted: c.get_inventory(pid, substitutions=[...])
 ```
 
-`InventoryResult` carries the typed `flows` list (one `InventoryFlow` per row) plus a `statistics` roll-up with per-direction totals and `top_categories`. The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead — same data, summarized.
+`InventoryResult` carries the typed `flows` list (one `InventoryFlow` per row) plus a `statistics` roll-up with per-direction totals and `top_categories`. The inventory is what every LCIA method runs on top of. If you only need *grouped* views (by name, location, classification, etc.), reach for `c.aggregate(scope="biosphere", group_by=...)` instead: same data, summarized.
 
 ## Compute environmental impacts (LCIA)
 
@@ -196,7 +197,7 @@ for c_flow in score.top_contributors:
 
 `LCIAResult` carries the score, unit, optional `normalized_score` / `weighted_score` (in Pt), and the top contributing biosphere flows with their `share_pct`.
 
-> *Compute every impact category in one go — climate, water, land use, …*
+> *Compute every impact category in one go: climate, water, land use, …*
 
 ```python
 batch = c.get_impacts_batch(plants[0].process_id)
@@ -214,7 +215,7 @@ There is no method to name here, so the collection has to come from somewhere: w
 
 > *I have a climate-change score. Which biosphere flows account for it? Which upstream activities?*
 
-`get_impacts(...).top_contributors` already returns the top biosphere flows for a single LCIA call. For a deeper or differently-bounded view — and for the *activity* attribution view — use the standalone drill-down endpoints:
+`get_impacts(...).top_contributors` already returns the top biosphere flows for a single LCIA call. For a deeper or differently-bounded view (and for the *activity* attribution view) use the standalone drill-down endpoints:
 
 ```python
 flows = c.get_contributing_flows(
@@ -234,7 +235,7 @@ for a in acts.activities:
     print(f"  {a.share_pct:.1f}%  {a.activity_name} ({a.location})")
 ```
 
-`ContributingFlows.top_flows` and `ContributingActivities.activities` are typed lists; both carriers also expose `method`, `unit`, and `total_score`. Note: the engine doesn't report a total count for these endpoints, so neither result derives a `has_more` flag — pass a generous `limit` and inspect the `share_pct` totals if you need exhaustive coverage.
+`ContributingFlows.top_flows` and `ContributingActivities.activities` are typed lists; both carriers also expose `method`, `unit`, and `total_score`. Note: the engine doesn't report a total count for these endpoints, so neither result derives a `has_more` flag; pass a generous `limit` and inspect the `share_pct` totals if you need exhaustive coverage.
 
 > *Which characterization factors does a method apply, and to which database flows?*
 
@@ -278,7 +279,7 @@ A client-side merge over two `aggregate` calls. Groups by `flow_id` (default) so
 
 ## Run counterfactuals (substitutions)
 
-> *What if I used organic wheat instead of conventional? Recycled aluminium instead of virgin? — without reloading the database.*
+> *What if I used organic wheat instead of conventional? Recycled aluminium instead of virgin? All without reloading the database.*
 
 The engine applies a Sherman–Morrison rank-1 update, so substitutions are fast regardless of database size. Works on `get_supply_chain`, `get_inventory`, and `get_impacts`.
 
@@ -291,11 +292,11 @@ subs = [{
 score = c.get_impacts(plants[0].process_id, method_id="Climate change", substitutions=subs)
 ```
 
-Multiple substitutions chain in one call — the `consumer` field disambiguates *where* in the chain each swap applies.
+Multiple substitutions chain in one call; the `consumer` field disambiguates *where* in the chain each swap applies.
 
 ## Handle errors
 
-> *The activity doesn't exist, the engine is down, or the request is malformed — what do I catch?*
+> *The activity doesn't exist, the engine is down, or the request is malformed: what do I catch?*
 
 ```python
 from volca import VoLCAError
@@ -310,14 +311,14 @@ except VoLCAError as e:
 
 ## Switch databases
 
-> *I want to run the same workflow against ecoinvent instead of Agribalyse — without rebuilding the client.*
+> *I want to run the same workflow against ecoinvent instead of Agribalyse, without rebuilding the client.*
 
 ```python
 ei = c.use("ecoinvent-3.10")
 ei_results = ei.search_activities(name="electricity, high voltage")
 ```
 
-`Client.use(db_name)` returns a new `Client` targeting a different database while sharing the HTTP session and dispatch table — no spec re-fetch.
+`Client.use(db_name)` returns a new `Client` targeting a different database while sharing the HTTP session and dispatch table, with no spec re-fetch.
 
 ## Refresh IDE autocomplete after upgrading the engine
 
@@ -341,17 +342,17 @@ _This reference is generated from the installed package. Run `python scripts/gen
 
 How values are reduced within a bucket.
 
-``SUM_QUANTITY`` — sum of quantities (default). ``COUNT`` — number of
-matching entries. ``SHARE`` — each bucket's percentage of the filtered
+``SUM_QUANTITY``: sum of quantities (default). ``COUNT``: number of
+matching entries. ``SHARE``: each bucket's percentage of the filtered
 total (0..100).
 
 ### `AggregateScope`
 
 What the ``/aggregate`` primitive groups over.
 
-``DIRECT`` — direct exchanges of the activity. ``SUPPLY_CHAIN`` — the
-upstream activities reachable via cumulative flow. ``BIOSPHERE`` — only
-biosphere flows in the supply chain. ``CONSUMPTION`` — every scaled
+``DIRECT``: direct exchanges of the activity. ``SUPPLY_CHAIN``: the
+upstream activities reachable via cumulative flow. ``BIOSPHERE``: only
+biosphere flows in the supply chain. ``CONSUMPTION``: every scaled
 technosphere edge (who consumes what, in scaled units); the scope that
 answers "total X consumed upstream" without double counting, via
 ``filter_consumer_not``.
@@ -360,8 +361,8 @@ answers "total X consumed upstream" without double counting, via
 
 Direction of a biosphere exchange.
 
-``RESOURCE`` — extraction from the environment (input).
-``EMISSION`` — release to the environment (output).
+``RESOURCE``: extraction from the environment (input).
+``EMISSION``: release to the environment (output).
 
 Lookup is case-insensitive (``BioDirection("emission")`` works): the
 engine reads the wire value that way, so the client should not be
@@ -379,7 +380,7 @@ Usage::
 
 Substitutions can be passed to ``get_supply_chain``, ``get_inventory``,
 and ``get_impacts`` to compute results with a different upstream
-supplier — fast::
+supplier, fast::
 
     subs = [{"from": old_pid, "to": new_pid, "consumer": consumer_pid}]
     result = c.get_impacts(pid, method_id=mid, substitutions=subs)
@@ -404,7 +405,7 @@ Args:
         / ``BIOSPHERE`` / ``CONSUMPTION``) or the equivalent wire
         string. Strings are accepted for one-liner ergonomics but
         bypass static checking. ``CONSUMPTION`` rows are scaled
-        technosphere edges — use it for "total X consumed upstream"
+        technosphere edges: use it for "total X consumed upstream"
         questions. Net electricity without grid double counting::
 
             aggregate(pid, "consumption", filter_name="electricity",
@@ -420,7 +421,7 @@ Args:
         any of these substrings (list or comma-separated string).
         Items always split on commas on the wire, so a name that
         itself contains a comma ("electricity production, hard
-        coal") becomes two independent substrings — use a
+        coal") becomes two independent substrings; use a
         comma-free fragment of the name instead.
     group_by: omit for a single-bucket result (just the totals).
         Supported keys: ``"name"``, ``"flow_id"``, ``"name_prefix"``,
@@ -428,7 +429,7 @@ Args:
         ``"consumer_name"`` (``CONSUMPTION`` scope),
         ``"classification.<system>"``.
     aggregate: :class:`AggregateOp` member or wire string
-        (``"sum_quantity"`` — default, ``"count"``, or ``"share"``).
+        (``"sum_quantity"`` by default, ``"count"``, or ``"share"``).
 
 ##### `Client.call(operation_id: str, **kwargs) -> Any`
 
@@ -446,7 +447,7 @@ Each perturbation is a dict
 ``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
 ``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
 so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
-plus one :class:`PerturbedResult` per perturbation — each carrying
+plus one :class:`PerturbedResult` per perturbation, each carrying
 either the perturbed impact and its delta, or an ``error`` string when
 that perturbation could not be resolved. ``method_id`` takes a method
 name as well as a UUID, and ``collection`` is read off the resolved
@@ -466,7 +467,7 @@ engine reports ``success=false``.
 Write new activities into a database that can hold them.
 
 Each activity's ``process_id`` is minted by the engine from its name,
-location, product name and product unit — you do not choose it — and
+location, product name and product unit (you do not choose it), and
 comes back in ``written``. Writing the same activity twice is therefore
 a conflict, not a second row; use :meth:`replace_activity` to correct
 one that is already there.
@@ -490,7 +491,7 @@ misspelled database name).
 
 ##### `Client.delete_activities(*, name: str = '', location: str = '', product: str = '', classifications: list[dict | tuple] | None = None, exact: bool = False, keep: list[str] | None = None, extra: list[str] | None = None, ids: list[str] | None = None, db_name: str | None = None) -> dict`
 
-Delete activities selected by filter — or exactly the ``ids`` list.
+Delete activities selected by filter, or exactly the ``ids`` list.
 
 Builds a ``DeleteSelectionRequest``: the filter fields select the whole
 matching set, ``keep`` spares matched process ids, and ``extra`` adds
@@ -499,10 +500,10 @@ ones the filter missed. ``classifications`` is a list of
 tuples.
 
 ``ids`` names the selection verbatim instead of filtering; the filter
-arguments (and ``exact``) must then stay unset — the two modes are
+arguments (and ``exact``) must then stay unset: the two modes are
 exclusive, mirroring the engine. Needs an engine speaking wire
 revision 3 (>= v0.9.3): an older one would silently drop the unknown
-``ids`` key and read the request as an empty filter — "everything" —
+``ids`` key and read the request as an empty filter ("everything"),
 so pyvolca refuses to send it rather than let the engine guess.
 
 Returns the ``DeleteSelectionResponse`` dict
@@ -536,7 +537,7 @@ Change what one activity consumes and emits, keeping the activity.
 
 This reaches what :meth:`replace_activity` cannot: an activity that came
 in from a database file. Its identity was minted by whichever parser
-read it, so no description addresses it — and a description could not
+read it, so no description addresses it, and a description could not
 carry back its classification, synonyms, parameters, pedigree or
 coproducts anyway. Here you name only the lines that change, and
 everything else stays as it was.
@@ -552,7 +553,7 @@ back per selector, in the order you stated them::
     {"removed": [2], "amountsSet": [], "added": 1,
      "transient": False, "warnings": [...]}
 
-Only a database of your own accepts edits — copy a configured one first.
+Only a database of your own accepts edits: copy a configured one first.
 
 Needs an engine speaking wire revision 7.
 
@@ -563,12 +564,12 @@ Idempotently make the archive at ``source`` a loaded database.
 The one-call form of the upload lifecycle: match by display name
 (default: the file's stem), upload only when absent, finalize the
 staged copy, load if unloaded. Returns the slug every later call
-targets — run it at the top of a script and it converges on the same
+targets: run it at the top of a script and it converges on the same
 loaded database every time instead of re-uploading. A match that is
-already loaded — even partially linked — is left untouched.
+already loaded, even partially linked, is left untouched.
 
 A staged copy that is not ready to finalize raises VoLCAError naming
-the blocker (missing suppliers, no activities parsed) — fix it with
+the blocker (missing suppliers, no activities parsed); fix it with
 :meth:`add_dependency` or :meth:`set_data_path`, then
 :meth:`finalize_database`. The gate also holds on re-runs: an upload
 left staged by an earlier failed run goes through the same readiness
@@ -587,7 +588,7 @@ rungs the cascade walked before the one that answered.
 
 Export a loaded database, returning the serialized bytes.
 
-``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway`` —
+``fmt`` is one of ``simapro|ecospold1|ecospold2|ilcd|brightway``,
 validated client-side; an unknown value raises VoLCAError before any
 request. Single-file formats carry their bytes directly; EcoSpold 2 /
 ILCD multi-file trees come back zipped.
@@ -602,9 +603,9 @@ warnings arrive in the ``X-Volca-Export-Warnings`` response header
 Export a loaded method collection, returning the serialized bytes.
 
 ``fmt`` names the target format: ``simapro`` (SimaPro method CSV),
-``csv`` (columnar CSV — one column per impact category, the
+``csv`` (columnar CSV, one column per impact category, the
 spreadsheet view), ``openlca`` (a zip of openLCA JSON-LD impact
-categories), or ``ilcd`` (a zip of an ILCD LCIA-method package —
+categories), or ``ilcd`` (a zip of an ILCD LCIA-method package,
 one method dataset per impact category plus its flow datasets).
 Projection warnings (anything the format cannot
 carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
@@ -645,7 +646,7 @@ How much of a database a whole method collection characterizes.
 
 Counts the distinct emission and resource flows at least one of the
 collection's methods resolves a factor for, with the same lookup
-scoring uses. Distinct across methods — their factors overlap, so the
+scoring uses. Distinct across methods: their factors overlap, so the
 per-method figures from :meth:`get_mapping_status` do not add up to
 this number.
 
@@ -658,7 +659,7 @@ Args:
     classification_filters: ClassificationFilter entries restricting
         the results. Multiple filters are AND-combined by the server.
         Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
-    sort: Sort key — ``"name"``, ``"location"``, ``"product"``,
+    sort: Sort key: ``"name"``, ``"location"``, ``"product"``,
         ``"amount"``, or ``"unit"``. Default orders by depth.
     order: ``"desc"`` to reverse; ascending otherwise.
     include_edges: When True, the response carries every technosphere
@@ -716,7 +717,7 @@ Use :meth:`get_impacts_batch` to retrieve every category in a method
 collection at once (and any configured scoring sets).
 
 Args:
-    method_id: A method UUID, or the method's name ("Water use") —
+    method_id: A method UUID, or the method's name ("Water use");
         a name is resolved against the engine's loaded methods.
     collection: Method collection name. Left out, it is read off the
         resolved method, so the caller needs to know only the method.
@@ -760,7 +761,7 @@ for grouped views.
 Args:
     flow: Substring filter on flow name.
     limit: Cap on returned flow rows. (Server returns full inventory
-        otherwise — the engine doesn't paginate this endpoint.)
+        otherwise; the engine doesn't paginate this endpoint.)
     substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
 
 ##### `Client.get_mapping_status(method_id: str, db_name: str | None = None) -> MappingStatus`
@@ -797,7 +798,7 @@ Setup status of a staged or loaded database (``DatabaseSetupInfo``).
 Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
 and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
 (declared deps), ``dataPath`` / ``availablePaths`` (the selected data
-file and the alternatives — see :meth:`set_data_path`), ``completeness``.
+file and the alternatives, see :meth:`set_data_path`), ``completeness``.
 
 ##### `Client.get_stats()`
 
@@ -810,7 +811,7 @@ Keys are already snake_case on the wire, so this returns the raw dict.
 Get the flat supply chain of an activity.
 
 Returns a :class:`SupplyChain`. Check ``result.has_more`` to detect
-when ``limit`` truncated ``entries`` below ``filtered_activities`` —
+when ``limit`` truncated ``entries`` below ``filtered_activities``:
 further downstream analysis on a truncated chain would be wrong
 without flagging the gap.
 
@@ -819,7 +820,7 @@ Args:
     classification_filters: Restrict entries to those matching any
         of the given ClassificationFilter triples. Multiple filters
         are AND-combined by the server.
-    sort: Sort key — ``"name"``, ``"location"``, ``"unit"``,
+    sort: Sort key: ``"name"``, ``"location"``, ``"unit"``,
         ``"depth"``, ``"consumers"``, or ``"amount"``. Default
         orders by descending absolute quantity.
     order: ``"desc"`` to reverse; ascending otherwise.
@@ -827,7 +828,7 @@ Args:
         the scaling vector is recomputed with the substituted
         suppliers. Accepts :class:`Substitution` (preferred) or the
         legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
-        is optional — omit it for a global swap.
+        is optional: omit it for a global swap.
 
 ##### `Client.get_synonym_groups(name: str) -> list[list[str]]`
 
@@ -837,7 +838,7 @@ Return the synonym groups of a flow-synonyms set (lists of aliases).
 
 Fetch the recursive activity tree used by the analysis SPA.
 
-``/tree`` has no operationId in the OpenAPI spec — it's kept for the
+``/tree`` has no operationId in the OpenAPI spec; it's kept for the
 SPA's lazy-expanding graph widget and intentionally not exposed as
 a Resource. Included here as a direct HTTP call for scripts that
 need the same shape.
@@ -846,7 +847,7 @@ need the same shape.
 
 Return server build metadata: version, git hash/tag, build target.
 
-Uses a direct HTTP call — ``/api/v1/version`` has no operationId
+Uses a direct HTTP call: ``/api/v1/version`` has no operationId
 since it predates the Resources ADT.
 
 ##### `Client.list_classifications()`
@@ -854,7 +855,7 @@ since it predates the Resources ADT.
 List classification systems and their values for the current database.
 
 ``ClassificationSystem.activity_count`` tells how widely each system
-is populated — useful for picking a filter dimension with enough
+is populated, useful for picking a filter dimension with enough
 signal.
 
 ##### `Client.list_databases()`
@@ -919,8 +920,8 @@ Also regenerates the `.pyi` type stubs in the installed pyvolca
 package directory so IDE autocomplete reflects the current engine.
 Useful when the engine is upgraded without reinstalling pyvolca.
 
-This is the explicit "the engine was upgraded" path — the likeliest
-place to meet a wire *change* — so it forgets the cached wire and
+This is the explicit "the engine was upgraded" path, the likeliest
+place to meet a wire *change*, so it forgets the cached wire and
 re-runs the gate against the live engine before fetching a spec
 pyvolca can't decode. Without the reset, a client that first met an
 older engine would keep refusing wire-gated capabilities after an
@@ -949,7 +950,7 @@ Returns the updated ``DatabaseSetupInfo`` dict.
 
 Rewrite one activity the database already holds, keeping its identity.
 
-``process_id`` must be the identity ``activity`` mints to — that is,
+``process_id`` must be the identity ``activity`` mints to; that is,
 the name, location, product name and product unit must be the ones the
 row already has. Change any of those and you are describing a different
 activity, which the engine refuses rather than writing to a second row;
@@ -966,12 +967,12 @@ One :meth:`search_activities` call per unique name, fanned out over
 two patterns scripts keep hand-rolling: downloading the whole
 database to build a name→process_id dict, and per-name thread pools.
 
-The result maps every input name to its matches — the mapping is
+The result maps every input name to its matches: the mapping is
 total, so misses are visible, never silently dropped:
 
-* ``[]`` — no match; the name does not resolve.
-* one :class:`Activity` — unambiguous; ``matches[0].process_id``.
-* several — ambiguous (same name across geographies or products);
+* ``[]``: no match; the name does not resolve.
+* one :class:`Activity`: unambiguous; ``matches[0].process_id``.
+* several: ambiguous (same name across geographies or products);
   disambiguate with ``geo=`` or inspect the candidates.
 
 With ``exact=False`` matches are relevance-ranked (best first), so
@@ -994,7 +995,7 @@ Score many processes in one call (every category of a collection each).
 
 Returns a :class:`BatchScores`: ``results`` holds one
 :class:`ScoredActivity` per process the engine could compute, while
-``not_found`` / ``invalid`` list the ids it could not resolve — inspect
+``not_found`` / ``invalid`` list the ids it could not resolve; inspect
 them, a partial result is not an error. ``top_flows`` caps the top
 contributors per category; ``exclude_long_term`` drops long-term
 emissions from the totals. Left without a ``collection``, the call runs
@@ -1008,7 +1009,7 @@ Search activities in the current database.
 All filters are AND-combined and case-insensitive. ``name`` and
 ``product`` match by substring unless ``exact=True``.
 
-Returns a paginated :class:`SearchResults` — iterate it to walk
+Returns a paginated :class:`SearchResults`: iterate it to walk
 every match across all pages (subsequent pages fetched on demand),
 or use ``.page(n)`` for explicit page access. ``len(results)`` is
 the server-reported total across all pages.
@@ -1020,29 +1021,29 @@ Args:
     preset: Apply a named classification preset configured in the engine.
     classification: System name (``"ISIC rev.4 ecoinvent"``).
     classification_value: Substring within that system's value.
-    classification_match: How ``classification_value`` is compared —
+    classification_match: How ``classification_value`` is compared:
         :class:`MatchMode.CONTAINS` (default, substring) or
         :class:`MatchMode.EXACT` (case-insensitive equality). Ignored
         when ``classification`` is unset.
-    page: 1-based page number. Must be paired with ``page_size`` —
+    page: 1-based page number. Must be paired with ``page_size``:
         offset cannot be derived from page alone.
     page_size: Items per page (becomes the wire-level ``limit``).
         Alone (no ``page``) means "page 1 with this size".
     limit: Wire-level cap on returned items. Prefer ``page_size``.
     offset: Wire-level starting index. Prefer ``page`` + ``page_size``.
-    sort: Sort key — ``"name"`` or ``"location"``. When set, results
+    sort: Sort key: ``"name"`` or ``"location"``. When set, results
         are ordered lexicographically instead of by relevance.
     order: ``"desc"`` to reverse; ascending otherwise.
     exact: When True, ``name`` and ``product`` are matched exactly.
 
 Returns:
-    :class:`SearchResults[Activity]` — iterable across all pages.
+    :class:`SearchResults[Activity]`, iterable across all pages.
 
 ##### `Client.search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None) -> SearchResults[Flow]`
 
 Search flows (technosphere products and biosphere flows) in the current database.
 
-Returns a paginated :class:`SearchResults[Flow]` — iterate to walk
+Returns a paginated :class:`SearchResults[Flow]`: iterate to walk
 every match across all pages, or use ``.page(n)`` for explicit
 access. See :meth:`search_activities` for the pagination contract.
 
@@ -1057,7 +1058,7 @@ Args:
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.
-    sort: Sort key — ``"name"`` (default), ``"category"``, or ``"unit"``.
+    sort: Sort key: ``"name"`` (default), ``"category"``, or ``"unit"``.
     order: ``"desc"`` to reverse; ascending otherwise.
 
 ##### `Client.set_data_path(path: str, db_name: str | None = None) -> dict`
@@ -1098,7 +1099,7 @@ dependencies with :meth:`add_dependency`, and call
 :meth:`finalize_database` to build matrices and load it.
 
 Raises VoLCAError on any rejection (uploads disabled on the plan, size
-cap exceeded, unreadable archive) — the engine reports these in-band
+cap exceeded, unreadable archive); the engine reports these in-band
 with HTTP 200 and ``success=false``.
 
 ##### `Client.upload_method_collection(source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
@@ -1121,7 +1122,7 @@ streamed-body + query-param shape as :meth:`upload_database`.
 Return a new client targeting a different database.
 
 Shares the underlying HTTP session, dispatch table, and any other
-Client-level state with the original — only ``db`` is overridden.
+Client-level state with the original; only ``db`` is overridden.
 New fields added to :meth:`Client.__init__` propagate automatically
 (no manual mirror to keep in sync).
 
@@ -1129,10 +1130,10 @@ New fields added to :meth:`Client.__init__` propagate automatically
 
 Lifecycle state of a database in the engine.
 
-``UNLOADED`` — declared in the engine config but not yet loaded.
-``PARTIALLY_LINKED`` — loaded, but some cross-DB flow references could
+``UNLOADED``: declared in the engine config but not yet loaded.
+``PARTIALLY_LINKED``: loaded, but some cross-DB flow references could
 not be resolved against currently-loaded dependencies.
-``LOADED`` — loaded and fully linked.
+``LOADED``: loaded and fully linked.
 
 Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
 serialises as the bare wire string.
@@ -1141,7 +1142,7 @@ serialises as the bare wire string.
 
 How a :class:`ClassificationFilter` value is compared against the entry.
 
-``EXACT`` — case-insensitive equality. ``CONTAINS`` — case-insensitive
+``EXACT``: case-insensitive equality. ``CONTAINS``: case-insensitive
 substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
 and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
 string ``"exact"`` / ``"contains"``.
@@ -1162,7 +1163,7 @@ Usage::
 
 ##### `base_url`
 
-``http://localhost:<port>`` — pass to :class:`Client(base_url=…)`.
+``http://localhost:<port>``, pass to :class:`Client(base_url=…)`.
 
 Always loopback: the managed server only listens locally.
 
@@ -1170,7 +1171,7 @@ Always loopback: the managed server only listens locally.
 
 ##### `Server.is_alive()`
 
-Health check — GET /api/v1/db, return True if 200.
+Health check: GET /api/v1/db, return True if 200.
 
 ##### `Server.start(idle_timeout: int = 300, wait_timeout: int = 120) -> None`
 
@@ -1193,10 +1194,10 @@ Stop the server via shutdown endpoint, then terminate process.
 
 Role a technosphere exchange plays within its host activity.
 
-``REFERENCE_PRODUCT`` — the activity's reference output product.
-``COPRODUCT`` — a secondary output (in allocated activities).
-``REFERENCE_INPUT`` — the reference input (in waste-treatment activities).
-``INPUT`` — any other technosphere input.
+``REFERENCE_PRODUCT``: the activity's reference output product.
+``COPRODUCT``: a secondary output (in allocated activities).
+``REFERENCE_INPUT``: the reference input (in waste-treatment activities).
+``INPUT``: any other technosphere input.
 
 ## Exceptions
 
@@ -1214,7 +1215,7 @@ Error from the VoLCA API.
 
 ### `Activity`
 
-One activity in a database — the row returned by /activities search.
+One activity in a database: the row returned by /activities search.
 
 ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
 and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
@@ -1224,10 +1225,10 @@ and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
 ``product_amount`` and ``product_unit`` describe the functional unit
 (typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
 geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
-its own — compose a label from ``activity_name`` + ``product_name``.
+its own; compose a label from ``activity_name`` + ``product_name``.
 
 ``allocation_percent`` is this product's share (0..100) of the parent
-activity's exchanges in a multi-output (allocated) process — e.g. a
+activity's exchanges in a multi-output (allocated) process, e.g. a
 cheese activity that also yields whey, cream and permeate gives each
 product its own share, summing to ~100. It is ``None`` for single-output
 processes. ``allocation_formula`` carries the raw symbolic formula when
@@ -1236,12 +1237,12 @@ else ``None``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `location` | `str` | — |
-| `product_name` | `str` | — |
-| `product_amount` | `float` | — |
-| `product_unit` | `str` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
 | `allocation_percent` | `float \| None` | None |
 | `allocation_formula` | `str \| None` | None |
 
@@ -1254,12 +1255,12 @@ the percentage of the total impact this activity contributes (0..100).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `product_name` | `str` | — |
-| `location` | `str` | — |
-| `contribution` | `float` | — |
-| `share_pct` | `float` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `contribution` | `float` | _required_ |
+| `share_pct` | `float` | _required_ |
 
 ### `ActivityDetail`
 
@@ -1270,17 +1271,17 @@ instead of walking the raw exchanges list.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `location` | `str` | — |
-| `unit` | `str` | — |
-| `description` | `list[str]` | — |
-| `classifications` | `dict[str, str]` | — |
-| `product_name` | `str \| None` | — |
-| `product_amount` | `float \| None` | — |
-| `product_unit` | `str \| None` | — |
-| `all_products` | `list[Activity]` | — |
-| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `description` | `list[str]` | _required_ |
+| `classifications` | `dict[str, str]` | _required_ |
+| `product_name` | `str \| None` | _required_ |
+| `product_amount` | `float \| None` | _required_ |
+| `product_unit` | `str \| None` | _required_ |
+| `all_products` | `list[Activity]` | _required_ |
+| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | _required_ |
 
 #### Properties
 
@@ -1290,12 +1291,12 @@ This process's own allocation share (0..100), or ``None``.
 
 A multi-output process splits the parent activity's burden across its
 co-products; every :attr:`all_products` entry carries its share. This
-returns the share of *this* process — the entry whose ``process_id``
-matches — and ``None`` for single-output processes.
+returns the share of *this* process (the entry whose ``process_id``
+matches), and ``None`` for single-output processes.
 
 ##### `inputs`
 
-Every input exchange — technosphere inputs and biosphere resources.
+Every input exchange: technosphere inputs and biosphere resources.
 
 Equivalent to filtering :attr:`exchanges` by ``e.is_input``. Mixed
 kinds: callers needing only one variant should use
@@ -1310,7 +1311,7 @@ Reads the structured ``allocation_percent`` the engine sets on each
 
 ##### `outputs`
 
-Every output exchange — products and biosphere emissions.
+Every output exchange: products and biosphere emissions.
 
 Includes the reference product, coproducts (in allocated
 activities), and all biosphere emissions.
@@ -1329,15 +1330,15 @@ Result of ``compare_activities``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `scope` | `str` | — |
-| `group_by` | `str` | — |
+| `scope` | `str` | _required_ |
+| `group_by` | `str` | _required_ |
 | `matched` | `list[ActivityDiffRow]` | list() |
 | `left_only` | `list[ActivityDiffRow]` | list() |
 | `right_only` | `list[ActivityDiffRow]` | list() |
 
 ### `ActivityInput`
 
-An activity as you write it — the body of :meth:`Client.create_activities`.
+An activity as you write it: the body of :meth:`Client.create_activities`.
 
 The inventory is three lists rather than one, so a field that means
 something on a supplier link cannot be sent on an emission.
@@ -1350,11 +1351,11 @@ yet, and this type does not pretend they are.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | — |
-| `location` | `str` | — |
-| `product_name` | `str` | — |
-| `product_amount` | `float` | — |
-| `product_unit` | `str` | — |
+| `name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
 | `description` | `list[str]` | list() |
 | `inputs` | `list[TechInput]` | list() |
 | `biosphere` | `list[BioExchange]` | list() |
@@ -1366,10 +1367,10 @@ One matched or unmatched flow in an activity comparison.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `key` | `str` | — |
-| `left` | `float \| None` | — |
-| `right` | `float \| None` | — |
-| `unit` | `str \| None` | — |
+| `key` | `str` | _required_ |
+| `left` | `float \| None` | _required_ |
+| `right` | `float \| None` | _required_ |
+| `unit` | `str \| None` | _required_ |
 
 #### Properties
 
@@ -1383,9 +1384,9 @@ One bucket inside an AggregateResult.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `key` | `str` | — |
-| `quantity` | `float` | — |
-| `count` | `int` | — |
+| `key` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `count` | `int` | _required_ |
 | `unit` | `str \| None` | None |
 | `share` | `float \| None` | None |
 
@@ -1399,10 +1400,10 @@ was set; empty otherwise.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `scope` | `AggregateScope` | — |
-| `filtered_total` | `float` | — |
-| `filtered_unit` | `str \| None` | — |
-| `filtered_count` | `int` | — |
+| `scope` | `AggregateScope` | _required_ |
+| `filtered_total` | `float` | _required_ |
+| `filtered_unit` | `str \| None` | _required_ |
+| `filtered_count` | `int` | _required_ |
 | `groups` | `list[AggregateGroup]` | list() |
 
 ### `BatchScores`
@@ -1416,9 +1417,9 @@ inspect, not a failure.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[ScoredActivity]` | — |
-| `not_found` | `list[str]` | — |
-| `invalid` | `list[str]` | — |
+| `results` | `list[ScoredActivity]` | _required_ |
+| `not_found` | `list[str]` | _required_ |
+| `invalid` | `list[str]` | _required_ |
 
 ### `BioExchange`
 
@@ -1426,8 +1427,8 @@ One resource taken from the environment, or one emission released into it.
 
 Name the flow one way or the other, never both: ``flow`` addresses one the
 database already has, and ``name`` + ``compartment`` introduce a new one.
-Use the two constructors rather than the fields —
-:meth:`existing` and :meth:`introducing` — which is why passing both or
+Use the two constructors rather than the fields,
+:meth:`existing` and :meth:`introducing`, which is why passing both or
 neither raises here instead of at the server.
 
 A biosphere amount is never converted, so an exchange on an existing flow
@@ -1435,8 +1436,8 @@ must be stated in that flow's own unit.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `direction` | `BioDirection` | — |
-| `amount` | `float` | — |
+| `direction` | `BioDirection` | _required_ |
+| `amount` | `float` | _required_ |
 | `flow` | `str \| None` | None |
 | `name` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
@@ -1450,11 +1451,11 @@ An exchange with the environment (resource extraction or emission).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | — |
-| `compartment` | `Compartment \| None` | — |
-| `amount` | `float` | — |
-| `unit` | `str` | — |
-| `direction` | `BioDirection` | — |
+| `flow_name` | `str` | _required_ |
+| `compartment` | `Compartment \| None` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `direction` | `BioDirection` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
 | `is_waste` | `bool` | False |
@@ -1470,7 +1471,7 @@ to the environment.
 
 ##### `is_reference`
 
-Always False — biosphere exchanges cannot be reference flows.
+Always False: biosphere exchanges cannot be reference flows.
 
 The reference flow defines the functional unit and is always a
 technosphere product (see :class:`TechnosphereExchange.is_reference`).
@@ -1485,15 +1486,15 @@ Returned in the ``factors`` list of :class:`CharacterizationResult`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_flow_name` | `str` | — |
-| `cf_value` | `float` | — |
-| `cf_unit` | `str` | — |
-| `direction` | `str` | — |
-| `db_flow_name` | `str` | — |
-| `flow_id` | `str` | — |
-| `flow_unit` | `str` | — |
-| `category` | `str` | — |
-| `match_strategy` | `str` | — |
+| `method_flow_name` | `str` | _required_ |
+| `cf_value` | `float` | _required_ |
+| `cf_unit` | `str` | _required_ |
+| `direction` | `str` | _required_ |
+| `db_flow_name` | `str` | _required_ |
+| `flow_id` | `str` | _required_ |
+| `flow_unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `match_strategy` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 
 ### `CharacterizationResult`
@@ -1506,10 +1507,10 @@ the slice is incomplete.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | — |
-| `unit` | `str` | — |
-| `matches` | `int` | — |
-| `shown` | `int` | — |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `matches` | `int` | _required_ |
+| `shown` | `int` | _required_ |
 | `factors` | `list[CharacterizationFactor]` | list() |
 
 #### Properties
@@ -1529,8 +1530,8 @@ Multiple filters are AND-combined by the server.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `system` | `str` | — |
-| `value` | `str` | — |
+| `system` | `str` | _required_ |
+| `value` | `str` | _required_ |
 | `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
 
 ### `ClassificationSystem`
@@ -1543,7 +1544,7 @@ how many activities carry at least one classification under this system
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | — |
+| `name` | `str` | _required_ |
 | `values` | `list[str]` | list() |
 | `activity_count` | `int` | 0 |
 
@@ -1551,12 +1552,12 @@ how many activities carry at least one classification under this system
 
 Biosphere compartment (medium + optional subcompartment).
 
-Frozen so it's hashable and immutable — callers can use it as a dict key
+Frozen so it's hashable and immutable, so callers can use it as a dict key
 when grouping flows by compartment, and accidental mutation is rejected.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | — |
+| `name` | `str` | _required_ |
 | `sub` | `str \| None` | None |
 
 ### `ConsumerResult`
@@ -1565,28 +1566,28 @@ Activity that consumes a given supplier, with BFS depth.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `location` | `str` | — |
-| `product_name` | `str` | — |
-| `product_amount` | `float` | — |
-| `product_unit` | `str` | — |
-| `depth` | `int` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
+| `depth` | `int` | _required_ |
 | `classifications` | `dict[str, str]` | dict() |
 
 ### `ConsumersResponse`
 
-Reverse supply chain (/consumers) — paginated consumer list plus
+Reverse supply chain (/consumers): paginated consumer list plus
 optional edge set. Mirrors :class:`SupplyChain` so callers have a
 uniform {entries, edges} shape in both traversal directions.
 
-``consumers`` is a :class:`SearchResults[ConsumerResult]` — iterate it
+``consumers`` is a :class:`SearchResults[ConsumerResult]`: iterate it
 to walk every consumer across all pages. ``edges`` is populated only
 when ``include_edges=True``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `consumers` | `SearchResults[ConsumerResult]` | — |
+| `consumers` | `SearchResults[ConsumerResult]` | _required_ |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
 ### `ContributingActivities`
@@ -1599,25 +1600,25 @@ reports no total, so pyvolca cannot derive ``has_more``. Pass a generous
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | — |
-| `unit` | `str` | — |
-| `total_score` | `float` | — |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `total_score` | `float` | _required_ |
 | `activities` | `list[ActivityContribution]` | list() |
 
 ### `ContributingFlows`
 
 Top elementary flows driving an LCIA score.
 
-Note: the engine does not report a total — ``top_flows`` is whatever the
+Note: the engine does not report a total: ``top_flows`` is whatever the
 server returned under ``limit``, but pyvolca cannot tell whether more
 flows were truncated. If you need exhaustive coverage, pass a generous
 ``limit`` and inspect ``share_pct`` totals.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | — |
-| `unit` | `str` | — |
-| `total_score` | `float` | — |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `total_score` | `float` | _required_ |
 | `top_flows` | `list[FlowContribution]` | list() |
 
 ### `DatabaseInfo`
@@ -1625,15 +1626,15 @@ flows were truncated. If you need exhaustive coverage, pass a generous
 One entry of :meth:`Client.list_databases`.
 
 ``depends_on`` names the databases this one links against for cross-DB
-flow resolution — mirrors the ``dependsOn`` list surfaced by the relink
+flow resolution, mirroring the ``dependsOn`` list surfaced by the relink
 endpoint. Derived from the engine's declared topology, not runtime state.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | — |
-| `display_name` | `str` | — |
-| `status` | `DatabaseStatus` | — |
-| `path` | `str` | — |
+| `name` | `str` | _required_ |
+| `display_name` | `str` | _required_ |
+| `status` | `DatabaseStatus` | _required_ |
+| `path` | `str` | _required_ |
 | `load_at_startup` | `bool` | False |
 | `is_uploaded` | `bool` | False |
 | `activity_count` | `int` | 0 |
@@ -1650,13 +1651,13 @@ their provider by process id; the third names its flow by identity. There
 is no kind for the reference product or a coproduct: changing those changes
 what the activity *is*, which is not what an inventory edit does.
 
-A selector may name several lines, and then it applies to all of them —
+A selector may name several lines, and then it applies to all of them;
 :meth:`Client.edit_exchanges` reports how many. Naming none is refused by
 the engine rather than passed off as done.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `kind` | `str` | — |
+| `kind` | `str` | _required_ |
 | `provider` | `str \| None` | None |
 | `flow` | `str \| None` | None |
 
@@ -1672,10 +1673,10 @@ the flow scores nothing) or ``"no_factor"``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | — |
-| `method_unit` | `str` | — |
-| `flow` | `ExplainedFlow` | — |
-| `outcome` | `str` | — |
+| `method` | `str` | _required_ |
+| `method_unit` | `str` | _required_ |
+| `flow` | `ExplainedFlow` | _required_ |
+| `outcome` | `str` | _required_ |
 | `explanation` | `list[str]` | list() |
 | `match` | `ExplainedMatch \| None` | None |
 | `steps_tried` | `list[ExplainedStep]` | list() |
@@ -1687,10 +1688,10 @@ The flow an explanation is about, as the cascade sees it.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | — |
-| `name` | `str` | — |
-| `unit` | `str` | — |
-| `category` | `str` | — |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 | `cas` | `str \| None` | None |
 
@@ -1700,11 +1701,11 @@ The factor that was served, and where it came from.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `rung` | `str` | — |
-| `cf_value` | `float` | — |
-| `cf_unit` | `str` | — |
-| `method_flow_name` | `str` | — |
-| `match_strategy` | `str` | — |
+| `rung` | `str` | _required_ |
+| `cf_value` | `float` | _required_ |
+| `cf_unit` | `str` | _required_ |
+| `method_flow_name` | `str` | _required_ |
+| `match_strategy` | `str` | _required_ |
 | `method_cas` | `str \| None` | None |
 | `unit_conversion` | `str \| None` | None |
 | `refusal` | `str \| None` | None |
@@ -1715,8 +1716,8 @@ One rung of the factor-matching cascade, and what it made of the flow.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `rung` | `str` | — |
-| `result` | `str` | — |
+| `rung` | `str` | _required_ |
+| `result` | `str` | _required_ |
 | `veto` | `str \| None` | None |
 
 ### `Flow`
@@ -1731,10 +1732,10 @@ apart. ``synonyms`` maps language code → list of synonym strings
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | — |
-| `name` | `str` | — |
-| `category` | `str` | — |
-| `unit_name` | `str` | — |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `unit_name` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 | `synonyms` | `dict[str, list[str]]` | dict() |
 
@@ -1746,11 +1747,11 @@ Emitted inside ``LCIAResult.top_contributors``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | — |
-| `contribution` | `float` | — |
-| `share_pct` | `float` | — |
-| `flow_id` | `str` | — |
-| `category` | `str` | — |
+| `flow_name` | `str` | _required_ |
+| `contribution` | `float` | _required_ |
+| `share_pct` | `float` | _required_ |
+| `flow_id` | `str` | _required_ |
+| `category` | `str` | _required_ |
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
 | `match_kind` | `str \| None` | None |
@@ -1759,16 +1760,16 @@ Emitted inside ``LCIAResult.top_contributors``.
 
 Detail of one flow, returned by :meth:`Client.get_flow`.
 
-``flow`` is the raw flow record — a tagged union (technosphere product,
+``flow`` is the raw flow record: a tagged union (technosphere product,
 biosphere flow, waste flow, or unresolved) whose shape depends on its
-kind — kept as a dict rather than forced into one dataclass.
+kind, kept as a dict rather than forced into one dataclass.
 ``usage_count`` is how many exchanges reference it.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow` | `dict` | — |
-| `unit_name` | `str` | — |
-| `usage_count` | `int` | — |
+| `flow` | `dict` | _required_ |
+| `unit_name` | `str` | _required_ |
+| `usage_count` | `int` | _required_ |
 
 ### `FlowMapping`
 
@@ -1780,10 +1781,10 @@ response of :meth:`Client.get_flow_mapping`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_name` | `str` | — |
-| `method_unit` | `str` | — |
-| `total_flows` | `int` | — |
-| `matched_flows` | `int` | — |
+| `method_name` | `str` | _required_ |
+| `method_unit` | `str` | _required_ |
+| `total_flows` | `int` | _required_ |
+| `matched_flows` | `int` | _required_ |
 | `flows` | `list[FlowMappingEntry]` | list() |
 
 #### Properties
@@ -1797,15 +1798,15 @@ Matched fraction expressed as 0..100. Returns 0 when total is 0.
 One DB biosphere flow and the CF (if any) assigned to it.
 
 ``cf_value`` is ``None`` when this DB flow has no characterization factor
-in the method — that flow contributes 0 to the score for the method.
+in the method: that flow contributes 0 to the score for the method.
 ``match_strategy`` records how the mapping was resolved (``"uuid"``,
 ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_id` | `str` | — |
-| `flow_name` | `str` | — |
-| `flow_category` | `str` | — |
+| `flow_id` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `flow_category` | `str` | _required_ |
 | `cf_value` | `float \| None` | None |
 | `cf_flow_name` | `str \| None` | None |
 | `match_strategy` | `str \| None` | None |
@@ -1816,10 +1817,10 @@ Result of :func:`download`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `binary` | `Path` | — |
-| `data_dir` | `Path` | — |
-| `version` | `str` | — |
-| `data_version` | `str` | — |
+| `binary` | `Path` | _required_ |
+| `data_dir` | `Path` | _required_ |
+| `version` | `str` | _required_ |
+| `data_version` | `str` | _required_ |
 
 ### `InventoryFlow`
 
@@ -1832,19 +1833,19 @@ one. ``category`` is the engine-normalised category used for grouping.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_id` | `str` | — |
-| `flow_name` | `str` | — |
-| `quantity` | `float` | — |
-| `unit_name` | `str` | — |
-| `is_emission` | `bool` | — |
-| `category` | `str` | — |
+| `flow_id` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `unit_name` | `str` | _required_ |
+| `is_emission` | `bool` | _required_ |
+| `category` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 
 ### `InventoryResult`
 
 Life-cycle inventory of an activity: cumulative biosphere flows.
 
-Returned by :meth:`Client.get_inventory`. The engine does not paginate —
+Returned by :meth:`Client.get_inventory`. The engine does not paginate:
 ``flows`` is the full inventory (filtered by ``flow=`` substring when
 requested). ``statistics`` carries the per-direction roll-ups and the
 most-populated categories.
@@ -1854,12 +1855,12 @@ most-populated categories.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `root` | `Activity` | — |
-| `total_flows` | `int` | — |
-| `emission_flows` | `int` | — |
-| `resource_flows` | `int` | — |
-| `flows` | `list[InventoryFlow]` | — |
-| `statistics` | `InventoryStatistics` | — |
+| `root` | `Activity` | _required_ |
+| `total_flows` | `int` | _required_ |
+| `emission_flows` | `int` | _required_ |
+| `resource_flows` | `int` | _required_ |
+| `flows` | `list[InventoryFlow]` | _required_ |
+| `statistics` | `InventoryStatistics` | _required_ |
 
 ### `InventoryStatistics`
 
@@ -1871,9 +1872,9 @@ lists ``(category_name, flow_count)`` pairs ordered by frequency.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `total_quantity` | `float` | — |
-| `emission_quantity` | `float` | — |
-| `resource_quantity` | `float` | — |
+| `total_quantity` | `float` | _required_ |
+| `emission_quantity` | `float` | _required_ |
+| `resource_quantity` | `float` | _required_ |
 | `top_categories` | `list[tuple[str, int]]` | list() |
 
 ### `LCIABatchResult`
@@ -1885,14 +1886,14 @@ impact results plus any formula-based scoring sets configured in the
 engine TOML (PEF, ECS, or any named set).
 
 ``scoring_indicators`` gives the per-variable normalized-weighted
-breakdown of each scoring set — already multiplied by the set's
+breakdown of each scoring set, already multiplied by the set's
 ``displayMultiplier`` and expressed in its display unit (see
 :class:`ScoringIndicator`). Lets callers render per-indicator charts
 alongside the aggregate ``scoring_results``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[LCIAResult]` | — |
+| `results` | `list[LCIAResult]` | _required_ |
 | `single_score` | `float \| None` | None |
 | `single_score_unit` | `str \| None` | None |
 | `norm_weight_set_name` | `str \| None` | None |
@@ -1910,14 +1911,14 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_id` | `str` | — |
-| `method_name` | `str` | — |
-| `category` | `str` | — |
-| `damage_category` | `str` | — |
-| `score` | `float` | — |
-| `unit` | `str` | — |
-| `mapped_flows` | `int` | — |
-| `functional_unit` | `str` | — |
+| `method_id` | `str` | _required_ |
+| `method_name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `damage_category` | `str` | _required_ |
+| `score` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `mapped_flows` | `int` | _required_ |
+| `functional_unit` | `str` | _required_ |
 | `normalized_score` | `float \| None` | None |
 | `weighted_score` | `float \| None` | None |
 | `top_contributors` | `list[FlowContribution]` | list() |
@@ -1937,37 +1938,37 @@ survive the generic camelCase→snake_case conversion.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_id` | `str` | — |
-| `method_name` | `str` | — |
-| `total_factors` | `int` | — |
-| `mapped_by_uuid` | `int` | — |
-| `mapped_by_cas` | `int` | — |
-| `mapped_by_name` | `int` | — |
-| `mapped_by_synonym` | `int` | — |
-| `unmapped` | `int` | — |
-| `coverage` | `float` | — |
-| `db_biosphere_count` | `int` | — |
-| `unique_db_flows_matched` | `int` | — |
-| `unmapped_flows` | `list[UnmappedFlow]` | — |
+| `method_id` | `str` | _required_ |
+| `method_name` | `str` | _required_ |
+| `total_factors` | `int` | _required_ |
+| `mapped_by_uuid` | `int` | _required_ |
+| `mapped_by_cas` | `int` | _required_ |
+| `mapped_by_name` | `int` | _required_ |
+| `mapped_by_synonym` | `int` | _required_ |
+| `unmapped` | `int` | _required_ |
+| `coverage` | `float` | _required_ |
+| `db_biosphere_count` | `int` | _required_ |
+| `unique_db_flows_matched` | `int` | _required_ |
+| `unmapped_flows` | `list[UnmappedFlow]` | _required_ |
 
 ### `Method`
 
 One LCIA method, returned by :meth:`Client.list_methods`.
 
-Pass ``id`` — or ``name``, which the client resolves against the loaded
-methods — wherever a ``method_id`` is asked for. ``collection`` is the
+Pass ``id`` (or ``name``, which the client resolves against the loaded
+methods) wherever a ``method_id`` is asked for. ``collection`` is the
 parent method collection (e.g. ``"ef-31"``); the client reads it off the
 resolved method, so it is worth passing to :meth:`Client.get_impacts` /
 :meth:`Client.get_impacts_batch` only to pin one of several loaded.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | — |
-| `name` | `str` | — |
-| `category` | `str` | — |
-| `unit` | `str` | — |
-| `factor_count` | `int` | — |
-| `collection` | `str` | — |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `factor_count` | `int` | _required_ |
+| `collection` | `str` | _required_ |
 
 ### `MethodDetail`
 
@@ -1978,11 +1979,11 @@ and ``description`` are free-text metadata the source may or may not carry.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | — |
-| `name` | `str` | — |
-| `unit` | `str` | — |
-| `category` | `str` | — |
-| `factor_count` | `int` | — |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `factor_count` | `int` | _required_ |
 | `description` | `str \| None` | None |
 | `methodology` | `str \| None` | None |
 
@@ -1992,18 +1993,18 @@ One characterization factor of a method (:meth:`Client.get_method_factors`).
 
 ``direction`` is the flow direction the factor applies to; ``value`` is the
 factor in the method's unit per the flow's unit. A method routinely holds
-several factors sharing one ``flow_name`` — the same substance emitted to
-air vs. water, or one regionalized factor per ``location`` — so
+several factors sharing one ``flow_name`` (the same substance emitted to
+air vs. water, or one regionalized factor per ``location``), so
 ``compartment``, ``location`` and ``unit`` are what tell them apart.
 Each is ``None`` when the source method does not carry that axis, or
 when the engine predates these fields.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_ref` | `str` | — |
-| `flow_name` | `str` | — |
-| `direction` | `str` | — |
-| `value` | `float` | — |
+| `flow_ref` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `direction` | `str` | _required_ |
+| `value` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
 | `location` | `str \| None` | None |
@@ -2014,9 +2015,9 @@ Shortest upstream path from a root process to a matching activity.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `path` | `list[PathStep]` | — |
-| `path_length` | `int` | — |
-| `total_ratio` | `float` | — |
+| `path` | `list[PathStep]` | _required_ |
+| `path_length` | `int` | _required_ |
+| `total_ratio` | `float` | _required_ |
 
 ### `PathStep`
 
@@ -2028,12 +2029,12 @@ emits camelCase keys (``processId``, ``activityName``,
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `location` | `str` | — |
-| `unit` | `str` | — |
-| `cumulative_quantity` | `float` | — |
-| `scaling_factor` | `float` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `cumulative_quantity` | `float` | _required_ |
+| `scaling_factor` | `float` | _required_ |
 | `local_step_ratio` | `float \| None` | None |
 
 ### `PerturbedResult`
@@ -2043,15 +2044,15 @@ One perturbation outcome from :meth:`Client.compute_sensitivity`.
 The engine flattens an ``Either`` on the wire: a success carries
 ``impact`` and ``delta_impact`` (with ``error`` None), a failure carries
 ``error`` (with the other two None). ``perturbation`` echoes the request
-entry — including its ``label`` if one was supplied — so results correlate
+entry (including its ``label`` if one was supplied), so results correlate
 without an out-of-band index.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `perturbation` | `dict` | — |
-| `impact` | `LCIAResult \| None` | — |
-| `delta_impact` | `float \| None` | — |
-| `error` | `str \| None` | — |
+| `perturbation` | `dict` | _required_ |
+| `impact` | `LCIAResult \| None` | _required_ |
+| `delta_impact` | `float \| None` | _required_ |
+| `error` | `str \| None` | _required_ |
 
 ### `Preset`
 
@@ -2062,9 +2063,9 @@ expands it server-side into the ``filters`` triples).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | — |
-| `label` | `str` | — |
-| `description` | `str \| None` | — |
+| `name` | `str` | _required_ |
+| `label` | `str` | _required_ |
+| `description` | `str \| None` | _required_ |
 | `filters` | `list[PresetFilter]` | list() |
 
 ### `PresetFilter`
@@ -2073,8 +2074,8 @@ One filter triple inside a :class:`Preset`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `system` | `str` | — |
-| `value` | `str` | — |
+| `system` | `str` | _required_ |
+| `value` | `str` | _required_ |
 | `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
 
 ### `ScoredActivity`
@@ -2086,9 +2087,9 @@ One process's batch impacts inside a :class:`BatchScores`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `activity_name` | `str` | — |
-| `impacts` | `LCIABatchResult` | — |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `impacts` | `LCIABatchResult` | _required_ |
 
 ### `ScoringIndicator`
 
@@ -2103,8 +2104,8 @@ from, or as a last resort the raw variable key.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `category` | `str` | — |
-| `value` | `float` | — |
+| `category` | `str` | _required_ |
+| `value` | `float` | _required_ |
 
 ### `SearchResults`
 
@@ -2112,25 +2113,25 @@ Paginated wire envelope, mirrors Haskell ``SearchResults a``.
 
 Carries one page of results plus pagination metadata. Iterating walks
 every page lazily, fetching subsequent pages on demand via the
-``_fetch`` callback. ``len()`` returns ``total`` — the server-reported
+``_fetch`` callback. ``len()`` returns ``total``: the server-reported
 count across *all* pages, not just the items currently held.
 
 Wire fields (``results``, ``total``, ``offset``, ``limit``, ``has_more``,
 ``search_time_ms``) mirror the server type exactly. Page-style helpers
 (``page_size``, ``page(n)``) are client conveniences computed from them.
 
-Pages fetched during iteration are cached on the instance — re-iterating
+Pages fetched during iteration are cached on the instance, so re-iterating
 replays the cache without hitting the server. Wrap in ``list(...)`` to
 materialise eagerly if you prefer.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[~T]` | — |
-| `total` | `int` | — |
-| `offset` | `int` | — |
-| `limit` | `int` | — |
-| `has_more` | `bool` | — |
-| `search_time_ms` | `float` | — |
+| `results` | `list[~T]` | _required_ |
+| `total` | `int` | _required_ |
+| `offset` | `int` | _required_ |
+| `limit` | `int` | _required_ |
+| `has_more` | `bool` | _required_ |
+| `search_time_ms` | `float` | _required_ |
 | `_fetch` | `Optional[Callable[[int, int \| None], dict]]` | None |
 | `_parse` | `Optional[Callable[[dict], ~T]]` | None |
 | `_fetched` | `list[~T]` | list() |
@@ -2151,8 +2152,8 @@ the order of the requested perturbations.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `baseline` | `LCIAResult` | — |
-| `perturbed` | `list[PerturbedResult]` | — |
+| `baseline` | `LCIAResult` | _required_ |
+| `perturbed` | `list[PerturbedResult]` | _required_ |
 
 ### `ServerVersion`
 
@@ -2165,10 +2166,10 @@ None for engines that predate it (everything up to v0.7.x).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `version` | `str` | — |
-| `git_hash` | `str` | — |
-| `git_tag` | `str \| None` | — |
-| `build_target` | `str` | — |
+| `version` | `str` | _required_ |
+| `git_hash` | `str` | _required_ |
+| `git_tag` | `str \| None` | _required_ |
+| `build_target` | `str` | _required_ |
 | `wire_version` | `int \| None` | None |
 
 ### `SetAmount`
@@ -2177,15 +2178,15 @@ The lines to restate, and what to restate them to.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `select` | `ExchangeSelector` | — |
-| `amount` | `float` | — |
+| `select` | `ExchangeSelector` | _required_ |
+| `amount` | `float` | _required_ |
 
 ### `Substitution`
 
 Replace one supplier with another in the upstream supply chain.
 
 All fields are process_ids. ``consumer`` identifies which downstream
-consumer's input to rewrite, scoping the swap to one edge — the same
+consumer's input to rewrite, scoping the swap to one edge: the same
 upstream supplier can be replaced by different alternatives in different
 parts of the tree. Omit it (leave ``None``) to apply the swap globally,
 replacing the supplier on every consumer at once.
@@ -2195,8 +2196,8 @@ substitution across multiple calls without aliasing risk.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `from_pid` | `str` | — |
-| `to_pid` | `str` | — |
+| `from_pid` | `str` | _required_ |
+| `to_pid` | `str` | _required_ |
 | `consumer` | `str \| None` | None |
 
 ### `SupplyChain`
@@ -2206,15 +2207,15 @@ Flat supply chain of an activity.
 ``total_activities`` is the unfiltered upstream count; ``filtered_activities``
 is what remains after the server applies ``classification_filters`` /
 ``min_quantity`` / ``preset``. ``entries`` is the slice the server actually
-returned — it may be shorter than ``filtered_activities`` when ``limit``
+returned; it may be shorter than ``filtered_activities`` when ``limit``
 truncates. Use :attr:`has_more` to detect that case rather than comparing
 lengths by hand.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `root` | `Activity` | — |
-| `total_activities` | `int` | — |
-| `filtered_activities` | `int` | — |
+| `root` | `Activity` | _required_ |
+| `total_activities` | `int` | _required_ |
+| `filtered_activities` | `int` | _required_ |
 | `entries` | `list[SupplyChainEntry]` | list() |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
@@ -2239,11 +2240,11 @@ id can exist in more than one loaded DB).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `from_id` | `str` | — |
-| `from_db` | `str` | — |
-| `to_id` | `str` | — |
-| `to_db` | `str` | — |
-| `amount` | `float` | — |
+| `from_id` | `str` | _required_ |
+| `from_db` | `str` | _required_ |
+| `to_id` | `str` | _required_ |
+| `to_db` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 
 ### `SupplyChainEntry`
 
@@ -2252,7 +2253,7 @@ One activity in a :class:`SupplyChain.entries` list.
 ``quantity`` is the cumulative amount of this activity's reference
 product consumed per functional unit of the root activity, in ``unit``.
 ``scaling_factor`` is the multiplier the solver applied to this
-activity to produce ``quantity`` — i.e. ``quantity = ref_output * scaling_factor``.
+activity to produce ``quantity``, i.e. ``quantity = ref_output * scaling_factor``.
 ``classifications`` mirrors the producing activity's classifications
 (ISIC, CPC, Category, …) so callers can filter by taxonomy without a
 second :meth:`Client.get_activity` round trip.
@@ -2263,15 +2264,15 @@ the database the entry lives in (they differ across linked databases).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | — |
-| `database_name` | `str` | — |
-| `activity_name` | `str` | — |
-| `location` | `str` | — |
-| `quantity` | `float` | — |
-| `unit` | `str` | — |
-| `scaling_factor` | `float` | — |
-| `depth` | `int` | — |
-| `upstream_count` | `int` | — |
+| `process_id` | `str` | _required_ |
+| `database_name` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `scaling_factor` | `float` | _required_ |
+| `depth` | `int` | _required_ |
+| `upstream_count` | `int` | _required_ |
 | `classifications` | `dict[str, str]` | dict() |
 
 ### `TechInput`
@@ -2279,32 +2280,32 @@ the database the entry lives in (they differ across linked databases).
 One product an activity consumes, named by the process that supplies it.
 
 ``provider`` is a ``process_id`` (``activityUUID_productUUID``, or a bare
-activity UUID when that activity has a single product) — the same address
+activity UUID when that activity has a single product), the same address
 every read endpoint hands out. The flow follows from the supplier, so it is
 never stated separately. ``unit`` defaults to the supplier's own reference
 unit; another one is fine as long as it converts.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `provider` | `str` | — |
-| `amount` | `float` | — |
+| `provider` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `comment` | `str \| None` | None |
 
 ### `TechnosphereExchange`
 
-An exchange with another activity. Carries no compartment — the
+An exchange with another activity. Carries no compartment: the
 producing activity's classifications describe the product taxonomy.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | — |
-| `amount` | `float` | — |
-| `unit` | `str` | — |
-| `role` | `TechRole` | — |
-| `target_activity_name` | `str \| None` | — |
-| `target_location` | `str \| None` | — |
-| `target_process_id` | `str \| None` | — |
+| `flow_name` | `str` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `role` | `TechRole` | _required_ |
+| `target_activity_name` | `str \| None` | _required_ |
+| `target_location` | `str \| None` | _required_ |
+| `target_process_id` | `str \| None` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | False |
@@ -2323,7 +2324,7 @@ knowing the four-role taxonomy.
 True for reference roles (``REFERENCE_PRODUCT`` / ``REFERENCE_INPUT``).
 
 The reference exchange is the one that defines the activity's
-functional unit — the basis the LCA result is normalised to.
+functional unit, the basis the LCA result is normalised to.
 
 ### `UnmappedFlow`
 
@@ -2331,9 +2332,9 @@ A method factor with no matching database flow (in :class:`MappingStatus`).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_ref` | `str` | — |
-| `flow_name` | `str` | — |
-| `direction` | `str` | — |
+| `flow_ref` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `direction` | `str` | _required_ |
 
 ### `WasteExchange`
 
@@ -2341,18 +2342,18 @@ An exchange of a waste flow with a treatment activity.
 
 Shares the technosphere matrix with product flows but tracked as its own
 kind so callers can tell a "waste sent to landfill" output apart from a
-product input. Orphan waste (no linked treatment) contributes zero impact
-— same cut-off semantics as an orphan technosphere input.
+product input. Orphan waste (no linked treatment) contributes zero impact,
+the same cut-off semantics as an orphan technosphere input.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | — |
-| `amount` | `float` | — |
-| `unit` | `str` | — |
-| `is_input` | `bool` | — |
-| `target_activity_name` | `str \| None` | — |
-| `target_location` | `str \| None` | — |
-| `target_process_id` | `str \| None` | — |
+| `flow_name` | `str` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `is_input` | `bool` | _required_ |
+| `target_activity_name` | `str \| None` | _required_ |
+| `target_location` | `str \| None` | _required_ |
+| `target_process_id` | `str \| None` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | True |
@@ -2361,7 +2362,7 @@ product input. Orphan waste (no linked treatment) contributes zero impact
 
 ##### `is_reference`
 
-Always False — waste flows never define an activity's functional unit.
+Always False: waste flows never define an activity's functional unit.
 
 Treatment activities have a ``ReferenceInput`` instead, exposed
 via :class:`TechnosphereExchange`.
@@ -2375,8 +2376,8 @@ names its producer.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `provider` | `str` | — |
-| `amount` | `float` | — |
+| `provider` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `comment` | `str \| None` | None |
 

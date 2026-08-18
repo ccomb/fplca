@@ -1,7 +1,7 @@
 """Offline request-shaping tests for the database write operations.
 
 These endpoints (copy / delete / relink / export / add-/remove-dependency)
-carry no operationId — they bypass the OpenAPI dispatcher and build their
+carry no operationId: they bypass the OpenAPI dispatcher and build their
 URLs directly. They also do not exist in any released engine binary, so these
 tests never touch a live engine: they mock ``Client._session`` and assert on
 the wire shape (URL, JSON body, raw-bytes handling, format validation, error
@@ -147,7 +147,7 @@ class TestDeleteByIds:
 
     def test_ids_never_sent_to_a_wire2_engine(self, mocked_client):
         # A wire-2 engine would drop the unknown "ids" key and read the request
-        # as an empty filter ("everything") — the client must refuse to send it.
+        # as an empty filter ("everything"); the client must refuse to send it.
         client, session = mocked_client
         _version_ok(session, wire=2)
         with pytest.raises(VoLCAError, match="wire revision >= 3"):

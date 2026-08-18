@@ -1,4 +1,4 @@
-"""VoLCA Python client — Life Cycle Assessment engine.
+"""VoLCA Python client for the Life Cycle Assessment engine.
 
 See https://volca.run/docs/python/ for the full guide.
 """

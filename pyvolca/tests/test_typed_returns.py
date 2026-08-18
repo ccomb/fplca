@@ -43,7 +43,7 @@ from volca.client import _substitution_body
 
 
 # ---------------------------------------------------------------------------
-# Pattern 1 — has_more surfacing
+# Pattern 1: has_more surfacing
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ class TestSupplyChainHasMore:
 class TestSupplyChainEntryDecoding:
     """Decode a wire-shaped entry: the engine has emitted ``depth``,
     ``databaseName`` and ``upstreamCount`` since v0.6.0, and 0.8.2 silently
-    dropped them — these tests pin that they now survive ``from_json``."""
+    dropped them; these tests pin that they now survive ``from_json``."""
 
     WIRE_ENTRY = {
         "processId": "act_prod",
@@ -131,7 +131,7 @@ class TestCharacterizationHasMore:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3a — typed list returns: client wiring
+# Pattern 3a: typed list returns, client wiring
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +203,7 @@ class TestServerVersionTyped:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3b — Substitution dataclass
+# Pattern 3b: Substitution dataclass
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ class TestSubstitution:
 
     def test_substitution_is_frozen_and_hashable(self):
         s = Substitution(from_pid="A", to_pid="B", consumer="C")
-        # Frozen — can be used as a set/dict key.
+        # Frozen: can be used as a set/dict key.
         assert {s}  # builds without error
 
 
@@ -268,7 +268,7 @@ class TestSupplyChainEdge:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 2 — StrEnums: str equality + value formatting
+# Pattern 2: StrEnums, str equality + value formatting
 # ---------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ class TestAggregateAcceptsEnumOrString:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3a — InventoryResult parsing
+# Pattern 3a: InventoryResult parsing
 # ---------------------------------------------------------------------------
 
 
@@ -361,7 +361,7 @@ class TestInventoryParsing:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3a — FlowMapping with derived coverage_pct
+# Pattern 3a: FlowMapping with derived coverage_pct
 # ---------------------------------------------------------------------------
 
 
@@ -378,7 +378,7 @@ class TestFlowMapping:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3a — ContributingFlows / ContributingActivities parsing
+# Pattern 3a: ContributingFlows / ContributingActivities parsing
 # ---------------------------------------------------------------------------
 
 
@@ -399,7 +399,7 @@ class TestClientUseSharesState:
     def test_use_shares_session_and_operations(self, mocked_client):
         client, session = mocked_client
         derived = client.use("other_db")
-        # Same underlying objects — no spec re-fetch, no new pool.
+        # Same underlying objects: no spec re-fetch, no new pool.
         assert derived._session is session
         assert derived._operations is client._operations
 
@@ -432,7 +432,7 @@ class TestSearchResultsStrictMode:
     def test_missing_keys_tolerated_in_detached_fixtures(self):
         from volca import Activity, SearchResults
 
-        # No fetch — caller is building a fixture by hand. Permissive defaults.
+        # No fetch: caller is building a fixture by hand. Permissive defaults.
         sr = SearchResults.from_raw(
             {"results": []},
             parse=Activity.from_json,
@@ -491,7 +491,7 @@ class TestActivityAllocation:
         assert a.allocation_formula is None
 
     def test_activity_from_json_defaults_when_absent(self):
-        # Search results carry no allocation — must default to None, not crash.
+        # Search results carry no allocation: must default to None, not crash.
         a = Activity.from_json({
             "processId": "flour", "activityName": "Wheat flour", "location": "FR",
             "productName": "wheat flour", "productAmount": 1.0, "productUnit": "kg",

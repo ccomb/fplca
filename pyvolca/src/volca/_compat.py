@@ -1,11 +1,11 @@
-"""Engine wire-compatibility policy — the single source of truth.
+"""Engine wire-compatibility policy: the single source of truth.
 
 pyvolca speaks a range of revisions of the JSON wire format; the engine
 advertises its own revision as ``wireVersion`` on ``/api/v1/version``. This
 module owns the comparison: the oldest wire this client accepts, the newest it
 understands, the engine hint shown when the check fails, and the check itself.
 
-It is deliberately import-cheap — only the stdlib at runtime — so the release
+It is deliberately import-cheap (only the stdlib at runtime) so the release
 preflight can read :data:`MIN_ENGINE_HINT` without pulling in ``requests`` or
 the client, and so importing it can never cycle back through the client.
 """
@@ -35,20 +35,20 @@ and may answer shapes it cannot decode."""
 
 MIN_ENGINE_HINT = "0.9.1"
 """First engine release that advertises :data:`REQUIRED_WIRE`. Used only for the
-error message and the release preflight — it is not, by itself, a runtime gate
+error message and the release preflight; it is not, by itself, a runtime gate
 (the engine's ``wireVersion`` is)."""
 
 
 def check(sv: ServerVersion) -> None:
     """Raise :class:`VoLCAError` if the engine's wire is too old; warn if newer.
 
-    The opt-out is read here, not in the caller, so every entry point — the
-    client's first operation and :meth:`volca.server.Server.start` alike —
+    The opt-out is read here, not in the caller, so every entry point,
+    the client's first operation and :meth:`volca.server.Server.start` alike,
     honours it. It is deliberately noisy: silencing the check is a foot-gun.
     """
     if os.environ.get("VOLCA_SKIP_COMPAT_CHECK"):
         warnings.warn(
-            "VOLCA_SKIP_COMPAT_CHECK set — skipping the engine "
+            "VOLCA_SKIP_COMPAT_CHECK set, skipping the engine "
             "wire-compatibility check."
         )
         return
@@ -66,6 +66,6 @@ def check(sv: ServerVersion) -> None:
     if w > KNOWN_WIRE:
         warnings.warn(
             f"Engine v{sv.version} speaks wire {w}; this pyvolca knows up to "
-            f"wire {KNOWN_WIRE}. Some responses may not decode — upgrade "
+            f"wire {KNOWN_WIRE}. Some responses may not decode; upgrade "
             "pyvolca."
         )

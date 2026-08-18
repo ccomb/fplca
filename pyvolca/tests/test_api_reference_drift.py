@@ -1,8 +1,8 @@
 """The README api-reference block must stay in sync with the generator.
 
 ``scripts/gen_api_md.py`` produces the block; this test asserts the committed
-README already reflects that output, so a stale block — or a reintroduced
-version-dependent signature — fails CI instead of silently shipping. Pure
+README already reflects that output, so a stale block (or a reintroduced
+version-dependent signature) fails CI instead of silently shipping. Pure
 Python introspection: no engine binary required.
 """
 
