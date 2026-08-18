@@ -116,7 +116,7 @@ def check_engine_released() -> Row:
         newest = ".".join(map(str, max(tags)))
         return PASS, "engine released", f"v{newest} >= v{MIN_ENGINE_HINT}"
     return FAIL, "engine released", (
-        f"needs engine >= v{MIN_ENGINE_HINT}; no such tag yet; release the engine first"
+        f"needs engine >= v{MIN_ENGINE_HINT}; no such tag yet: release the engine first"
     )
 
 

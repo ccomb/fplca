@@ -50,7 +50,7 @@ def test_all_runnable_blocks_execute(readme_namespace: dict) -> None:
     for i, block in enumerate(blocks, start=1):
         try:
             exec(compile(block, f"<README:block{i}>", "exec"), readme_namespace)
-        except Exception as exc:  # noqa: BLE001, surface the offending block
+        except Exception as exc:  # noqa: BLE001 (surface the offending block)
             raise AssertionError(
                 f"README block #{i} failed to execute: {exc!r}\n"
                 f"--- block source ---\n{block}\n--- end ---"

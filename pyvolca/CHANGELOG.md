@@ -176,7 +176,7 @@ Then paste the rendered block at the top of this file and tighten wording.
 
 ### Changed
 
-- The runnable examples left this repository, they now live at
+- The runnable examples left this repository and now live at
   <https://www.volca.run/examples/>.
 
 ## [0.8.0] - 2026-07-14

@@ -2097,7 +2097,7 @@ class ExchangeSelector:
     is no kind for the reference product or a coproduct: changing those changes
     what the activity *is*, which is not what an inventory edit does.
 
-    A selector may name several lines, and then it applies to all of them, and
+    A selector may name several lines, and then it applies to all of them;
     :meth:`Client.edit_exchanges` reports how many. Naming none is refused by
     the engine rather than passed off as done.
     """
