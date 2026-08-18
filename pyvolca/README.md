@@ -18,13 +18,6 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine: too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
-| pyvolca | wire | compatible engine |
-|---------|------|-------------------|
-| `0.5.x` | (pre-`wireVersion`) | `v0.5.0` … `v0.7.x` |
-| `0.6.0` … `0.7.1` | `1` | `v0.8.0` … `v0.9.0` |
-| `0.7.2` … `0.8.1` | `2` | `≥ v0.9.1` |
-| `> 0.8.1` | `2` … `4` | `≥ v0.9.1` (delete by ids: `≥ v0.9.3`; quality reports: `≥ v0.9.4`) |
-
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
