@@ -2,8 +2,8 @@
 
 Python client for [VoLCA](https://github.com/ccomb/volca), the Life Cycle Assessment engine over Agribalyse and ecoinvent.
 
-> **Full guide and tutorials**: <https://volca.run/docs/python/>
-> **Issues / source**: <https://github.com/ccomb/volca>
+> **Full guide and tutorials**: <https://volca.run/docs/python/>  
+> **Issues / source**: <https://github.com/ccomb/volca>  
 > **Changelog**: <https://github.com/ccomb/volca/blob/main/pyvolca/CHANGELOG.md>
 
 ## Install
