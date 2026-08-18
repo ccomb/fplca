@@ -1,4 +1,4 @@
-# git-cliff config — pyvolca-scoped changelog generation.
+# git-cliff config for pyvolca-scoped changelog generation.
 #
 # Usage:
 #   cd pyvolca
