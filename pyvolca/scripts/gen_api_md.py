@@ -209,7 +209,7 @@ def render_dataclass(cls: type, buf: io.StringIO) -> None:
             elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
                 default = f"{f.default_factory.__name__}()"  # type: ignore[union-attr]
             else:
-                default = "required"
+                default = "_required_"
             buf.write(f"| `{f.name}` | `{type_str}` | {default} |\n")
         buf.write("\n")
     # Dataclasses carry computed @property members too (e.g.

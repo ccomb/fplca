@@ -1237,12 +1237,12 @@ else ``None``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `location` | `str` | required |
-| `product_name` | `str` | required |
-| `product_amount` | `float` | required |
-| `product_unit` | `str` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
 | `allocation_percent` | `float \| None` | None |
 | `allocation_formula` | `str \| None` | None |
 
@@ -1255,12 +1255,12 @@ the percentage of the total impact this activity contributes (0..100).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `product_name` | `str` | required |
-| `location` | `str` | required |
-| `contribution` | `float` | required |
-| `share_pct` | `float` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `contribution` | `float` | _required_ |
+| `share_pct` | `float` | _required_ |
 
 ### `ActivityDetail`
 
@@ -1271,17 +1271,17 @@ instead of walking the raw exchanges list.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `location` | `str` | required |
-| `unit` | `str` | required |
-| `description` | `list[str]` | required |
-| `classifications` | `dict[str, str]` | required |
-| `product_name` | `str \| None` | required |
-| `product_amount` | `float \| None` | required |
-| `product_unit` | `str \| None` | required |
-| `all_products` | `list[Activity]` | required |
-| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `description` | `list[str]` | _required_ |
+| `classifications` | `dict[str, str]` | _required_ |
+| `product_name` | `str \| None` | _required_ |
+| `product_amount` | `float \| None` | _required_ |
+| `product_unit` | `str \| None` | _required_ |
+| `all_products` | `list[Activity]` | _required_ |
+| `exchanges` | `list[Union[TechnosphereExchange, BiosphereExchange, WasteExchange]]` | _required_ |
 
 #### Properties
 
@@ -1330,8 +1330,8 @@ Result of ``compare_activities``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `scope` | `str` | required |
-| `group_by` | `str` | required |
+| `scope` | `str` | _required_ |
+| `group_by` | `str` | _required_ |
 | `matched` | `list[ActivityDiffRow]` | list() |
 | `left_only` | `list[ActivityDiffRow]` | list() |
 | `right_only` | `list[ActivityDiffRow]` | list() |
@@ -1351,11 +1351,11 @@ yet, and this type does not pretend they are.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | required |
-| `location` | `str` | required |
-| `product_name` | `str` | required |
-| `product_amount` | `float` | required |
-| `product_unit` | `str` | required |
+| `name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
 | `description` | `list[str]` | list() |
 | `inputs` | `list[TechInput]` | list() |
 | `biosphere` | `list[BioExchange]` | list() |
@@ -1367,10 +1367,10 @@ One matched or unmatched flow in an activity comparison.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `key` | `str` | required |
-| `left` | `float \| None` | required |
-| `right` | `float \| None` | required |
-| `unit` | `str \| None` | required |
+| `key` | `str` | _required_ |
+| `left` | `float \| None` | _required_ |
+| `right` | `float \| None` | _required_ |
+| `unit` | `str \| None` | _required_ |
 
 #### Properties
 
@@ -1384,9 +1384,9 @@ One bucket inside an AggregateResult.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `key` | `str` | required |
-| `quantity` | `float` | required |
-| `count` | `int` | required |
+| `key` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `count` | `int` | _required_ |
 | `unit` | `str \| None` | None |
 | `share` | `float \| None` | None |
 
@@ -1400,10 +1400,10 @@ was set; empty otherwise.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `scope` | `AggregateScope` | required |
-| `filtered_total` | `float` | required |
-| `filtered_unit` | `str \| None` | required |
-| `filtered_count` | `int` | required |
+| `scope` | `AggregateScope` | _required_ |
+| `filtered_total` | `float` | _required_ |
+| `filtered_unit` | `str \| None` | _required_ |
+| `filtered_count` | `int` | _required_ |
 | `groups` | `list[AggregateGroup]` | list() |
 
 ### `BatchScores`
@@ -1417,9 +1417,9 @@ inspect, not a failure.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[ScoredActivity]` | required |
-| `not_found` | `list[str]` | required |
-| `invalid` | `list[str]` | required |
+| `results` | `list[ScoredActivity]` | _required_ |
+| `not_found` | `list[str]` | _required_ |
+| `invalid` | `list[str]` | _required_ |
 
 ### `BioExchange`
 
@@ -1436,8 +1436,8 @@ must be stated in that flow's own unit.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `direction` | `BioDirection` | required |
-| `amount` | `float` | required |
+| `direction` | `BioDirection` | _required_ |
+| `amount` | `float` | _required_ |
 | `flow` | `str \| None` | None |
 | `name` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
@@ -1451,11 +1451,11 @@ An exchange with the environment (resource extraction or emission).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | required |
-| `compartment` | `Compartment \| None` | required |
-| `amount` | `float` | required |
-| `unit` | `str` | required |
-| `direction` | `BioDirection` | required |
+| `flow_name` | `str` | _required_ |
+| `compartment` | `Compartment \| None` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `direction` | `BioDirection` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
 | `is_waste` | `bool` | False |
@@ -1486,15 +1486,15 @@ Returned in the ``factors`` list of :class:`CharacterizationResult`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_flow_name` | `str` | required |
-| `cf_value` | `float` | required |
-| `cf_unit` | `str` | required |
-| `direction` | `str` | required |
-| `db_flow_name` | `str` | required |
-| `flow_id` | `str` | required |
-| `flow_unit` | `str` | required |
-| `category` | `str` | required |
-| `match_strategy` | `str` | required |
+| `method_flow_name` | `str` | _required_ |
+| `cf_value` | `float` | _required_ |
+| `cf_unit` | `str` | _required_ |
+| `direction` | `str` | _required_ |
+| `db_flow_name` | `str` | _required_ |
+| `flow_id` | `str` | _required_ |
+| `flow_unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `match_strategy` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 
 ### `CharacterizationResult`
@@ -1507,10 +1507,10 @@ the slice is incomplete.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | required |
-| `unit` | `str` | required |
-| `matches` | `int` | required |
-| `shown` | `int` | required |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `matches` | `int` | _required_ |
+| `shown` | `int` | _required_ |
 | `factors` | `list[CharacterizationFactor]` | list() |
 
 #### Properties
@@ -1530,8 +1530,8 @@ Multiple filters are AND-combined by the server.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `system` | `str` | required |
-| `value` | `str` | required |
+| `system` | `str` | _required_ |
+| `value` | `str` | _required_ |
 | `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
 
 ### `ClassificationSystem`
@@ -1544,7 +1544,7 @@ how many activities carry at least one classification under this system
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | required |
+| `name` | `str` | _required_ |
 | `values` | `list[str]` | list() |
 | `activity_count` | `int` | 0 |
 
@@ -1557,7 +1557,7 @@ when grouping flows by compartment, and accidental mutation is rejected.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | required |
+| `name` | `str` | _required_ |
 | `sub` | `str \| None` | None |
 
 ### `ConsumerResult`
@@ -1566,13 +1566,13 @@ Activity that consumes a given supplier, with BFS depth.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `location` | `str` | required |
-| `product_name` | `str` | required |
-| `product_amount` | `float` | required |
-| `product_unit` | `str` | required |
-| `depth` | `int` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `product_name` | `str` | _required_ |
+| `product_amount` | `float` | _required_ |
+| `product_unit` | `str` | _required_ |
+| `depth` | `int` | _required_ |
 | `classifications` | `dict[str, str]` | dict() |
 
 ### `ConsumersResponse`
@@ -1587,7 +1587,7 @@ when ``include_edges=True``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `consumers` | `SearchResults[ConsumerResult]` | required |
+| `consumers` | `SearchResults[ConsumerResult]` | _required_ |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
 ### `ContributingActivities`
@@ -1600,9 +1600,9 @@ reports no total, so pyvolca cannot derive ``has_more``. Pass a generous
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | required |
-| `unit` | `str` | required |
-| `total_score` | `float` | required |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `total_score` | `float` | _required_ |
 | `activities` | `list[ActivityContribution]` | list() |
 
 ### `ContributingFlows`
@@ -1616,9 +1616,9 @@ flows were truncated. If you need exhaustive coverage, pass a generous
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | required |
-| `unit` | `str` | required |
-| `total_score` | `float` | required |
+| `method` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `total_score` | `float` | _required_ |
 | `top_flows` | `list[FlowContribution]` | list() |
 
 ### `DatabaseInfo`
@@ -1631,10 +1631,10 @@ endpoint. Derived from the engine's declared topology, not runtime state.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | required |
-| `display_name` | `str` | required |
-| `status` | `DatabaseStatus` | required |
-| `path` | `str` | required |
+| `name` | `str` | _required_ |
+| `display_name` | `str` | _required_ |
+| `status` | `DatabaseStatus` | _required_ |
+| `path` | `str` | _required_ |
 | `load_at_startup` | `bool` | False |
 | `is_uploaded` | `bool` | False |
 | `activity_count` | `int` | 0 |
@@ -1657,7 +1657,7 @@ the engine rather than passed off as done.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `kind` | `str` | required |
+| `kind` | `str` | _required_ |
 | `provider` | `str \| None` | None |
 | `flow` | `str \| None` | None |
 
@@ -1673,10 +1673,10 @@ the flow scores nothing) or ``"no_factor"``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method` | `str` | required |
-| `method_unit` | `str` | required |
-| `flow` | `ExplainedFlow` | required |
-| `outcome` | `str` | required |
+| `method` | `str` | _required_ |
+| `method_unit` | `str` | _required_ |
+| `flow` | `ExplainedFlow` | _required_ |
+| `outcome` | `str` | _required_ |
 | `explanation` | `list[str]` | list() |
 | `match` | `ExplainedMatch \| None` | None |
 | `steps_tried` | `list[ExplainedStep]` | list() |
@@ -1688,10 +1688,10 @@ The flow an explanation is about, as the cascade sees it.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | required |
-| `name` | `str` | required |
-| `unit` | `str` | required |
-| `category` | `str` | required |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 | `cas` | `str \| None` | None |
 
@@ -1701,11 +1701,11 @@ The factor that was served, and where it came from.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `rung` | `str` | required |
-| `cf_value` | `float` | required |
-| `cf_unit` | `str` | required |
-| `method_flow_name` | `str` | required |
-| `match_strategy` | `str` | required |
+| `rung` | `str` | _required_ |
+| `cf_value` | `float` | _required_ |
+| `cf_unit` | `str` | _required_ |
+| `method_flow_name` | `str` | _required_ |
+| `match_strategy` | `str` | _required_ |
 | `method_cas` | `str \| None` | None |
 | `unit_conversion` | `str \| None` | None |
 | `refusal` | `str \| None` | None |
@@ -1716,8 +1716,8 @@ One rung of the factor-matching cascade, and what it made of the flow.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `rung` | `str` | required |
-| `result` | `str` | required |
+| `rung` | `str` | _required_ |
+| `result` | `str` | _required_ |
 | `veto` | `str \| None` | None |
 
 ### `Flow`
@@ -1732,10 +1732,10 @@ apart. ``synonyms`` maps language code → list of synonym strings
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | required |
-| `name` | `str` | required |
-| `category` | `str` | required |
-| `unit_name` | `str` | required |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `unit_name` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 | `synonyms` | `dict[str, list[str]]` | dict() |
 
@@ -1747,11 +1747,11 @@ Emitted inside ``LCIAResult.top_contributors``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | required |
-| `contribution` | `float` | required |
-| `share_pct` | `float` | required |
-| `flow_id` | `str` | required |
-| `category` | `str` | required |
+| `flow_name` | `str` | _required_ |
+| `contribution` | `float` | _required_ |
+| `share_pct` | `float` | _required_ |
+| `flow_id` | `str` | _required_ |
+| `category` | `str` | _required_ |
 | `cf_value` | `float` | 0.0 |
 | `compartment` | `str \| None` | None |
 | `match_kind` | `str \| None` | None |
@@ -1767,9 +1767,9 @@ kind, kept as a dict rather than forced into one dataclass.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow` | `dict` | required |
-| `unit_name` | `str` | required |
-| `usage_count` | `int` | required |
+| `flow` | `dict` | _required_ |
+| `unit_name` | `str` | _required_ |
+| `usage_count` | `int` | _required_ |
 
 ### `FlowMapping`
 
@@ -1781,10 +1781,10 @@ response of :meth:`Client.get_flow_mapping`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_name` | `str` | required |
-| `method_unit` | `str` | required |
-| `total_flows` | `int` | required |
-| `matched_flows` | `int` | required |
+| `method_name` | `str` | _required_ |
+| `method_unit` | `str` | _required_ |
+| `total_flows` | `int` | _required_ |
+| `matched_flows` | `int` | _required_ |
 | `flows` | `list[FlowMappingEntry]` | list() |
 
 #### Properties
@@ -1804,9 +1804,9 @@ in the method: that flow contributes 0 to the score for the method.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_id` | `str` | required |
-| `flow_name` | `str` | required |
-| `flow_category` | `str` | required |
+| `flow_id` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `flow_category` | `str` | _required_ |
 | `cf_value` | `float \| None` | None |
 | `cf_flow_name` | `str \| None` | None |
 | `match_strategy` | `str \| None` | None |
@@ -1817,10 +1817,10 @@ Result of :func:`download`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `binary` | `Path` | required |
-| `data_dir` | `Path` | required |
-| `version` | `str` | required |
-| `data_version` | `str` | required |
+| `binary` | `Path` | _required_ |
+| `data_dir` | `Path` | _required_ |
+| `version` | `str` | _required_ |
+| `data_version` | `str` | _required_ |
 
 ### `InventoryFlow`
 
@@ -1833,12 +1833,12 @@ one. ``category`` is the engine-normalised category used for grouping.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_id` | `str` | required |
-| `flow_name` | `str` | required |
-| `quantity` | `float` | required |
-| `unit_name` | `str` | required |
-| `is_emission` | `bool` | required |
-| `category` | `str` | required |
+| `flow_id` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `unit_name` | `str` | _required_ |
+| `is_emission` | `bool` | _required_ |
+| `category` | `str` | _required_ |
 | `compartment` | `str \| None` | None |
 
 ### `InventoryResult`
@@ -1855,12 +1855,12 @@ most-populated categories.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `root` | `Activity` | required |
-| `total_flows` | `int` | required |
-| `emission_flows` | `int` | required |
-| `resource_flows` | `int` | required |
-| `flows` | `list[InventoryFlow]` | required |
-| `statistics` | `InventoryStatistics` | required |
+| `root` | `Activity` | _required_ |
+| `total_flows` | `int` | _required_ |
+| `emission_flows` | `int` | _required_ |
+| `resource_flows` | `int` | _required_ |
+| `flows` | `list[InventoryFlow]` | _required_ |
+| `statistics` | `InventoryStatistics` | _required_ |
 
 ### `InventoryStatistics`
 
@@ -1872,9 +1872,9 @@ lists ``(category_name, flow_count)`` pairs ordered by frequency.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `total_quantity` | `float` | required |
-| `emission_quantity` | `float` | required |
-| `resource_quantity` | `float` | required |
+| `total_quantity` | `float` | _required_ |
+| `emission_quantity` | `float` | _required_ |
+| `resource_quantity` | `float` | _required_ |
 | `top_categories` | `list[tuple[str, int]]` | list() |
 
 ### `LCIABatchResult`
@@ -1893,7 +1893,7 @@ alongside the aggregate ``scoring_results``.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[LCIAResult]` | required |
+| `results` | `list[LCIAResult]` | _required_ |
 | `single_score` | `float \| None` | None |
 | `single_score_unit` | `str \| None` | None |
 | `norm_weight_set_name` | `str \| None` | None |
@@ -1911,14 +1911,14 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_id` | `str` | required |
-| `method_name` | `str` | required |
-| `category` | `str` | required |
-| `damage_category` | `str` | required |
-| `score` | `float` | required |
-| `unit` | `str` | required |
-| `mapped_flows` | `int` | required |
-| `functional_unit` | `str` | required |
+| `method_id` | `str` | _required_ |
+| `method_name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `damage_category` | `str` | _required_ |
+| `score` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `mapped_flows` | `int` | _required_ |
+| `functional_unit` | `str` | _required_ |
 | `normalized_score` | `float \| None` | None |
 | `weighted_score` | `float \| None` | None |
 | `top_contributors` | `list[FlowContribution]` | list() |
@@ -1938,18 +1938,18 @@ survive the generic camelCase→snake_case conversion.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `method_id` | `str` | required |
-| `method_name` | `str` | required |
-| `total_factors` | `int` | required |
-| `mapped_by_uuid` | `int` | required |
-| `mapped_by_cas` | `int` | required |
-| `mapped_by_name` | `int` | required |
-| `mapped_by_synonym` | `int` | required |
-| `unmapped` | `int` | required |
-| `coverage` | `float` | required |
-| `db_biosphere_count` | `int` | required |
-| `unique_db_flows_matched` | `int` | required |
-| `unmapped_flows` | `list[UnmappedFlow]` | required |
+| `method_id` | `str` | _required_ |
+| `method_name` | `str` | _required_ |
+| `total_factors` | `int` | _required_ |
+| `mapped_by_uuid` | `int` | _required_ |
+| `mapped_by_cas` | `int` | _required_ |
+| `mapped_by_name` | `int` | _required_ |
+| `mapped_by_synonym` | `int` | _required_ |
+| `unmapped` | `int` | _required_ |
+| `coverage` | `float` | _required_ |
+| `db_biosphere_count` | `int` | _required_ |
+| `unique_db_flows_matched` | `int` | _required_ |
+| `unmapped_flows` | `list[UnmappedFlow]` | _required_ |
 
 ### `Method`
 
@@ -1963,12 +1963,12 @@ resolved method, so it is worth passing to :meth:`Client.get_impacts` /
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | required |
-| `name` | `str` | required |
-| `category` | `str` | required |
-| `unit` | `str` | required |
-| `factor_count` | `int` | required |
-| `collection` | `str` | required |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `factor_count` | `int` | _required_ |
+| `collection` | `str` | _required_ |
 
 ### `MethodDetail`
 
@@ -1979,11 +1979,11 @@ and ``description`` are free-text metadata the source may or may not carry.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `id` | `str` | required |
-| `name` | `str` | required |
-| `unit` | `str` | required |
-| `category` | `str` | required |
-| `factor_count` | `int` | required |
+| `id` | `str` | _required_ |
+| `name` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `category` | `str` | _required_ |
+| `factor_count` | `int` | _required_ |
 | `description` | `str \| None` | None |
 | `methodology` | `str \| None` | None |
 
@@ -2001,10 +2001,10 @@ when the engine predates these fields.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_ref` | `str` | required |
-| `flow_name` | `str` | required |
-| `direction` | `str` | required |
-| `value` | `float` | required |
+| `flow_ref` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `direction` | `str` | _required_ |
+| `value` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
 | `location` | `str \| None` | None |
@@ -2015,9 +2015,9 @@ Shortest upstream path from a root process to a matching activity.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `path` | `list[PathStep]` | required |
-| `path_length` | `int` | required |
-| `total_ratio` | `float` | required |
+| `path` | `list[PathStep]` | _required_ |
+| `path_length` | `int` | _required_ |
+| `total_ratio` | `float` | _required_ |
 
 ### `PathStep`
 
@@ -2029,12 +2029,12 @@ emits camelCase keys (``processId``, ``activityName``,
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `location` | `str` | required |
-| `unit` | `str` | required |
-| `cumulative_quantity` | `float` | required |
-| `scaling_factor` | `float` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `unit` | `str` | _required_ |
+| `cumulative_quantity` | `float` | _required_ |
+| `scaling_factor` | `float` | _required_ |
 | `local_step_ratio` | `float \| None` | None |
 
 ### `PerturbedResult`
@@ -2049,10 +2049,10 @@ without an out-of-band index.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `perturbation` | `dict` | required |
-| `impact` | `LCIAResult \| None` | required |
-| `delta_impact` | `float \| None` | required |
-| `error` | `str \| None` | required |
+| `perturbation` | `dict` | _required_ |
+| `impact` | `LCIAResult \| None` | _required_ |
+| `delta_impact` | `float \| None` | _required_ |
+| `error` | `str \| None` | _required_ |
 
 ### `Preset`
 
@@ -2063,9 +2063,9 @@ expands it server-side into the ``filters`` triples).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `name` | `str` | required |
-| `label` | `str` | required |
-| `description` | `str \| None` | required |
+| `name` | `str` | _required_ |
+| `label` | `str` | _required_ |
+| `description` | `str \| None` | _required_ |
 | `filters` | `list[PresetFilter]` | list() |
 
 ### `PresetFilter`
@@ -2074,8 +2074,8 @@ One filter triple inside a :class:`Preset`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `system` | `str` | required |
-| `value` | `str` | required |
+| `system` | `str` | _required_ |
+| `value` | `str` | _required_ |
 | `mode` | `MatchMode` | <MatchMode.CONTAINS: 'contains'> |
 
 ### `ScoredActivity`
@@ -2087,9 +2087,9 @@ One process's batch impacts inside a :class:`BatchScores`.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `activity_name` | `str` | required |
-| `impacts` | `LCIABatchResult` | required |
+| `process_id` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `impacts` | `LCIABatchResult` | _required_ |
 
 ### `ScoringIndicator`
 
@@ -2104,8 +2104,8 @@ from, or as a last resort the raw variable key.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `category` | `str` | required |
-| `value` | `float` | required |
+| `category` | `str` | _required_ |
+| `value` | `float` | _required_ |
 
 ### `SearchResults`
 
@@ -2126,12 +2126,12 @@ materialise eagerly if you prefer.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `results` | `list[~T]` | required |
-| `total` | `int` | required |
-| `offset` | `int` | required |
-| `limit` | `int` | required |
-| `has_more` | `bool` | required |
-| `search_time_ms` | `float` | required |
+| `results` | `list[~T]` | _required_ |
+| `total` | `int` | _required_ |
+| `offset` | `int` | _required_ |
+| `limit` | `int` | _required_ |
+| `has_more` | `bool` | _required_ |
+| `search_time_ms` | `float` | _required_ |
 | `_fetch` | `Optional[Callable[[int, int \| None], dict]]` | None |
 | `_parse` | `Optional[Callable[[dict], ~T]]` | None |
 | `_fetched` | `list[~T]` | list() |
@@ -2152,8 +2152,8 @@ the order of the requested perturbations.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `baseline` | `LCIAResult` | required |
-| `perturbed` | `list[PerturbedResult]` | required |
+| `baseline` | `LCIAResult` | _required_ |
+| `perturbed` | `list[PerturbedResult]` | _required_ |
 
 ### `ServerVersion`
 
@@ -2166,10 +2166,10 @@ None for engines that predate it (everything up to v0.7.x).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `version` | `str` | required |
-| `git_hash` | `str` | required |
-| `git_tag` | `str \| None` | required |
-| `build_target` | `str` | required |
+| `version` | `str` | _required_ |
+| `git_hash` | `str` | _required_ |
+| `git_tag` | `str \| None` | _required_ |
+| `build_target` | `str` | _required_ |
 | `wire_version` | `int \| None` | None |
 
 ### `SetAmount`
@@ -2178,8 +2178,8 @@ The lines to restate, and what to restate them to.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `select` | `ExchangeSelector` | required |
-| `amount` | `float` | required |
+| `select` | `ExchangeSelector` | _required_ |
+| `amount` | `float` | _required_ |
 
 ### `Substitution`
 
@@ -2196,8 +2196,8 @@ substitution across multiple calls without aliasing risk.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `from_pid` | `str` | required |
-| `to_pid` | `str` | required |
+| `from_pid` | `str` | _required_ |
+| `to_pid` | `str` | _required_ |
 | `consumer` | `str \| None` | None |
 
 ### `SupplyChain`
@@ -2213,9 +2213,9 @@ lengths by hand.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `root` | `Activity` | required |
-| `total_activities` | `int` | required |
-| `filtered_activities` | `int` | required |
+| `root` | `Activity` | _required_ |
+| `total_activities` | `int` | _required_ |
+| `filtered_activities` | `int` | _required_ |
 | `entries` | `list[SupplyChainEntry]` | list() |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
@@ -2240,11 +2240,11 @@ id can exist in more than one loaded DB).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `from_id` | `str` | required |
-| `from_db` | `str` | required |
-| `to_id` | `str` | required |
-| `to_db` | `str` | required |
-| `amount` | `float` | required |
+| `from_id` | `str` | _required_ |
+| `from_db` | `str` | _required_ |
+| `to_id` | `str` | _required_ |
+| `to_db` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 
 ### `SupplyChainEntry`
 
@@ -2264,15 +2264,15 @@ the database the entry lives in (they differ across linked databases).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `process_id` | `str` | required |
-| `database_name` | `str` | required |
-| `activity_name` | `str` | required |
-| `location` | `str` | required |
-| `quantity` | `float` | required |
-| `unit` | `str` | required |
-| `scaling_factor` | `float` | required |
-| `depth` | `int` | required |
-| `upstream_count` | `int` | required |
+| `process_id` | `str` | _required_ |
+| `database_name` | `str` | _required_ |
+| `activity_name` | `str` | _required_ |
+| `location` | `str` | _required_ |
+| `quantity` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `scaling_factor` | `float` | _required_ |
+| `depth` | `int` | _required_ |
+| `upstream_count` | `int` | _required_ |
 | `classifications` | `dict[str, str]` | dict() |
 
 ### `TechInput`
@@ -2287,8 +2287,8 @@ unit; another one is fine as long as it converts.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `provider` | `str` | required |
-| `amount` | `float` | required |
+| `provider` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `comment` | `str \| None` | None |
 
@@ -2299,13 +2299,13 @@ producing activity's classifications describe the product taxonomy.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | required |
-| `amount` | `float` | required |
-| `unit` | `str` | required |
-| `role` | `TechRole` | required |
-| `target_activity_name` | `str \| None` | required |
-| `target_location` | `str \| None` | required |
-| `target_process_id` | `str \| None` | required |
+| `flow_name` | `str` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `role` | `TechRole` | _required_ |
+| `target_activity_name` | `str \| None` | _required_ |
+| `target_location` | `str \| None` | _required_ |
+| `target_process_id` | `str \| None` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | False |
@@ -2332,9 +2332,9 @@ A method factor with no matching database flow (in :class:`MappingStatus`).
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_ref` | `str` | required |
-| `flow_name` | `str` | required |
-| `direction` | `str` | required |
+| `flow_ref` | `str` | _required_ |
+| `flow_name` | `str` | _required_ |
+| `direction` | `str` | _required_ |
 
 ### `WasteExchange`
 
@@ -2347,13 +2347,13 @@ the same cut-off semantics as an orphan technosphere input.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `flow_name` | `str` | required |
-| `amount` | `float` | required |
-| `unit` | `str` | required |
-| `is_input` | `bool` | required |
-| `target_activity_name` | `str \| None` | required |
-| `target_location` | `str \| None` | required |
-| `target_process_id` | `str \| None` | required |
+| `flow_name` | `str` | _required_ |
+| `amount` | `float` | _required_ |
+| `unit` | `str` | _required_ |
+| `is_input` | `bool` | _required_ |
+| `target_activity_name` | `str \| None` | _required_ |
+| `target_location` | `str \| None` | _required_ |
+| `target_process_id` | `str \| None` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | True |
@@ -2376,8 +2376,8 @@ names its producer.
 
 | Field | Type | Default |
 |-------|------|---------|
-| `provider` | `str` | required |
-| `amount` | `float` | required |
+| `provider` | `str` | _required_ |
+| `amount` | `float` | _required_ |
 | `unit` | `str \| None` | None |
 | `comment` | `str \| None` | None |
 
