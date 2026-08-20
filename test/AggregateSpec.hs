@@ -24,7 +24,7 @@ import qualified API.Types as API
 import qualified Service.Aggregate as Agg
 import qualified SharedSolver as SS
 import TestHelpers (loadSampleDatabase, mkDepLookupFromMap, mkSolverFromDb)
-import Types (CrossDBLink (..), Database (..), processIdToText)
+import Types (CrossDBLink (..), Database (..), ExchangeKind (..), processIdToText)
 import qualified Types
 import qualified UnitConversion as UC
 
@@ -328,13 +328,13 @@ spec = do
 
     describe "exchangeTypeScopeError (shared REST/MCP guard)" $ do
         it "allows the filter on scope=direct and an absent filter everywhere" $ do
-            Agg.exchangeTypeScopeError Agg.ScopeDirect (Just Agg.KindTechnosphere) `shouldBe` Nothing
+            Agg.exchangeTypeScopeError Agg.ScopeDirect (Just KindTechnosphere) `shouldBe` Nothing
             Agg.exchangeTypeScopeError Agg.ScopeConsumption Nothing `shouldBe` Nothing
 
         it "rejects the filter on every non-direct scope" $ do
-            Agg.exchangeTypeScopeError Agg.ScopeBiosphere (Just Agg.KindBiosphere) `shouldSatisfy` isJust
-            Agg.exchangeTypeScopeError Agg.ScopeSupplyChain (Just Agg.KindWaste) `shouldSatisfy` isJust
-            Agg.exchangeTypeScopeError Agg.ScopeConsumption (Just Agg.KindTechnosphere) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeBiosphere (Just KindBiosphere) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeSupplyChain (Just KindWaste) `shouldSatisfy` isJust
+            Agg.exchangeTypeScopeError Agg.ScopeConsumption (Just KindTechnosphere) `shouldSatisfy` isJust
 
     describe "ScopeBiosphere on SAMPLE.min3" $ do
         it "echoes the biosphere scope text" $ do

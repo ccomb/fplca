@@ -34,7 +34,7 @@ import qualified Data.Vector.Unboxed as VU
 import GHC.Generics (Generic)
 
 import Control.Lens ((&), (?~))
-import Data.List (nub)
+import Data.List (find, nub)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
 import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
@@ -669,6 +669,50 @@ flowKindCompartment :: FlowKind -> Maybe Compartment
 flowKindCompartment (TechKind _) = Nothing
 flowKindCompartment (BioKind f) = bfCompartment f
 flowKindCompartment (WasteKind _) = Nothing
+
+{- | Which of the three an inventory line is, as a value rather than as the
+line itself: a product taken from the technosphere, a substance exchanged with
+nature, or a waste. An exchange has one and so does the flow it carries, which
+is why one type answers for both, 'exchangeKindOf' reading it off a line and
+'kindOfFlow' off a resolved flow.
+
+It is what the @exchange_type@, @filter_exchange_type@ and @kind@ parameters
+name, and 'exchangeKindName' is the one place their spelling lives.
+-}
+data ExchangeKind = KindTechnosphere | KindBiosphere | KindWaste
+    deriving (Eq, Show, Enum, Bounded)
+
+{- | Project an 'Exchange' onto its kind. Total, so a fourth variant would
+surface as a compile error here.
+-}
+exchangeKindOf :: Exchange -> ExchangeKind
+exchangeKindOf TechnosphereExchange{} = KindTechnosphere
+exchangeKindOf BiosphereExchange{} = KindBiosphere
+exchangeKindOf WasteExchange{} = KindWaste
+
+-- | Project a resolved flow onto the same three. Total.
+kindOfFlow :: FlowKind -> ExchangeKind
+kindOfFlow (TechKind _) = KindTechnosphere
+kindOfFlow (BioKind _) = KindBiosphere
+kindOfFlow (WasteKind _) = KindWaste
+
+-- | How a kind is spelled on every surface that names one.
+exchangeKindName :: ExchangeKind -> Text
+exchangeKindName KindTechnosphere = "technosphere"
+exchangeKindName KindBiosphere = "biosphere"
+exchangeKindName KindWaste = "waste"
+
+{- | Read a kind a request asked for. 'Nothing' for anything else, so the
+caller refuses with its own message rather than filtering on a guess.
+-}
+parseExchangeKind :: Text -> Maybe ExchangeKind
+parseExchangeKind raw = find ((== raw) . exchangeKindName) [minBound .. maxBound]
+
+{- | The kinds a request may name, for the message that refuses the others.
+Read off the type, so a fourth kind cannot go unmentioned.
+-}
+exchangeKindChoices :: Text
+exchangeKindChoices = T.intercalate " | " (map exchangeKindName [minBound .. maxBound])
 
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit

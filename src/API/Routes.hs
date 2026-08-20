@@ -1601,10 +1601,9 @@ getActivityAggregate dbName processId scopeParam isInputParam maxDepthParam fnam
             _ -> V.failure "scope must be one of: direct | supply_chain | biosphere | consumption"
         parseExType = \case
             Nothing -> V.Success Nothing
-            Just "technosphere" -> V.Success (Just Agg.KindTechnosphere)
-            Just "biosphere" -> V.Success (Just Agg.KindBiosphere)
-            Just "waste" -> V.Success (Just Agg.KindWaste)
-            Just _ -> V.failure "filter_exchange_type must be one of: technosphere | biosphere | waste"
+            Just raw -> case parseExchangeKind raw of
+                Just k -> V.Success (Just k)
+                Nothing -> V.failure ("filter_exchange_type must be one of: " <> exchangeKindChoices)
         parseAgg = \case
             Nothing -> V.Success Agg.AggSum
             Just "sum_quantity" -> V.Success Agg.AggSum

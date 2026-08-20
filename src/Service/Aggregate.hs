@@ -13,8 +13,6 @@ module Service.Aggregate (
     AggregateParams (..),
     AggScope (..),
     AggregateFn (..),
-    ExchangeKind (..),
-    exchangeKindOf,
     exchangeTypeScopeError,
     emptyAggregateParams,
     aggregate,
@@ -61,7 +59,7 @@ import Types (
     BiosphereFlow (..),
     CrossDBLink (..),
     Database (..),
-    Exchange (..),
+    ExchangeKind (..),
     SparseTriple (..),
     UnitDB,
     activityClassification,
@@ -72,6 +70,7 @@ import Types (
     exchangeFlowId,
     exchangeIsInput,
     exchangeIsReference,
+    exchangeKindOf,
     processIdToText,
     qualifyRef,
     supplierRefText,
@@ -84,20 +83,6 @@ import UnitConversion (UnitConfig)
 
 data AggScope = ScopeDirect | ScopeSupplyChain | ScopeBiosphere | ScopeConsumption
     deriving (Eq, Show)
-
-{- | Local discriminator for filtering by exchange variant. Mirrors the
-three-way 'Exchange' sum (technosphere / biosphere / waste).
--}
-data ExchangeKind = KindTechnosphere | KindBiosphere | KindWaste
-    deriving (Eq, Show)
-
-{- | Project an 'Exchange' onto its 'ExchangeKind'. Total — every variant is
-covered, so a new constructor would surface as a compile error here.
--}
-exchangeKindOf :: Exchange -> ExchangeKind
-exchangeKindOf TechnosphereExchange{} = KindTechnosphere
-exchangeKindOf BiosphereExchange{} = KindBiosphere
-exchangeKindOf WasteExchange{} = KindWaste
 
 {- | Why a filter_exchange_type value cannot be combined with the given
 scope — 'Nothing' when the combination is legal. Shared by the REST and
