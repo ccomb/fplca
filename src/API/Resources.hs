@@ -359,7 +359,13 @@ description r = case r of
         \connected entries, divide the supplier's scaling_factor by the consumer's \
         \scaling_factor. Summing quantities across entries that feed each other \
         \(electricity high→medium→low voltage) double-counts the chain, so use \
-        \aggregate with scope=consumption for upstream totals."
+        \aggregate with scope=consumption for upstream totals.\n\
+        \\n\
+        \Every entry states its own 'unit': the producing activity's reference \
+        \product unit, which a SimaPro or Brightway Excel import records in the \
+        \canonical unit of its dimension (kg, mj, m3). It is not always the unit \
+        \written on the exchange that consumes it, so an input of 0.22 kWh appears \
+        \here in mj (1 kWh = 3.6 MJ). Read the unit off the entry, never assume it."
     GetInventory ->
         "LCA / ACV: compute the Life Cycle Inventory (LCI): biosphere flows \
         \(emissions and resource extractions) for an activity's full supply chain. \

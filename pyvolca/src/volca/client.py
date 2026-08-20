@@ -1617,6 +1617,11 @@ class Client:
         further downstream analysis on a truncated chain would be wrong
         without flagging the gap.
 
+        Each entry carries its own ``unit``, and entries do not share one: it
+        is the producing activity's reference-product unit, which is not
+        always the unit written on the exchange that consumes it. Read it off
+        the entry rather than off the activity you started from.
+
         Args:
             max_depth: Max hops from root. 1 = direct inputs only.
             classification_filters: Restrict entries to those matching any
