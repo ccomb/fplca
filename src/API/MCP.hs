@@ -781,12 +781,18 @@ callSearchFlows rid args (db, _) =
                     Left err -> return $ toolError rid (T.pack $ show err)
                     Right val -> return $ toolSuccessJson rid val
   where
-    -- A typo must not read as "every kind", the way a dropped filter would.
-    readKind = case textArg "kind" args of
+    -- A typo must not read as "every kind", the way a dropped filter would,
+    -- and neither must a value that is not text at all: 'textArg' cannot tell
+    -- @{"kind": true}@ from an absent key, so the lookup is read here.
+    readKind = case KM.lookup (fromText "kind") args of
         Nothing -> Right Nothing
-        Just raw -> case parseExchangeKind raw of
+        Just Null -> Right Nothing
+        Just (String raw) -> case parseExchangeKind raw of
             Just k -> Right (Just k)
-            Nothing -> Left ("kind must be one of: " <> exchangeKindChoices <> " (got " <> raw <> ")")
+            Nothing -> Left (badKind raw)
+        Just other -> Left (badKind (TE.decodeUtf8Lenient (BSL.toStrict (encode other))))
+
+    badKind got = "kind must be one of: " <> exchangeKindChoices <> " (got " <> got <> ")"
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) = runTool rid $ do
