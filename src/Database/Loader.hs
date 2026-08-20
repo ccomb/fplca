@@ -250,6 +250,15 @@ History of manual bumps:
      states about itself: published source, technology, review). Old caches
      miss the field; the Store layout is positional, so decoding them would
      misread every field after it.
+- 16: a dimension's reference unit is now its shortest spelling at factor 1.0,
+     and the energy column of the unit table is scaled so that MJ carries it.
+     A reference product ingested from SimaPro or Brightway Excel is therefore
+     recorded as 3.6 mj where it used to be 3.6e6 j, which divides the
+     activity's normalization factor by a million, and a volume or count
+     reference is recorded under m3 / p rather than cubic meter /
+     dimensionless, which changes the product flow's UUID (it is derived from
+     the unit name) and so the activity's process id. Value changes with no
+     type change, which the fingerprint alone would accept.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -257,7 +266,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 15
+     in hi `xor` lo `xor` 16
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

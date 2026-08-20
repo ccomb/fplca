@@ -129,6 +129,43 @@ spec = do
             cfg <- loadFullUnitConfig
             normalizeToCanonical cfg "Bq" 1000.0 `shouldBe` Just ("kbq", 1.0)
 
+        -- Energy's reference unit is MJ, not the SI joule: that is the unit
+        -- energy CFs and cumulative-energy-demand results are authored in, and
+        -- it is what an LCA practitioner reads. A joule-canonical table records
+        -- a 1 kWh reference product as 3600000, which is arithmetically right
+        -- and unreadable.
+        it "normalizes kWh to canonical MJ (energy CFs are per MJ)" $ do
+            cfg <- loadFullUnitConfig
+            normalizeToCanonical cfg "kWh" 1.0 `shouldBe` Just ("mj", 3.6)
+
+        -- What a dimension's reference unit is decides the unit a reference
+        -- product is recorded in and the basis a result-expression CF is read
+        -- against. It is a policy choice, not an accident of which spelling
+        -- sorts first, so every dimension that declares one is pinned here:
+        -- moving one moves recorded amounts, and has to be deliberate.
+        it "pins the canonical unit of every dimension" $ do
+            cfg <- loadFullUnitConfig
+            let canonicals =
+                    [ ("kilogram", Just "kg")
+                    , ("meter", Just "m")
+                    , ("second", Just "s")
+                    , ("j", Just "mj")
+                    , ("square meter", Just "m2")
+                    , ("cubic meter", Just "m3")
+                    , ("unit", Just "p")
+                    , ("eur2005", Just "eur")
+                    , ("Bq", Just "kbq")
+                    , ("km/h", Just "m/s")
+                    , ("kg/h", Just "kg/s")
+                    , ("kg/ha", Just "kg/m2")
+                    , ("kg/l", Just "kg/m3")
+                    , ("tkm", Just "kgm")
+                    , ("m2*year", Just "m2a")
+                    , -- a dimension may declare none, and then nothing normalizes
+                      ("mj/kg", Nothing)
+                    ]
+            map (canonicalUnitFor cfg . fst) canonicals `shouldBe` map snd canonicals
+
         it "returns Nothing for incompatible units" $ do
             cfg <- loadFullUnitConfig
             convertUnit cfg "kg" "m" 1.0 `shouldBe` Nothing

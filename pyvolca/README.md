@@ -808,6 +808,11 @@ when ``limit`` truncated ``entries`` below ``filtered_activities``:
 further downstream analysis on a truncated chain would be wrong
 without flagging the gap.
 
+Each entry carries its own ``unit``, and entries do not share one: it
+is the producing activity's reference-product unit, which is not
+always the unit written on the exchange that consumes it. Read it off
+the entry rather than off the activity you started from.
+
 Args:
     max_depth: Max hops from root. 1 = direct inputs only.
     classification_filters: Restrict entries to those matching any
@@ -1216,7 +1221,10 @@ and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
 ``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
 ``product_name`` is the reference output product (e.g. ``"wheat flour"``);
 ``product_amount`` and ``product_unit`` describe the functional unit
-(typically ``1.0`` of ``"kg"`` / ``"MJ"`` / etc.). ``location`` is the
+(typically ``1.0`` of ``"kg"`` / ``"mj"`` / etc.; a database imported from
+SimaPro or Brightway Excel states it in the canonical unit of its
+dimension, so a 1 kWh reference product reads ``3.6`` of ``"mj"``).
+``location`` is the
 geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
 its own; compose a label from ``activity_name`` + ``product_name``.
 
@@ -2252,6 +2260,11 @@ One activity in a :class:`SupplyChain.entries` list.
 
 ``quantity`` is the cumulative amount of this activity's reference
 product consumed per functional unit of the root activity, in ``unit``.
+``unit`` is the producing activity's reference-product unit, which for a
+database imported from SimaPro or Brightway Excel is the canonical unit of
+its dimension (``"kg"``, ``"mj"``, ``"m3"``), not the unit written on the
+exchange that consumes it. An input stated as ``0.22 kWh`` therefore shows
+up here as its equivalent in ``mj``: 1 kWh is 3.6 MJ.
 ``scaling_factor`` is the multiplier the solver applied to this
 activity to produce ``quantity``, i.e. ``quantity = ref_output * scaling_factor``.
 ``classifications`` mirrors the producing activity's classifications

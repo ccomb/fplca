@@ -1103,10 +1103,10 @@ scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 {- | Convert product row to exchange, flow, and unit in one pass.
 
 For reference products ('isRef == True'), the declared amount is converted to
-the canonical base unit of its dimension (kg for mass, MJ for energy, m³ for
-volume, …). This ensures 'activityNormFactor' and the resulting matrix column
-are expressed per 1 base unit — otherwise a reference declared as "1 ton"
-would produce impacts 1000× too large.
+the canonical base unit of its dimension (kg for mass, mj for energy, m3 for
+volume, and so on). This ensures 'activityNormFactor' and the resulting matrix
+column are expressed per 1 base unit: a reference declared as "1 ton" would
+otherwise produce impacts 1000x too large.
 
 If the unit is unknown to the config or its dimension has no base unit, the
 raw values are kept (the downstream matrix builder in 'Database.hs' surfaces

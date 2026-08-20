@@ -121,7 +121,7 @@ spec = do
             -- Regression: the previous filter `abs value > 1e-15` was applied AFTER
             -- dividing rawValue by the normalization factor. For activities whose
             -- reference product gets normalized to a large canonical-unit amount at
-            -- ingest (e.g. SimaPro turns "1 kWh" into 3.6e6 J, so normFactor = 3.6e6),
+            -- ingest (e.g. SimaPro turns "3.6 TJ" into 3.6e6 MJ, so normFactor = 3.6e6),
             -- a real 1e-9 kg emission yielded a post-normalization value of ~2.8e-16
             -- and was silently dropped. The fix moves the filter to the source value,
             -- so the triplet must now survive even though its stored magnitude is
@@ -129,7 +129,7 @@ spec = do
             let actUUID = mkUUID "11111111-2222-3333-4444-555555555555"
                 prodUUID = mkUUID "22222222-3333-4444-5555-666666666666"
                 bioFlowUUID = mkUUID "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-                jUnitId = mkUUID "00000000-0000-0000-0000-00000000000a"
+                mjUnitId = mkUUID "00000000-0000-0000-0000-00000000000a"
                 kgUnitId = mkUUID "00000000-0000-0000-0000-00000000000b"
                 rawBioAmount = 1.0e-9 :: Double
                 normFactor = 3.6e6 :: Double
@@ -138,7 +138,7 @@ spec = do
                     TechnosphereExchange
                         { techFlowId = prodUUID
                         , techAmount = normFactor
-                        , techUnitId = jUnitId
+                        , techUnitId = mjUnitId
                         , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
@@ -165,7 +165,7 @@ spec = do
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
                         , activityLocationSource = LocationDeclared
-                        , activityUnit = "j"
+                        , activityUnit = "mj"
                         , exchanges = [refExchange, bioExchange]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
@@ -176,11 +176,11 @@ spec = do
                         , activityFormulaCheck = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
-                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
+                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" mjUnitId M.empty Nothing Nothing)
                 bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
                 unitDB =
                     M.fromList
-                        [ (jUnitId, Unit jUnitId "j" "j" "")
+                        [ (mjUnitId, Unit mjUnitId "mj" "mj" "")
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
@@ -207,13 +207,13 @@ spec = do
             let actUUID = mkUUID "11111111-2222-3333-4444-777777777777"
                 prodUUID = mkUUID "22222222-3333-4444-5555-888888888888"
                 bioFlowUUID = mkUUID "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
-                jUnitId = mkUUID "00000000-0000-0000-0000-00000000000a"
+                mjUnitId = mkUUID "00000000-0000-0000-0000-00000000000a"
                 kgUnitId = mkUUID "00000000-0000-0000-0000-00000000000b"
                 refExchange =
                     TechnosphereExchange
                         { techFlowId = prodUUID
                         , techAmount = 1.0
-                        , techUnitId = jUnitId
+                        , techUnitId = mjUnitId
                         , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
@@ -240,7 +240,7 @@ spec = do
                         , activityClassification = M.empty
                         , activityLocation = "GLO"
                         , activityLocationSource = LocationDeclared
-                        , activityUnit = "j"
+                        , activityUnit = "mj"
                         , exchanges = [refExchange, zeroBio]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
@@ -251,11 +251,11 @@ spec = do
                         , activityFormulaCheck = Nothing
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
-                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" jUnitId M.empty Nothing Nothing)
+                techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" mjUnitId M.empty Nothing Nothing)
                 bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
                 unitDB =
                     M.fromList
-                        [ (jUnitId, Unit jUnitId "j" "j" "")
+                        [ (mjUnitId, Unit mjUnitId "mj" "mj" "")
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 

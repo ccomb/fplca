@@ -54,7 +54,7 @@ class Decomposition:
     pattern: str                               # "wrapper_wfldb" | "direct" | "layered"
     raw_material_name: str | None
     raw_material_kg: float
-    electricity_kwh: float
+    electricity_mj: float
     heat_mj: float
     tap_water_kg: float
     wastewater_m3: float
@@ -449,9 +449,9 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
         ]
 
     if dummy_op:
-        elec_kwh = heat_mj = tap_water_kg = wastewater_m3 = biowaste_kg = 0.0
+        elec_mj = heat_mj = tap_water_kg = wastewater_m3 = biowaste_kg = 0.0
     else:
-        elec_kwh = agg_total(filter_name="Electricity", filter_unit="kWh")
+        elec_mj = agg_total(filter_name="Electricity", filter_unit="MJ")
         heat_mj = agg_total(filter_name="Heat", filter_unit="MJ")
         tap_water_kg = agg_total(filter_name="Tap water", filter_unit="kg")
         wastewater_m3 = agg_total(filter_name="Wastewater", filter_unit="m3")
@@ -461,7 +461,7 @@ def decompose(client: "Client", process_id: str) -> Decomposition:
         pattern=pattern,
         raw_material_name=raw_name,
         raw_material_kg=raw_kg,
-        electricity_kwh=elec_kwh,
+        electricity_mj=elec_mj,
         heat_mj=heat_mj,
         tap_water_kg=tap_water_kg,
         wastewater_m3=wastewater_m3,

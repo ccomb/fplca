@@ -70,6 +70,63 @@
   and the database's scores move accordingly. A line naming several flows in a
   unit none of them uses, which used to mint a twin in silence, now refuses,
   and refuses the load with it.
+- Energy is now measured in megajoules rather than joules. A database imported
+  from SimaPro or Brightway Excel records its reference product in the
+  canonical unit of that product's dimension, and for energy that unit was the
+  joule, so a market for low-voltage electricity delivering one kilowatt hour
+  was written down as `3600000 j`, and every amount drawn from it read the same
+  way: the electricity a pig farm consumes was `5.07e10 j` where it now reads
+  `50652 mj`. Megajoules are the unit those numbers are compared in and
+  reasoned about everywhere else in the field.
+  Nothing about the inventory moves. A unit conversion has always been a ratio
+  between two entries of the unit table, so rescaling the whole energy column
+  leaves every ratio where it was: scoring a kilogram of wheat or of cheese
+  against EF 3.1 gives the same answer to the last digit a double holds, which
+  was measured on two engines built from the same source and differing only in
+  that table. Two narrow exceptions are worth knowing. A characterization
+  factor whose own unit the table does not know, one written "MJ-Eq" or "MJ
+  deprived" rather than plain "MJ", is read against the reference unit of the
+  flow it applies to, so on an energy flow it is now read per megajoule rather
+  than per joule and its score changes by a factor of a million. That is the
+  same correction radioactivity received when kBq became the reference unit,
+  and the new number is the right one; no shipped method writes a unit that
+  way, so it is a method of your own that would move. And a ratio that used to
+  land on a round double may now land one bit away from it, a kilowatt hour
+  reading 3600000.0000000005 joules rather than 3600000, since the two factors
+  it divides are no longer whole numbers.
+  What does move is the functional unit itself, which is the point rather than
+  a side effect: an activity that *sells* energy is now scored per megajoule
+  instead of per joule, so its score is a million times larger and says the
+  same thing. French low-voltage electricity reads 0.021 kg of fossil CO2 per
+  MJ where it used to read 2.1e-8 per J.
+  Which unit of a dimension is the reference one is now stated rather than
+  inferred. A unit spelled two ways carries the same factor, so several names
+  compete for the role ("mj" and "megajoule"), and the winner used to be
+  whichever sorted first alphabetically. It is now the shortest spelling, which
+  is the symbol and not the word. Energy was not the only dimension the
+  alphabet was deciding badly. Five others get a new reference name: a volume
+  is recorded as `m3` rather than `cubic meter`, a count of things as `p`
+  rather than `dimensionless`, a land occupation as `m2a` rather than `m2*a`,
+  a freight transport as `kgm` rather than `kg*m`, and a price as `eur` rather
+  than `dollar`. All five carry the same factor as the spelling they replace,
+  so no amount changes with them. The price one only renames an older defect
+  rather than fixing it: seven currencies sit in the table at a factor of 1.0,
+  so any of them converts to any other at par, and the reference name says
+  which label the amount is written under, not which currency it is. A test now
+  pins the reference unit of every dimension, so moving one is a decision and
+  not an accident.
+  One consequence to know about: the identifier of a product flow is derived
+  from the unit that product is measured in, so an activity whose reference
+  product is energy, a volume, a count, a land occupation, a freight transport
+  or a price now answers to a new `process_id`. A process id of such an
+  activity written down before this release no longer resolves; search for the
+  activity again to get the current one. Databases already on disk rebuild
+  their cache on the next load.
+  The same is true of a process id recorded inside a database: an uploaded
+  database whose edits are kept in a journal replays them by process id, so an
+  edit recorded against one of those activities no longer finds its target and
+  the database refuses to load, naming the id it could not resolve. Those edits
+  have to be made again against the current ids.
 - The shipped `volca.toml` names the settings it never mentioned: `[hosting]`
   and its nine limits, `chem-synonyms`, `substance-edges`, `[server] name`,
   and the three method fields that carry a single score (`scoring`, `patches`,

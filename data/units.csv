@@ -44,31 +44,31 @@ year,time,31536000.0
 a,time,31536000.0
 yr,time,31536000.0
 month,time,2592000.0
-j,energy,1.0
-joule,energy,1.0
-kj,energy,1000.0
-kilojoule,energy,1000.0
-mj,energy,1.0e6
-megajoule,energy,1.0e6
-gj,energy,1.0e9
-gigajoule,energy,1.0e9
-tj,energy,1.0e12
-terajoule,energy,1.0e12
-kwh,energy,3.6e6
-kilowatt hour,energy,3.6e6
-kilowatt-hour,energy,3.6e6
-mwh,energy,3.6e9
-megawatt hour,energy,3.6e9
-megawatt-hour,energy,3.6e9
-wh,energy,3600.0
-watt hour,energy,3600.0
-watt-hour,energy,3600.0
-kcal,energy,4184.0
-kilocalorie,energy,4184.0
-cal,energy,4.184
-calorie,energy,4.184
-btu,energy,1055.06
-british thermal unit,energy,1055.06
+j,energy,1.0e-6
+joule,energy,1.0e-6
+kj,energy,0.001
+kilojoule,energy,0.001
+mj,energy,1.0
+megajoule,energy,1.0
+gj,energy,1000.0
+gigajoule,energy,1000.0
+tj,energy,1.0e6
+terajoule,energy,1.0e6
+kwh,energy,3.6
+kilowatt hour,energy,3.6
+kilowatt-hour,energy,3.6
+mwh,energy,3600.0
+megawatt hour,energy,3600.0
+megawatt-hour,energy,3600.0
+wh,energy,0.0036
+watt hour,energy,0.0036
+watt-hour,energy,0.0036
+kcal,energy,0.004184
+kilocalorie,energy,0.004184
+cal,energy,4.184e-6
+calorie,energy,4.184e-6
+btu,energy,0.00105506
+british thermal unit,energy,0.00105506
 m2,area,1.0
 m²,area,1.0
 square meter,area,1.0

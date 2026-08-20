@@ -50,7 +50,7 @@ import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 unitConfig :: UnitConfig
 unitConfig =
     fromRight defaultUnitConfig $
-        buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\ntonne,mass,1000.0\nm3,volume,1.0\nmj,energy,1.0e6\n")
+        buildFromCSV (BLC.pack "name,dimension,factor\nkg,mass,1.0\ntonne,mass,1000.0\nm3,volume,1.0\nmj,energy,1.0\n")
 
 uidKg, uidTonne, uidM3, uidMJ :: UUID
 uidKg = UUID.fromWords64 1 0
