@@ -1082,10 +1082,12 @@ data TechInputAPI = TechInputAPI
 {- | One biosphere exchange: a resource taken from the environment or an
 emission released into it.
 
-Either @beFlow@ names a flow already in the vocabulary by its identifier, or
-@beName@ + @beCompartment@ introduce one. Giving both is refused rather than
-guessed at. A biosphere amount is never converted, so an exchange on an
-existing flow must be stated in that flow's own unit.
+Either @beFlow@ names a flow by its identifier, or @beName@ with
+@beCompartment@ and @beUnit@ names one in words, which reaches the flow the
+vocabulary already declares under them and introduces one only when nothing
+answers to them. Giving both is refused rather than guessed at. A biosphere
+amount is never converted, so an exchange states its amount in the flow's own
+unit.
 -}
 data BioExchangeAPI = BioExchangeAPI
     { beFlow :: Maybe Text
@@ -1937,27 +1939,38 @@ toSelector es = case (T.toLower (T.strip (esKind es)), esProvider es, esFlow es)
         | otherwise ->
             Left ["unknown selector kind: " <> kind <> " (expected input|waste|biosphere)"]
 
-{- | A biosphere line names an existing flow by identifier, or introduces one
-by name and compartment. Both at once is ambiguous and neither says nothing,
-so both are refused instead of picking a winner.
+{- | A biosphere line names a flow by identifier, or in words. Both at once is
+ambiguous and neither says nothing, so both are refused instead of picking a
+winner.
 -}
 bioFlowRef :: BioExchangeAPI -> Either Text FlowRef
 bioFlowRef be = case (beFlow be, beName be) of
-    (Just _, Just _) -> Left "a biosphere exchange names either an existing flow or a new one, not both"
-    (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name and compartment"
+    (Just _, Just _) -> Left "a biosphere exchange names its flow by identifier or in words, not both"
+    (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name, a compartment and a unit"
     (Just flowId, Nothing) ->
-        maybe (Left ("not a flow identifier: " <> flowId)) (Right . ExistingFlow) (UUID.fromText flowId)
+        maybe (Left (notAnIdentifier flowId)) (Right . FlowById) (UUID.fromText flowId)
     (Nothing, Just name) -> case (beCompartment be, beUnit be) of
         (Nothing, _) -> Left ("biosphere flow \"" <> name <> "\" needs a compartment (air, water, soil, natural resource)")
-        -- The unit is half of a named flow's identity (see
-        -- 'Database.Author.authoredBioFlowUUID'), so it cannot be defaulted.
+        -- The unit is half of what makes a flow named in words that flow, both
+        -- when the words reach one the database declares and when they mint a
+        -- new one (see 'Database.Author.authoredBioFlowUUID'), so it cannot be
+        -- defaulted.
         (_, Nothing) -> Left ("biosphere flow \"" <> name <> "\" needs a unit")
         (Just medium, Just unit) ->
             Right $
-                NewBioFlow
+                FlowByName
                     name
                     Compartment{compartmentName = medium, compartmentSub = beSubCompartment be}
                     unit
+
+{- | A name written into the identifier field is the common mistake, so the
+refusal says where identifiers come from and how a name is written instead.
+-}
+notAnIdentifier :: Text -> Text
+notAnIdentifier flowId =
+    "not a flow identifier: "
+        <> flowId
+        <> " (an identifier is the UUID a flow search returns; a flow written in words is stated as its name, compartment and unit instead)"
 
 bioDirection :: Text -> Either Text BioDirection
 bioDirection raw = case T.toLower (T.strip raw) of

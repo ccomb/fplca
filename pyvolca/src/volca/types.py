@@ -908,13 +908,20 @@ def _direction_is_input(direction: BioDirection) -> bool:
 
 @dataclass
 class BiosphereExchange:
-    """An exchange with the environment (resource extraction or emission)."""
+    """An exchange with the environment (resource extraction or emission).
+
+    ``flow_id`` is what a line writes back when its words cannot address the
+    flow on their own: a name several flows answer to, or one whose source
+    recorded no compartment. Everything else restates as
+    :meth:`BioExchange.named` takes it.
+    """
 
     flow_name: str
     compartment: Compartment | None
     amount: float
     unit: str
     direction: BioDirection  # "Resource" = extraction, "Emission" = release
+    flow_id: str
     comment: str | None = None
 
     is_biosphere: bool = True  # discriminator for callers using duck typing
@@ -947,6 +954,7 @@ class BiosphereExchange:
             amount=inner["amount"],
             unit=ewu["unitName"],
             direction=BioDirection(inner["direction"]),
+            flow_id=inner["flowId"],
             comment=_exchange_comment(ewu, inner),
         )
 
@@ -1059,6 +1067,7 @@ def parse_exchange_detail(ed: dict) -> Exchange:
             amount=inner["amount"],
             unit=unit,
             direction=BioDirection(inner["direction"]),
+            flow_id=inner["flowId"],
             comment=comment,
         )
     if tag == "WasteExchange":
@@ -1929,14 +1938,15 @@ class TechInput:
 class BioExchange:
     """One resource taken from the environment, or one emission released into it.
 
-    Name the flow one way or the other, never both: ``flow`` addresses one the
-    database already has, and ``name`` + ``compartment`` introduce a new one.
-    Use the two constructors rather than the fields,
-    :meth:`existing` and :meth:`introducing`, which is why passing both or
-    neither raises here instead of at the server.
+    Name the flow one way or the other, never both: ``flow`` is the identifier
+    of a flow the database already has, which :meth:`Client.search_flows` and
+    :attr:`BiosphereExchange.flow_id` both return, while ``name`` with
+    ``compartment`` and ``unit`` names one in words. Use the two constructors
+    rather than the fields, :meth:`existing` and :meth:`named`, which is why
+    passing both or neither raises here instead of at the server.
 
-    A biosphere amount is never converted, so an exchange on an existing flow
-    must be stated in that flow's own unit.
+    A biosphere amount is never converted, so an exchange states its amount in
+    the flow's own unit.
     """
 
     direction: BioDirection
@@ -1951,8 +1961,9 @@ class BioExchange:
     def __post_init__(self) -> None:
         if (self.flow is None) == (self.name is None):
             raise ValueError(
-                "a biosphere exchange names either an existing flow (flow=...) "
-                "or a new one (name=..., compartment=...), not both and not neither"
+                "a biosphere exchange names its flow by identifier (flow=...) "
+                "or in words (name=..., compartment=..., unit=...), "
+                "not both and not neither"
             )
         if self.name is not None and self.compartment is None:
             raise ValueError(
@@ -1962,7 +1973,7 @@ class BioExchange:
         if self.name is not None and self.unit is None:
             raise ValueError(
                 f"biosphere flow {self.name!r} needs a unit "
-                "(it is half of a new flow's identity, so it cannot be defaulted)"
+                "(it is half of the flow's identity, so it cannot be defaulted)"
             )
 
     @classmethod
@@ -1975,7 +1986,10 @@ class BioExchange:
         unit: str | None = None,
         comment: str | None = None,
     ) -> "BioExchange":
-        """An exchange on a flow the database already declares, by its identifier."""
+        """An exchange on a flow the database already declares, by its identifier.
+
+        :meth:`Client.search_flows` is where identifiers come from.
+        """
         return cls(
             direction=BioDirection(direction),
             amount=amount,
@@ -1985,7 +1999,7 @@ class BioExchange:
         )
 
     @classmethod
-    def introducing(
+    def named(
         cls,
         name: str,
         compartment: str,
@@ -1996,10 +2010,21 @@ class BioExchange:
         sub_compartment: str | None = None,
         comment: str | None = None,
     ) -> "BioExchange":
-        """An exchange on a flow this activity brings into the database.
+        """An exchange on the flow this name, compartment and unit address.
 
-        No characterization factor matches a brand-new flow by identity, so the
+        That is the flow the database already declares under them when it has
+        one, which is what keeps an exchange written from an inventory pointing
+        at the curated flow rather than at a twin of it. ``sub_compartment`` is
+        part of the address, not a decoration: a flow recorded in
+        ``water/river`` is reached with ``sub_compartment="river"`` and not by
+        ``water`` alone.
+
+        A name nothing answers to brings a flow into the database, and since no
+        characterization factor matches a brand-new flow by identity, the
         engine returns a warning alongside the write rather than refusing it.
+        A name several flows answer to in the unit stated is refused, listing
+        their identifiers, so the exchange can name the one it means; two flows
+        of one name in two units are told apart by the unit itself.
         """
         return cls(
             direction=BioDirection(direction),

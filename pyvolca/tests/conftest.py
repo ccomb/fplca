@@ -302,6 +302,7 @@ def readme_namespace() -> dict[str, Any]:
                 amount=0.41,
                 unit="kg",
                 direction=BioDirection.EMISSION,
+                flow_id="349b29d1-3e58-4c66-98b9-9d1a1b1f1234",
             ),
         ],
     )

@@ -102,7 +102,7 @@ class TestParseExchangeWaste:
             "targetActivityName": None, "targetLocation": None, "targetProcessId": None,
         })
         bio = parse_exchange({
-            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
+            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission", "flowId": "11111111-2222-3333-4444-555555555555"},
             "flowName": "CO2", "unitName": "kg",
             "compartment": {"name": "air", "sub": None},
         })
@@ -118,7 +118,7 @@ class TestParseExchangeWaste:
             "targetActivityName": None, "targetLocation": None, "targetProcessId": None,
         })
         bio = parse_exchange({
-            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
+            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission", "flowId": "11111111-2222-3333-4444-555555555555"},
             "flowName": "CO2", "unitName": "kg",
             "compartment": {"name": "air", "sub": None},
         })
@@ -170,7 +170,7 @@ class TestParseExchangeDetailWaste:
 
     def test_waste_flow_envelope_rejected_on_biosphere_tag(self):
         bad = {
-            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission"},
+            "exchange": {"tag": "BiosphereExchange", "amount": 1.0, "direction": "Emission", "flowId": "11111111-2222-3333-4444-555555555555"},
             "exchangeUnitName": "kg",
             "flow": {"kind": "waste", "flow": {"name": "CO2"}},
         }

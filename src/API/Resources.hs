@@ -942,6 +942,6 @@ params r = case r of
         , Param "remove" "array" Optional "Lines to drop. Each is {kind, provider|flow}: kind \"input\" or \"waste\" with the provider's process_id, or kind \"biosphere\" with the flow id."
         , Param "set_amounts" "array" Optional "Lines to restate. Each is {select: {kind, provider|flow}, amount}."
         , Param "add_inputs" "array" Optional "Technosphere inputs to add. Each is {provider, amount} plus optional unit and comment. The flow follows from the provider."
-        , Param "add_biosphere" "array" Optional "Biosphere lines to add. Each is {direction, amount} plus either flow (an existing flow id) or name + compartment + unit to introduce a new one."
+        , Param "add_biosphere" "array" Optional "Biosphere lines to add. Each is {direction, amount} plus either flow (an existing flow id) or name + compartment + unit, which reach the flow the database declares under them and introduce one only when nothing does."
         , Param "add_waste_outputs" "array" Optional "Waste outputs to add. Each is {provider, amount} plus optional unit and comment, where the provider is the treatment process."
         ]
