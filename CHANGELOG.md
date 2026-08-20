@@ -175,6 +175,18 @@
   an older engine.
 
 ### Fixed
+- A waste output now names the activity that treats it. An exchange records the
+  link to its treatment exactly as an input records the link to its supplier,
+  but the activity view read that link on the input side only, so a waste output
+  answered with no target whatever it was linked to. Anything reading a waste
+  output with no target as a final waste flow, which is what a waste nothing
+  treats is, then described every linked one as final. The treatment is read off
+  the pair the matrix routes the waste on, activity and flow together, so the
+  row named is the one the score charged and never another product of the same
+  treatment. Databases written by hand are where this shows most, since
+  authoring always records the treatment a waste output goes to; an imported
+  file that states a link on a waste output is read the same way, which the
+  EcoSpold 2 reader carries through as written.
 - A Brightway Excel workbook loads from a directory, not only when its own
   path is named. The engine reads five database formats but the step that
   decides what a source directory holds knew four, so an uploaded `.xlsx` —
