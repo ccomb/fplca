@@ -1419,11 +1419,11 @@ inspect, not a failure.
 One resource taken from the environment, or one emission released into it.
 
 Name the flow one way or the other, never both: ``flow`` is the identifier
-of a flow the database already has, which :meth:`Client.search_flows`
-returns, while ``name`` with ``compartment`` and ``unit`` names one in
-words. Use the two constructors rather than the fields, :meth:`existing`
-and :meth:`named`, which is why passing both or neither raises here
-instead of at the server.
+of a flow the database already has, which :meth:`Client.search_flows` and
+:attr:`BiosphereExchange.flow_id` both return, while ``name`` with
+``compartment`` and ``unit`` names one in words. Use the two constructors
+rather than the fields, :meth:`existing` and :meth:`named`, which is why
+passing both or neither raises here instead of at the server.
 
 A biosphere amount is never converted, so an exchange states its amount in
 the flow's own unit.
@@ -1443,6 +1443,11 @@ the flow's own unit.
 
 An exchange with the environment (resource extraction or emission).
 
+``flow_id`` is what a line writes back when its words cannot address the
+flow on their own: a name several flows answer to, or one whose source
+recorded no compartment. Everything else restates as
+:meth:`BioExchange.named` takes it.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `flow_name` | `str` | _required_ |
@@ -1450,6 +1455,7 @@ An exchange with the environment (resource extraction or emission).
 | `amount` | `float` | _required_ |
 | `unit` | `str` | _required_ |
 | `direction` | `BioDirection` | _required_ |
+| `flow_id` | `str` | _required_ |
 | `comment` | `str \| None` | None |
 | `is_biosphere` | `bool` | True |
 | `is_waste` | `bool` | False |

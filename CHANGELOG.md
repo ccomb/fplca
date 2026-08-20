@@ -61,6 +61,15 @@
   different units, an energy carrier in kg and in MJ, are told apart by the
   unit the exchange states. The refusal for a name written into the identifier
   field now says where identifiers come from and how a name is written instead.
+  A biosphere line reads back with its flow's identifier as well, so a line
+  whose words cannot address one flow can still be restated from what the read
+  hands back.
+  This changes what a database written before now means. Its journal records
+  what the author wrote, not what it resolved to, so a line that minted a twin
+  of a curated flow last month now reaches the curated flow on the next load,
+  and the database's scores move accordingly. A line naming several flows in a
+  unit none of them uses, which used to mint a twin in silence, now refuses,
+  and refuses the load with it.
 - The shipped `volca.toml` names the settings it never mentioned: `[hosting]`
   and its nine limits, `chem-synonyms`, `substance-edges`, `[server] name`,
   and the three method fields that carry a single score (`scoring`, `patches`,

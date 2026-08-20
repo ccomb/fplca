@@ -28,6 +28,7 @@ def _inner(tag: str) -> dict:
         base["role"] = "Input"
     elif tag == "BiosphereExchange":
         base["direction"] = "Resource"
+        base["flowId"] = "11111111-2222-3333-4444-555555555555"
     elif tag == "WasteExchange":
         base["isInput"] = False
     return base
