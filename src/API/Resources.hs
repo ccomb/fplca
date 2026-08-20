@@ -771,7 +771,7 @@ params r = case r of
         , Param "max_depth" "integer" Optional "Only for scope=supply_chain: max hops from the root activity"
         , Param "filter_name" "string" Optional "Case-insensitive substring on flow/activity name"
         , Param "filter_name_not" "string" Optional "Comma-separated substring exclude list"
-        , Param "filter_unit" "string" Optional "Exact unit name"
+        , Param "filter_unit" "string" Optional "Whole unit name, case-insensitive: \"MJ\" and \"mj\" are the same unit, \"kg\" does not match \"kgm\""
         , Param "preset" "string" Optional "Name of a classification preset (from list_presets): expanded and merged into filter_classification."
         , Param "filter_classification" "array" Optional "List of \"System=Value[:exact]\" strings; defaults to 'contains' mode"
         , Param "filter_target_name" "string" Optional "Only for scope=direct technosphere or scope=consumption: filter by supplier activity name"

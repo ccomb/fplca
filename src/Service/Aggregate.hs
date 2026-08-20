@@ -418,9 +418,14 @@ filterRow p r =
         Nothing -> True
         Just q -> contains q (rowName r)
     nameNotOk = not $ any (`contains` rowName r) (apFilterNameNot p)
+    -- A unit is matched whole, not as a substring: "kg" must not take "kgm".
+    -- Case and surrounding space are ignored, because the caller writes the
+    -- unit the way their database spells it ("MJ") while a row carries the
+    -- reference spelling ("mj"), and an exact compare would answer zero rows
+    -- rather than say the two are the same unit.
     unitOk = case apFilterUnit p of
         Nothing -> True
-        Just u -> u == rowUnit r
+        Just u -> ci (T.strip u) == ci (T.strip (rowUnit r))
     targetOk = case apFilterTargetName p of
         Nothing -> True
         Just q -> case rowTargetName r of

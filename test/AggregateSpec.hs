@@ -212,6 +212,23 @@ spec = do
             length (API.aggGroups agg) `shouldSatisfy` (<= distinctUnits)
             length (API.aggGroups agg) `shouldSatisfy` (>= 1)
 
+        -- A caller writes the unit the way their database spells it, while a
+        -- row carries the reference spelling; a case-sensitive compare would
+        -- answer zero rows and read as "there is none of that unit here".
+        it "filter_unit reads a unit the way it is spelled, whatever the case" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            lower <- runAgg db direct{Agg.apFilterUnit = Just "kg"}
+            upper <- runAgg db direct{Agg.apFilterUnit = Just "KG"}
+            spaced <- runAgg db direct{Agg.apFilterUnit = Just " Kg "}
+            API.aggFilteredCount lower `shouldSatisfy` (> 0)
+            API.aggFilteredCount upper `shouldBe` API.aggFilteredCount lower
+            API.aggFilteredCount spaced `shouldBe` API.aggFilteredCount lower
+
+        it "filter_unit matches a unit whole, so a prefix of one matches nothing" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            agg <- runAgg db direct{Agg.apFilterUnit = Just "k"}
+            API.aggFilteredCount agg `shouldBe` 0
+
     describe "ScopeSupplyChain on SAMPLE.min3" $ do
         it "lists cumulative production per upstream product (root excluded)" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
