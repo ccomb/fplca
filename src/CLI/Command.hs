@@ -291,6 +291,7 @@ executeSearchFlowsCommand fmt database opts =
                     Service.FlowFilter
                         { Service.ffQuery = query
                         , Service.ffLang = searchLang opts
+                        , Service.ffKind = Nothing
                         , Service.ffLimit = searchFlowsLimit opts
                         , Service.ffOffset = searchFlowsOffset opts
                         , Service.ffSort = Nothing

@@ -332,6 +332,32 @@ spec = describe "MCP database load/unload tools" $ do
             activity <- callOnSampleWith "get_activity" [("process_id", emitter), ("flow", String " ")]
             exchangeFlowNames activity `shouldSatisfy` ((> 1) . length)
 
+    -- A kind the engine cannot read must be refused, never dropped: a dropped
+    -- filter answers with every kind, which reads as "they are all of that
+    -- kind" and no caller can tell the two apart.
+    describe "the kind of flow a search is filtered on" $ do
+        let water = String "water"
+
+        it "keeps one kind when it is one of the three" $ do
+            resp <- callOnSampleWith "search_flows" [("query", water), ("kind", String "biosphere")]
+            isError resp `shouldBe` False
+
+        it "refuses a kind that is none of them" $ do
+            resp <- callOnSampleWith "search_flows" [("query", water), ("kind", String "emission")]
+            isError resp `shouldBe` True
+            resultText resp `shouldSatisfy` maybe False ("kind must be one of" `T.isInfixOf`)
+
+        it "refuses a kind that is not written as text" $ do
+            resp <- callOnSampleWith "search_flows" [("query", water), ("kind", Bool True)]
+            isError resp `shouldBe` True
+            resultText resp `shouldSatisfy` maybe False ("kind must be one of" `T.isInfixOf`)
+
+        -- A client that writes an omitted argument as null is asking for no
+        -- kind, not for a kind it cannot spell.
+        it "reads a null kind as no kind asked for" $ do
+            resp <- callOnSampleWith "search_flows" [("query", water), ("kind", Null)]
+            isError resp `shouldBe` False
+
     -- A server that shuts itself down when idle asks this question of every
     -- MCP request. Answering "yes" too often keeps an unused server alive for
     -- as long as an assistant stays connected, which is a bill with nobody

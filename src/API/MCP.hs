@@ -58,7 +58,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, getUnitNameForBioFlow, lookupExchangeFlow, processIdToText, qualifyRef, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, processIdToText, qualifyRef, unresolvedCount)
 import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
@@ -760,23 +760,39 @@ callListClassifications rid args (db, _) =
 
 callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) =
-    case textArg "query" args of
-        Nothing -> return $ toolSuccessJson rid Service.emptyFlowSearchResults
-        Just query -> do
-            let limit = intArg "limit" args
-                ff =
-                    Service.FlowFilter
-                        { Service.ffQuery = query
-                        , Service.ffLang = Nothing
-                        , Service.ffLimit = limit <|> Just 20
-                        , Service.ffOffset = Nothing
-                        , Service.ffSort = Nothing
-                        , Service.ffOrder = Nothing
-                        }
-            result <- Service.searchFlows db ff
-            case result of
-                Left err -> return $ toolError rid (T.pack $ show err)
-                Right val -> return $ toolSuccessJson rid val
+    case readKind of
+        Left err -> return $ toolError rid err
+        Right kind -> case textArg "query" args of
+            Nothing -> return $ toolSuccessJson rid Service.emptyFlowSearchResults
+            Just query -> do
+                let limit = intArg "limit" args
+                    ff =
+                        Service.FlowFilter
+                            { Service.ffQuery = query
+                            , Service.ffLang = Nothing
+                            , Service.ffKind = kind
+                            , Service.ffLimit = limit <|> Just 20
+                            , Service.ffOffset = Nothing
+                            , Service.ffSort = Nothing
+                            , Service.ffOrder = Nothing
+                            }
+                result <- Service.searchFlows db ff
+                case result of
+                    Left err -> return $ toolError rid (T.pack $ show err)
+                    Right val -> return $ toolSuccessJson rid val
+  where
+    -- A typo must not read as "every kind", the way a dropped filter would,
+    -- and neither must a value that is not text at all: 'textArg' cannot tell
+    -- @{"kind": true}@ from an absent key, so the lookup is read here.
+    readKind = case KM.lookup (fromText "kind") args of
+        Nothing -> Right Nothing
+        Just Null -> Right Nothing
+        Just (String raw) -> case parseExchangeKind raw of
+            Just k -> Right (Just k)
+            Nothing -> Left (badKind raw)
+        Just other -> Left (badKind (TE.decodeUtf8Lenient (BSL.toStrict (encode other))))
+
+    badKind got = "kind must be one of: " <> exchangeKindChoices <> " (got " <> got <> ")"
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) = runTool rid $ do
@@ -819,11 +835,10 @@ callGetActivity rid args (db, _) = runTool rid $ do
     validatedExchangeType = case exchangeType of
         Nothing -> Right Nothing
         Just "all" -> Right Nothing
-        Just "technosphere" -> Right (Just Agg.KindTechnosphere)
-        Just "biosphere" -> Right (Just Agg.KindBiosphere)
-        Just "waste" -> Right (Just Agg.KindWaste)
-        Just other ->
-            Left $ "exchange_type must be one of: all | technosphere | biosphere | waste (got " <> other <> ")"
+        Just other -> case parseExchangeKind other of
+            Just k -> Right (Just k)
+            Nothing ->
+                Left $ "exchange_type must be one of: all | " <> exchangeKindChoices <> " (got " <> other <> ")"
     noFilters =
         exchangeType `elem` [Nothing, Just "all"]
             && isNothing flowFilter
@@ -833,7 +848,7 @@ callGetActivity rid args (db, _) = runTool rid $ do
     -- needs to know what else matched.
     keptExchanges = matchingFlowName . filter (\ewu -> matchType ewu && matchIsInput ewu)
     matchType ewu = case validatedExchangeType of
-        Right (Just want) -> Agg.exchangeKindOf (ewuExchange ewu) == want
+        Right (Just want) -> exchangeKindOf (ewuExchange ewu) == want
         _ -> True
     -- The query read the way search_flows reads it, so a name found there
     -- filters here, synonyms included whenever the exchange resolves to a
@@ -951,10 +966,9 @@ callAggregate dbManager presets rid args (db, solver) =
     -- results; surface it via toolError instead.
     filterExchangeTypeFromArg = case textArg "filter_exchange_type" args of
         Nothing -> Right Nothing
-        Just "technosphere" -> Right (Just Agg.KindTechnosphere)
-        Just "biosphere" -> Right (Just Agg.KindBiosphere)
-        Just "waste" -> Right (Just Agg.KindWaste)
-        Just other -> Left ("filter_exchange_type must be one of: technosphere | biosphere | waste (got " <> other <> ")")
+        Just other -> case parseExchangeKind other of
+            Just k -> Right (Just k)
+            Nothing -> Left ("filter_exchange_type must be one of: " <> exchangeKindChoices <> " (got " <> other <> ")")
     parseClassFilter raw =
         let (sys, rest) = T.breakOn "=" raw
          in if T.null rest

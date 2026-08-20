@@ -92,6 +92,7 @@ before building this record.
 data FlowFilter = FlowFilter
     { ffQuery :: Text
     , ffLang :: Maybe Text
+    , ffKind :: Maybe ExchangeKind
     , ffLimit :: Maybe Int
     , ffOffset :: Maybe Int
     , ffSort :: Maybe Text
@@ -793,9 +794,10 @@ Shared by the REST and MCP/CLI search paths, which differ only in how they
 paginate.
 -}
 flowSearchResults :: UnitDB -> FlowFilter -> [FlowKind] -> [FlowSearchResult]
-flowSearchResults units FlowFilter{ffQuery = query, ffSort = sortParam, ffOrder = orderParam} =
-    L.sortBy (direction (\a b -> compare (sortKey a) (sortKey b))) . map toResult
+flowSearchResults units FlowFilter{ffQuery = query, ffKind = kindParam, ffSort = sortParam, ffOrder = orderParam} =
+    L.sortBy (direction (\a b -> compare (sortKey a) (sortKey b))) . map toResult . filter askedFor
   where
+    askedFor flow = maybe True (== kindOfFlow flow) kindParam
     direction = if orderParam == Just "desc" then flip else id
     -- Parsers turn an absent sub-compartment into 'Nothing', never @""@, so
     -- the empty string sorts where 'Nothing' would: ahead of every named one.
@@ -812,6 +814,7 @@ flowSearchResults units FlowFilter{ffQuery = query, ffSort = sortParam, ffOrder 
         FlowSearchResult
             { fsrId = flowKindId flow
             , fsrName = flowKindName flow
+            , fsrKind = kindOfFlow flow
             , fsrCategory = flowKindCategory flow
             , fsrCompartment = flowKindCompartmentSub flow
             , fsrUnitName = flowKindUnitName units flow

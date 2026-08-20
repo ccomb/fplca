@@ -22,7 +22,7 @@ pyvolca speaks a range of revisions of the engine's JSON wire format; the engine
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 8** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
 
 <!-- END: compatibility -->
 
@@ -121,7 +121,7 @@ for a in plants:
     print(f"{a.process_id}  {a.activity_name} → {a.product_name} ({a.location})")
 ```
 
-`search_activities` returns a `SearchResults[Activity]`: a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together; `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` is a process, an `(activity, product)` pair, carrying `process_id`, `activity_name`, `location`, `product_name`, `product_amount`, `product_unit`. A process has no name of its own; compose a label from `activity_name` + `product_name`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name (technosphere products and biosphere flows) instead of activity name, use `c.search_flows(query=...)`.
+`search_activities` returns a `SearchResults[Activity]`: a paginated wire envelope. Iterate it to walk every match across all pages (subsequent pages fetched on demand, then cached so re-iteration is free); `len(results)` is the server-reported total. Use `results.page(n, page_size=M)` for explicit page access, or pass `page=N` + `page_size=M` to jump straight to a page (both are required together; `page=` alone is rejected since the offset can't be derived without committing to a page size). Each `Activity` is a process, an `(activity, product)` pair, carrying `process_id`, `activity_name`, `location`, `product_name`, `product_amount`, `product_unit`. A process has no name of its own; compose a label from `activity_name` + `product_name`. Narrow the query with `geo="FR"`, `classification=`/`classification_value=` (ISIC/CPC), or set `exact=True` for an exact-name match. To search by flow name instead of activity name, use `c.search_flows(query=...)`: it answers with every kind of flow, and `kind="technosphere"`, `"biosphere"` or `"waste"` keeps one.
 
 ## Inspect an activity
 
@@ -1037,9 +1037,13 @@ Args:
 Returns:
     :class:`SearchResults[Activity]`, iterable across all pages.
 
-##### `Client.search_flows(query: str | None = None, *, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None) -> SearchResults[Flow]`
+##### `Client.search_flows(query: str | None = None, *, kind: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None) -> SearchResults[Flow]`
 
-Search flows (technosphere products and biosphere flows) in the current database.
+Search flows in the current database.
+
+Three kinds of flow answer, and :attr:`Flow.kind` says which each one
+is: a technosphere product one activity makes and another consumes, a
+biosphere substance exchanged with nature, or a waste.
 
 Returns a paginated :class:`SearchResults[Flow]`: iterate to walk
 every match across all pages, or use ``.page(n)`` for explicit
@@ -1053,6 +1057,10 @@ Args:
         ``water fossil`` and ``water, fossil`` search alike. With no
         ``sort`` asked for, names carrying the query as typed come
         first. An empty query returns nothing.
+    kind: Keep one kind only: ``"technosphere"``, ``"biosphere"`` or
+        ``"waste"``. Omit for all three. Needs engine wire revision 9;
+        an older engine would drop the filter and answer with every
+        kind, so the request is refused rather than sent.
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.
@@ -1730,13 +1738,20 @@ One rung of the factor-matching cascade, and what it made of the flow.
 
 ### `Flow`
 
-A technosphere product or biosphere flow as returned by /flows.
+One flow as returned by /flows.
 
-Mirrors the server's :code:`FlowSearchResult`. ``category`` is the
-medium alone ("soil"); ``compartment`` is the sub-compartment
-("agricultural"), which is often all that tells two same-named flows
-apart. ``synonyms`` maps language code → list of synonym strings
-(empty when the database carries no synonym index).
+Mirrors the server's :code:`FlowSearchResult`. ``kind`` says which of the
+three a flow is: ``"technosphere"`` for a product one activity makes and
+another consumes, ``"biosphere"`` for a substance exchanged with nature,
+``"waste"`` for a waste. It is ``None`` against an engine older than wire
+revision 9, which did not report it.
+
+``category`` is the medium alone ("air", "water", "soil", "resource") and
+``compartment`` the sub-compartment ("agricultural"), which is often all
+that tells two same-named flows apart. Only a biosphere flow has either:
+that is where "taken from nature" and "released to nature" are told apart.
+``synonyms`` maps language code → list of synonym strings (empty when the
+database carries no synonym index).
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1744,6 +1759,7 @@ apart. ``synonyms`` maps language code → list of synonym strings
 | `name` | `str` | _required_ |
 | `category` | `str` | _required_ |
 | `unit_name` | `str` | _required_ |
+| `kind` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
 | `synonyms` | `dict[str, list[str]]` | dict() |
 

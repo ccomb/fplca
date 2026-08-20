@@ -1513,6 +1513,7 @@ class Client:
         self,
         query: str | None = None,
         *,
+        kind: str | None = None,
         page: int | None = None,
         page_size: int | None = None,
         limit: int | None = None,
@@ -1520,7 +1521,11 @@ class Client:
         sort: str | None = None,
         order: str | None = None,
     ) -> SearchResults[Flow]:
-        """Search flows (technosphere products and biosphere flows) in the current database.
+        """Search flows in the current database.
+
+        Three kinds of flow answer, and :attr:`Flow.kind` says which each one
+        is: a technosphere product one activity makes and another consumes, a
+        biosphere substance exchanged with nature, or a waste.
 
         Returns a paginated :class:`SearchResults[Flow]`: iterate to walk
         every match across all pages, or use ``.page(n)`` for explicit
@@ -1534,17 +1539,23 @@ class Client:
                 ``water fossil`` and ``water, fossil`` search alike. With no
                 ``sort`` asked for, names carrying the query as typed come
                 first. An empty query returns nothing.
+            kind: Keep one kind only: ``"technosphere"``, ``"biosphere"`` or
+                ``"waste"``. Omit for all three. Needs engine wire revision 9;
+                an older engine would drop the filter and answer with every
+                kind, so the request is refused rather than sent.
             page / page_size: Web-style pagination; convert to wire-level
                 ``offset`` / ``limit``.
             limit / offset: Wire-level escape hatch.
             sort: Sort key: ``"name"`` (default), ``"category"``, or ``"unit"``.
             order: ``"desc"`` to reverse; ascending otherwise.
         """
+        if kind is not None:
+            self._require_wire(9, "search_flows(kind=...)", engine_hint="0.9.6")
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
 
         def fetch(o: int, l: int | None) -> dict:
             return self._call(
-                "search_flows", q=query, sort=sort, order=order, limit=l, offset=o
+                "search_flows", q=query, kind=kind, sort=sort, order=order, limit=l, offset=o
             )
 
         raw = fetch(wire_offset, wire_limit)

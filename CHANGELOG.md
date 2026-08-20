@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- A flow search now says what kind of flow each result is, and can be asked for
+  one kind alone. Three different things answer to a name: a technosphere flow,
+  meaning a product one activity makes and another consumes; a biosphere flow,
+  meaning a substance exchanged with nature; and a waste flow. Searching for
+  "tap water" or "biowaste" returned all of them mixed together, with nothing
+  saying which was which: the only hint was an empty category, which a
+  technosphere flow and a waste flow both have. Every result now carries
+  `kind`, and `kind=technosphere | biosphere | waste` keeps one of them:
+  `search_flows(query="water", kind="biosphere")` for the substance, and
+  nothing else. A value that is none of the three is refused rather than
+  quietly ignored, which would have read as "no flow of that kind exists".
+  The tool description said the search returned biosphere flows, which was
+  never true and is now corrected. This is wire revision 9.
 - An activity now carries the provenance its dataset states about itself, and
   `GET /api/v1/activity/{id}` reports it as `documentation`: the source it was
   published in, the technology and period it describes, how it was sampled, and
