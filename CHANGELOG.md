@@ -48,6 +48,19 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Changed
+- A biosphere exchange that names its flow in words now reaches the flow the
+  database already declares under that name and compartment, instead of always
+  creating one. Writing an emission the way an inventory shows it, `Nitrogen,
+  total` in water, used to mint a second flow of that name; no characterization
+  method knows that new flow, so the emission scored as zero beside the curated
+  one it was meant to be. Only a flow identifier reached the curated flow, and
+  nothing in a written inventory shows identifiers. A name nothing answers to
+  still brings a flow into the database, with the warning it always carried,
+  and a name two flows answer to is refused with both identifiers so the
+  exchange can name the one it means. Two flows of one name recorded in
+  different units, an energy carrier in kg and in MJ, are told apart by the
+  unit the exchange states. The refusal for a name written into the identifier
+  field now says where identifiers come from and how a name is written instead.
 - The shipped `volca.toml` names the settings it never mentioned: `[hosting]`
   and its nine limits, `chem-synonyms`, `substance-edges`, `[server] name`,
   and the three method fields that carry a single score (`scoring`, `patches`,

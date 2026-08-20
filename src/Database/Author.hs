@@ -142,8 +142,12 @@ authoredBioFlowUUID name comp unit =
 -- What an author writes
 -- ---------------------------------------------------------------------------
 
-{- | The flow a biosphere exchange names: one already in the vocabulary, or one
-the author is introducing.
+{- | The flow a biosphere exchange names: by identifier, or in words.
+
+Words reach the flow the database already declares under that name and
+compartment, and introduce one only when nothing answers to them. An author
+reading an inventory writes the names it shows, so the alternative would have
+them mint a twin of a curated flow, uncharacterized and scoring as zero.
 
 There is deliberately no technosphere counterpart. A technosphere input always
 names a *supplier* — a product that something in scope produces — so the flow
@@ -153,7 +157,7 @@ and that one is minted from the activity itself, never stated as an input.
 -}
 data FlowRef
     = ExistingFlow UUID
-    | -- | name, compartment, unit
+    | -- | name, compartment, unit: an existing flow when one carries them, a new one otherwise
       NewBioFlow Text Compartment Text
     deriving (Eq, Show)
 
@@ -727,24 +731,51 @@ resolveBio ctx flowRef direction amount mUnit comment
             Just (flow, ownerUnits, local) ->
                 let flowUnit = unitNameOf ownerUnits (bfUnitId flow)
                  in case mUnit of
-                        Just stated | normalizeUnit stated /= normalizeUnit flowUnit -> Left [mismatch flow stated flowUnit]
+                        Just stated | normalizeUnit stated /= normalizeUnit flowUnit -> Left [mismatch stated flowUnit]
                         _ -> emitKnown flowId flow flowUnit local
-        NewBioFlow name comp unit -> case lookupUnit ctx unit of
-            Nothing -> Left ["unknown unit \"" <> unit <> "\" for flow \"" <> name <> "\""]
-            Just (unitRef, unitLabel) ->
-                let flowId = authoredBioFlowUUID name comp unitLabel
-                 in case findBioFlow ctx flowId of
-                        Just (flow, ownerUnits, local) -> emitKnown flowId flow (unitNameOf ownerUnits (bfUnitId flow)) local
-                        Nothing ->
-                            emit
-                                flowId
-                                unitRef
-                                (Just (newBioFlow flowId name comp unitRef))
-                                [ "biosphere flow \""
-                                    <> name
-                                    <> "\" is new to this database; no characterization factor matches it by identity yet"
-                                ]
+        NewBioFlow name comp unit -> case findBioFlowsByName ctx name comp of
+            [] -> introduce name comp unit
+            [found] -> attach unit found
+            several -> case filter (statedIn unit) several of
+                [found] -> attach unit found
+                _ -> Left [severalNamed comp several]
   where
+    -- A name the database already carries addresses that flow, rather than
+    -- minting a second one under it: an introduced flow matches no
+    -- characterization factor by identity, so the twin of a curated flow
+    -- would score as zero next to the original.
+    attach stated (flow, ownerUnits, local) =
+        let flowUnit = unitNameOf ownerUnits (bfUnitId flow)
+         in if normalizeUnit stated /= normalizeUnit flowUnit
+                then Left [mismatch stated flowUnit]
+                else emitKnown (bfId flow) flow flowUnit local
+    -- One name and compartment in two units (an energy carrier recorded in
+    -- kg and in MJ) is told apart by the unit the exchange states, which the
+    -- author has already written. Nothing else is guessed at.
+    statedIn stated (flow, ownerUnits, _) =
+        normalizeUnit stated == normalizeUnit (unitNameOf ownerUnits (bfUnitId flow))
+    introduce name comp unit = case lookupUnit ctx unit of
+        Nothing -> Left ["unknown unit \"" <> unit <> "\" for flow \"" <> name <> "\""]
+        Just (unitRef, unitLabel) ->
+            let flowId = authoredBioFlowUUID name comp unitLabel
+             in emit
+                    flowId
+                    unitRef
+                    (Just (newBioFlow flowId name comp unitRef))
+                    [ "biosphere flow \""
+                        <> name
+                        <> "\" is new to this database; no characterization factor matches it by identity yet"
+                    ]
+    -- The refusal carries the identifiers, because an author who reaches it
+    -- has to name one of them and has no other place to read them from.
+    severalNamed comp several =
+        "more than one flow carries this name in "
+            <> renderCompartment comp
+            <> ": "
+            <> T.intercalate ", " (map describeFlow several)
+            <> "; name the one this exchange means by its identifier"
+    describeFlow (flow, ownerUnits, _) =
+        UUID.toText (bfId flow) <> " (" <> unitNameOf ownerUnits (bfUnitId flow) <> ")"
     -- A flow found in a dependency is copied into the edited database with
     -- its unit remapped: characterization resolves flows through the edited
     -- database's own vocabulary ('dbBioFlows'), so an exchange must never
@@ -779,10 +810,8 @@ resolveBio ctx flowRef direction amount mUnit comment
     -- The biosphere matrix carries amounts through unconverted, so a unit the
     -- flow does not use would land as a wrong number rather than as a
     -- conversion. Refuse and name both units.
-    mismatch flow stated flowUnit =
-        "biosphere flow \""
-            <> bfName flow
-            <> "\" is recorded in \""
+    mismatch stated flowUnit =
+        "the flow is recorded in \""
             <> flowUnit
             <> "\" but the exchange states \""
             <> stated
@@ -856,6 +885,46 @@ refUnitOf :: Database -> Activity -> (Exchange -> Bool) -> Text
 refUnitOf db act keep = case filter keep (exchanges act) of
     (ex : _) -> getUnitNameForExchange (dbUnits db) ex
     [] -> ""
+
+{- | Every biosphere flow the edited database or a dependency declares under
+this name and compartment, with what 'findBioFlow' returns beside each.
+
+Matched on the flow's own name, case and spacing aside, and never on a
+synonym: an author writing a name in words means the flow that name belongs
+to, while a synonym match would attach the exchange to a flow they never
+wrote. A blank compartment matches nothing, as does a flow whose source
+recorded no compartment, since neither says where the exchange happens.
+
+Read from 'dbBioFlows' rather than from the name index a loaded database
+carries, because that index is a runtime attachment a rebuild drops: replaying
+a journal against a database that has lost it would resolve a name differently
+than the write that recorded it did.
+-}
+findBioFlowsByName :: AuthorContext -> Text -> Compartment -> [(BiosphereFlow, UnitDB, Bool)]
+findBioFlowsByName ctx name comp = case matchesIn True (acDb ctx) of
+    [] -> concatMap (matchesIn False) (acDeps ctx)
+    found -> found
+  where
+    wantedName = foldName name
+    wantedCompartment = compartmentKey comp
+    matchesIn local db =
+        [ (flow, dbUnits db, local)
+        | not (T.null (fst wantedCompartment))
+        , flow <- M.elems (dbBioFlows db)
+        , foldName (bfName flow) == wantedName
+        , Just flowComp <- [bfCompartment flow]
+        , compartmentKey flowComp == wantedCompartment
+        ]
+
+-- | Names, compartments and sub-compartments compare as written, case and spacing aside.
+foldName :: Text -> Text
+foldName = T.toLower . T.unwords . T.words
+
+compartmentKey :: Compartment -> (Text, Text)
+compartmentKey comp = (foldName (compartmentName comp), foldName (fromMaybe "" (compartmentSub comp)))
+
+renderCompartment :: Compartment -> Text
+renderCompartment comp = compartmentName comp <> maybe "" ("/" <>) (compartmentSub comp)
 
 {- | Find a biosphere flow, with the unit table that can name its unit and
 whether it lives in the edited database itself.

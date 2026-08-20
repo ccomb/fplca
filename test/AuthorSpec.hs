@@ -222,6 +222,39 @@ spec = do
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [bioOf (ExistingFlow co2Id) 1 Nothing]}
                 map bfName (riNewBioFlows r) `shouldBe` []
 
+            it "reads a flow named in words as the one the database already declares" $ do
+                -- The name an inventory shows is what an author writes back;
+                -- minting a twin of a curated flow would carry no
+                -- characterization factor and score as zero beside it.
+                r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [bioOf (NewBioFlow "carbon dioxide" air "kg") 2 Nothing]}
+                map bfName (riNewBioFlows r) `shouldBe` []
+                bioFlowIds r `shouldBe` [co2Id]
+
+            it "keeps a name in another compartment apart" $ do
+                let urban = Compartment{compartmentName = "air", compartmentSub = Just "urban air"}
+                r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [bioOf (NewBioFlow "Carbon dioxide" urban "kg") 2 Nothing]}
+                map bfName (riNewBioFlows r) `shouldBe` ["Carbon dioxide"]
+                bioFlowIds r `shouldSatisfy` (/= [co2Id])
+
+            it "refuses a named flow restated in another unit" $
+                failsWith
+                    "biosphere amounts are not converted"
+                    (baseActivity{aaExchanges = [bioOf (NewBioFlow "Carbon dioxide" air "m") 1 Nothing]})
+
+            it "tells two flows of one name apart by the unit the exchange states" $ do
+                -- An energy carrier recorded in kg and in MJ is the real case:
+                -- the author has already written which one they mean.
+                r <- resolveOrFail (withTwinFlow fixtureDb) baseActivity{aaExchanges = [bioOf (NewBioFlow "Carbon dioxide" air "kg") 2 Nothing]}
+                bioFlowIds r `shouldBe` [co2Id]
+
+            it "refuses a name two flows answer to, naming both identifiers" $
+                -- The refusal is where the author reads the identifier they
+                -- then have to write, so it carries them.
+                refusalOf
+                    (withTwinFlow fixtureDb)
+                    (UUID.toText twinFlowId)
+                    (baseActivity{aaExchanges = [bioOf (NewBioFlow "Carbon dioxide" air "item") 1 Nothing]})
+
         describe "insertActivities" $ do
             it "adds the activity, its product flow and its new biosphere flow together" $ do
                 let authored =
@@ -457,6 +490,18 @@ wasteOut provider amount unit =
 
 treatPid :: Text
 treatPid = UUID.toText treatActId <> "_" <> UUID.toText usedOilId
+
+-- | The biosphere flows one resolved activity points at, in exchange order.
+bioFlowIds :: ResolvedInsert -> [UUID]
+bioFlowIds r = [flowId | BiosphereExchange{bioFlowId = flowId} <- exchanges (riActivity r)]
+
+-- | The same database with a second "Carbon dioxide" in air, recorded in another unit.
+withTwinFlow :: Database -> Database
+withTwinFlow db =
+    db{dbBioFlows = M.insert twinFlowId co2Flow{bfId = twinFlowId, bfUnitId = metreUnitId} (dbBioFlows db)}
+
+twinFlowId :: UUID
+twinFlowId = mkUUID 6
 
 bioOf :: FlowRef -> Double -> Maybe Text -> AuthoredExchange
 bioOf flow amount unit =

@@ -427,10 +427,10 @@ paramsToSchema ps =
                     [ "direction" .= stringField "resource (taken from the environment) | emission (released into it)"
                     , "amount" .= numberField "Amount exchanged, in the flow's own unit"
                     , "flow" .= stringField "Id of a flow the database already has (from get_activity or search_flows)"
-                    , "name" .= stringField "Name of a flow to introduce instead, with compartment and unit"
+                    , "name" .= stringField "Name of the flow instead, with its compartment and unit: the flow the database declares under them, or a new one when nothing does"
                     , "compartment" .= stringField "air | water | soil | natural resource"
-                    , "subCompartment" .= stringField "Sub-compartment of an introduced flow, e.g. \"low population density\""
-                    , "unit" .= stringField "Unit. Part of an introduced flow's identity, so it cannot be omitted there."
+                    , "subCompartment" .= stringField "Sub-compartment, e.g. \"low population density\". Part of what tells two flows of one name apart."
+                    , "unit" .= stringField "Unit. Part of a named flow's identity, so it cannot be omitted there."
                     , "comment" .= stringField "Free-text note on this line"
                     ]
             , "required" .= (["direction", "amount"] :: [Text])
