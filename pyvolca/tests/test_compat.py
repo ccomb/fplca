@@ -150,5 +150,5 @@ def test_search_flows_kind_refuses_an_engine_that_would_drop_it(make_response) -
     with pytest.raises(VoLCAError) as exc:
         c.search_flows("water", kind="biosphere")
     assert "wire revision >= 9" in str(exc.value)
-    assert session.post.call_count == 0
+    assert session.get.call_count == 1  # version checked; the search never went out
 

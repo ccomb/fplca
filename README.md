@@ -261,7 +261,7 @@ POST   /api/v1/db/{dbName}/impacts/{collection}                          Batch-i
 
 # Search and reference data
 GET    /api/v1/db/{dbName}/activities?name=&geo=&product=&preset=&classification=&sort=  Search activities
-GET    /api/v1/db/{dbName}/flows?q=&lang=                                Search flows
+GET    /api/v1/db/{dbName}/flows?q=&lang=&kind=                          Search flows
 GET    /api/v1/db/{dbName}/flow/{flowId}                                 Flow details
 GET    /api/v1/db/{dbName}/flow/{flowId}/activities                      Activities using a flow
 GET    /api/v1/db/{dbName}/classifications                               Classification systems available in this DB
@@ -356,7 +356,7 @@ Available tools — auto-derived at runtime from the single resource registry (`
 | `list_classifications` | List classification systems and values for a database |
 | `list_methods` | List loaded impact assessment methods |
 | `search_activities` | Search by name, geography, product, classification, or preset |
-| `search_flows` | Search biosphere flows |
+| `search_flows` | Search flows, filtered by kind |
 | `get_activity` | Activity details and exchanges (with comments) |
 | `aggregate` | SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges |
 | `get_supply_chain` | Flat upstream activity list with quantities and filters |
@@ -505,7 +505,7 @@ volca method delete ef-31                        # delete
 |---------|----------|-----|
 | **Search** | | |
 | Search activities | `GET /db/{db}/activities?name=&geo=&product=&preset=&classification=` | `activities --name --geo --product` |
-| Search flows | `GET /db/{db}/flows?q=&lang=` | `flows --query --lang` |
+| Search flows | `GET /db/{db}/flows?q=&lang=&kind=` | `flows --query --lang` |
 | Classifications | `GET /db/{db}/classifications` | — |
 | Classification presets | `GET /classification-presets` | — |
 | **Analysis** | | |

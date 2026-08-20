@@ -1550,7 +1550,7 @@ class Client:
             order: ``"desc"`` to reverse; ascending otherwise.
         """
         if kind is not None:
-            self._require_wire(9, "search_flows(kind=...)", engine_hint="0.9.7")
+            self._require_wire(9, "search_flows(kind=...)", engine_hint="0.9.6")
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
 
         def fetch(o: int, l: int | None) -> dict:
