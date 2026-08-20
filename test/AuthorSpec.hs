@@ -20,6 +20,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Test.Hspec
 
+import API.Types (ActivityForAPI (..), ExchangeWithUnit (..))
 import Database (buildDatabaseWithMatrices)
 import Database.Author (
     AuthorContext (..),
@@ -36,6 +37,7 @@ import Database.Author (
     validateAuthored,
  )
 import Database.Rebuild (deleteActivities, insertActivities, replaceActivities)
+import Service (convertActivityForAPI)
 import Types (
     Activity (..),
     BioDirection (..),
@@ -52,7 +54,9 @@ import Types (
     Unit (..),
     exchangeAmount,
     findProcessId,
+    getActivity,
     isTechnosphereExchange,
+    processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -278,6 +282,26 @@ spec = do
                         M.member (snd (riKey r)) (dbTechFlows db') `shouldBe` True
                         map bfName (M.elems (dbBioFlows db')) `shouldSatisfy` elem "Nitrous oxide"
                         uncurry (findProcessId db') (riKey r) `shouldSatisfy` (/= Nothing)
+
+            it "names the treatment a waste output was linked to" $ do
+                -- A waste output with no target is what a final waste flow looks
+                -- like. An authored one always has a treatment, so reading its
+                -- link as no target would report every one of them as final.
+                r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [wasteOut treatPid 0.5 Nothing]}
+                case insertActivities defaultUnitConfig [r] fixtureDb of
+                    Left err -> expectationFailure ("insertActivities: " <> show err)
+                    Right db' ->
+                        case (uncurry (findProcessId db') (riKey r), findProcessId db' treatActId usedOilId) of
+                            (Just pid, Just treatmentPid) ->
+                                case getActivity db' pid of
+                                    Nothing -> expectationFailure "the inserted activity is not in the database"
+                                    Just act ->
+                                        case [ewu | ewu <- pfaExchanges (convertActivityForAPI defaultUnitConfig db' pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
+                                            [ewu] -> do
+                                                ewuTargetProcessId ewu `shouldBe` Just (processIdToText db' treatmentPid)
+                                                ewuTargetActivityName ewu `shouldBe` Just "waste oil incineration"
+                                            other -> expectationFailure ("expected one waste output, got " <> show (length other))
+                            _ -> expectationFailure "the authored activity or its treatment has no process id"
 
             it "refuses a key the database already holds" $ do
                 r <- resolveOrFail fixtureDb baseActivity

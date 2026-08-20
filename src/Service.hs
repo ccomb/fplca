@@ -1130,9 +1130,13 @@ resolveTarget cfg db links = \case
     WasteExchange{waIsInput = True, waActivityLinkId = lid}
         | lid /= UUID.nil -> resolveByActivityUUID db lid
         | otherwise -> Nothing
+    -- An output's link names the activity that treats the waste, exactly as an
+    -- input's names the one that supplies it. Reading it as no target at all
+    -- makes a linked waste output indistinguishable from a final waste flow,
+    -- which is what a consumer reports when nothing treats a waste.
     WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
-        | lid == UUID.nil -> resolveByCrossDBLink links fid
-        | otherwise -> Nothing
+        | lid /= UUID.nil -> resolveByActivityUUID db lid
+        | otherwise -> resolveByCrossDBLink links fid
 
 {- | Flow name + (biosphere-only) compartment. Each variant has exactly one
 flow side by construction, so no Maybe-merge is needed downstream.
