@@ -34,7 +34,7 @@ import Database.Author (
  )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..))
+import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), exchangeKindName)
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -224,10 +224,15 @@ data ConsumersResponse = ConsumersResponse
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ConsumersResponse)
 
--- | Enhanced flow information for search results (now includes synonyms)
+{- | Enhanced flow information for search results (now includes synonyms).
+
+'fsrKind' is what tells a product apart from a substance. Without it the two
+are told apart only by an empty 'fsrCategory', which a waste flow has as well.
+-}
 data FlowSearchResult = FlowSearchResult
     { fsrId :: UUID
     , fsrName :: Text
+    , fsrKind :: ExchangeKind
     , fsrCategory :: Text -- Medium only (e.g. "soil"), never the sub-compartment
     , fsrCompartment :: Maybe Text -- Sub-compartment (e.g. "agricultural")
     , fsrUnitName :: Text
@@ -1790,6 +1795,20 @@ instance ToSchema NativeActivityType where
 instance ToJSON NodeType
 instance ToJSON EdgeType
 instance ToJSON FlowRole
+
+{- | A kind reaches the wire as the word a request would name it by, so what a
+result reports and what a filter accepts are the same three strings.
+-}
+instance ToJSON ExchangeKind where
+    toJSON = toJSON . exchangeKindName
+
+instance ToSchema ExchangeKind where
+    declareNamedSchema _ =
+        pure $
+            NamedSchema (Just "ExchangeKind") $
+                mempty
+                    & type_ ?~ OpenApiString
+                    & enum_ ?~ map (toJSON . exchangeKindName) [minBound .. maxBound]
 
 -- ToJSON / FromJSON / ToSchema for Unit are derived via Stripped alongside
 -- its data declaration in src/Types.hs.

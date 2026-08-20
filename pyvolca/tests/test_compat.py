@@ -141,3 +141,14 @@ def test_preloaded_operations_skip_the_gate(mocked_client) -> None:
     client._load_operations()
     assert session.get.call_count == 0
     assert client._checked is False
+
+
+def test_search_flows_kind_refuses_an_engine_that_would_drop_it(make_response) -> None:
+    """An engine before wire 9 ignores the unknown query key and answers with
+    every kind, which reads as "no flow of that kind exists". Refuse instead."""
+    c, session = _client_with_version(make_response, wire=8)
+    with pytest.raises(VoLCAError) as exc:
+        c.search_flows("water", kind="biosphere")
+    assert "wire revision >= 9" in str(exc.value)
+    assert session.post.call_count == 0
+

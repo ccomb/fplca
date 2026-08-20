@@ -760,23 +760,33 @@ callListClassifications rid args (db, _) =
 
 callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) =
-    case textArg "query" args of
-        Nothing -> return $ toolSuccessJson rid Service.emptyFlowSearchResults
-        Just query -> do
-            let limit = intArg "limit" args
-                ff =
-                    Service.FlowFilter
-                        { Service.ffQuery = query
-                        , Service.ffLang = Nothing
-                        , Service.ffLimit = limit <|> Just 20
-                        , Service.ffOffset = Nothing
-                        , Service.ffSort = Nothing
-                        , Service.ffOrder = Nothing
-                        }
-            result <- Service.searchFlows db ff
-            case result of
-                Left err -> return $ toolError rid (T.pack $ show err)
-                Right val -> return $ toolSuccessJson rid val
+    case readKind of
+        Left err -> return $ toolError rid err
+        Right kind -> case textArg "query" args of
+            Nothing -> return $ toolSuccessJson rid Service.emptyFlowSearchResults
+            Just query -> do
+                let limit = intArg "limit" args
+                    ff =
+                        Service.FlowFilter
+                            { Service.ffQuery = query
+                            , Service.ffLang = Nothing
+                            , Service.ffKind = kind
+                            , Service.ffLimit = limit <|> Just 20
+                            , Service.ffOffset = Nothing
+                            , Service.ffSort = Nothing
+                            , Service.ffOrder = Nothing
+                            }
+                result <- Service.searchFlows db ff
+                case result of
+                    Left err -> return $ toolError rid (T.pack $ show err)
+                    Right val -> return $ toolSuccessJson rid val
+  where
+    -- A typo must not read as "every kind", the way a dropped filter would.
+    readKind = case textArg "kind" args of
+        Nothing -> Right Nothing
+        Just raw -> case parseExchangeKind raw of
+            Just k -> Right (Just k)
+            Nothing -> Left ("kind must be one of: " <> exchangeKindChoices <> " (got " <> raw <> ")")
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) = runTool rid $ do

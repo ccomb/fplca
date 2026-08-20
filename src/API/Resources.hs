@@ -321,9 +321,16 @@ description r = case r of
         \impact environnemental, occupation des sols, surface agricole, prairie, \
         \pâturage, intrants, filière, chaîne amont."
     SearchFlows ->
-        "LCA / ACV: search for biosphere flows (emissions, resources) by name. \
-        \Use this to locate specific substances (CO2, CH4, water, land occupation) \
-        \before querying characterization factors or inventory contributions."
+        "LCA / ACV: search flows by name. Three kinds of flow answer, and each \
+        \result says which it is in its 'kind' field: a biosphere flow, meaning a \
+        \substance exchanged with nature (CO2, CH4, water, land occupation); a \
+        \technosphere flow, meaning a product one activity makes and another \
+        \consumes; or a waste flow. Pass kind=biosphere to look for a substance \
+        \alone, which is what a question about characterization factors or \
+        \inventory contributions is usually after. A biosphere flow also reports \
+        \the medium it is exchanged with in 'category' (air, water, soil, \
+        \resource), which is how a resource taken from nature is told apart from \
+        \an emission released to it; the other two kinds have no medium."
     GetActivity ->
         "LCA / ACV: get detailed information about an activity: name, location, \
         \exchanges, reference product, metadata. Use exchange_type / is_input / flow \
@@ -754,6 +761,7 @@ params r = case r of
     SearchFlows ->
         [ pDatabase
         , Param "query" "string" Required "Flow name to search for"
+        , Param "kind" "string" Optional "Keep one kind of flow only: technosphere | biosphere | waste. Omit for all three."
         , pLimit "Max results (default 20)"
         ]
     GetActivity ->

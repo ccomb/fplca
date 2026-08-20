@@ -118,7 +118,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method-collection" :> Capture "collection" Text :> "coverage" :> Get '[JSON] CollectionCoverage
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "characterization" :> QueryParam "flow" Text :> QueryParam "limit" Int :> Get '[JSON] CharacterizationResult
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "explain-cf" :> Capture "flowId" Text :> Get '[JSON] ExplainCFResult
-                :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
+                :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "kind" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> QueryParam "exclude-long-term" Bool :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
@@ -1279,7 +1279,8 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 8: the two quality reports as downloadable CSV;
+(revision 9: the @kind@ a flow search reports and filters on;
+revision 8: the two quality reports as downloadable CSV;
 revision 7: editing the exchanges of an activity the database already holds;
 revision 6: the explain-cf route, and the @match_kind@ field flow
 contributions gained alongside it; revision 5: writing activities, and the
@@ -1291,7 +1292,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 8
+currentWireVersion = 9
 
 getVersion :: AppM Value
 getVersion =
@@ -2112,9 +2113,10 @@ unloadMethodCollectionHandler name = do
     dbManager <- asks aeDbManager
     simpleAction (DM.unloadMethodCollection dbManager name) ("Unloaded method: " <> name)
 
-searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
-searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderParam = do
+searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
+searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortParam orderParam = do
     (db, _) <- requireDatabaseByName dbName
+    kind <- traverse readKind kindParam
     case queryParam of
         Nothing -> return (SearchResults [] 0 0 50 False 0.0)
         Just query -> do
@@ -2122,12 +2124,19 @@ searchFlows dbName queryParam langParam limitParam offsetParam sortParam orderPa
                     Service.FlowFilter
                         { Service.ffQuery = query
                         , Service.ffLang = langParam
+                        , Service.ffKind = kind
                         , Service.ffLimit = limitParam
                         , Service.ffOffset = offsetParam
                         , Service.ffSort = sortParam
                         , Service.ffOrder = orderParam
                         }
             searchFlowsInternal db ff
+  where
+    -- A typo must not read as "every kind": that would answer a question
+    -- nobody asked with no sign the filter was dropped.
+    readKind raw = case parseExchangeKind raw of
+        Just k -> pure k
+        Nothing -> badRequest ("kind must be one of: " <> exchangeKindChoices <> " (got " <> raw <> ")")
 
 searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
 searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do

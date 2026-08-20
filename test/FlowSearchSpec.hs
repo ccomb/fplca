@@ -19,6 +19,7 @@ import Test.Hspec
 import Types (
     BiosphereFlow (..),
     Compartment (..),
+    ExchangeKind (..),
     FlowKind (..),
     TechnosphereFlow (..),
     UUID,
@@ -149,6 +150,20 @@ orderSpec = describe "Service.flowSearchResults" $ do
                        , ("water", Just "river")
                        ]
 
+    it "says which of the three kinds each flow is" $
+        map (\r -> (fsrName r, fsrKind r)) (search byName threeKinds)
+            `shouldBe` [ ("Tap water", KindTechnosphere)
+                       , ("Waste water", KindWaste)
+                       , ("Water, fossil", KindBiosphere)
+                       ]
+
+    it "keeps the one kind asked for" $
+        map fsrName (search byName{ffKind = Just KindBiosphere} threeKinds)
+            `shouldBe` ["Water, fossil"]
+
+    it "keeps all three when no kind is asked for" $
+        length (search byName threeKinds) `shouldBe` 3
+
     it "reverses the whole order on desc, not just the requested column" $
         map compartmentOf (search sortByName{ffOrder = Just "desc"} deltamethrins)
             `shouldBe` reverse (map compartmentOf (search sortByName deltamethrins))
@@ -167,6 +182,20 @@ orderSpec = describe "Service.flowSearchResults" $ do
     it "leaves the order alone when a column was asked for" $
         map fsrName (search crudeOil{ffSort = Just "name"} oilFlows)
             `shouldBe` ["Crude oil, in ground", "Oil, crude", "Palm oil, crude, at plant"]
+
+-- | Sorted by name, so the three kinds come out in an order the test can state.
+byName :: FlowFilter
+byName = sortByName{ffQuery = "water", ffSort = Just "name"}
+
+{- | One flow of each kind, all three named after water so that one query
+would reach them all.
+-}
+threeKinds :: [FlowKind]
+threeKinds =
+    [ TechKind (TechnosphereFlow (mkUUID 1) "Tap water" (mkUUID 0) M.empty Nothing Nothing)
+    , BioKind (biosphere 2 "Water, fossil" [])
+    , WasteKind (WasteFlow (mkUUID 3) "Waste water" (mkUUID 0) M.empty Nothing Nothing)
+    ]
 
 crudeOil :: FlowFilter
 crudeOil = sortByName{ffQuery = "oil, crude"}
@@ -189,6 +218,7 @@ sortByName =
     FlowFilter
         { ffQuery = "Deltamethrin"
         , ffLang = Nothing
+        , ffKind = Nothing
         , ffLimit = Nothing
         , ffOffset = Nothing
         , ffSort = Nothing

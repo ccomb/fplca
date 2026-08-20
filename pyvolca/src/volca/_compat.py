@@ -25,8 +25,9 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 8
-"""The newest wire revision this pyvolca understands (revision 8 adds the two
+KNOWN_WIRE = 9
+"""The newest wire revision this pyvolca understands (revision 9 adds the kind
+a flow search reports and filters on; revision 8 added the two
 quality reports as downloadable CSV; revision 7 added editing an activity's
 exchanges; revision 6 added explain_cf and the match_kind field on flow
 contributions; revision 5 added writing activities; revision 4 added the

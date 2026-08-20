@@ -556,19 +556,27 @@ class Activity(FromJson):
 
 @dataclass
 class Flow(FromJson):
-    """A technosphere product or biosphere flow as returned by /flows.
+    """One flow as returned by /flows.
 
-    Mirrors the server's :code:`FlowSearchResult`. ``category`` is the
-    medium alone ("soil"); ``compartment`` is the sub-compartment
-    ("agricultural"), which is often all that tells two same-named flows
-    apart. ``synonyms`` maps language code → list of synonym strings
-    (empty when the database carries no synonym index).
+    Mirrors the server's :code:`FlowSearchResult`. ``kind`` says which of the
+    three a flow is: ``"technosphere"`` for a product one activity makes and
+    another consumes, ``"biosphere"`` for a substance exchanged with nature,
+    ``"waste"`` for a waste. It is ``None`` against an engine older than wire
+    revision 9, which did not report it.
+
+    ``category`` is the medium alone ("air", "water", "soil", "resource") and
+    ``compartment`` the sub-compartment ("agricultural"), which is often all
+    that tells two same-named flows apart. Only a biosphere flow has either:
+    that is where "taken from nature" and "released to nature" are told apart.
+    ``synonyms`` maps language code → list of synonym strings (empty when the
+    database carries no synonym index).
     """
 
     id: str
     name: str
     category: str
     unit_name: str
+    kind: str | None = None
     compartment: str | None = None
     synonyms: dict[str, list[str]] = field(default_factory=dict)
 
