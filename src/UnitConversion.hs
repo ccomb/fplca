@@ -48,7 +48,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Lazy as BL
 import Data.Csv (HasHeader (..), decode)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.List (elemIndex)
+import Data.List (elemIndex, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
@@ -117,22 +117,34 @@ convertUnit cfg fromUnit toUnit amount = do
         else Nothing
 
 {- | Canonical (reference) unit name for the dimension of a given unit.
-The reference unit is the one whose factor is 1.0 in @units.csv@ — normally the
+
+The reference unit is the one whose factor is 1.0 in @units.csv@, normally the
 SI base, but a dimension may instead pick the unit its characterization factors
 are authored in. Radioactivity uses @kBq@ (not the SI @Bq@) because EF/ILCD
-ionising-radiation CFs are defined per kBq, and 'convertForCharacterization'
-normalizes a flow to this reference before applying a result-expression CF.
+ionising-radiation CFs are defined per kBq, and energy uses @MJ@ (not the SI
+joule) for the same reason. 'convertForCharacterization' normalizes a flow to
+this reference before applying a result-expression CF, so the choice decides
+what such a factor is read against.
+
+A unit spelled two ways carries the same factor, so a dimension usually offers
+several names at 1.0 ("mj" and "megajoule", "kg" and "kilogram"). The shortest
+one wins, which is the symbol rather than the word: it is what a database
+writes and what a practitioner reads, and it keeps the name a reference product
+is recorded under from moving when a new spelling is added to the table.
+
 Returns 'Nothing' if the input unit is unknown or its dimension defines no
 reference unit.
 -}
 canonicalUnitFor :: UnitConfig -> Text -> Maybe Text
 canonicalUnitFor cfg unitText = do
     UnitDef dim _ <- lookupUnitDef cfg unitText
-    case [ normKey
-         | (normKey, UnitDef d f) <- M.toList (ucUnits cfg)
-         , d == dim
-         , f == 1.0
-         ] of
+    case sortOn
+        (\k -> (T.length k, k))
+        [ normKey
+        | (normKey, UnitDef d f) <- M.toList (ucUnits cfg)
+        , d == dim
+        , f == 1.0
+        ] of
         (normKey : _) -> Just $ M.findWithDefault normKey normKey (ucOriginalKeys cfg)
         [] -> Nothing
 
