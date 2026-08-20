@@ -1418,14 +1418,15 @@ inspect, not a failure.
 
 One resource taken from the environment, or one emission released into it.
 
-Name the flow one way or the other, never both: ``flow`` addresses one the
-database already has, and ``name`` + ``compartment`` introduce a new one.
-Use the two constructors rather than the fields,
-:meth:`existing` and :meth:`introducing`, which is why passing both or
-neither raises here instead of at the server.
+Name the flow one way or the other, never both: ``flow`` is the identifier
+of a flow the database already has, which :meth:`Client.search_flows`
+returns, while ``name`` with ``compartment`` and ``unit`` names one in
+words. Use the two constructors rather than the fields, :meth:`existing`
+and :meth:`named`, which is why passing both or neither raises here
+instead of at the server.
 
-A biosphere amount is never converted, so an exchange on an existing flow
-must be stated in that flow's own unit.
+A biosphere amount is never converted, so an exchange states its amount in
+the flow's own unit.
 
 | Field | Type | Default |
 |-------|------|---------|

@@ -387,7 +387,7 @@ class TestCreateActivities:
         _ok(session, {"written": ["a_b"], "transient": False, "warnings": ["new flow"]})
         activity = _cheese(
             biosphere=[
-                BioExchange.introducing("Nitrous oxide", "air", "Emission", 0.5, "kg"),
+                BioExchange.named("Nitrous oxide", "air", "Emission", 0.5, "kg"),
                 BioExchange.existing("11111111-2222-3333-4444-555555555555", "Emission", 1.2),
             ]
         )
@@ -458,7 +458,7 @@ class TestAuthoringInputTypes:
     def test_direction_is_read_the_way_the_engine_reads_it(self):
         # The engine lowercases the wire value before matching, so the
         # client accepts any casing but always sends the canonical one.
-        exchange = BioExchange.introducing("Nitrous oxide", "air", "emission", 0.5, "kg")
+        exchange = BioExchange.named("Nitrous oxide", "air", "emission", 0.5, "kg")
         assert exchange.direction is BioDirection.EMISSION
         assert exchange.to_wire()["direction"] == "Emission"
 
