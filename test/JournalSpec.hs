@@ -256,7 +256,7 @@ cheese =
                 , atiComment = Just "milk in"
                 }
             , AuthoredBio
-                { abFlow = ExistingFlow co2Id
+                { abFlow = FlowById co2Id
                 , abDirection = Emission
                 , abAmount = 0.5
                 , abUnit = Nothing
@@ -264,7 +264,7 @@ cheese =
                 }
             , AuthoredBio
                 { abFlow =
-                    NewBioFlow
+                    FlowByName
                         "Methane"
                         Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
                         "kg"
@@ -281,7 +281,7 @@ methane :: AuthoredExchange
 methane =
     AuthoredBio
         { abFlow =
-            NewBioFlow
+            FlowByName
                 "Methane"
                 Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
                 "kg"

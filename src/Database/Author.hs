@@ -67,6 +67,7 @@ module Database.Author (
 
 import qualified Data.ByteString as BS
 import Data.Either (partitionEithers)
+import Data.List (nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
@@ -156,9 +157,9 @@ technosphere flow authoring can create is the authored activity's own product,
 and that one is minted from the activity itself, never stated as an input.
 -}
 data FlowRef
-    = ExistingFlow UUID
+    = FlowById UUID
     | -- | name, compartment, unit: an existing flow when one carries them, a new one otherwise
-      NewBioFlow Text Compartment Text
+      FlowByName Text Compartment Text
     deriving (Eq, Show)
 
 {- | One line of an authored activity's inventory.
@@ -352,8 +353,8 @@ describeExchange :: AuthoredExchange -> Text
 describeExchange ex = case ex of
     AuthoredTechInput{atiProvider = provider} -> "input from \"" <> provider <> "\""
     AuthoredWasteOutput{awProvider = provider} -> "waste output to \"" <> provider <> "\""
-    AuthoredBio{abFlow = ExistingFlow flowId} -> "biosphere flow " <> UUID.toText flowId
-    AuthoredBio{abFlow = NewBioFlow name _ _} -> "biosphere flow \"" <> name <> "\""
+    AuthoredBio{abFlow = FlowById flowId} -> "biosphere flow " <> UUID.toText flowId
+    AuthoredBio{abFlow = FlowByName name _ _} -> "biosphere flow \"" <> name <> "\""
 
 {- | An amount that can carry information: finite, and not zero. A zero
 exchange is not a measurement of nothing, it is a line that should not have
@@ -721,7 +722,7 @@ resolveBio ctx flowRef direction amount mUnit comment
     | not (isUsableAmount amount) =
         Left ["the amount is " <> T.pack (show amount) <> "; it must be a finite non-zero number"]
     | otherwise = case flowRef of
-        ExistingFlow flowId -> case findBioFlow ctx flowId of
+        FlowById flowId -> case findBioFlow ctx flowId of
             Nothing ->
                 Left
                     [ "no biosphere flow "
@@ -733,12 +734,13 @@ resolveBio ctx flowRef direction amount mUnit comment
                  in case mUnit of
                         Just stated | normalizeUnit stated /= normalizeUnit flowUnit -> Left [mismatch stated flowUnit]
                         _ -> emitKnown flowId flow flowUnit local
-        NewBioFlow name comp unit -> case findBioFlowsByName ctx name comp of
+        FlowByName name comp unit -> case findBioFlowsByName ctx name comp of
             [] -> introduce name comp unit
             [found] -> attach unit found
             several -> case filter (statedIn unit) several of
                 [found] -> attach unit found
-                _ -> Left [severalNamed comp several]
+                [] -> Left [unitAmong unit several]
+                ties -> Left [severalNamed comp ties]
   where
     -- A name the database already carries addresses that flow, rather than
     -- minting a second one under it: an introduced flow matches no
@@ -766,6 +768,15 @@ resolveBio ctx flowRef direction amount mUnit comment
                         <> name
                         <> "\" is new to this database; no characterization factor matches it by identity yet"
                     ]
+    -- Several flows carry the name and none is recorded in the unit stated.
+    -- That is a unit to restate, not a choice to make: calling it ambiguous
+    -- would send the author to identifiers that refuse for the same reason.
+    unitAmong stated cands =
+        "the flows carrying this name are recorded in "
+            <> T.intercalate " and " (map quoted (nub (map unitOfCandidate cands)))
+            <> " but the exchange states \""
+            <> stated
+            <> "\"; biosphere amounts are not converted, so restate it in one of them"
     -- The refusal carries the identifiers, because an author who reaches it
     -- has to name one of them and has no other place to read them from.
     severalNamed comp several =
@@ -776,6 +787,8 @@ resolveBio ctx flowRef direction amount mUnit comment
             <> "; name the one this exchange means by its identifier"
     describeFlow (flow, ownerUnits, _) =
         UUID.toText (bfId flow) <> " (" <> unitNameOf ownerUnits (bfUnitId flow) <> ")"
+    unitOfCandidate (flow, ownerUnits, _) = unitNameOf ownerUnits (bfUnitId flow)
+    quoted u = "\"" <> u <> "\""
     -- A flow found in a dependency is copied into the edited database with
     -- its unit remapped: characterization resolves flows through the edited
     -- database's own vocabulary ('dbBioFlows'), so an exchange must never

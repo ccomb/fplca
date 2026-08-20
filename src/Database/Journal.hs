@@ -632,15 +632,17 @@ parseExchange = withObject "exchange" $ \o ->
                 <*> o .:? "comment"
         other -> fail ("unknown exchange kind: " <> T.unpack other)
 
-{- | A biosphere line names a flow the vocabulary already has, or introduces
-one. The unit of an introduced flow is part of its identity, which is why it
-lives inside the flow rather than beside it: the amount's own unit is a
-separate field, and the two are not required to be the same thing.
+{- | A biosphere line names its flow by identifier, or in words. Words are
+recorded as written rather than as resolved, so a replay reads them the way
+'Database.Author.resolveBio' does: the flow the database declares under them,
+or a new one when nothing answers. The unit is part of what the words address,
+which is why it lives inside the flow rather than beside it: the amount's own
+unit is a separate field, and the two are not required to be the same thing.
 -}
 flowJSON :: FlowRef -> Value
 flowJSON = \case
-    ExistingFlow flowId -> object ["id" .= UUID.toText flowId]
-    NewBioFlow name compartment unit ->
+    FlowById flowId -> object ["id" .= UUID.toText flowId]
+    FlowByName name compartment unit ->
         object $
             ["name" .= name, "compartment" .= compartmentName compartment, "unit" .= unit]
                 <> maybe [] (\sub -> ["sub_compartment" .= sub]) (compartmentSub compartment)
@@ -651,19 +653,19 @@ parseFlow = withObject "biosphere flow" $ \o -> do
     mName <- o .:? "name"
     case (mIdentifier, mName) of
         (Just identifier, Nothing) ->
-            maybe (fail ("not a flow identifier: " <> T.unpack identifier)) (pure . ExistingFlow) $
+            maybe (fail ("not a flow identifier: " <> T.unpack identifier)) (pure . FlowById) $
                 UUID.fromText identifier
         (Nothing, Just name) -> do
             compartment <- o .: "compartment"
             sub <- o .:? "sub_compartment"
             unit <- o .: "unit"
             pure $
-                NewBioFlow
+                FlowByName
                     name
                     Compartment{compartmentName = compartment, compartmentSub = sub}
                     unit
         (Just _, Just _) ->
-            fail "a biosphere flow names either an existing flow or a new one, not both"
+            fail "a biosphere flow is named by identifier or in words, not both"
         (Nothing, Nothing) ->
             fail "a biosphere flow needs either an identifier or a name, compartment and unit"
 

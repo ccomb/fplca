@@ -1945,18 +1945,20 @@ winner.
 -}
 bioFlowRef :: BioExchangeAPI -> Either Text FlowRef
 bioFlowRef be = case (beFlow be, beName be) of
-    (Just _, Just _) -> Left "a biosphere exchange names either an existing flow or a new one, not both"
-    (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name and compartment"
+    (Just _, Just _) -> Left "a biosphere exchange names its flow by identifier or in words, not both"
+    (Nothing, Nothing) -> Left "a biosphere exchange needs either a flow identifier or a name, a compartment and a unit"
     (Just flowId, Nothing) ->
-        maybe (Left (notAnIdentifier flowId)) (Right . ExistingFlow) (UUID.fromText flowId)
+        maybe (Left (notAnIdentifier flowId)) (Right . FlowById) (UUID.fromText flowId)
     (Nothing, Just name) -> case (beCompartment be, beUnit be) of
         (Nothing, _) -> Left ("biosphere flow \"" <> name <> "\" needs a compartment (air, water, soil, natural resource)")
-        -- The unit is half of a named flow's identity (see
-        -- 'Database.Author.authoredBioFlowUUID'), so it cannot be defaulted.
+        -- The unit is half of what makes a flow named in words that flow, both
+        -- when the words reach one the database declares and when they mint a
+        -- new one (see 'Database.Author.authoredBioFlowUUID'), so it cannot be
+        -- defaulted.
         (_, Nothing) -> Left ("biosphere flow \"" <> name <> "\" needs a unit")
         (Just medium, Just unit) ->
             Right $
-                NewBioFlow
+                FlowByName
                     name
                     Compartment{compartmentName = medium, compartmentSub = beSubCompartment be}
                     unit
