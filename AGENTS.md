@@ -82,12 +82,14 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 - **Pure domain, effectful edges**.
 - Avoid long function signatures. They are a smell — split the function or gather arguments in a product type.
 - Each type should have a sensible domain or technical meaning.
+- **A name a caller types is short, expressive, and explains itself where it is used.** Judge it by the line that calls it, not the line that defines it. Name the axis that actually separates a family of siblings: `BioExchange.from_id` and `BioExchange.from_name` say which of the two ways the flow is designated, where `existing` and `named` each answered a different question. Leave the verb out when nothing is being done - a constructor builds a value, it does not add one. This holds for every name someone outside this repo types: pyvolca's classes, methods and constructors, and the operations, fields and parameters in `API.Resources` that REST and MCP derive from.
 - Use advanced Haskell patterns when they improve expressivity and reduce line count.
 
 ### Design philosophy
 - Think like "Out Of The Tar Pit": most complexity is accidental. Minimize mutable state, keep logic declarative, separate state / control / computation.
 - Simplicity: perfection = nothing left to remove. Avoid over-engineering and cognitive load.
-- **Pre-1.0 (`v0.y.z`): no backward-compatibility obligation yet** — keep wire formats and APIs clean rather than carrying cruft. Reassess at `v1.0.0`.
+- **Pre-1.0 (`v0.y.z`): the wire format stays free to change** — `wireVersion` carries that compatibility and pyvolca refuses a wire it cannot speak, so a changed shape reaches a user as a clear error rather than a wrong number. Keep it clean rather than carrying cruft. Reassess at `v1.0.0`.
+- **A published Python name is not free in the same way.** Renaming or removing one in `pyvolca` costs its users an afternoon of edits with nothing to point at: their script does not fail on a version check, it fails on the line that used the name. So ship the new name and keep the old one as an alias that warns and says what replaced it (`volca._compat.warn_renamed`), and drop it at 1.0, never in the release that introduces the replacement.
 - Use language servers for fast diagnostics: HLS for Haskell, pyright for the `pyvolca/` Python client.
 - Fix a diagnostic the moment you see it, even a pre-existing one you only surfaced in passing — don't defer it to "later" or leave it because it predates your change. A separate small commit keeps it out of your feature's scope.
 
