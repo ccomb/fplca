@@ -27,3 +27,21 @@ def test_readme_api_reference_in_sync() -> None:
         "pyvolca/README.md api-reference block is stale. Run "
         "`python scripts/gen_api_md.py --write` and commit the result."
     )
+
+
+def test_the_reference_reads_as_markdown_not_as_sphinx() -> None:
+    # Docstrings cross-reference with Sphinx roles. Rendered verbatim, the role
+    # name lands in the page (":meth:`from_id`") and the reader trips on it.
+    reference = gen_api_md.render_reference()
+    assert ":meth:`" not in reference
+    assert ":class:`" not in reference
+    assert ":attr:`" not in reference
+
+
+def test_a_dataclass_shows_the_constructors_a_caller_writes() -> None:
+    # A classmethod object is not callable until it is bound, which once hid
+    # every alternative constructor from the reference: the fields were listed
+    # and the two ways to build the thing were not.
+    reference = gen_api_md.render_reference()
+    assert "`BioExchange.from_id(" in reference
+    assert "`BioExchange.from_name(" in reference
