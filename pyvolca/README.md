@@ -18,6 +18,8 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine: too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
+The other direction is a promise about pyvolca's own names. A name this client publishes does not vanish under a working script: when one is renamed, the old spelling keeps working and warns, saying what replaced it and that it takes the same arguments. A retired name is dropped at pyvolca 1.0, never in the release that introduces its replacement, so upgrading tells you what to edit rather than breaking on the line that used it. Run Python with `-W error::DeprecationWarning` to turn those warnings into failures and find every retired name at once.
+
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
@@ -1438,7 +1440,7 @@ Name the flow one way or the other, never both: ``flow`` is the identifier
 of a flow the database already has, which :meth:`Client.search_flows` and
 :attr:`BiosphereExchange.flow_id` both return, while ``name`` with
 ``compartment`` and ``unit`` names one in words. Use the two constructors
-rather than the fields, :meth:`existing` and :meth:`named`, which is why
+rather than the fields, :meth:`from_id` and :meth:`from_name`, which is why
 passing both or neither raises here instead of at the server.
 
 A biosphere amount is never converted, so an exchange states its amount in
@@ -1462,7 +1464,7 @@ An exchange with the environment (resource extraction or emission).
 ``flow_id`` is what a line writes back when its words cannot address the
 flow on their own: a name several flows answer to, or one whose source
 recorded no compartment. Everything else restates as
-:meth:`BioExchange.named` takes it.
+:meth:`BioExchange.from_name` takes it.
 
 | Field | Type | Default |
 |-------|------|---------|
