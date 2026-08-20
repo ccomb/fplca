@@ -30,6 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
+import Database.MatrixBuild (findProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
@@ -1110,10 +1111,23 @@ resolveByProductFlow cfg db fId = do
 resolveByCrossDBLink :: M.Map UUID CrossDBLink -> UUID -> Maybe TargetRef
 resolveByCrossDBLink links fId = crossDBLinkToTarget <$> M.lookup fId links
 
+{- | The producer the matrix routes this exchange through: 'findProducer' is the
+same function the triples are built with, so a target named here is the row the
+score charged. The activity UUID alone would answer with an arbitrary product of
+a multi-product activity, and would name a treatment for a pair the matrix never
+routed.
+-}
+resolveByRoutedProducer :: Database -> Exchange -> Maybe TargetRef
+resolveByRoutedProducer db ex = do
+    pid <- findProducer (dbProcessIdLookup db) ex
+    act <- getActivity db pid
+    pure (activityToTarget db pid act)
+
 {- | Resolve the target activity (if any) for one exchange. Technosphere broken
 links (linkId set but unresolvable) do NOT fall through to the product-flow
 path — that matches the original behaviour. Use '<|>' to chain fallbacks only
-where the original code did.
+where the original code did. A waste output is the one arm resolved the way the
+matrix routes it; the others answer from the activity UUID alone.
 -}
 resolveTarget ::
     UnitConfig ->
@@ -1134,8 +1148,8 @@ resolveTarget cfg db links = \case
     -- input's names the one that supplies it. Reading it as no target at all
     -- makes a linked waste output indistinguishable from a final waste flow,
     -- which is what a consumer reports when nothing treats a waste.
-    WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
-        | lid /= UUID.nil -> resolveByActivityUUID db lid
+    ex@WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
+        | lid /= UUID.nil -> resolveByRoutedProducer db ex
         | otherwise -> resolveByCrossDBLink links fid
 
 {- | Flow name + (biosphere-only) compartment. Each variant has exactly one

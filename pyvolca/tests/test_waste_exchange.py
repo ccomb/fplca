@@ -9,8 +9,9 @@ for SimaPro "Final waste flows".
 This module covers the wire shape for both envelopes:
 
 * ``ExchangeWithUnit``: inner ``{tag: "WasteExchange", isInput, ...}`` plus
-  target fields at the envelope level when the cross-DB linker resolved the
-  waste output to a treatment activity.
+  target fields at the envelope level whenever a treatment was resolved,
+  either through the waste output's own link (a bare same-database process
+  id) or through the cross-DB linker (a ``db::pid`` one).
 * ``ExchangeDetail``: same inner shape, but the flow is carried as a
   ``{kind: "waste", flow: <wasteFlow>}`` tagged sum.
 """

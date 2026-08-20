@@ -15,6 +15,7 @@ module AuthorSpec (spec) where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text, isInfixOf)
+import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -52,6 +53,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    WasteFlow (..),
     exchangeAmount,
     findProcessId,
     getActivity,
@@ -288,20 +290,23 @@ spec = do
                 -- like. An authored one always has a treatment, so reading its
                 -- link as no target would report every one of them as final.
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [wasteOut treatPid 0.5 Nothing]}
-                case insertActivities defaultUnitConfig [r] fixtureDb of
-                    Left err -> expectationFailure ("insertActivities: " <> show err)
-                    Right db' ->
-                        case (uncurry (findProcessId db') (riKey r), findProcessId db' treatActId usedOilId) of
-                            (Just pid, Just treatmentPid) ->
-                                case getActivity db' pid of
-                                    Nothing -> expectationFailure "the inserted activity is not in the database"
-                                    Just act ->
-                                        case [ewu | ewu <- pfaExchanges (convertActivityForAPI defaultUnitConfig db' pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
-                                            [ewu] -> do
-                                                ewuTargetProcessId ewu `shouldBe` Just (processIdToText db' treatmentPid)
-                                                ewuTargetActivityName ewu `shouldBe` Just "waste oil incineration"
-                                            other -> expectationFailure ("expected one waste output, got " <> show (length other))
-                            _ -> expectationFailure "the authored activity or its treatment has no process id"
+                case insertedWasteOutput fixtureDb r of
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (ewu, treatment) -> do
+                        ewuFlowName ewu `shouldBe` "used oil"
+                        ewuTargetProcessId ewu `shouldBe` Just treatment
+                        ewuTargetActivityName ewu `shouldBe` Just "waste oil incineration"
+
+            it "names the treatment's own row, not another product of the same activity" $ do
+                -- The matrix routes the waste on the pair (activity, flow); an
+                -- activity that answers to two process ids would otherwise be
+                -- reported at whichever product the UUID index happens to hold,
+                -- naming a row the score never charged.
+                db <- buildTwoProductTreatment
+                r <- resolveOrFail db baseActivity{aaExchanges = [wasteOut treatPid 0.5 Nothing]}
+                case insertedWasteOutput db r of
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (ewu, treatment) -> ewuTargetProcessId ewu `shouldBe` Just treatment
 
             it "refuses a key the database already holds" $ do
                 r <- resolveOrFail fixtureDb baseActivity
@@ -521,6 +526,22 @@ wasteOut provider amount unit =
 treatPid :: Text
 treatPid = UUID.toText treatActId <> "_" <> UUID.toText usedOilId
 
+{- | Insert one resolved activity and read back its single waste-output line as
+the activity view describes it, next to the process id its treatment sits at.
+-}
+insertedWasteOutput :: Database -> ResolvedInsert -> Either Text (ExchangeWithUnit, Text)
+insertedWasteOutput db r = do
+    db' <- insertActivities defaultUnitConfig [r] db
+    pid <- note "the authored activity has no process id" (uncurry (findProcessId db') (riKey r))
+    act <- note "the inserted activity is not in the database" (getActivity db' pid)
+    treatment <- note "the treatment has no process id" (findProcessId db' treatActId usedOilId)
+    case [ewu | ewu <- pfaExchanges (convertActivityForAPI defaultUnitConfig db' pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
+        [ewu] -> Right (ewu, processIdToText db' treatment)
+        other -> Left ("expected one waste output, got " <> T.pack (show (length other)))
+  where
+    note :: Text -> Maybe a -> Either Text a
+    note msg = maybe (Left msg) Right
+
 -- | The biosphere flows one resolved activity points at, in exchange order.
 bioFlowIds :: ResolvedInsert -> [UUID]
 bioFlowIds r = [flowId | BiosphereExchange{bioFlowId = flowId} <- exchanges (riActivity r)]
@@ -723,7 +744,33 @@ buildFixtureAt actId prodId = do
                 ]
             )
             (M.singleton co2Id co2Flow)
-            M.empty
+            (M.singleton usedOilId usedOilWasteFlow)
+            unitTable
+    either (fail . show) pure r
+
+{- | The same fixture with a second product on the treatment, so its activity
+UUID answers to two process ids. Which of them a waste output resolves to is
+then a real question, and only the pair the matrix routes on answers it.
+-}
+buildTwoProductTreatment :: IO Database
+buildTwoProductTreatment = do
+    r <-
+        buildDatabaseWithMatrices
+            defaultUnitConfig
+            ( M.fromList
+                [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
+                , ((treatActId, usedOilId), treatmentWithHeat)
+                , ((treatActId, heatId), treatmentWithHeat)
+                ]
+            )
+            ( M.fromList
+                [ (supplierProdId, milkFlowAt supplierProdId)
+                , (usedOilId, usedOilFlow)
+                , (heatId, heatFlow)
+                ]
+            )
+            (M.singleton co2Id co2Flow)
+            (M.singleton usedOilId usedOilWasteFlow)
             unitTable
     either (fail . show) pure r
 
@@ -747,12 +794,13 @@ buildBareFixture = do
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 
-supplierActId, supplierProdId, co2Id, treatActId, usedOilId, highActId, highProdId, kgUnitId, itemUnitId, metreUnitId :: UUID
+supplierActId, supplierProdId, co2Id, treatActId, usedOilId, heatId, highActId, highProdId, kgUnitId, itemUnitId, metreUnitId :: UUID
 supplierActId = mkUUID 1
 supplierProdId = mkUUID 2
 co2Id = mkUUID 3
 treatActId = mkUUID 4
 usedOilId = mkUUID 5
+heatId = mkUUID 30
 highActId = UUID.fromWords64 maxBound 1
 highProdId = UUID.fromWords64 maxBound 2
 kgUnitId = mkUUID 10
@@ -793,6 +841,33 @@ co2Flow =
         , bfCompartment = Just air
         }
 
+{- | The same waste declared on the waste axis. A treatment's reference stays a
+technosphere product while the lines that send waste to it sit on the waste
+axis, so an import declares the flow in both tables.
+-}
+usedOilWasteFlow :: WasteFlow
+usedOilWasteFlow =
+    WasteFlow
+        { wfId = usedOilId
+        , wfName = "used oil"
+        , wfUnitId = kgUnitId
+        , wfSynonyms = M.empty
+        , wfCAS = Nothing
+        , wfSubstanceId = Nothing
+        }
+
+-- | The heat a treatment recovers, its second product.
+heatFlow :: TechnosphereFlow
+heatFlow =
+    TechnosphereFlow
+        { tfId = heatId
+        , tfName = "heat, recovered"
+        , tfUnitId = kgUnitId
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
+        }
+
 usedOilFlow :: TechnosphereFlow
 usedOilFlow =
     TechnosphereFlow
@@ -802,6 +877,28 @@ usedOilFlow =
         , tfSynonyms = M.empty
         , tfCAS = Nothing
         , tfSubstanceId = Nothing
+        }
+
+{- | The same treatment, recovering heat as a second product. Its activity UUID
+then answers to two process ids, only one of which treats the waste.
+-}
+treatmentWithHeat :: Activity
+treatmentWithHeat =
+    treatmentActivity
+        { exchanges =
+            exchanges treatmentActivity
+                ++ [ TechnosphereExchange
+                        { techFlowId = heatId
+                        , techAmount = 3.0
+                        , techUnitId = kgUnitId
+                        , techRole = Coproduct
+                        , techActivityLinkId = UUID.nil
+                        , techProcessLinkId = Nothing
+                        , techLocation = ""
+                        , techComment = Nothing
+                        , techPedigree = Nothing
+                        }
+                   ]
         }
 
 {- | A treatment process: its only reference is an input, so it has no

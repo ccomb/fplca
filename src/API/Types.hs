@@ -1519,9 +1519,9 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuUnitName :: Text -- Unit name for the exchange
     , ewuFlowName :: Text -- Name of the flow being exchanged
     , ewuCompartment :: Maybe Compartment -- Biosphere compartment, Nothing for technosphere
-    , ewuTargetActivityName :: Maybe Text -- For technosphere: name of target activity
-    , ewuTargetLocation :: Maybe Text -- For technosphere: location of target activity
-    , ewuTargetProcessId :: Maybe Text -- For technosphere: ProcessId for navigation (activityUUID_productUUID)
+    , ewuTargetActivityName :: Maybe Text -- Supplier, or the treatment a waste goes to; Nothing on a biosphere line
+    , ewuTargetLocation :: Maybe Text -- Location of that activity
+    , ewuTargetProcessId :: Maybe Text -- ProcessId for navigation (activityUUID_productUUID)
     , ewuExComment :: Maybe Text -- Free-text per-exchange comment (mirrors exchangeComment)
     , ewuPedigree :: Maybe Pedigree -- LCA data-quality scores when available (mirrors exchangePedigree)
     }
