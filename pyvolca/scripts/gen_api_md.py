@@ -152,8 +152,8 @@ def _public_members(cls: type) -> tuple[list[tuple[str, str, str]], list[tuple[s
             doc = inspect.getdoc(raw.fget) or ""
             properties.append((name, doc))
             continue
-        # ``vars`` hands back the descriptor, and a classmethod object is not
-        # callable on its own until 3.10 binds it, so read the bound member
+        # ``vars`` hands back the raw descriptor, and a classmethod descriptor
+        # is not callable until the class binds it, so read the bound member
         # instead: alternative constructors are methods like any other.
         member = getattr(cls, name, raw)
         if not callable(member):
@@ -382,7 +382,9 @@ def render_compatibility() -> str:
         f"This build of **pyvolca {version('pyvolca')}** speaks wire "
         f"{wires} and requires a VoLCA engine "
         f"**≥ v{_compat.MIN_ENGINE_HINT}**; a capability gated on a newer "
-        "wire than the engine speaks refuses to run with a clear error."
+        "wire than the engine speaks refuses to run with a clear error. "
+        f"A name this build has retired keeps working until pyvolca "
+        f"**{_compat.RENAMED_REMOVED_IN}**."
     )
 
 

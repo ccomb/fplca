@@ -466,7 +466,6 @@ class TestAuthoringInputTypes:
         "retired,current,args",
         [
             ("existing", "from_id", ("11111111-2222-3333-4444-555555555555", "Emission", 1.2)),
-            ("named", "from_name", ("Nitrous oxide", "air", "Emission", 0.5, "kg")),
             ("introducing", "from_name", ("Nitrous oxide", "air", "Emission", 0.5, "kg")),
         ],
     )

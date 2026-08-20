@@ -18,13 +18,13 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine: too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
-The other direction is a promise about pyvolca's own names. A name this client publishes does not vanish under a working script: when one is renamed, the old spelling keeps working and warns, saying what replaced it and that it takes the same arguments. A retired name is dropped at pyvolca 1.0, never in the release that introduces its replacement, so upgrading tells you what to edit rather than breaking on the line that used it. Run Python with `-W error::DeprecationWarning` to turn those warnings into failures and find every retired name at once.
+The other direction is a promise about pyvolca's own names. A name this client publishes does not vanish under a working script: when one is renamed, the old spelling keeps working and warns, saying what replaced it and that it takes the same arguments. A retired name is dropped at a major version, never in the release that introduces its replacement, so upgrading tells you what to edit rather than breaking on the line that used it. Python shows a `DeprecationWarning` only when it is raised from your top-level script, so run with `-W default::DeprecationWarning` to see the ones raised from your own modules and packages too.
 
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1461,7 +1461,7 @@ the flow's own unit.
 
 ##### `BioExchange.existing(flow: str, direction: BioDirection | str, amount: float, *, unit: str | None = None, comment: str | None = None) -> BioExchange`
 
-Retired name of `from_id`, kept working until pyvolca 1.0.
+Retired name of `from_id`. Still works, and says so.
 
 ##### `BioExchange.from_id(flow: str, direction: BioDirection | str, amount: float, *, unit: str | None = None, comment: str | None = None) -> BioExchange`
 
@@ -1489,15 +1489,11 @@ of one name in two units are told apart by the unit itself.
 
 ##### `BioExchange.introducing(name: str, compartment: str, direction: BioDirection | str, amount: float, unit: str, *, sub_compartment: str | None = None, comment: str | None = None) -> BioExchange`
 
-Retired name of `from_name`, kept working until pyvolca 1.0.
+Retired name of `from_name`. Still works, and says so.
 
 It was named for what it did when a name reached nothing: bring the
 flow into the database. It now reaches the flow the database already
 declares under that name, and only introduces one when nothing does.
-
-##### `BioExchange.named(name: str, compartment: str, direction: BioDirection | str, amount: float, unit: str, *, sub_compartment: str | None = None, comment: str | None = None) -> BioExchange`
-
-Retired name of `from_name`, kept working until pyvolca 1.0.
 
 ### `BiosphereExchange`
 

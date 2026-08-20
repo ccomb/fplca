@@ -2064,33 +2064,9 @@ class BioExchange:
         unit: str | None = None,
         comment: str | None = None,
     ) -> "BioExchange":
-        """Retired name of :meth:`from_id`, kept working until pyvolca 1.0."""
+        """Retired name of :meth:`from_id`. Still works, and says so."""
         warn_renamed("BioExchange.existing", "BioExchange.from_id")
         return cls.from_id(flow, direction, amount, unit=unit, comment=comment)
-
-    @classmethod
-    def named(
-        cls,
-        name: str,
-        compartment: str,
-        direction: BioDirection | str,
-        amount: float,
-        unit: str,
-        *,
-        sub_compartment: str | None = None,
-        comment: str | None = None,
-    ) -> "BioExchange":
-        """Retired name of :meth:`from_name`, kept working until pyvolca 1.0."""
-        warn_renamed("BioExchange.named", "BioExchange.from_name")
-        return cls.from_name(
-            name,
-            compartment,
-            direction,
-            amount,
-            unit,
-            sub_compartment=sub_compartment,
-            comment=comment,
-        )
 
     @classmethod
     def introducing(
@@ -2104,7 +2080,7 @@ class BioExchange:
         sub_compartment: str | None = None,
         comment: str | None = None,
     ) -> "BioExchange":
-        """Retired name of :meth:`from_name`, kept working until pyvolca 1.0.
+        """Retired name of :meth:`from_name`. Still works, and says so.
 
         It was named for what it did when a name reached nothing: bring the
         flow into the database. It now reaches the flow the database already
