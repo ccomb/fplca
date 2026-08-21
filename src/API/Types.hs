@@ -34,7 +34,7 @@ import Database.Author (
  )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), exchangeKindName)
+import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), WasteRole (..), exchangeKindName)
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -1522,6 +1522,7 @@ data ExchangeWithUnit = ExchangeWithUnit
     , ewuTargetActivityName :: Maybe Text -- Supplier, or the treatment a waste goes to; Nothing on a biosphere line
     , ewuTargetLocation :: Maybe Text -- Location of that activity
     , ewuTargetProcessId :: Maybe Text -- ProcessId for navigation (activityUUID_productUUID)
+    , ewuWasteRole :: Maybe WasteRole -- What a waste line does; Nothing on every other kind
     , ewuExComment :: Maybe Text -- Free-text per-exchange comment (mirrors exchangeComment)
     , ewuPedigree :: Maybe Pedigree -- LCA data-quality scores when available (mirrors exchangePedigree)
     }

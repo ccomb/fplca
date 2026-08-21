@@ -14,9 +14,10 @@ import API.Types (
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
-import Data.UUID (nil, toText)
+import Data.UUID (fromWords, nil, toText)
 import Service (
     ServiceError (..),
+    TargetRef (..),
     buildUnitGroups,
     extractCompartment,
     filterTreeExport,
@@ -24,6 +25,7 @@ import Service (
     resolveActivityAndProcessId,
     validateProcessIdInMatrixIndex,
     validateUUID,
+    wasteRoleOf,
  )
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
@@ -185,6 +187,46 @@ spec = do
     -- -----------------------------------------------------------------------
     -- filterTreeExport
     -- -----------------------------------------------------------------------
+    -- -----------------------------------------------------------------------
+    -- wasteRoleOf
+    -- -----------------------------------------------------------------------
+    describe "wasteRoleOf" $ do
+        let treatment = TargetRef "waste oil incineration" "GLO" "aaa_bbb"
+            wasteLine isInput link =
+                WasteExchange
+                    { waFlowId = nil
+                    , waAmount = 1.0
+                    , waUnitId = nil
+                    , waIsInput = isInput
+                    , waActivityLinkId = link
+                    , waProcessLinkId = Nothing
+                    , waLocation = ""
+                    , waComment = Nothing
+                    , waPedigree = Nothing
+                    }
+            linked = fromWords 1 2 3 4
+
+        it "calls an input a treatment of the waste" $
+            wasteRoleOf (Just treatment) (wasteLine True linked) `shouldBe` Just TreatsWaste
+
+        it "calls a resolved output a waste sent to treatment" $
+            wasteRoleOf (Just treatment) (wasteLine False linked) `shouldBe` Just SentToTreatment
+
+        it "calls an output naming no treatment a final waste flow" $
+            wasteRoleOf Nothing (wasteLine False nil) `shouldBe` Just FinalWasteFlow
+
+        -- The distinction the whole field exists for: this output states that
+        -- something treats the waste, so calling it final would report a
+        -- missing database as an accounted-for end of life.
+        it "does not call an output whose named treatment is missing final" $
+            wasteRoleOf Nothing (wasteLine False linked) `shouldBe` Just TreatmentNotLoaded
+
+        it "leaves every other kind of line without a role" $ do
+            let bio = BiosphereExchange nil 1.0 nil Emission "" Nothing Nothing
+                tech = TechnosphereExchange nil 1.0 nil Input nil Nothing "" Nothing Nothing
+            wasteRoleOf Nothing bio `shouldBe` Nothing
+            wasteRoleOf (Just treatment) tech `shouldBe` Nothing
+
     describe "filterTreeExport" $ do
         it "keeps matching node and its ancestor" $
             let export =

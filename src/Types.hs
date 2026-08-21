@@ -702,6 +702,27 @@ exchangeKindName KindTechnosphere = "technosphere"
 exchangeKindName KindBiosphere = "biosphere"
 exchangeKindName KindWaste = "waste"
 
+{- | What a waste line does within its activity.
+
+A consumer used to read this off the target being absent, which conflates two
+opposite statements: a waste nothing treats, and a waste whose named treatment
+is in no loaded database. The first is a complete description of an end-of-life
+flow, the second is a gap in what was loaded, and calling the second final says
+the burden is accounted for when it is missing. Only the engine holds both
+facts, so the engine states the role instead of leaving it to be inferred.
+-}
+data WasteRole
+    = -- | An input: this activity is the one treating the waste.
+      TreatsWaste
+    | -- | An output whose treatment resolved.
+      SentToTreatment
+    | -- | An output naming no treatment: nothing treats this waste.
+      FinalWasteFlow
+    | -- | An output naming a treatment no loaded database ships.
+      TreatmentNotLoaded
+    deriving (Eq, Show, Generic, NFData, Enum, Bounded)
+    deriving anyclass (ToSchema)
+
 {- | Read a kind a request asked for. 'Nothing' for anything else, so the
 caller refuses with its own message rather than filtering on a guess.
 -}
@@ -1661,6 +1682,9 @@ data CrossDBLink = CrossDBLink
 -- the default Generic encoding (constructor name as JSON string).
 instance ToJSON TechRole
 instance FromJSON TechRole
+
+instance ToJSON WasteRole
+instance FromJSON WasteRole
 
 instance ToJSON BioDirection
 instance FromJSON BioDirection

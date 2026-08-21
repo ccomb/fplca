@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- Every waste line of an activity now says what it does, as `wasteRole`. A
+  consumer had to work it out from the target being absent, and that reading
+  runs two opposite statements together: a waste nothing treats, which is a
+  complete description of an end-of-life flow, and a waste whose named
+  treatment is in no loaded database, which is a gap in what was loaded. Both
+  arrive with no target, and calling the second one final says the burden is
+  accounted for when it is missing. The four values are `TreatsWaste` for a
+  line the activity treats, `SentToTreatment` for one whose treatment was
+  found, `FinalWasteFlow` for an output naming no treatment, and
+  `TreatmentNotLoaded` for one naming a treatment that is nowhere to be found.
+  Only the engine holds both facts, so the engine now states the role instead
+  of leaving it to be guessed. This is wire revision 10.
 - A flow search now says what kind of flow each result is, and can be asked for
   one kind alone. Three different things answer to a name: a technosphere flow,
   meaning a product one activity makes and another consumes; a biosphere flow,
