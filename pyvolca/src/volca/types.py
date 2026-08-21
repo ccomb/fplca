@@ -977,14 +977,35 @@ class BiosphereExchange:
         )
 
 
+class WasteRole(_StrEnum):
+    """What a waste line does within its activity.
+
+    ``TREATS_WASTE``: an input, so this activity is the one treating it.
+    ``SENT_TO_TREATMENT``: an output whose treatment was found.
+    ``FINAL_WASTE_FLOW``: an output naming no treatment, so nothing treats it.
+    ``TREATMENT_NOT_LOADED``: an output naming a treatment no loaded database
+    ships, so its burden is missing rather than accounted for.
+
+    The last two both arrive with no target, which is why the role is stated
+    rather than worked out from the target fields.
+    """
+
+    TREATS_WASTE = "TreatsWaste"
+    SENT_TO_TREATMENT = "SentToTreatment"
+    FINAL_WASTE_FLOW = "FinalWasteFlow"
+    TREATMENT_NOT_LOADED = "TreatmentNotLoaded"
+
+
 @dataclass
 class WasteExchange:
     """An exchange of a waste flow with a treatment activity.
 
     Shares the technosphere matrix with product flows but tracked as its own
     kind so callers can tell a "waste sent to landfill" output apart from a
-    product input. Orphan waste (no linked treatment) contributes zero impact,
-    the same cut-off semantics as an orphan technosphere input.
+    product input. A waste output no treatment is found for contributes zero
+    impact, the same cut-off semantics as an orphan technosphere input;
+    ``role`` says whether that is because nothing treats it or because the
+    treatment it names was not loaded.
     """
 
     flow_name: str
@@ -995,6 +1016,7 @@ class WasteExchange:
     target_location: str | None
     target_process_id: str | None
     comment: str | None = None
+    role: WasteRole | None = None  # None from an engine older than wire 10
 
     is_biosphere: bool = False
     is_waste: bool = True
@@ -1011,6 +1033,7 @@ class WasteExchange:
     @classmethod
     def from_json(cls, ewu: dict) -> "WasteExchange":
         inner = ewu["exchange"]
+        raw_role = ewu.get("wasteRole")
         return cls(
             flow_name=ewu["flowName"],
             amount=inner["amount"],
@@ -1020,6 +1043,7 @@ class WasteExchange:
             target_location=ewu.get("targetLocation"),
             target_process_id=ewu.get("targetProcessId"),
             comment=_exchange_comment(ewu, inner),
+            role=WasteRole(raw_role) if raw_role else None,
         )
 
 

@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 10** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1206,6 +1206,19 @@ Role a technosphere exchange plays within its host activity.
 ``COPRODUCT``: a secondary output (in allocated activities).
 ``REFERENCE_INPUT``: the reference input (in waste-treatment activities).
 ``INPUT``: any other technosphere input.
+
+### `WasteRole`
+
+What a waste line does within its activity.
+
+``TREATS_WASTE``: an input, so this activity is the one treating it.
+``SENT_TO_TREATMENT``: an output whose treatment was found.
+``FINAL_WASTE_FLOW``: an output naming no treatment, so nothing treats it.
+``TREATMENT_NOT_LOADED``: an output naming a treatment no loaded database
+ships, so its burden is missing rather than accounted for.
+
+The last two both arrive with no target, which is why the role is stated
+rather than worked out from the target fields.
 
 ## Exceptions
 
@@ -2470,8 +2483,10 @@ An exchange of a waste flow with a treatment activity.
 
 Shares the technosphere matrix with product flows but tracked as its own
 kind so callers can tell a "waste sent to landfill" output apart from a
-product input. Orphan waste (no linked treatment) contributes zero impact,
-the same cut-off semantics as an orphan technosphere input.
+product input. A waste output no treatment is found for contributes zero
+impact, the same cut-off semantics as an orphan technosphere input;
+``role`` says whether that is because nothing treats it or because the
+treatment it names was not loaded.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -2483,6 +2498,7 @@ the same cut-off semantics as an orphan technosphere input.
 | `target_location` | `str \| None` | _required_ |
 | `target_process_id` | `str \| None` | _required_ |
 | `comment` | `str \| None` | None |
+| `role` | `WasteRole \| None` | None |
 | `is_biosphere` | `bool` | False |
 | `is_waste` | `bool` | True |
 
