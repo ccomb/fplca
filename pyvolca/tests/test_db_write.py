@@ -387,8 +387,8 @@ class TestCreateActivities:
         _ok(session, {"written": ["a_b"], "transient": False, "warnings": ["new flow"]})
         activity = _cheese(
             biosphere=[
-                BioExchange.named("Nitrous oxide", "air", "Emission", 0.5, "kg"),
-                BioExchange.existing("11111111-2222-3333-4444-555555555555", "Emission", 1.2),
+                BioExchange.from_name("Nitrous oxide", "air", "Emission", 0.5, "kg"),
+                BioExchange.from_id("11111111-2222-3333-4444-555555555555", "Emission", 1.2),
             ]
         )
         client.create_activities([activity])
@@ -458,9 +458,23 @@ class TestAuthoringInputTypes:
     def test_direction_is_read_the_way_the_engine_reads_it(self):
         # The engine lowercases the wire value before matching, so the
         # client accepts any casing but always sends the canonical one.
-        exchange = BioExchange.named("Nitrous oxide", "air", "emission", 0.5, "kg")
+        exchange = BioExchange.from_name("Nitrous oxide", "air", "emission", 0.5, "kg")
         assert exchange.direction is BioDirection.EMISSION
         assert exchange.to_wire()["direction"] == "Emission"
+
+    @pytest.mark.parametrize(
+        "retired,current,args",
+        [
+            ("existing", "from_id", ("11111111-2222-3333-4444-555555555555", "Emission", 1.2)),
+            ("introducing", "from_name", ("Nitrous oxide", "air", "Emission", 0.5, "kg")),
+        ],
+    )
+    def test_a_retired_constructor_still_builds_and_says_what_replaced_it(
+        self, retired, current, args
+    ):
+        with pytest.warns(DeprecationWarning, match=f"BioExchange.{current}"):
+            built = getattr(BioExchange, retired)(*args)
+        assert built == getattr(BioExchange, current)(*args)
 
 
 class TestEditExchanges:

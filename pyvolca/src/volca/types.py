@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, ClassVar, Generic, Iterator, Literal, TypeVar, Union
 
+from ._compat import warn_renamed
+
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
@@ -929,7 +931,7 @@ class BiosphereExchange:
     ``flow_id`` is what a line writes back when its words cannot address the
     flow on their own: a name several flows answer to, or one whose source
     recorded no compartment. Everything else restates as
-    :meth:`BioExchange.named` takes it.
+    :meth:`BioExchange.from_name` takes it.
     """
 
     flow_name: str
@@ -1958,7 +1960,7 @@ class BioExchange:
     of a flow the database already has, which :meth:`Client.search_flows` and
     :attr:`BiosphereExchange.flow_id` both return, while ``name`` with
     ``compartment`` and ``unit`` names one in words. Use the two constructors
-    rather than the fields, :meth:`existing` and :meth:`named`, which is why
+    rather than the fields, :meth:`from_id` and :meth:`from_name`, which is why
     passing both or neither raises here instead of at the server.
 
     A biosphere amount is never converted, so an exchange states its amount in
@@ -1993,7 +1995,7 @@ class BioExchange:
             )
 
     @classmethod
-    def existing(
+    def from_id(
         cls,
         flow: str,
         direction: BioDirection | str,
@@ -2015,7 +2017,7 @@ class BioExchange:
         )
 
     @classmethod
-    def named(
+    def from_name(
         cls,
         name: str,
         compartment: str,
@@ -2049,6 +2051,49 @@ class BioExchange:
             compartment=compartment,
             sub_compartment=sub_compartment,
             unit=unit,
+            comment=comment,
+        )
+
+    @classmethod
+    def existing(
+        cls,
+        flow: str,
+        direction: BioDirection | str,
+        amount: float,
+        *,
+        unit: str | None = None,
+        comment: str | None = None,
+    ) -> "BioExchange":
+        """Retired name of :meth:`from_id`. Still works, and says so."""
+        warn_renamed("BioExchange.existing", "BioExchange.from_id")
+        return cls.from_id(flow, direction, amount, unit=unit, comment=comment)
+
+    @classmethod
+    def introducing(
+        cls,
+        name: str,
+        compartment: str,
+        direction: BioDirection | str,
+        amount: float,
+        unit: str,
+        *,
+        sub_compartment: str | None = None,
+        comment: str | None = None,
+    ) -> "BioExchange":
+        """Retired name of :meth:`from_name`. Still works, and says so.
+
+        It was named for what it did when a name reached nothing: bring the
+        flow into the database. It now reaches the flow the database already
+        declares under that name, and only introduces one when nothing does.
+        """
+        warn_renamed("BioExchange.introducing", "BioExchange.from_name")
+        return cls.from_name(
+            name,
+            compartment,
+            direction,
+            amount,
+            unit,
+            sub_compartment=sub_compartment,
             comment=comment,
         )
 

@@ -18,11 +18,13 @@ Requires Python ≥ 3.10 and a running VoLCA engine. Use `Server` (below) to run
 
 pyvolca speaks a range of revisions of the engine's JSON wire format; the engine advertises its revision as `wireVersion` on `/api/v1/version`. pyvolca checks it the first time it talks to the engine: too old fails with a clear error, newer than this client knows warns, and a capability that needs a newer wire than the engine speaks refuses to run instead of letting the engine misread the request. pyvolca and engine version numbers move independently: `wireVersion` carries compatibility, not the version numbers.
 
+The other direction is a promise about pyvolca's own names. A name this client publishes does not vanish under a working script: when one is renamed, the old spelling keeps working and warns, saying what replaced it and that it takes the same arguments. A retired name is dropped at a major version, never in the release that introduces its replacement, so upgrading tells you what to edit rather than breaking on the line that used it. Python shows a `DeprecationWarning` only when it is raised from your top-level script, so run with `-W default::DeprecationWarning` to see the ones raised from your own modules and packages too.
+
 <!-- BEGIN: compatibility -->
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 9** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -394,7 +396,7 @@ dependency topology.
 SQL-group-by aggregation over direct exchanges, supply chain, or biosphere flows.
 
 Args:
-    scope: :class:`AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
+    scope: `AggregateScope` member (``DIRECT`` / ``SUPPLY_CHAIN``
         / ``BIOSPHERE`` / ``CONSUMPTION``) or the equivalent wire
         string. Strings are accepted for one-liner ergonomics but
         bypass static checking. ``CONSUMPTION`` rows are scaled
@@ -421,7 +423,7 @@ Args:
         ``"unit"``, ``"location"``, ``"target_name"``,
         ``"consumer_name"`` (``CONSUMPTION`` scope),
         ``"classification.<system>"``.
-    aggregate: :class:`AggregateOp` member or wire string
+    aggregate: `AggregateOp` member or wire string
         (``"sum_quantity"`` by default, ``"count"``, or ``"share"``).
 
 ##### `Client.call(operation_id: str, **kwargs) -> Any`
@@ -439,8 +441,8 @@ How much one impact score moves when technosphere links are perturbed.
 Each perturbation is a dict
 ``{"consumer": pid, "supplier": pid, "delta": -0.05, "label"?: str}``:
 ``delta`` is *relative* (the coefficient becomes ``a * (1 + delta)``,
-so ``-1.0`` removes the link). Returns the ``baseline`` :class:`LCIAResult`
-plus one :class:`PerturbedResult` per perturbation, each carrying
+so ``-1.0`` removes the link). Returns the ``baseline`` `LCIAResult`
+plus one `PerturbedResult` per perturbation, each carrying
 either the perturbed impact and its delta, or an ``error`` string when
 that perturbation could not be resolved. ``method_id`` takes a method
 name as well as a UUID, and ``collection`` is read off the resolved
@@ -462,7 +464,7 @@ Write new activities into a database that can hold them.
 Each activity's ``process_id`` is minted by the engine from its name,
 location, product name and product unit (you do not choose it), and
 comes back in ``written``. Writing the same activity twice is therefore
-a conflict, not a second row; use :meth:`replace_activity` to correct
+a conflict, not a second row; use `replace_activity` to correct
 one that is already there.
 
 Only a database of your own accepts writes: one you uploaded, or a
@@ -528,7 +530,7 @@ Raises VoLCAError on an HTTP error (e.g. the set does not exist).
 
 Change what one activity consumes and emits, keeping the activity.
 
-This reaches what :meth:`replace_activity` cannot: an activity that came
+This reaches what `replace_activity` cannot: an activity that came
 in from a database file. Its identity was minted by whichever parser
 read it, so no description addresses it, and a description could not
 carry back its classification, synonyms, parameters, pedigree or
@@ -563,8 +565,8 @@ already loaded, even partially linked, is left untouched.
 
 A staged copy that is not ready to finalize raises VoLCAError naming
 the blocker (missing suppliers, no activities parsed); fix it with
-:meth:`add_dependency` or :meth:`set_data_path`, then
-:meth:`finalize_database`. The gate also holds on re-runs: an upload
+`add_dependency` or `set_data_path`, then
+`finalize_database`. The gate also holds on re-runs: an upload
 left staged by an earlier failed run goes through the same readiness
 check instead of being loaded half-linked.
 
@@ -589,7 +591,7 @@ ILCD multi-file trees come back zipped.
 The engine streams the payload as raw bytes. Best-effort approximation
 warnings arrive in the ``X-Volca-Export-Warnings`` response header
 (percent-encoded, newline-joined) and are surfaced through
-:mod:`warnings`. Raises VoLCAError on an HTTP error.
+`warnings`. Raises VoLCAError on an HTTP error.
 
 ##### `Client.export_method_collection(name: str, fmt: str = 'simapro') -> bytes`
 
@@ -602,18 +604,18 @@ categories), or ``ilcd`` (a zip of an ILCD LCIA-method package,
 one method dataset per impact category plus its flow datasets).
 Projection warnings (anything the format cannot
 carry faithfully) arrive in the ``X-Volca-Export-Warnings`` response
-header and are surfaced through :mod:`warnings`. Raises VoLCAError
+header and are surfaced through `warnings`. Raises VoLCAError
 on an HTTP error, including a collection that is not loaded.
 
 ##### `Client.export_to_file(fmt: str, out_path: str, db_name: str | None = None) -> None`
 
-Export a database (see :meth:`export_database`) and write it to a file.
+Export a database (see `export_database`) and write it to a file.
 
 ##### `Client.finalize_database(db_name: str | None = None) -> dict`
 
 Build matrices for a staged database and load it (``ActivateResponse``).
 
-Call after dependencies resolve (:meth:`get_setup` reports
+Call after dependencies resolve (`get_setup` reports
 ``isReady``). Raises VoLCAError if the engine reports ``success=false``
 (e.g. unresolved suppliers).
 
@@ -629,7 +631,7 @@ Returns a typed ActivityDetail. Use ``act.inputs`` / ``act.outputs`` /
 
 Look up characterization factors for a method matched to database flows.
 
-Returns a :class:`CharacterizationResult` carrying ``matches`` (total
+Returns a `CharacterizationResult` carrying ``matches`` (total
 rows the filter selected) and ``shown`` (rows actually returned under
 ``limit``). Check ``result.has_more`` to detect truncation.
 
@@ -640,7 +642,7 @@ How much of a database a whole method collection characterizes.
 Counts the distinct emission and resource flows at least one of the
 collection's methods resolves a factor for, with the same lookup
 scoring uses. Distinct across methods: their factors overlap, so the
-per-method figures from :meth:`get_mapping_status` do not add up to
+per-method figures from `get_mapping_status` do not add up to
 this number.
 
 ##### `Client.get_consumers(process_id: str, *, name: str | None = None, location: str | None = None, product: str | None = None, preset: str | None = None, classification_filters: list[ClassificationFilter] | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, max_depth: int | None = None, sort: str | None = None, order: str | None = None, include_edges: bool = False) -> ConsumersResponse`
@@ -651,7 +653,7 @@ Args:
     max_depth: Max hops from supplier. 1 = direct consumers only.
     classification_filters: ClassificationFilter entries restricting
         the results. Multiple filters are AND-combined by the server.
-        Mode is :class:`MatchMode.EXACT` or :class:`MatchMode.CONTAINS`.
+        Mode is `MatchMode.EXACT` or `MatchMode.CONTAINS`.
     sort: Sort key: ``"name"``, ``"location"``, ``"product"``,
         ``"amount"``, or ``"unit"``. Default orders by depth.
     order: ``"desc"`` to reverse; ascending otherwise.
@@ -660,8 +662,8 @@ Args:
         Callers can walk these to reconstruct supplier→consumer paths
         without a second ``get_path_to`` round-trip.
 
-Returns a :class:`ConsumersResponse` whose ``consumers`` attribute is
-a :class:`SearchResults[ConsumerResult]` (iterate it to walk every
+Returns a `ConsumersResponse` whose ``consumers`` attribute is
+a `SearchResults[ConsumerResult]` (iterate it to walk every
 consumer across all pages) and whose ``edges`` attribute carries
 the traversal subgraph (empty by default).
 
@@ -669,7 +671,7 @@ the traversal subgraph (empty by default).
 
 Which upstream activities drive a given impact category.
 
-Same engine-side limitation as :meth:`get_contributing_flows`: no
+Same engine-side limitation as `get_contributing_flows`: no
 total exposed, so ``has_more`` cannot be derived. Inspect
 ``share_pct`` totals to gauge coverage. ``method_id`` takes a method
 name as well as a UUID, and ``collection`` is read off the resolved
@@ -679,7 +681,7 @@ method unless you pin it.
 
 Which elementary flows drive a given impact category.
 
-Returns a :class:`ContributingFlows`. Caveat: the engine does not
+Returns a `ContributingFlows`. Caveat: the engine does not
 report the total flow count, so pyvolca cannot derive ``has_more``
 from the response. Pass a generous ``limit`` if you need exhaustive
 coverage and inspect ``share_pct`` totals. ``method_id`` takes a method
@@ -698,7 +700,7 @@ Activities that produce or consume a given flow.
 
 Get the characterization-factor-to-database-flow mapping coverage.
 
-:class:`FlowMapping.coverage_pct` summarises how many of the DB's
+`FlowMapping.coverage_pct` summarises how many of the DB's
 biosphere flows the method has a CF for; ``flows`` is the per-flow
 breakdown including unmatched rows (``cf_value=None``).
 
@@ -706,7 +708,7 @@ breakdown including unmatched rows (``cf_value=None``).
 
 Compute the LCIA score for a single impact category on an activity.
 
-Use :meth:`get_impacts_batch` to retrieve every category in a method
+Use `get_impacts_batch` to retrieve every category in a method
 collection at once (and any configured scoring sets).
 
 Args:
@@ -720,12 +722,12 @@ Args:
 
 Compute LCIA for every impact category in a collection, in one call.
 
-The response carries the per-method :class:`LCIAResult` list plus any
+The response carries the per-method `LCIAResult` list plus any
 formula-based scoring sets declared in the engine config (PEF, ECS…).
 ``scoring_indicators`` gives the per-variable breakdown of each
 scoring set, pre-multiplied by the set's ``displayMultiplier``.
 ``exclude_long_term`` drops long-term emissions before scoring, the
-same switch :meth:`score_activities` carries.
+same switch `score_activities` carries.
 
 Left without a ``collection``, the call runs against the only loaded
 one, and refuses when several are loaded rather than picking one.
@@ -745,17 +747,17 @@ Uses a direct HTTP call because ``/inputs`` has no operationId
 
 Compute the life-cycle inventory (cumulative biosphere flows) for an activity.
 
-Returns an :class:`InventoryResult` with the per-elementary-flow
+Returns an `InventoryResult` with the per-elementary-flow
 totals scaled to one functional unit of the activity's reference
-product. Use :meth:`get_impacts` to apply a characterization method
-to the inventory; use :meth:`aggregate` with ``scope="biosphere"``
+product. Use `get_impacts` to apply a characterization method
+to the inventory; use `aggregate` with ``scope="biosphere"``
 for grouped views.
 
 Args:
     flow: Substring filter on flow name.
     limit: Cap on returned flow rows. (Server returns full inventory
         otherwise; the engine doesn't paginate this endpoint.)
-    substitutions: Upstream supplier swaps; see :meth:`get_supply_chain`.
+    substitutions: Upstream supplier swaps; see `get_supply_chain`.
 
 ##### `Client.get_mapping_status(method_id: str, db_name: str | None = None) -> MappingStatus`
 
@@ -774,7 +776,7 @@ The characterization factors of a method (flow, direction, value).
 
 ##### `Client.get_outputs(process_id: str) -> list[Exchange]`
 
-Return the output exchanges of an activity. See :meth:`get_inputs` for notes.
+Return the output exchanges of an activity. See `get_inputs` for notes.
 
 ##### `Client.get_path_to(process_id: str, target: str) -> PathResult`
 
@@ -791,7 +793,7 @@ Setup status of a staged or loaded database (``DatabaseSetupInfo``).
 Key fields: ``isReady`` (can it be finalized/loaded), ``missingSuppliers``
 and ``unresolvedLinks`` (unmet cross-database links), ``dependencies``
 (declared deps), ``dataPath`` / ``availablePaths`` (the selected data
-file and the alternatives, see :meth:`set_data_path`), ``completeness``.
+file and the alternatives, see `set_data_path`), ``completeness``.
 
 ##### `Client.get_stats()`
 
@@ -803,7 +805,7 @@ Keys are already snake_case on the wire, so this returns the raw dict.
 
 Get the flat supply chain of an activity.
 
-Returns a :class:`SupplyChain`. Check ``result.has_more`` to detect
+Returns a `SupplyChain`. Check ``result.has_more`` to detect
 when ``limit`` truncated ``entries`` below ``filtered_activities``:
 further downstream analysis on a truncated chain would be wrong
 without flagging the gap.
@@ -824,7 +826,7 @@ Args:
     order: ``"desc"`` to reverse; ascending otherwise.
     substitutions: When provided, the call is upgraded to POST and
         the scaling vector is recomputed with the substituted
-        suppliers. Accepts :class:`Substitution` (preferred) or the
+        suppliers. Accepts `Substitution` (preferred) or the
         legacy ``{"from", "to", "consumer"}`` dict form; ``consumer``
         is optional: omit it for a global swap.
 
@@ -875,7 +877,7 @@ Each entry carries ``name``, ``displayName``, ``status``,
 
 List every LCIA method available in the engine.
 
-Each :class:`Method` carries ``id``, ``name``, ``category``, ``unit``,
+Each `Method` carries ``id``, ``name``, ``category``, ``unit``,
 ``factor_count``, and the parent ``collection``. Every ``method_id``
 argument takes either, so this list is for browsing, not for looking
 up an id before a call.
@@ -884,8 +886,8 @@ up an id before a call.
 
 List classification presets configured in this instance.
 
-Each :class:`Preset` carries its ``filters`` (list of
-:class:`PresetFilter` triples). Apply by passing ``preset=p.name``
+Each `Preset` carries its ``filters`` (list of
+`PresetFilter` triples). Apply by passing ``preset=p.name``
 to filtering endpoints.
 
 ##### `Client.list_reference_data(kind: RefDataKind) -> list[dict]`
@@ -936,7 +938,7 @@ sent inline so the engine needs no filesystem access. Returns the
 
 ##### `Client.relink_from_file(dep_db: str, mapping_path: str, db_name: str | None = None) -> dict`
 
-Read a mapping CSV file and call :meth:`relink` with its text.
+Read a mapping CSV file and call `relink` with its text.
 
 ##### `Client.remove_dependency(dep_name: str, db_name: str | None = None) -> dict`
 
@@ -954,13 +956,13 @@ row already has. Change any of those and you are describing a different
 activity, which the engine refuses rather than writing to a second row;
 create that one and delete the old one instead.
 
-Returns the same shape as :meth:`create_activities`.
+Returns the same shape as `create_activities`.
 
 ##### `Client.resolve_activities(names: Iterable[str], *, by: Literal['name', 'product'] = 'name', geo: str | None = None, exact: bool = True, limit: int = 5, workers: int = 8) -> dict[str, list[Activity]]`
 
 Resolve a batch of names to their matching activities, concurrently.
 
-One :meth:`search_activities` call per unique name, fanned out over
+One `search_activities` call per unique name, fanned out over
 ``workers`` threads on the client's HTTP session. This replaces the
 two patterns scripts keep hand-rolling: downloading the whole
 database to build a name→process_id dict, and per-name thread pools.
@@ -969,7 +971,7 @@ The result maps every input name to its matches: the mapping is
 total, so misses are visible, never silently dropped:
 
 * ``[]``: no match; the name does not resolve.
-* one :class:`Activity`: unambiguous; ``matches[0].process_id``.
+* one `Activity`: unambiguous; ``matches[0].process_id``.
 * several: ambiguous (same name across geographies or products);
   disambiguate with ``geo=`` or inspect the candidates.
 
@@ -991,8 +993,8 @@ Returns:
 
 Score many processes in one call (every category of a collection each).
 
-Returns a :class:`BatchScores`: ``results`` holds one
-:class:`ScoredActivity` per process the engine could compute, while
+Returns a `BatchScores`: ``results`` holds one
+`ScoredActivity` per process the engine could compute, while
 ``not_found`` / ``invalid`` list the ids it could not resolve; inspect
 them, a partial result is not an error. ``top_flows`` caps the top
 contributors per category; ``exclude_long_term`` drops long-term
@@ -1007,7 +1009,7 @@ Search activities in the current database.
 All filters are AND-combined and case-insensitive. ``name`` and
 ``product`` match by substring unless ``exact=True``.
 
-Returns a paginated :class:`SearchResults`: iterate it to walk
+Returns a paginated `SearchResults`: iterate it to walk
 every match across all pages (subsequent pages fetched on demand),
 or use ``.page(n)`` for explicit page access. ``len(results)`` is
 the server-reported total across all pages.
@@ -1020,8 +1022,8 @@ Args:
     classification: System name (``"ISIC rev.4 ecoinvent"``).
     classification_value: Substring within that system's value.
     classification_match: How ``classification_value`` is compared:
-        :class:`MatchMode.CONTAINS` (default, substring) or
-        :class:`MatchMode.EXACT` (case-insensitive equality). Ignored
+        `MatchMode.CONTAINS` (default, substring) or
+        `MatchMode.EXACT` (case-insensitive equality). Ignored
         when ``classification`` is unset.
     page: 1-based page number. Must be paired with ``page_size``:
         offset cannot be derived from page alone.
@@ -1035,19 +1037,19 @@ Args:
     exact: When True, ``name`` and ``product`` are matched exactly.
 
 Returns:
-    :class:`SearchResults[Activity]`, iterable across all pages.
+    `SearchResults[Activity]`, iterable across all pages.
 
 ##### `Client.search_flows(query: str | None = None, *, kind: str | None = None, page: int | None = None, page_size: int | None = None, limit: int | None = None, offset: int | None = None, sort: str | None = None, order: str | None = None) -> SearchResults[Flow]`
 
 Search flows in the current database.
 
-Three kinds of flow answer, and :attr:`Flow.kind` says which each one
+Three kinds of flow answer, and `Flow.kind` says which each one
 is: a technosphere product one activity makes and another consumes, a
 biosphere substance exchanged with nature, or a waste.
 
-Returns a paginated :class:`SearchResults[Flow]`: iterate to walk
+Returns a paginated `SearchResults[Flow]`: iterate to walk
 every match across all pages, or use ``.page(n)`` for explicit
-access. See :meth:`search_activities` for the pagination contract.
+access. See `search_activities` for the pagination contract.
 
 Args:
     query: Words matched case-insensitively against flow names and
@@ -1072,7 +1074,7 @@ Args:
 Choose which data file a staged multi-file archive should use.
 
 ``path`` must be one of the ``availablePaths`` reported by
-:meth:`get_setup`, relative to the upload directory. Returns the
+`get_setup`, relative to the upload directory. Returns the
 updated ``DatabaseSetupInfo`` dict.
 
 ##### `Client.unload_database(db_name: str) -> dict`
@@ -1100,9 +1102,9 @@ Excel) and stages the database without loading it.
 
 Returns the ``UploadResponse`` dict
 (``{"success", "message", "slug", "format"}``); ``slug`` is the name
-every later call targets. Then inspect :meth:`get_setup`, wire missing
-dependencies with :meth:`add_dependency`, and call
-:meth:`finalize_database` to build matrices and load it.
+every later call targets. Then inspect `get_setup`, wire missing
+dependencies with `add_dependency`, and call
+`finalize_database` to build matrices and load it.
 
 Raises VoLCAError on any rejection (uploads disabled on the plan, size
 cap exceeded, unreadable archive); the engine reports these in-band
@@ -1113,7 +1115,7 @@ with HTTP 200 and ``success=false``.
 Upload an ILCD method file as a staged method collection.
 
 ``source`` is a path to the method archive (or its raw ``bytes``).
-Same streamed-body + query-param shape as :meth:`upload_database`;
+Same streamed-body + query-param shape as `upload_database`;
 returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
 
 ##### `Client.upload_reference_data(kind: RefDataKind, source: str | Path | bytes, name: str, *, description: str | None = None) -> dict`
@@ -1121,7 +1123,7 @@ returns the ``UploadResponse`` dict and raises VoLCAError on rejection.
 Upload a reference-data CSV of ``kind`` as a staged set.
 
 ``source`` is a path to the CSV (or its raw ``bytes``). Same
-streamed-body + query-param shape as :meth:`upload_database`.
+streamed-body + query-param shape as `upload_database`.
 
 ##### `Client.use(db_name: str) -> 'Client'`
 
@@ -1129,7 +1131,7 @@ Return a new client targeting a different database.
 
 Shares the underlying HTTP session, dispatch table, and any other
 Client-level state with the original; only ``db`` is overridden.
-New fields added to :meth:`Client.__init__` propagate automatically
+New fields added to `Client.__init__` propagate automatically
 (no manual mirror to keep in sync).
 
 ### `DatabaseStatus`
@@ -1141,15 +1143,15 @@ Lifecycle state of a database in the engine.
 not be resolved against currently-loaded dependencies.
 ``LOADED``: loaded and fully linked.
 
-Inherits from :class:`str`, so ``dataclasses.asdict(db)["status"]``
+Inherits from `str`, so ``dataclasses.asdict(db)["status"]``
 serialises as the bare wire string.
 
 ### `MatchMode`
 
-How a :class:`ClassificationFilter` value is compared against the entry.
+How a `ClassificationFilter` value is compared against the entry.
 
 ``EXACT``: case-insensitive equality. ``CONTAINS``: case-insensitive
-substring. Inherits from :class:`str` so ``json.dumps(MatchMode.EXACT)``
+substring. Inherits from `str` so ``json.dumps(MatchMode.EXACT)``
 and ``dataclasses.asdict(filter)["mode"]`` both serialise as the bare
 string ``"exact"`` / ``"contains"``.
 
@@ -1169,7 +1171,7 @@ Usage::
 
 ##### `base_url`
 
-``http://localhost:<port>``, pass to :class:`Client(base_url=…)`.
+``http://localhost:<port>``, pass to `Client(base_url=…)`.
 
 Always loopback: the managed server only listens locally.
 
@@ -1188,7 +1190,7 @@ Args:
         down. Default 5 min. An API request or a matrix solve counts
         as use; an MCP client merely staying connected does not.
     wait_timeout: How long to poll for the server to become healthy
-        before raising :class:`TimeoutError`.
+        before raising `TimeoutError`.
 
 No-op if a healthy server is already reachable on ``base_url``.
 
@@ -1224,8 +1226,8 @@ Error from the VoLCA API.
 One activity in a database: the row returned by /activities search.
 
 ``process_id`` is the engine's canonical address (``activityUUID_productUUID``)
-and is what you pass to every detail endpoint (:meth:`Client.get_activity`,
-:meth:`Client.get_supply_chain`, :meth:`Client.get_impacts`, …).
+and is what you pass to every detail endpoint (`Client.get_activity`,
+`Client.get_supply_chain`, `Client.get_impacts`, …).
 ``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
 ``product_name`` is the reference output product (e.g. ``"wheat flour"``);
 ``product_amount`` and ``product_unit`` describe the functional unit
@@ -1259,7 +1261,7 @@ else ``None``.
 
 One upstream activity's contribution to an LCIA score.
 
-Returned in :class:`ContributingActivities.activities`. ``share_pct`` is
+Returned in `ContributingActivities.activities`. ``share_pct`` is
 the percentage of the total impact this activity contributes (0..100).
 
 | Field | Type | Default |
@@ -1299,7 +1301,7 @@ instead of walking the raw exchanges list.
 This process's own allocation share (0..100), or ``None``.
 
 A multi-output process splits the parent activity's burden across its
-co-products; every :attr:`all_products` entry carries its share. This
+co-products; every `all_products` entry carries its share. This
 returns the share of *this* process (the entry whose ``process_id``
 matches), and ``None`` for single-output processes.
 
@@ -1307,16 +1309,16 @@ matches), and ``None`` for single-output processes.
 
 Every input exchange: technosphere inputs and biosphere resources.
 
-Equivalent to filtering :attr:`exchanges` by ``e.is_input``. Mixed
+Equivalent to filtering `exchanges` by ``e.is_input``. Mixed
 kinds: callers needing only one variant should use
-:attr:`technosphere_inputs` or filter manually.
+`technosphere_inputs` or filter manually.
 
 ##### `is_allocated`
 
 True iff the activity splits its burden across several co-products.
 
 Reads the structured ``allocation_percent`` the engine sets on each
-:attr:`all_products` entry (authoritative), not the description text.
+`all_products` entry (authoritative), not the description text.
 
 ##### `outputs`
 
@@ -1347,7 +1349,7 @@ Result of ``compare_activities``.
 
 ### `ActivityInput`
 
-An activity as you write it: the body of :meth:`Client.create_activities`.
+An activity as you write it: the body of `Client.create_activities`.
 
 The inventory is three lists rather than one, so a field that means
 something on a supplier link cannot be sent on an emission.
@@ -1417,9 +1419,9 @@ was set; empty otherwise.
 
 ### `BatchScores`
 
-Result of :meth:`Client.score_activities` scoring many processes at once.
+Result of `Client.score_activities` scoring many processes at once.
 
-``results`` carries one :class:`ScoredActivity` per process the engine
+``results`` carries one `ScoredActivity` per process the engine
 computed; ``not_found`` and ``invalid`` list the process ids it could not
 resolve. A non-empty ``not_found``/``invalid`` is a partial result to
 inspect, not a failure.
@@ -1435,10 +1437,10 @@ inspect, not a failure.
 One resource taken from the environment, or one emission released into it.
 
 Name the flow one way or the other, never both: ``flow`` is the identifier
-of a flow the database already has, which :meth:`Client.search_flows` and
-:attr:`BiosphereExchange.flow_id` both return, while ``name`` with
+of a flow the database already has, which `Client.search_flows` and
+`BiosphereExchange.flow_id` both return, while ``name`` with
 ``compartment`` and ``unit`` names one in words. Use the two constructors
-rather than the fields, :meth:`existing` and :meth:`named`, which is why
+rather than the fields, `from_id` and `from_name`, which is why
 passing both or neither raises here instead of at the server.
 
 A biosphere amount is never converted, so an exchange states its amount in
@@ -1455,6 +1457,44 @@ the flow's own unit.
 | `unit` | `str \| None` | None |
 | `comment` | `str \| None` | None |
 
+#### Methods
+
+##### `BioExchange.existing(flow: str, direction: BioDirection | str, amount: float, *, unit: str | None = None, comment: str | None = None) -> BioExchange`
+
+Retired name of `from_id`. Still works, and says so.
+
+##### `BioExchange.from_id(flow: str, direction: BioDirection | str, amount: float, *, unit: str | None = None, comment: str | None = None) -> BioExchange`
+
+An exchange on a flow the database already declares, by its identifier.
+
+`Client.search_flows` is where identifiers come from.
+
+##### `BioExchange.from_name(name: str, compartment: str, direction: BioDirection | str, amount: float, unit: str, *, sub_compartment: str | None = None, comment: str | None = None) -> BioExchange`
+
+An exchange on the flow this name, compartment and unit address.
+
+That is the flow the database already declares under them when it has
+one, which is what keeps an exchange written from an inventory pointing
+at the curated flow rather than at a twin of it. ``sub_compartment`` is
+part of the address, not a decoration: a flow recorded in
+``water/river`` is reached with ``sub_compartment="river"`` and not by
+``water`` alone.
+
+A name nothing answers to brings a flow into the database, and since no
+characterization factor matches a brand-new flow by identity, the
+engine returns a warning alongside the write rather than refusing it.
+A name several flows answer to in the unit stated is refused, listing
+their identifiers, so the exchange can name the one it means; two flows
+of one name in two units are told apart by the unit itself.
+
+##### `BioExchange.introducing(name: str, compartment: str, direction: BioDirection | str, amount: float, unit: str, *, sub_compartment: str | None = None, comment: str | None = None) -> BioExchange`
+
+Retired name of `from_name`. Still works, and says so.
+
+It was named for what it did when a name reached nothing: bring the
+flow into the database. It now reaches the flow the database already
+declares under that name, and only introduces one when nothing does.
+
 ### `BiosphereExchange`
 
 An exchange with the environment (resource extraction or emission).
@@ -1462,7 +1502,7 @@ An exchange with the environment (resource extraction or emission).
 ``flow_id`` is what a line writes back when its words cannot address the
 flow on their own: a name several flows answer to, or one whose source
 recorded no compartment. Everything else restates as
-:meth:`BioExchange.named` takes it.
+`BioExchange.from_name` takes it.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1490,13 +1530,13 @@ to the environment.
 Always False: biosphere exchanges cannot be reference flows.
 
 The reference flow defines the functional unit and is always a
-technosphere product (see :class:`TechnosphereExchange.is_reference`).
+technosphere product (see `TechnosphereExchange.is_reference`).
 
 ### `CharacterizationFactor`
 
 One characterization factor matched against a database biosphere flow.
 
-Returned in the ``factors`` list of :class:`CharacterizationResult`.
+Returned in the ``factors`` list of `CharacterizationResult`.
 ``match_strategy`` records how the CF was matched to the DB flow
 (``"uuid"``, ``"cas"``, ``"name"``, ``"synonym"``, ``"fuzzy"``).
 
@@ -1515,10 +1555,10 @@ Returned in the ``factors`` list of :class:`CharacterizationResult`.
 
 ### `CharacterizationResult`
 
-Result of :meth:`Client.get_characterization`.
+Result of `Client.get_characterization`.
 
 The engine truncates ``factors`` to ``shown`` rows (server-side ``limit``).
-``matches`` is the unfiltered total: use :attr:`has_more` to detect when
+``matches`` is the unfiltered total: use `has_more` to detect when
 the slice is incomplete.
 
 | Field | Type | Default |
@@ -1594,10 +1634,10 @@ Activity that consumes a given supplier, with BFS depth.
 ### `ConsumersResponse`
 
 Reverse supply chain (/consumers): paginated consumer list plus
-optional edge set. Mirrors :class:`SupplyChain` so callers have a
+optional edge set. Mirrors `SupplyChain` so callers have a
 uniform {entries, edges} shape in both traversal directions.
 
-``consumers`` is a :class:`SearchResults[ConsumerResult]`: iterate it
+``consumers`` is a `SearchResults[ConsumerResult]`: iterate it
 to walk every consumer across all pages. ``edges`` is populated only
 when ``include_edges=True``.
 
@@ -1606,11 +1646,23 @@ when ``include_edges=True``.
 | `consumers` | `SearchResults[ConsumerResult]` | _required_ |
 | `edges` | `list[SupplyChainEdge]` | list() |
 
+#### Methods
+
+##### `ConsumersResponse.from_json(d: dict, *, fetch: Optional[Callable[[int, int | None], dict]] = None) -> ConsumersResponse`
+
+Parse the /consumers wire envelope.
+
+``fetch`` is a page fetcher returning the inner ``results`` envelope
+for ``(offset, limit)``, used by ``SearchResults`` for lazy
+iteration. The client wires this so users get pagination for free;
+callers building ConsumersResponse manually (e.g. tests) can omit
+it and the resulting SearchResults is "detached" (one page only).
+
 ### `ContributingActivities`
 
 Top upstream activities driving an LCIA score.
 
-Same engine-side limitation as :class:`ContributingFlows`: the server
+Same engine-side limitation as `ContributingFlows`: the server
 reports no total, so pyvolca cannot derive ``has_more``. Pass a generous
 ``limit`` and inspect ``share_pct`` if exhaustive coverage matters.
 
@@ -1639,7 +1691,7 @@ flows were truncated. If you need exhaustive coverage, pass a generous
 
 ### `DatabaseInfo`
 
-One entry of :meth:`Client.list_databases`.
+One entry of `Client.list_databases`.
 
 ``depends_on`` names the databases this one links against for cross-DB
 flow resolution, mirroring the ``dependsOn`` list surfaced by the relink
@@ -1668,7 +1720,7 @@ is no kind for the reference product or a coproduct: changing those changes
 what the activity *is*, which is not what an inventory edit does.
 
 A selector may name several lines, and then it applies to all of them;
-:meth:`Client.edit_exchanges` reports how many. Naming none is refused by
+`Client.edit_exchanges` reports how many. Naming none is refused by
 the engine rather than passed off as done.
 
 | Field | Type | Default |
@@ -1677,9 +1729,23 @@ the engine rather than passed off as done.
 | `provider` | `str \| None` | None |
 | `flow` | `str \| None` | None |
 
+#### Methods
+
+##### `ExchangeSelector.biosphere_flow(flow: str) -> ExchangeSelector`
+
+A biosphere exchange, by flow id.
+
+##### `ExchangeSelector.input_from(provider: str) -> ExchangeSelector`
+
+A technosphere input, by the process id of what supplies it.
+
+##### `ExchangeSelector.waste_to(provider: str) -> ExchangeSelector`
+
+A waste output, by the process id of the treatment it goes to.
+
 ### `ExplainCFResult`
 
-Result of :meth:`Client.explain_cf`.
+Result of `Client.explain_cf`.
 
 ``explanation`` is written by the engine: show it as it is rather than
 rewording the codes. The structured fields are for comparing, filtering or
@@ -1740,7 +1806,7 @@ One rung of the factor-matching cascade, and what it made of the flow.
 
 One flow as returned by /flows.
 
-Mirrors the server's :code:`FlowSearchResult`. ``kind`` says which of the
+Mirrors the server's `FlowSearchResult`. ``kind`` says which of the
 three a flow is: ``"technosphere"`` for a product one activity makes and
 another consumes, ``"biosphere"`` for a substance exchanged with nature,
 ``"waste"`` for a waste. It is ``None`` against an engine older than wire
@@ -1782,7 +1848,7 @@ Emitted inside ``LCIAResult.top_contributors``.
 
 ### `FlowDetail`
 
-Detail of one flow, returned by :meth:`Client.get_flow`.
+Detail of one flow, returned by `Client.get_flow`.
 
 ``flow`` is the raw flow record: a tagged union (technosphere product,
 biosphere flow, waste flow, or unresolved) whose shape depends on its
@@ -1801,7 +1867,7 @@ CF-coverage report for one method against the current database.
 
 ``matched_flows / total_flows`` is the coverage ratio: how many of the
 database's biosphere flows have a CF in this method. Mirrors the engine
-response of :meth:`Client.get_flow_mapping`.
+response of `Client.get_flow_mapping`.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1837,7 +1903,7 @@ in the method: that flow contributes 0 to the score for the method.
 
 ### `Installed`
 
-Result of :func:`download`.
+Result of `download`.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1869,7 +1935,7 @@ one. ``category`` is the engine-normalised category used for grouping.
 
 Life-cycle inventory of an activity: cumulative biosphere flows.
 
-Returned by :meth:`Client.get_inventory`. The engine does not paginate:
+Returned by `Client.get_inventory`. The engine does not paginate:
 ``flows`` is the full inventory (filtered by ``flow=`` substring when
 requested). ``statistics`` carries the per-direction roll-ups and the
 most-populated categories.
@@ -1905,14 +1971,14 @@ lists ``(category_name, flow_count)`` pairs ordered by frequency.
 
 Batch LCIA: every impact category in a method collection, for one activity.
 
-Returned by :meth:`Client.get_impacts_batch`. Carries the per-method
+Returned by `Client.get_impacts_batch`. Carries the per-method
 impact results plus any formula-based scoring sets configured in the
 engine TOML (PEF, ECS, or any named set).
 
 ``scoring_indicators`` gives the per-variable normalized-weighted
 breakdown of each scoring set, already multiplied by the set's
 ``displayMultiplier`` and expressed in its display unit (see
-:class:`ScoringIndicator`). Lets callers render per-indicator charts
+`ScoringIndicator`). Lets callers render per-indicator charts
 alongside the aggregate ``scoring_results``.
 
 | Field | Type | Default |
@@ -1930,8 +1996,8 @@ alongside the aggregate ``scoring_results``.
 
 LCIA score for one impact category on one activity.
 
-Returned directly by :meth:`Client.get_impacts`, and nested inside
-:class:`LCIABatchResult.results` (one entry per impact category).
+Returned directly by `Client.get_impacts`, and nested inside
+`LCIABatchResult.results` (one entry per impact category).
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1951,7 +2017,7 @@ Returned directly by :meth:`Client.get_impacts`, and nested inside
 
 How a method's factors map onto a database's biosphere flows.
 
-Returned by :meth:`Client.get_mapping_status`. The ``mapped_by_*`` counts
+Returned by `Client.get_mapping_status`. The ``mapped_by_*`` counts
 break the match cascade down by stage (UUID, then CAS, then name, then
 synonym); ``coverage`` is the matched percentage (0–100), and
 ``unmapped_flows`` lists the factors still without a database flow.
@@ -1977,13 +2043,13 @@ survive the generic camelCase→snake_case conversion.
 
 ### `Method`
 
-One LCIA method, returned by :meth:`Client.list_methods`.
+One LCIA method, returned by `Client.list_methods`.
 
 Pass ``id`` (or ``name``, which the client resolves against the loaded
 methods) wherever a ``method_id`` is asked for. ``collection`` is the
 parent method collection (e.g. ``"ef-31"``); the client reads it off the
-resolved method, so it is worth passing to :meth:`Client.get_impacts` /
-:meth:`Client.get_impacts_batch` only to pin one of several loaded.
+resolved method, so it is worth passing to `Client.get_impacts` /
+`Client.get_impacts_batch` only to pin one of several loaded.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -1996,7 +2062,7 @@ resolved method, so it is worth passing to :meth:`Client.get_impacts` /
 
 ### `MethodDetail`
 
-Detail of one LCIA method, returned by :meth:`Client.get_method`.
+Detail of one LCIA method, returned by `Client.get_method`.
 
 ``factor_count`` is the number of characterization factors; ``methodology``
 and ``description`` are free-text metadata the source may or may not carry.
@@ -2013,7 +2079,7 @@ and ``description`` are free-text metadata the source may or may not carry.
 
 ### `MethodFactor`
 
-One characterization factor of a method (:meth:`Client.get_method_factors`).
+One characterization factor of a method (`Client.get_method_factors`).
 
 ``direction`` is the flow direction the factor applies to; ``value`` is the
 factor in the method's unit per the flow's unit. A method routinely holds
@@ -2063,7 +2129,7 @@ emits camelCase keys (``processId``, ``activityName``,
 
 ### `PerturbedResult`
 
-One perturbation outcome from :meth:`Client.compute_sensitivity`.
+One perturbation outcome from `Client.compute_sensitivity`.
 
 The engine flattens an ``Either`` on the wire: a success carries
 ``impact`` and ``delta_impact`` (with ``error`` None), a failure carries
@@ -2094,7 +2160,7 @@ expands it server-side into the ``filters`` triples).
 
 ### `PresetFilter`
 
-One filter triple inside a :class:`Preset`.
+One filter triple inside a `Preset`.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -2104,10 +2170,10 @@ One filter triple inside a :class:`Preset`.
 
 ### `ScoredActivity`
 
-One process's batch impacts inside a :class:`BatchScores`.
+One process's batch impacts inside a `BatchScores`.
 
-``impacts`` is the same :class:`LCIABatchResult` that
-:meth:`Client.get_impacts_batch` returns for a single process.
+``impacts`` is the same `LCIABatchResult` that
+`Client.get_impacts_batch` returns for a single process.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -2167,11 +2233,38 @@ materialise eagerly if you prefer.
 
 Server-applied limit (page size for further fetches).
 
+#### Methods
+
+##### `SearchResults.from_raw(raw: dict, *, parse: Callable[[dict], ~T], fetch: Optional[Callable[[int, int | None], dict]] = None) -> SearchResults[T]`
+
+Build from the wire envelope.
+
+Wire keys: ``results``, ``total``, ``offset``, ``limit``, ``hasMore``,
+``searchTimeMs``. ``fetch`` is the callback used by iteration and
+``page(n)`` to retrieve further pages. Omit only when the envelope
+is a single-page snapshot (``hasMore=False``); otherwise iteration
+would silently truncate and the constructor raises.
+
+When ``fetch`` is provided (the production path), every wire key is
+required: missing fields would let pyvolca silently default to a
+truncated total or page size, which is the exact silent-undercount
+bug 0.5.0 set out to eliminate. When ``fetch`` is None (test
+fixtures), missing fields fall back to permissive defaults so
+callers can build small envelopes by hand.
+
+##### `SearchResults.page(n: int, *, page_size: int | None = None) -> SearchResults[T]`
+
+Fetch a specific page (1-based). Returns a fresh SearchResults.
+
+``page_size`` overrides the current ``limit`` for the fetched page;
+the returned envelope's ``limit`` reflects what the server actually
+applied.
+
 ### `SensitivityResult`
 
 Sensitivity analysis: baseline impact plus one entry per perturbation.
 
-Returned by :meth:`Client.compute_sensitivity`. ``perturbed`` preserves
+Returned by `Client.compute_sensitivity`. ``perturbed`` preserves
 the order of the requested perturbations.
 
 | Field | Type | Default |
@@ -2181,7 +2274,7 @@ the order of the requested perturbations.
 
 ### `ServerVersion`
 
-Server build metadata returned by :meth:`Client.get_version`.
+Server build metadata returned by `Client.get_version`.
 
 ``git_tag`` is None for untagged dev builds. ``build_target`` names the
 platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
@@ -2224,6 +2317,12 @@ substitution across multiple calls without aliasing risk.
 | `to_pid` | `str` | _required_ |
 | `consumer` | `str \| None` | None |
 
+#### Methods
+
+##### `Substitution.to_wire()`
+
+Serialise to the wire shape consumed by SubstitutionRequest.
+
 ### `SupplyChain`
 
 Flat supply chain of an activity.
@@ -2232,7 +2331,7 @@ Flat supply chain of an activity.
 is what remains after the server applies ``classification_filters`` /
 ``min_quantity`` / ``preset``. ``entries`` is the slice the server actually
 returned; it may be shorter than ``filtered_activities`` when ``limit``
-truncates. Use :attr:`has_more` to detect that case rather than comparing
+truncates. Use `has_more` to detect that case rather than comparing
 lengths by hand.
 
 | Field | Type | Default |
@@ -2272,7 +2371,7 @@ id can exist in more than one loaded DB).
 
 ### `SupplyChainEntry`
 
-One activity in a :class:`SupplyChain.entries` list.
+One activity in a `SupplyChain.entries` list.
 
 ``quantity`` is the cumulative amount of this activity's reference
 product consumed per functional unit of the root activity, in ``unit``.
@@ -2285,7 +2384,7 @@ up here as its equivalent in ``mj``: 1 kWh is 3.6 MJ.
 activity to produce ``quantity``, i.e. ``quantity = ref_output * scaling_factor``.
 ``classifications`` mirrors the producing activity's classifications
 (ISIC, CPC, Category, …) so callers can filter by taxonomy without a
-second :meth:`Client.get_activity` round trip.
+second `Client.get_activity` round trip.
 ``depth`` is the BFS shortest-path distance from the queried root
 (0 = the root itself), ``upstream_count`` the number of direct
 consumers of this activity inside the chain, and ``database_name``
@@ -2357,7 +2456,7 @@ functional unit, the basis the LCA result is normalised to.
 
 ### `UnmappedFlow`
 
-A method factor with no matching database flow (in :class:`MappingStatus`).
+A method factor with no matching database flow (in `MappingStatus`).
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -2394,13 +2493,13 @@ the same cut-off semantics as an orphan technosphere input.
 Always False: waste flows never define an activity's functional unit.
 
 Treatment activities have a ``ReferenceInput`` instead, exposed
-via :class:`TechnosphereExchange`.
+via `TechnosphereExchange`.
 
 ### `WasteOutput`
 
 One residue an activity hands to a treatment process.
 
-``provider`` names that treatment process, exactly as a :class:`TechInput`
+``provider`` names that treatment process, exactly as a `TechInput`
 names its producer.
 
 | Field | Type | Default |
@@ -2438,7 +2537,7 @@ Args:
     force: Re-download even if the install root looks complete.
 
 Returns:
-    :class:`Installed` with the resolved paths and versions.
+    `Installed` with the resolved paths and versions.
 
 ## Type aliases
 
