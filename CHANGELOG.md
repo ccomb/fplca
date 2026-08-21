@@ -175,6 +175,19 @@
   an older engine.
 
 ### Fixed
+- A waste output that names its treatment now reaches that treatment when it
+  lives in another loaded database. The step that links a database to the ones
+  it depends on looked at waste outputs naming no treatment at all, and skipped
+  every output that named one, on the assumption that a named treatment is
+  always in the same file. That holds for an imported file and not for a
+  database written by hand, where naming the treatment is exactly how a waste
+  output is written: the waste was silently cut off and its burden counted as
+  zero. The link now decides which match applies, not whether the search
+  happens: an output naming a treatment is matched on that activity's identity,
+  one naming none on the waste flow itself, and neither falls back on the other,
+  since substituting a treatment found by name for the one the author named
+  would charge an activity nobody asked for. An output the database resolves in
+  place is still left to the matrix, so nothing is charged twice.
 - A waste output now names the activity that treats it. An exchange records the
   link to its treatment exactly as an input records the link to its supplier,
   but the activity view read that link on the input side only, so a waste output

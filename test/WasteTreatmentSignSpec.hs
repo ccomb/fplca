@@ -171,28 +171,39 @@ scoreIntra name acts = do
         Nothing -> fail "producer not interned"
         Just pid -> co2Of <$> computeInventoryMatrix db (fromIntegral pid)
 
-{- | Cross-DB scoring: a root DB whose orphan waste OUTPUT is resolved — by the
-real linker ('findAllCrossDBLinks' → 'findWasteTreatmentAcrossDatabases') — to a
-treatment in a separate dependency DB, then scored through the dep-demand solve.
-Going through the linker (rather than a hand-built 'CrossDBLink') is the point:
-that is where the treatment's reference-sign correction is applied.
+-- | A linking context holding one dependency database.
+ctxWithDep :: T.Text -> Database -> LinkingContext
+ctxWithDep depName depDB =
+    LinkingContext
+        { lcIndexedDatabases = [buildIndexedDatabaseFromDB depName emptySynonymDB depDB]
+        , lcSynonymDB = emptySynonymDB
+        , lcUnitConfig = defaultUnitConfig
+        , lcThreshold = defaultLinkingThreshold
+        , lcLocationHierarchy = M.empty
+        , lcGeographyPolicy = GeoExact
+        , lcSupplierAliases = emptyAliasMap
+        }
+
+-- | The cross-DB links the real linker finds for one root activity map.
+linksFor :: LinkingContext -> M.Map (UUID, UUID) Activity -> [CrossDBLink]
+linksFor ctx = cdlLinks . findAllCrossDBLinks ctx techFlowDB wasteFlowDB (M.singleton kgU (Unit kgU "kg" "kg" ""))
+
+{- | Cross-DB scoring: a root DB whose waste OUTPUT is resolved by the real
+linker ('findAllCrossDBLinks') to a treatment in a separate dependency DB, then
+scored through the dep-demand solve. Going through the linker (rather than a
+hand-built 'CrossDBLink') is the point: that is where the treatment's
+reference-sign correction is applied.
+
+@rootLink@ is what the waste output states about its treatment: 'UUID.nil' for
+an output naming none, @tA@ for one naming the dependency's treatment. Both
+must reach the same treatment and the same score.
 -}
-scoreCross :: T.Text -> TechRole -> Double -> IO Double
-scoreCross depName depRole depRefAmount = do
-    let rootActs = M.singleton (pA, yY) (producer (wasteEx False UUID.nil 3.0))
+scoreCross :: UUID -> T.Text -> TechRole -> Double -> IO Double
+scoreCross rootLink depName depRole depRefAmount = do
+    let rootActs = M.singleton (pA, yY) (producer (wasteEx False rootLink 3.0))
     rootBase <- buildDB "root" rootActs
     depDB <- buildDB depName (M.singleton (tA, wW) (treatment depRole depRefAmount))
-    let ctx =
-            LinkingContext
-                { lcIndexedDatabases = [buildIndexedDatabaseFromDB depName emptySynonymDB depDB]
-                , lcSynonymDB = emptySynonymDB
-                , lcUnitConfig = defaultUnitConfig
-                , lcThreshold = defaultLinkingThreshold
-                , lcLocationHierarchy = M.empty
-                , lcGeographyPolicy = GeoExact
-                , lcSupplierAliases = emptyAliasMap
-                }
-        links = cdlLinks (findAllCrossDBLinks ctx techFlowDB wasteFlowDB (M.singleton kgU (Unit kgU "kg" "kg" "")) rootActs)
+    let links = linksFor (ctxWithDep depName depDB) rootActs
         rootDB = rootBase{dbCrossDBLinks = links}
     if null links
         then fail "linker created no cross-DB waste link (matcher did not fire)"
@@ -233,9 +244,29 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ILCD (positive ReferenceInput) treatment scores +6" $ do
-        score <- scoreCross "ilcd-dep" ReferenceInput 1.0
+        score <- scoreCross UUID.nil "ilcd-dep" ReferenceInput 1.0
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ecoinvent (negative ReferenceProduct) treatment scores +6" $ do
-        score <- scoreCross "eco-dep" ReferenceProduct (-1.0)
+        score <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
+
+    -- An authored waste output states the treatment it goes to. When that
+    -- treatment lives in a dependency, naming it must reach the dependency
+    -- just as naming nothing does; reading the link as "resolved elsewhere"
+    -- cut the waste off with no burden at all.
+    it "cross-DB from a waste output that names the dependency's treatment scores +6" $ do
+        score <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
+        withinTolerance 1.0e-9 6.0 score `shouldBe` True
+
+    -- The other half of the same gate: a link the root database resolves in
+    -- place is the matrix's business, and a cross-DB link on top would charge
+    -- the treatment twice.
+    it "a waste output linked inside its own database gets no cross-DB link" $ do
+        let rootActs =
+                M.fromList
+                    [ ((pA, yY), producer (wasteEx False tA 3.0))
+                    , ((tA, wW), treatment ReferenceProduct (-1.0))
+                    ]
+        depDB <- buildDB "eco-dep" (M.singleton (tA, wW) (treatment ReferenceProduct (-1.0)))
+        linksFor (ctxWithDep "eco-dep" depDB) rootActs `shouldBe` []

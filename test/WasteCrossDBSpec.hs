@@ -11,16 +11,18 @@ import SynonymDB (emptySynonymDB)
 import Test.Hspec
 import qualified UnitConversion as UC
 
-{- | Unit tests for the exact-match cross-DB waste-treatment linker.
+{- | Unit tests for the exact-match cross-DB waste-treatment linkers.
 
-The linker honors only author-provided alignment: same flow UUID or
-byte-exact normalized name on the supplier's reference product. There is
-no synonym graph, no compound-name extraction, no widening, no scoring.
-Multiple databases offering a candidate resolves to 'WasteAmbiguous',
-never to a first-wins auto-pick.
+Both honor only author-provided alignment, and differ in what the waste
+output states: 'findWasteTreatmentAcrossDatabases' matches an output naming
+no treatment, on flow UUID or byte-exact normalized name;
+'findWasteTreatmentByActivity' matches one naming its treatment, on that
+activity's identity. There is no synonym graph, no compound-name extraction,
+no widening, no scoring. Multiple databases offering a candidate resolves to
+'WasteAmbiguous', never to a first-wins auto-pick.
 -}
 spec :: Spec
-spec = describe "findWasteTreatmentAcrossDatabases" $ do
+spec = describe "Cross-DB waste-treatment matching" $ do
     let supplierFor :: Text -> SupplierEntry
         supplierFor nm =
             SupplierEntry
@@ -126,3 +128,29 @@ spec = describe "findWasteTreatmentAcrossDatabases" $ do
                     , idbWith "wfldb" [] [("organic carbon, placed in landfill", entry)]
                     ]
         expectMatched "ecoinvent" (findWasteTreatmentAcrossDatabases ctx wasteUUID "Organic carbon, placed in landfill")
+
+    let treatActUUID = seActivityUUID entry
+        otherActUUID = UUID.fromWords 8 8 8 8
+
+    it "matches the treatment a waste output's link names" $ do
+        let ctx = ctxWith [idbWith "ecoinvent" [(wasteUUID, entry)] []]
+        expectMatched "ecoinvent" (findWasteTreatmentByActivity ctx treatActUUID wasteUUID)
+
+    it "stays orphan when the named activity treats the flow in no loaded DB" $ do
+        let ctx = ctxWith [idbWith "ecoinvent" [(wasteUUID, entry)] []]
+        expectNoMatch (findWasteTreatmentByActivity ctx otherActUUID wasteUUID)
+
+    it "ignores the name index: a named link is matched on identity alone" $ do
+        let ctx = ctxWith [idbWith "ecoinvent" [] [("organic carbon, placed in landfill", entry)]]
+        expectNoMatch (findWasteTreatmentByActivity ctx treatActUUID wasteUUID)
+
+    it "reports WasteAmbiguous when two databases ship that same treatment" $ do
+        let ctx =
+                ctxWith
+                    [ idbWith "ecoinvent-3.9" [(wasteUUID, entry)] []
+                    , idbWith "ecoinvent-3.10" [(wasteUUID, entry)] []
+                    ]
+        case findWasteTreatmentByActivity ctx treatActUUID wasteUUID of
+            WasteAmbiguous dbs -> dbs `shouldMatchList` ["ecoinvent-3.9", "ecoinvent-3.10"]
+            WasteMatched _ dbN -> expectationFailure $ "expected ambiguous, got match in " <> show dbN
+            WasteNoMatch -> expectationFailure "expected ambiguous, got no match"

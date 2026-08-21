@@ -53,6 +53,7 @@ module Database.CrossLinking (
     findSupplierInIndexedDBs,
     findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
+    findWasteTreatmentByActivity,
     WasteTreatmentMatch (..),
 
     -- * Scoring Functions
@@ -79,7 +80,7 @@ import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
 import Data.Char (isAlpha, isUpper)
 import Data.Foldable (find)
-import Data.List (maximumBy)
+import Data.List (maximumBy, nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Ord (comparing)
@@ -610,6 +611,34 @@ findWasteTreatmentAcrossDatabases LinkingContext{lcIndexedDatabases} flowUUID fl
                 [_] -> WasteNoMatch -- single DB with multiple candidates: stay orphan
                 [] -> WasteNoMatch
                 manyDbs -> WasteAmbiguous (map fst manyDbs)
+
+{- | The treatment a waste output's own link names, looked up in the loaded
+databases. The link is the dataset author's own disambiguation, so the match is
+strict on identity: same waste flow, same activity UUID, no name match, no
+location widening. Two databases shipping that identity resolve to
+'WasteAmbiguous' rather than a first-wins pick, as everywhere else here.
+
+Waste treatments live in 'idbWasteTreatmentByFlowUUID' and nowhere else:
+'idbByActivityProduct' is built from activities whose reference is a
+technosphere product, which a treatment's never is.
+-}
+findWasteTreatmentByActivity ::
+    LinkingContext ->
+    -- | Activity the waste output links to
+    UUID ->
+    -- | Waste flow UUID
+    UUID ->
+    WasteTreatmentMatch
+findWasteTreatmentByActivity LinkingContext{lcIndexedDatabases} actUUID flowUUID =
+    case [ (idbName idb, entry)
+         | idb <- lcIndexedDatabases
+         , Just entries <- [M.lookup flowUUID (idbWasteTreatmentByFlowUUID idb)]
+         , entry <- entries
+         , seActivityUUID entry == actUUID
+         ] of
+        [(dbN, entry)] -> WasteMatched entry dbN
+        [] -> WasteNoMatch
+        matches -> WasteAmbiguous (nub (map fst matches))
 
 {- | Find a supplier across all loaded databases (using pre-built indexes)
 This is the fast O(1) lookup version
