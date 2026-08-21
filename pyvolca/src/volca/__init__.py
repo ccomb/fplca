@@ -73,6 +73,7 @@ from .types import (
     UnmappedFlow,
     WasteExchange,
     WasteOutput,
+    WasteRole,
 )
 
 __all__ = [
@@ -149,6 +150,7 @@ __all__ = [
     "VoLCAError",
     "WasteExchange",
     "WasteOutput",
+    "WasteRole",
     "compare_activities",
     "download",
 ]

@@ -1147,10 +1147,32 @@ resolveTarget cfg db links = \case
     -- An output's link names the activity that treats the waste, exactly as an
     -- input's names the one that supplies it. Reading it as no target at all
     -- makes a linked waste output indistinguishable from a final waste flow,
-    -- which is what a consumer reports when nothing treats a waste.
+    -- which is what a consumer reports when nothing treats a waste. A named
+    -- treatment this database does not hold falls through to the cross-DB link
+    -- the loader built for it, for the same reason as everywhere here: the row
+    -- named must be the row the score charged, and that link is charged.
     ex@WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
-        | lid /= UUID.nil -> resolveByRoutedProducer db ex
+        | lid /= UUID.nil -> resolveByRoutedProducer db ex <|> resolveByCrossDBLink links fid
         | otherwise -> resolveByCrossDBLink links fid
+
+{- | What a waste line does, given the target 'resolveTarget' found for it.
+'Nothing' on every other kind, which is what makes the field a statement about
+waste rather than a target-shaped restatement of the three fields next to it.
+
+The distinction the caller cannot make for itself is the last two: an output
+naming no treatment describes an end-of-life flow completely, while an output
+whose named treatment resolved to nothing is a gap in what was loaded. Both
+arrive with no target.
+-}
+wasteRoleOf :: Maybe TargetRef -> Exchange -> Maybe WasteRole
+wasteRoleOf target = \case
+    TechnosphereExchange{} -> Nothing
+    BiosphereExchange{} -> Nothing
+    WasteExchange{waIsInput = True} -> Just TreatsWaste
+    WasteExchange{waActivityLinkId = lid}
+        | isJust target -> Just SentToTreatment
+        | lid /= UUID.nil -> Just TreatmentNotLoaded
+        | otherwise -> Just FinalWasteFlow
 
 {- | Flow name + (biosphere-only) compartment. Each variant has exactly one
 flow side by construction, so no Maybe-merge is needed downstream.
@@ -1195,6 +1217,7 @@ toExchangeWithUnit cfg db links exchange =
             , ewuTargetActivityName = trName <$> target
             , ewuTargetLocation = trLocation <$> target
             , ewuTargetProcessId = trProcessId <$> target
+            , ewuWasteRole = wasteRoleOf target exchange
             , ewuExComment = exchangeComment exchange
             , ewuPedigree = exchangePedigree exchange
             }

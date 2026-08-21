@@ -54,6 +54,7 @@ import Types (
     UUID,
     Unit (..),
     WasteFlow (..),
+    WasteRole (..),
     exchangeAmount,
     findProcessId,
     getActivity,
@@ -296,6 +297,7 @@ spec = do
                         ewuFlowName ewu `shouldBe` "used oil"
                         ewuTargetProcessId ewu `shouldBe` Just treatment
                         ewuTargetActivityName ewu `shouldBe` Just "waste oil incineration"
+                        ewuWasteRole ewu `shouldBe` Just SentToTreatment
 
             it "names the treatment's own row, not another product of the same activity" $ do
                 -- The matrix routes the waste on the pair (activity, flow); an

@@ -11,7 +11,8 @@ This module covers the wire shape for both envelopes:
 * ``ExchangeWithUnit``: inner ``{tag: "WasteExchange", isInput, ...}`` plus
   target fields at the envelope level whenever a treatment was resolved,
   either through the waste output's own link (a bare same-database process
-  id) or through the cross-DB linker (a ``db::pid`` one).
+  id) or through the cross-DB linker (a ``db::pid`` one), plus a
+  ``wasteRole`` saying what the line does (wire 10 and above).
 * ``ExchangeDetail``: same inner shape, but the flow is carried as a
   ``{kind: "waste", flow: <wasteFlow>}`` tagged sum.
 """
@@ -24,12 +25,13 @@ from volca.types import (
     BiosphereExchange,
     TechnosphereExchange,
     WasteExchange,
+    WasteRole,
     parse_exchange,
     parse_exchange_detail,
 )
 
 
-def _waste_ewu(*, is_input: bool, target: dict | None = None) -> dict:
+def _waste_ewu(*, is_input: bool, target: dict | None = None, role: str | None = None) -> dict:
     out: dict = {
         "exchange": {
             "tag": "WasteExchange",
@@ -42,6 +44,8 @@ def _waste_ewu(*, is_input: bool, target: dict | None = None) -> dict:
         "targetLocation": (target or {}).get("location"),
         "targetProcessId": (target or {}).get("processId"),
     }
+    if role is not None:
+        out["wasteRole"] = role
     return out
 
 
@@ -87,6 +91,19 @@ class TestParseExchangeWaste:
         assert ex.target_activity_name == "Landfill of organic waste, FR"
         assert ex.target_location == "FR"
         assert ex.target_process_id == target["processId"]
+
+    def test_role_tells_a_final_waste_from_a_treatment_that_is_missing(self):
+        # Both lines have no target, and they say opposite things: one is a
+        # complete end-of-life flow, the other a gap in what was loaded.
+        final = parse_exchange(_waste_ewu(is_input=False, role="FinalWasteFlow"))
+        missing = parse_exchange(_waste_ewu(is_input=False, role="TreatmentNotLoaded"))
+        assert final.target_process_id is None
+        assert missing.target_process_id is None
+        assert final.role is WasteRole.FINAL_WASTE_FLOW
+        assert missing.role is WasteRole.TREATMENT_NOT_LOADED
+
+    def test_role_is_none_from_an_engine_that_does_not_send_one(self):
+        assert parse_exchange(_waste_ewu(is_input=False)).role is None
 
     def test_discriminator_flags_set_correctly(self):
         """Duck-typing flags must place waste alongside neither tech nor bio."""

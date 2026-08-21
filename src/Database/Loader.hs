@@ -133,6 +133,7 @@ import Database.CrossLinking (
     findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
+    findWasteTreatmentByActivity,
     locationHierarchy,
     normalizeUnicode,
  )
@@ -1862,8 +1863,10 @@ A link whose target resolves in the internal matrix would be double-counted by
 a cross-DB link too, so 'resolvesInternally' gates it out — mirroring
 'Database.MatrixBuild.findProducer': a populated process link, or a non-nil
 @activityLinkId@ whose @(linkId, flowId)@ key is one of this database's own
-('lsOwnKeys'). Orphan waste outputs (waIsInput=False, linkId=nil) use the strict
-'findWasteTreatmentAcrossDatabases' — no synonym, no widening.
+('lsOwnKeys'). Waste outputs take the same gate, then a strict matcher chosen by
+their link — 'findWasteTreatmentByActivity' when they name a treatment,
+'findWasteTreatmentAcrossDatabases' when they name none — with no synonym and
+no widening in either.
 -}
 findExchangeCrossDBLink ::
     LinkScan ->
@@ -1962,44 +1965,57 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                 , cdlLocationUnresolved = unresolved
                 }
 findExchangeCrossDBLink _ _ _ BiosphereExchange{} = mempty
--- Cross-DB linking for orphan waste OUTPUTS: strict match only — see
--- 'findWasteTreatmentAcrossDatabases'. No synonym, no fuzzy name match, no
--- location widening. Multi-DB matches stay orphan as 'cdlWasteAmbiguous'.
+-- Cross-DB linking for waste OUTPUTS the internal matrix does not route:
+-- strict match only. No synonym, no fuzzy name match, no location widening.
+-- Multi-DB matches stay orphan as 'cdlWasteAmbiguous'. Which matcher applies
+-- follows the link: an output that names its treatment is matched on that
+-- identity, one that names none on the flow itself. Neither falls back on the
+-- other — substituting a treatment found by name for the one the author named
+-- would link the waste to an activity nobody asked for.
 -- Waste inputs (treatment side) are left alone: they have no clean LCA
 -- semantic as a cross-DB demand.
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
-    | not isInp && lid == UUID.nil =
-        let flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
-         in case findWasteTreatmentAcrossDatabases ctx fid flowName of
-                WasteMatched entry dbN ->
-                    let
-                        -- The dep-demand solve drives the matched treatment in
-                        -- its OWN reference convention: an EcoSpold2 treatment
-                        -- has a negative-output reference ('seRefSign' = -1),
-                        -- an ILCD one a positive 'ReferenceInput' (+1). The
-                        -- consumer's waste-output amount is positive, so we
-                        -- carry the treatment's sign into the coefficient —
-                        -- without it a negative-reference background treatment
-                        -- scores the treated waste's burden with a flipped sign.
-                        !crossLink =
-                            CrossDBLink
-                                { cdlConsumerActUUID = consumerActUUID
-                                , cdlConsumerProdUUID = consumerProdUUID
-                                , cdlConsumerFlowId = fid
-                                , cdlSupplierActUUID = seActivityUUID entry
-                                , cdlSupplierProdUUID = seProductUUID entry
-                                , cdlCoefficient = amt * seRefSign entry
-                                , cdlExchangeUnit = seUnit entry
-                                , cdlFlowName = seProductName entry
-                                , cdlLocation = seLocation entry
-                                , cdlSourceDatabase = dbN
-                                , cdlTiedAlternatives = []
-                                }
-                     in
-                        mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
-                WasteAmbiguous _ -> mempty{cdlWasteAmbiguous = 1}
-                WasteNoMatch -> mempty{cdlCutoffWasteCount = 1}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID ex@WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
+    | not isInp && not resolvesInternally =
+        case treatmentMatch of
+            WasteMatched entry dbN ->
+                let
+                    -- The dep-demand solve drives the matched treatment in
+                    -- its OWN reference convention: an EcoSpold2 treatment
+                    -- has a negative-output reference ('seRefSign' = -1),
+                    -- an ILCD one a positive 'ReferenceInput' (+1). The
+                    -- consumer's waste-output amount is positive, so we
+                    -- carry the treatment's sign into the coefficient —
+                    -- without it a negative-reference background treatment
+                    -- scores the treated waste's burden with a flipped sign.
+                    !crossLink =
+                        CrossDBLink
+                            { cdlConsumerActUUID = consumerActUUID
+                            , cdlConsumerProdUUID = consumerProdUUID
+                            , cdlConsumerFlowId = fid
+                            , cdlSupplierActUUID = seActivityUUID entry
+                            , cdlSupplierProdUUID = seProductUUID entry
+                            , cdlCoefficient = amt * seRefSign entry
+                            , cdlExchangeUnit = seUnit entry
+                            , cdlFlowName = seProductName entry
+                            , cdlLocation = seLocation entry
+                            , cdlSourceDatabase = dbN
+                            , cdlTiedAlternatives = []
+                            }
+                 in
+                    mempty{cdlLinks = [crossLink], cdlWasteExactLinks = 1}
+            WasteAmbiguous _ -> mempty{cdlWasteAmbiguous = 1}
+            WasteNoMatch -> mempty{cdlCutoffWasteCount = 1}
     | otherwise = mempty
+  where
+    -- Same gate as the technosphere arm: a link the matrix already routes in
+    -- place would be counted twice if a cross-DB link were emitted for it too.
+    resolvesInternally =
+        isJust (exchangeProcessLinkId ex)
+            || (lid /= UUID.nil && S.member (lid, fid) ownKeys)
+    treatmentMatch
+        | lid /= UUID.nil = findWasteTreatmentByActivity ctx lid fid
+        | otherwise = findWasteTreatmentAcrossDatabases ctx fid flowName
+    flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
 
 -- | Report cross-database linking statistics
 reportCrossDBLinkingStats :: Int -> CrossDBLinkingStats -> IO ()
