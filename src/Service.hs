@@ -1147,9 +1147,12 @@ resolveTarget cfg db links = \case
     -- An output's link names the activity that treats the waste, exactly as an
     -- input's names the one that supplies it. Reading it as no target at all
     -- makes a linked waste output indistinguishable from a final waste flow,
-    -- which is what a consumer reports when nothing treats a waste.
+    -- which is what a consumer reports when nothing treats a waste. A named
+    -- treatment this database does not hold falls through to the cross-DB link
+    -- the loader built for it, for the same reason as everywhere here: the row
+    -- named must be the row the score charged, and that link is charged.
     ex@WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
-        | lid /= UUID.nil -> resolveByRoutedProducer db ex
+        | lid /= UUID.nil -> resolveByRoutedProducer db ex <|> resolveByCrossDBLink links fid
         | otherwise -> resolveByCrossDBLink links fid
 
 {- | What a waste line does, given the target 'resolveTarget' found for it.

@@ -21,6 +21,7 @@ every case — treating waste adds burden, it never subtracts it.
 -}
 module WasteTreatmentSignSpec (spec) where
 
+import API.Types (ExchangeWithUnit (..))
 import Data.List (elemIndex)
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
@@ -32,6 +33,7 @@ import Database (buildDatabaseWithMatrices)
 import Database.CrossLinking (LinkingContext (..), buildIndexedDatabaseFromDB, defaultLinkingThreshold, emptyAliasMap)
 import Database.Loader (findAllCrossDBLinks)
 import Matrix (computeInventoryMatrix)
+import Service (buildCrossDBLinkMap, toExchangeWithUnit)
 import SharedSolver (CrossDBSolution (..), computeInventoryMatrixWithDepsCached)
 import SynonymDB (emptySynonymDB)
 import Test.Hspec
@@ -197,8 +199,12 @@ reference-sign correction is applied.
 @rootLink@ is what the waste output states about its treatment: 'UUID.nil' for
 an output naming none, @tA@ for one naming the dependency's treatment. Both
 must reach the same treatment and the same score.
+
+Returns the score and the waste line as the API reports it, so a test can hold
+the two against each other: a charged line that reports no treatment is the
+same bug read from the other end.
 -}
-scoreCross :: UUID -> T.Text -> TechRole -> Double -> IO Double
+scoreCross :: UUID -> T.Text -> TechRole -> Double -> IO (Double, ExchangeWithUnit)
 scoreCross rootLink depName depRole depRefAmount = do
     let rootActs = M.singleton (pA, yY) (producer (wasteEx False rootLink 3.0))
     rootBase <- buildDB "root" rootActs
@@ -215,9 +221,15 @@ scoreCross rootLink depName depRole depRefAmount = do
                 Nothing -> fail "producer not interned"
                 Just pid -> do
                     res <- computeInventoryMatrixWithDepsCached defaultUnitConfig depLookup rootDB "root" rootSolver pid
+                    let reported =
+                            toExchangeWithUnit
+                                defaultUnitConfig
+                                rootDB
+                                (buildCrossDBLinkMap rootDB pid)
+                                (wasteEx False rootLink 3.0)
                     case res of
                         Left err -> fail (T.unpack err)
-                        Right sol -> pure (co2Of (csInventory sol))
+                        Right sol -> pure (co2Of (csInventory sol), reported)
 
 spec :: Spec
 spec = describe "Waste-treatment scoring sign across reference conventions" $ do
@@ -244,11 +256,11 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ILCD (positive ReferenceInput) treatment scores +6" $ do
-        score <- scoreCross UUID.nil "ilcd-dep" ReferenceInput 1.0
+        (score, _) <- scoreCross UUID.nil "ilcd-dep" ReferenceInput 1.0
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ecoinvent (negative ReferenceProduct) treatment scores +6" $ do
-        score <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
+        (score, _) <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     -- An authored waste output states the treatment it goes to. When that
@@ -256,8 +268,22 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
     -- just as naming nothing does; reading the link as "resolved elsewhere"
     -- cut the waste off with no burden at all.
     it "cross-DB from a waste output that names the dependency's treatment scores +6" $ do
-        score <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
+        (score, _) <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
+
+    -- Both halves of the same statement: the treatment charged is the one
+    -- reported. Reporting no treatment for a line the score charged says the
+    -- burden is missing when it was counted, which is the reading the role
+    -- exists to make impossible.
+    it "reports the dependency's treatment for the waste output it charged" $ do
+        (_, reported) <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
+        ewuWasteRole reported `shouldBe` Just SentToTreatment
+        (T.isPrefixOf "eco-dep::" <$> ewuTargetProcessId reported) `shouldBe` Just True
+
+    it "reports the dependency's treatment for an output naming none" $ do
+        (_, reported) <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
+        ewuWasteRole reported `shouldBe` Just SentToTreatment
+        (T.isPrefixOf "eco-dep::" <$> ewuTargetProcessId reported) `shouldBe` Just True
 
     -- The other half of the same gate: a link the root database resolves in
     -- place is the matrix's business, and a cross-DB link on top would charge
