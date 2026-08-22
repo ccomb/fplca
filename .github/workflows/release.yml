@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - name: Compare tag against cabal version
         run: |
           cabal_ver=$(awk '/^version:/ {print $2; exit}' volca.cabal)
@@ -28,6 +31,10 @@ jobs:
             echo "::error::Cut releases from a 'Release v${tag_ver}' PR that bumps volca.cabal first."
             exit 1
           fi
+      - name: Check data/VERSION against the previous release
+        # A bundle whose contents changed under an unchanged number is one
+        # the installers never fetch: they keep data/<version>/ and skip it.
+        run: scripts/check-data-version.sh "$GITHUB_REF_NAME"
 
   build:
     needs: verify-tag
@@ -56,9 +63,11 @@ jobs:
         # Reference data (flows, compartments, units, geographies) ships as
         # a separate, platform-independent tarball with its own version in
         # data/VERSION. Engines find it via VOLCA_DATA_DIR (see Config.hs's
-        # resolveDataPath); install.sh and pyvolca.download() set that env
-        # var to the extracted bundle. Always rebuild and upload, even when
-        # data/VERSION is unchanged — dedup is not worth the complexity.
+        # applyDataDir); install.sh and pyvolca.download() set that env var
+        # to the extracted bundle. The bundle is attached to every release,
+        # unchanged or not, because the installers read the release's own
+        # SHA256SUMS to find it; the installers are what skip a bundle they
+        # already hold, keyed on the number verify-tag checked above.
         run: |
           DATA_VER=$(cat data/VERSION)
           tar -czf "dist/volca-data-${DATA_VER}.tar.gz" -C data .

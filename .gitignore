@@ -15,6 +15,7 @@ cbits/*.o
 /scripts/*
 !/scripts/build_chem_synonyms.py
 !/scripts/propose_flow_bridges.py
+!/scripts/check-data-version.sh
 node_modules/
 
 # Generated source
