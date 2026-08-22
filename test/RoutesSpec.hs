@@ -249,7 +249,8 @@ routeSpecs = do
         it "GET /api/v1/version says which data bundle it reads, null when it reads none" $ \b -> do
             -- The test config names no flow registry, so there is no bundle to
             -- report: the key must still be there, carrying null, so a client
-            -- can tell "no bundle" from "an engine too old to say".
+            -- that read wire 11 can tell "no bundle" from "an engine too old
+            -- to say".
             resp <- doGet b "/api/v1/version"
             decode (responseBody resp) `shouldSatisfy` \case
                 Just (Object km) -> KM.lookup "dataVersion" km == Just Null

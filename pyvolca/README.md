@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.9.2** speaks wire formats **2 to 10** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.9.2** speaks wire formats **2 to 11** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -2293,6 +2293,9 @@ Server build metadata returned by `Client.get_version`.
 platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
 ``wire_version`` is the engine's advertised JSON wire-format revision, or
 None for engines that predate it (everything up to v0.7.x).
+``data_version`` names the reference-data bundle the engine reads; None
+when it reads none, or for engines that predate the field. Two engines of
+one version giving two scores for one calculation differ here.
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -2301,6 +2304,7 @@ None for engines that predate it (everything up to v0.7.x).
 | `git_tag` | `str \| None` | _required_ |
 | `build_target` | `str` | _required_ |
 | `wire_version` | `int \| None` | None |
+| `data_version` | `str \| None` | None |
 
 ### `SetAmount`
 

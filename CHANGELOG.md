@@ -11,7 +11,7 @@
   check now run on every pull request and before every release keeps it true:
   the last two releases both shipped `volca-data-2.tar.gz` with different
   contents, so two engines reading different data would have answered the
-  same `dataVersion`. This is data version 3.
+  same `dataVersion`. This is data version 3, and wire revision 11.
 - Every waste line of an activity now says what it does, as `wasteRole`. A
   consumer had to work it out from the target being absent, and that reading
   runs two opposite statements together: a waste nothing treats, which is a
