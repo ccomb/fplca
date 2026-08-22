@@ -3,12 +3,15 @@
 ## [Unreleased]
 
 ### Added
-- `data/VERSION`, the number of the reference-data bundle, is now checked on
-  every pull request and before every release: a `data/` that changed since
-  the previous release under the same number, or a number that moved with
-  nothing behind it, fails the run. The last two releases both shipped
-  `volca-data-2.tar.gz` with different contents, and an installer that
-  already held a `data/2/` directory kept the old one. This is data version 3.
+- `GET /api/v1/version` now says which reference-data bundle the engine reads,
+  as `dataVersion`, and pyvolca's `ServerVersion` carries it as
+  `data_version`. Two engines of the same version that give two scores for the
+  same calculation differ there, and that is where to look first. An engine
+  configured with no bundle reports `null`. The number is `data/VERSION`, and a
+  check now run on every pull request and before every release keeps it true:
+  the last two releases both shipped `volca-data-2.tar.gz` with different
+  contents, and an installer that already held a `data/2/` directory kept the
+  old one. This is data version 3.
 - Every waste line of an activity now says what it does, as `wasteRole`. A
   consumer had to work it out from the target being absent, and that reading
   runs two opposite statements together: a waste nothing treats, which is a

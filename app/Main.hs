@@ -30,7 +30,7 @@ import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (ClassificationPreset, Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
+import Config (Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readDataVersion, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -265,15 +265,21 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
     let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
     (lastRequestRef, idleActiveRef) <- setupIdleTimeout serverOpts
+    dataVersion <- readDataVersion config
+    let env =
+            AppEnv
+                { aeDbManager = dbManager
+                , aeMaxTreeDepth = serverTreeDepth serverOpts
+                , aePassword = password
+                , aeHostingConfig = cfgHosting config
+                , aeClassificationPresets = cfgClassificationPresets config
+                , aeDataVersion = dataVersion
+                }
     baseApp <-
         createServerApp
-            dbManager
-            (serverTreeDepth serverOpts)
+            env
             staticDir
             (serverDesktopMode serverOpts)
-            password
-            (cfgHosting config)
-            (cfgClassificationPresets config)
             (scName (cfgServer config))
             (getCurrentTime >>= writeIORef lastRequestRef)
     let finalApp =
@@ -390,25 +396,17 @@ logRequest req = do
     putStrLn $ C8.unpack (requestMethod req) ++ " " ++ C8.unpack (rawPathInfo req <> rawQueryString req)
     hFlush stdout
 
--- | Create a Wai application with DatabaseManager.
-createServerApp :: DatabaseManager -> Int -> FilePath -> Bool -> Maybe String -> Maybe HostingConfig -> [ClassificationPreset] -> Maybe ServerName -> IO () -> IO Application
-createServerApp dbManager maxTreeDepth staticDir desktopMode password hostingConfig filterPresets serverName markActivity = do
+-- | Create a Wai application over a ready environment.
+createServerApp :: AppEnv -> FilePath -> Bool -> Maybe ServerName -> IO () -> IO Application
+createServerApp env staticDir desktopMode serverName markActivity = do
     -- The MCP @web_url@ deep links point at Elm SPA routes served from
     -- 'staticDir'. When the SPA is not bundled (backend-only image), those
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
-    mcp <- mcpApp dbManager filterPresets hasFrontend hostingConfig serverName markActivity
-    let env =
-            AppEnv
-                { aeDbManager = dbManager
-                , aeMaxTreeDepth = maxTreeDepth
-                , aePassword = password
-                , aeHostingConfig = hostingConfig
-                , aeClassificationPresets = filterPresets
-                }
-        apiApp = serve lcaAPI (lcaServer env)
+    mcp <- mcpApp (aeDbManager env) (aeClassificationPresets env) hasFrontend (aeHostingConfig env) serverName markActivity
+    let apiApp = serve lcaAPI (lcaServer env)
     pure $ \req respond -> do
         unless desktopMode (logRequest req)
         dispatchRequest staticDir mcp apiApp req respond

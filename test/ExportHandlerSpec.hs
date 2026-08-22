@@ -35,6 +35,7 @@ runExport dbName fmt = do
                 , aePassword = Nothing
                 , aeHostingConfig = Nothing
                 , aeClassificationPresets = []
+                , aeDataVersion = Nothing
                 }
     runHandler (runApp env (exportDatabaseHandler dbName (ExportRequest fmt)))
 

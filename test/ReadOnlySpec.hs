@@ -87,6 +87,7 @@ envWith hc = do
             , aePassword = Nothing
             , aeHostingConfig = hc
             , aeClassificationPresets = []
+            , aeDataVersion = Nothing
             }
 
 -- | The HTTP status a handler failed with, or 'Nothing' when it succeeded.

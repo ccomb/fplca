@@ -1296,7 +1296,8 @@ currentWireVersion :: Int
 currentWireVersion = 10
 
 getVersion :: AppM Value
-getVersion =
+getVersion = do
+    dataVersion <- asks aeDataVersion
     return $
         object
             [ "version" .= Version.version
@@ -1304,6 +1305,7 @@ getVersion =
             , "gitTag" .= Version.gitTag
             , "buildTarget" .= Version.buildTarget
             , "wireVersion" .= currentWireVersion
+            , "dataVersion" .= fmap Config.unDataVersion dataVersion
             ]
 
 getHosting :: AppM Value

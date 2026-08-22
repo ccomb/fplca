@@ -113,6 +113,11 @@ lands after all, the release PR raises the version at the same time it
 drops the `-dev` suffix. The point is that `main` is never sitting on a
 released version, the `-dev` suffix marks "in flight".
 
+A change under `data/` never touches the engine's number. Reference data
+has its own, `data/VERSION`, and a score that moves on unchanged inputs
+is read there: `/api/v1/version` reports it as `dataVersion`, so two
+engines of one version giving two answers differ on that field.
+
 ## One-liner installers
 
 After a `v*` release lands, end users can install with one line.
