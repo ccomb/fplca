@@ -38,7 +38,9 @@ Create a PR titled `Release v0.7.0` (replace with the target version).
 The PR should:
 
 - Bump `volca.cabal` `version:` from `<previous>-dev` to `0.7.0` (no
-  `-dev` suffix).
+  `-dev` suffix). Before dropping the suffix, hold the number against
+  the rule in step 5: a removal or redefinition that landed since the
+  last bump raises it here, `0.7.1-dev` becoming `0.8.0`.
 - Update `CHANGELOG.md` with a `## [0.7.0]` section.
 - Bump `data/VERSION` only if data changed since the last release
   (Lot 2; not yet implemented).
@@ -82,9 +84,30 @@ Open a small follow-up PR:
 +version:             0.7.1-dev
 ```
 
-Pick the next patch (e.g. `0.7.1-dev`) or next minor (`0.8.0-dev`)
-depending on what's planned. The point is that `main` is never sitting
-on a released version — the `-dev` suffix marks "in flight".
+This is where the *next* release number is decided: step 1 above reads
+the target straight from `volca.cabal`, so nothing infers it later. The
+number warns users of one thing: whether a script that works today
+survives the coming release.
+
+- Something a working client relies on goes away or changes meaning: a
+  field, a route or an MCP tool removed, a unit or an identifier
+  redefined, in short anything an older client cannot survive (what
+  makes pyvolca raise its `REQUIRED_WIRE`). **Minor**, `0.8.0-dev`. From `1.0.0` on the same rule
+  reads **major**, `2.0.0-dev`.
+- Everything else, however large: **patch**, `0.7.1-dev`. New routes,
+  tools, formats, configuration keys and fields are additive, and so is
+  a wire revision: `currentWireVersion` counts what the engine learnt to
+  say, not what it stopped saying. From `1.0.0` on, additions read
+  **minor** and fixes **patch**.
+
+A removal is never a surprise: the release that introduces a replacement
+keeps the old shape, and its CHANGELOG entry names the release that drops
+it, the next minor (major from `1.0.0` on) at the earliest. A
+redefinition has no old shape to keep, which is why the version number
+is what announces it. Not knowing yet counts as nothing removed, so pick the patch; if a removal
+lands after all, the release PR raises the version at the same time it
+drops the `-dev` suffix. The point is that `main` is never sitting on a
+released version, the `-dev` suffix marks "in flight".
 
 ## One-liner installers
 
