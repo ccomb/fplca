@@ -38,7 +38,9 @@ Create a PR titled `Release v0.7.0` (replace with the target version).
 The PR should:
 
 - Bump `volca.cabal` `version:` from `<previous>-dev` to `0.7.0` (no
-  `-dev` suffix).
+  `-dev` suffix). Before dropping the suffix, hold the number against
+  the rule in step 5: a removal or redefinition that landed since the
+  last bump raises it here, `0.7.1-dev` becoming `0.8.0`.
 - Update `CHANGELOG.md` with a `## [0.7.0]` section.
 - Bump `data/VERSION` only if data changed since the last release
   (Lot 2; not yet implemented).
@@ -89,8 +91,8 @@ survives the coming release.
 
 - Something a working client relies on goes away or changes meaning: a
   field, a route or an MCP tool removed, a unit or an identifier
-  redefined, in short anything that forces pyvolca to raise
-  `REQUIRED_WIRE`. **Minor**, `0.8.0-dev`. From `1.0.0` on the same rule
+  redefined, in short anything an older client cannot survive (what
+  makes pyvolca raise its `REQUIRED_WIRE`). **Minor**, `0.8.0-dev`. From `1.0.0` on the same rule
   reads **major**, `2.0.0-dev`.
 - Everything else, however large: **patch**, `0.7.1-dev`. New routes,
   tools, formats, configuration keys and fields are additive, and so is
@@ -99,9 +101,10 @@ survives the coming release.
   **minor** and fixes **patch**.
 
 A removal is never a surprise: the release that introduces a replacement
-keeps the old shape, marked `deprecated` in the OpenAPI document, and the
-next minor (major from `1.0.0` on) is the earliest that may drop it. Not
-knowing yet counts as nothing removed, so pick the patch; if a removal
+keeps the old shape, and its CHANGELOG entry names the release that drops
+it, the next minor (major from `1.0.0` on) at the earliest. A
+redefinition has no old shape to keep, which is why the version number
+is what announces it. Not knowing yet counts as nothing removed, so pick the patch; if a removal
 lands after all, the release PR raises the version at the same time it
 drops the `-dev` suffix. The point is that `main` is never sitting on a
 released version, the `-dev` suffix marks "in flight".
