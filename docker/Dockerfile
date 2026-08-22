@@ -126,8 +126,13 @@ COPY mumps-hs/ /build/mumps-hs/
 COPY gen-cabal-config.sh /build/volca/
 
 # Set up cabal.project with mumps-hs as local package, LINK_MODE=musl.
+# This project is written here rather than copied, so it inherits nothing
+# from the repository's own cabal.project: the hold on
+# insert-ordered-containers has to be repeated, and allow-newer above
+# would let the breaking version in otherwise.
 RUN echo "packages: ./volca ./mumps-hs" > /build/cabal.project \
     && echo "allow-newer: true" >> /build/cabal.project \
+    && echo "constraints: insert-ordered-containers < 0.3" >> /build/cabal.project \
     && MUMPS_LIB_DIR="/build/mumps/lib" \
     MUMPS_INCLUDE_DIR="/build/mumps/include" \
     OPENBLAS_LIB_DIR="/build/openblas/lib" \
