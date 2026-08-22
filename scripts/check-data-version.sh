@@ -2,19 +2,19 @@
 # Refuse a data/ that changed since the last engine release under the same
 # data/VERSION, and a new data/VERSION with no change behind it.
 #
-# The installers keep one data/<version>/ directory per bundle and skip the
-# download when it already exists, so a bundle whose contents changed under
-# an unchanged number is one they never fetch. The number only has to be
-# honest against the last release: two pull requests both moving it from 2
-# to 3 are both right.
+# The number is the bundle's identity: it names the release asset
+# (volca-data-<version>.tar.gz), the data/<version>/ directory the installers
+# extract into, and the dataVersion an engine reports on /api/v1/version. Two
+# releases shipping different contents under one number make all three lie:
+# two engines reading different data answer the same dataVersion. The number
+# only has to be honest against the last release, so two pull requests both
+# moving it from 2 to 3 are both right.
 #
-# Usage: scripts/check-data-version.sh [TAG]
-#   TAG  the release being cut, so the comparison base is the release before
-#        it (release.yml passes the tag being built). Without it, the base is
-#        the newest v* tag reachable from the parent of HEAD.
+# Compares HEAD with the newest v* tag reachable from its parent; run on the
+# commit being tagged, that is the release before the one being cut.
 set -eu
 
-base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${1:-HEAD}^")
+base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^)
 old=$(git show "$base:data/VERSION")
 new=$(cat data/VERSION)
 

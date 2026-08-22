@@ -35,9 +35,10 @@ jobs:
     with:
       release: false
 
-  # data/VERSION names the reference-data bundle installers key on, so a PR
-  # that changes data/ has to move it. Cheap and build-independent, so it
-  # runs beside the matrix and the PR shows the mismatch at once.
+  # data/VERSION is the bundle's identity (the asset name, the install
+  # directory, the dataVersion an engine reports), so a PR that changes
+  # data/ has to move it. Cheap and build-independent, so it runs beside
+  # the matrix and the PR shows the mismatch at once.
   data-version:
     name: data/VERSION follows data/
     runs-on: ubuntu-latest

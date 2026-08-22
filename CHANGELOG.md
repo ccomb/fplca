@@ -10,8 +10,8 @@
   configured with no bundle reports `null`. The number is `data/VERSION`, and a
   check now run on every pull request and before every release keeps it true:
   the last two releases both shipped `volca-data-2.tar.gz` with different
-  contents, and an installer that already held a `data/2/` directory kept the
-  old one. This is data version 3.
+  contents, so two engines reading different data would have answered the
+  same `dataVersion`. This is data version 3.
 - Every waste line of an activity now says what it does, as `wasteRole`. A
   consumer had to work it out from the target being absent, and that reading
   runs two opposite statements together: a waste nothing treats, which is a

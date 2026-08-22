@@ -32,9 +32,9 @@ jobs:
             exit 1
           fi
       - name: Check data/VERSION against the previous release
-        # A bundle whose contents changed under an unchanged number is one
-        # the installers never fetch: they keep data/<version>/ and skip it.
-        run: scripts/check-data-version.sh "$GITHUB_REF_NAME"
+        # Two releases shipping different data under one number would make
+        # the asset name and the engine's reported dataVersion both lie.
+        run: scripts/check-data-version.sh
 
   build:
     needs: verify-tag
@@ -66,8 +66,8 @@ jobs:
         # applyDataDir); install.sh and pyvolca.download() set that env var
         # to the extracted bundle. The bundle is attached to every release,
         # unchanged or not, because the installers read the release's own
-        # SHA256SUMS to find it; the installers are what skip a bundle they
-        # already hold, keyed on the number verify-tag checked above.
+        # SHA256SUMS to find it; verify-tag above is what keeps its number
+        # honest.
         run: |
           DATA_VER=$(cat data/VERSION)
           tar -czf "dist/volca-data-${DATA_VER}.tar.gz" -C data .
