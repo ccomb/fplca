@@ -177,18 +177,6 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
             wantsSse = "text/event-stream" `BS.isInfixOf` acceptHdr
         st <- readIORef stateRef
         case method of
-            -- GET: open SSE stream for server-initiated messages.
-            -- VoLCA is stateless so we return an empty stream immediately.
-            "GET" ->
-                respond $
-                    responseLBS
-                        status200
-                        [ (hContentType, "text/event-stream; charset=utf-8")
-                        , ("Cache-Control", "no-cache")
-                        , ("Connection", "keep-alive")
-                        , ("Mcp-Session-Id", TE.encodeUtf8 (mcpSessionId st))
-                        ]
-                        ""
             "POST" -> do
                 body <- strictRequestBody req
                 case eitherDecode body of
@@ -210,6 +198,11 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
                                 if wantsSse
                                     then respond $ sseResponse (mcpSessionId st) val
                                     else respond $ jsonResponse (mcpSessionId st) val
+            -- Everything else, GET included. A GET opens the stream a server
+            -- uses to speak first; VoLCA never does, and answering it with a
+            -- stream that closes at once reads to a client as a dropped
+            -- connection, which it reconnects, forever. 405 says there is no
+            -- stream to open, and the client stops asking.
             _ ->
                 respond $
                     responseLBS status405 [(hContentType, "application/json")] $
