@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.10.0] - 2026-08-22
 
 ### Added
 - `GET /api/v1/version` now says which reference-data bundle the engine reads,
@@ -82,6 +82,7 @@
   instead of "This instance is read-only", naming who to talk to about it.
 
 ### Changed
+
 - A biosphere exchange that names its flow in words now reaches the flow the
   database already declares under that name and compartment, instead of always
   creating one. Writing an emission the way an inventory shows it, `Nitrogen,
@@ -194,8 +195,51 @@
   configuration written before that rename started up loading nothing at all.
   A warning rather than a refusal: a key from a later release should not stop
   an older engine.
+- **The server now listens on the address `[server] host` names, and stops
+  answering the network unless it is told to.** That setting had never reached
+  the socket: whatever it said, the server accepted on every IPv4 interface, so
+  a configuration written to keep an engine on its own machine did not, while
+  the password is off by default. The documented default, `127.0.0.1`, is now
+  real. A deployment that relied on the old reach without asking for it has to
+  ask: `host = "0.0.0.0"` answers the network over IPv4, `"::"` over IPv6. The
+  startup banner names the address it bound, so the one case that cannot be
+  honoured - `--port 0` takes a free port on loopback - is visible rather than
+  silent. The command line reaches such a server at this machine rather than at
+  the wildcard, which is not an address anything can connect to.
+- The location hierarchy the regionalized scoring path uses is built once at
+  startup instead of being rebuilt from the geography table on every call.
+  It was two full passes over that table for each scoring request, and each
+  method of a panel paid it again, even when the characterization tables
+  themselves came back from their cache. The geographies file itself was read
+  once at startup before this change as well.
+- Startup now refuses a configuration in which two classification presets or
+  two method collections share a name, the same way it already refused two
+  databases sharing one. Both are looked up by name, so the duplicate would
+  have silently shadowed one of its bearers; the error names the offenders
+  instead.
+- Every download now includes `THIRD-PARTY-LICENSES.md`, naming the numerical
+  libraries built into the program and their terms. The Windows zip also
+  carries the full licence texts of the runtime libraries beside it.
+- Assistant answers now carry their `web_url` deep links when the engine runs
+  behind a reverse proxy that serves the web interface upstream. The proxy
+  declares itself with the standard `X-Forwarded-Prefix` header; the links then
+  carry that prefix and the forwarded protocol. Before, an engine running
+  without a bundled frontend emitted no links at all, even when a proxy in
+  front of it served those very pages.
 
 ### Fixed
+
+- `--jsonpath` now selects what `--format csv` flattens, instead of being
+  required and then ignored. The flag was mandatory for CSV and had no effect
+  on it: whatever you named, the command guessed the array to flatten by
+  looking for the one array field of the response, and a search response holds
+  three, so the guess failed and the whole JSON document was printed with exit
+  code 0 where a table had been asked for. The path the help text already
+  documented is now the one that is read (`srResults`,
+  `piActivity.pfaExchanges`), and a path naming nothing, or naming something
+  that is not an array, is refused with what was found and which fields exist
+  rather than silently falling back.
+
 - A waste output that names its treatment now reaches that treatment when it
   lives in another loaded database. The step that links a database to the ones
   it depends on looked at waste outputs naming no treatment at all, and skipped
@@ -223,8 +267,8 @@
   EcoSpold 2 reader carries through as written.
 - A Brightway Excel workbook loads from a directory, not only when its own
   path is named. The engine reads five database formats but the step that
-  decides what a source directory holds knew four, so an uploaded `.xlsx` —
-  which arrives extracted into a directory — was refused with "No supported
+  decides what a source directory holds knew four, so an uploaded `.xlsx`,
+  which arrives extracted into a directory, was refused with "No supported
   database files found", listing the four formats it did know. The list in
   that sentence is now read off the same place the detection is, so a format
   the engine reads cannot go missing from what it says it reads.
@@ -233,7 +277,7 @@
   zero-padded: the group is two digits and the check digit one. One of the two
   readers stripped zeros from every segment, turning formaldehyde's `50-00-0`
   into `50-0-0`, so which spelling a value carried depended on which parser had
-  read it — and the two never met. Every substance whose group segment begins
+  read it, and the two never met. Every substance whose group segment begins
   with a zero was affected. Both sides of the bridge now canonicalize, so a
   padded and an unpadded spelling of one substance meet whichever parser
   produced them. **Scores change** where a factor was previously missed: an
@@ -386,39 +430,6 @@
   round trip instead of being flattened to spaces. A line break in a name or a
   geography is still refused: there it means nothing and would tear the row
   apart on re-import.
-
-### Changed
-- **The server now listens on the address `[server] host` names, and stops
-  answering the network unless it is told to.** That setting had never reached
-  the socket: whatever it said, the server accepted on every IPv4 interface, so
-  a configuration written to keep an engine on its own machine did not, while
-  the password is off by default. The documented default, `127.0.0.1`, is now
-  real. A deployment that relied on the old reach without asking for it has to
-  ask: `host = "0.0.0.0"` answers the network over IPv4, `"::"` over IPv6. The
-  startup banner names the address it bound, so the one case that cannot be
-  honoured - `--port 0` takes a free port on loopback - is visible rather than
-  silent. The command line reaches such a server at this machine rather than at
-  the wildcard, which is not an address anything can connect to.
-- The location hierarchy the regionalized scoring path uses is built once at
-  startup instead of being rebuilt from the geography table on every call.
-  It was two full passes over that table for each scoring request, and each
-  method of a panel paid it again, even when the characterization tables
-  themselves came back from their cache. The geographies file itself was read
-  once at startup before this change as well.
-- Startup now refuses a configuration in which two classification presets or
-  two method collections share a name, the same way it already refused two
-  databases sharing one. Both are looked up by name, so the duplicate would
-  have silently shadowed one of its bearers; the error names the offenders
-  instead.
-- Every download now includes `THIRD-PARTY-LICENSES.md`, naming the numerical
-  libraries built into the program and their terms. The Windows zip also
-  carries the full licence texts of the runtime libraries beside it.
-- Assistant answers now carry their `web_url` deep links when the engine runs
-  behind a reverse proxy that serves the web interface upstream. The proxy
-  declares itself with the standard `X-Forwarded-Prefix` header; the links then
-  carry that prefix and the forwarded protocol. Before, an engine running
-  without a bundled frontend emitted no links at all, even when a proxy in
-  front of it served those very pages.
 
 ## [0.9.5] - 2026-08-04
 
