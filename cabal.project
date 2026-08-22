@@ -17,3 +17,9 @@ program-options
 -- prebuilt-store hash includes this file).
 package *
   split-sections: True
+
+-- insert-ordered-containers 0.3 changed its JSON instances, and openapi3 3.2.5
+-- answers by wrapping InsOrdHashMap in a compat newtype from that version on.
+-- Our schema code builds `properties` with the plain type, so the two no longer
+-- meet. Hold the old library until that code moves to openapi3's compat module.
+constraints: insert-ordered-containers < 0.3
