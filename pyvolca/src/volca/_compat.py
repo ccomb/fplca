@@ -32,8 +32,9 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 10
-"""The newest wire revision this pyvolca understands (revision 10 adds the role
+KNOWN_WIRE = 11
+"""The newest wire revision this pyvolca understands (revision 11 adds the
+data bundle's version on the version route; revision 10 added the role
 a waste line reports; revision 9 added the kind
 a flow search reports and filters on; revision 8 added the two
 quality reports as downloadable CSV; revision 7 added editing an activity's

@@ -42,8 +42,12 @@ The PR should:
   the rule in step 5: a removal or redefinition that landed since the
   last bump raises it here, `0.7.1-dev` becoming `0.8.0`.
 - Update `CHANGELOG.md` with a `## [0.7.0]` section.
-- Bump `data/VERSION` only if data changed since the last release
-  (Lot 2; not yet implemented).
+- Nothing to do for `data/VERSION`: it moved in the PR that changed
+  `data/`, the way the wire revision moves in the PR that changes the
+  wire. `scripts/check-data-version.sh` runs on every PR and again in
+  `release.yml` before anything is built, and refuses both a `data/`
+  that changed since the previous release under the same number and a
+  number that moved with nothing behind it.
 
 ### 2. Wait for green CI
 
@@ -108,6 +112,11 @@ is what announces it. Not knowing yet counts as nothing removed, so pick the pat
 lands after all, the release PR raises the version at the same time it
 drops the `-dev` suffix. The point is that `main` is never sitting on a
 released version, the `-dev` suffix marks "in flight".
+
+A change under `data/` never touches the engine's number. Reference data
+has its own, `data/VERSION`, and a score that moves on unchanged inputs
+is read there: `/api/v1/version` reports it as `dataVersion`, so two
+engines of one version giving two answers differ on that field.
 
 ## One-liner installers
 

@@ -7,6 +7,7 @@ import Config (
     ClassificationEntry (..),
     ClassificationPreset (..),
     Config (..),
+    DataVersion (..),
     DatabaseConfig (..),
     HostingConfig (..),
     Listen (..),
@@ -19,12 +20,14 @@ import Config (
     applyDataDir,
     clientHost,
     configKeys,
+    dataBundleDir,
     defaultConfig,
     documentKeyPaths,
     expandClassificationPreset,
     keyPaths,
     listenOn,
     loadConfigOrDefault,
+    readDataVersion,
     redirectIntoDataDir,
     resolveConfigPaths,
     unknownKeys,
@@ -343,6 +346,29 @@ spec = do
                 \scale = 0.6\n" of
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected a decode error for an empty selector"
+
+    let registry path uploaded = RefDataConfig{rdName = "flows", rdPath = path, rdActive = True, rdIsUploaded = uploaded, rdIsAuto = False, rdDescription = Nothing}
+        reading path = defaultConfig{cfgFlowSynonyms = [registry path False]}
+
+    describe "dataBundleDir" $ do
+        it "is the directory of the shipped flow registry" $
+            dataBundleDir (reading "/opt/volca-data/3/flows.csv") `shouldBe` Just "/opt/volca-data/3"
+
+        it "skips an uploaded registry, which lives with the uploads, not the bundle" $
+            dataBundleDir defaultConfig{cfgFlowSynonyms = [registry "uploads/mine.csv" True, registry "data/flows.csv" False]}
+                `shouldBe` Just "data"
+
+        it "is Nothing without a registry: an engine running with no bundle" $
+            dataBundleDir defaultConfig `shouldBe` Nothing
+
+    describe "readDataVersion" $ do
+        it "reads the VERSION file of the in-tree bundle" $ do
+            expected <- T.strip <$> TIO.readFile "data/VERSION"
+            v <- readDataVersion (reading "data/flows.csv")
+            v `shouldBe` Just (DataVersion expected)
+
+        it "is Nothing when the registry's directory carries no VERSION" $
+            readDataVersion (reading "test/flows.csv") `shouldReturn` Nothing
 
     describe "redirectIntoDataDir" $ do
         it "leaves paths unchanged when VOLCA_DATA_DIR is unset" $

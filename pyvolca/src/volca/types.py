@@ -1413,6 +1413,9 @@ class ServerVersion:
     platform triple the binary was compiled for (e.g. ``"x86_64-linux"``).
     ``wire_version`` is the engine's advertised JSON wire-format revision, or
     None for engines that predate it (everything up to v0.7.x).
+    ``data_version`` names the reference-data bundle the engine reads; None
+    when it reads none, or for engines that predate the field. Two engines of
+    one version giving two scores for one calculation differ here.
     """
 
     version: str
@@ -1420,6 +1423,7 @@ class ServerVersion:
     git_tag: str | None
     build_target: str
     wire_version: int | None = None
+    data_version: str | None = None
 
     @classmethod
     def from_json(cls, d: dict) -> "ServerVersion":
@@ -1431,6 +1435,7 @@ class ServerVersion:
             # Plain .get (not "... or None"): wire 0 is a distinct value, not
             # "absent". Absent (old engine) → None; present → the int verbatim.
             wire_version=d.get("wireVersion"),
+            data_version=d.get("dataVersion"),
         )
 
 

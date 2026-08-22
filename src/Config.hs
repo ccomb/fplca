@@ -48,6 +48,11 @@ module Config (
     redirectIntoDataDir,
     applyDataDir,
 
+    -- * The shipped data bundle
+    DataVersion (..),
+    dataBundleDir,
+    readDataVersion,
+
     -- * Config-relative path resolution
     resolveConfigPaths,
 
@@ -59,7 +64,7 @@ module Config (
 ) where
 
 import Control.Monad (forM_, unless, when)
-import Data.List (isPrefixOf)
+import Data.List (find, isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
@@ -809,6 +814,34 @@ applyDataDir :: Maybe FilePath -> Config -> Config
 applyDataDir mDataDir = overPaths $ \kind path -> case kind of
     ReferenceDataPath -> redirectIntoDataDir mDataDir path
     UserContentPath -> path
+
+-- | The version of the reference-data bundle, as its @VERSION@ file states it.
+newtype DataVersion = DataVersion {unDataVersion :: Text}
+    deriving (Show, Eq)
+
+{- | Where the shipped data bundle sits: the directory of the flow registry,
+the first @flow-synonyms@ entry that is not an upload. The installers key a
+bundle on @data/<version>/flows.csv@, and this is the same file seen from the
+engine. Nothing when no registry is configured, which is an engine running
+without a bundle.
+-}
+dataBundleDir :: Config -> Maybe FilePath
+dataBundleDir = fmap (takeDirectory . rdPath) . find (not . rdIsUploaded) . cfgFlowSynonyms
+
+{- | The bundle's version, from the @VERSION@ file in 'dataBundleDir'. Nothing
+when there is no bundle or the directory carries no such file: an engine
+reading a registry of its operator's own has no bundle version to report, and
+saying so is the honest answer.
+-}
+readDataVersion :: Config -> IO (Maybe DataVersion)
+readDataVersion cfg = case dataBundleDir cfg of
+    Nothing -> pure Nothing
+    Just dir -> do
+        let file = dir </> "VERSION"
+        present <- doesFileExist file
+        if present
+            then Just . DataVersion . T.strip <$> TIO.readFile file
+            else pure Nothing
 
 {- | Resolve every relative path a config carries against the directory the
 config file sits in, so one file describes the same setup from any working

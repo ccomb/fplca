@@ -246,6 +246,16 @@ routeSpecs = do
                     _ -> False
                 _ -> False
 
+        it "GET /api/v1/version says which data bundle it reads, null when it reads none" $ \b -> do
+            -- The test config names no flow registry, so there is no bundle to
+            -- report: the key must still be there, carrying null, so a client
+            -- that read wire 11 can tell "no bundle" from "an engine too old
+            -- to say".
+            resp <- doGet b "/api/v1/version"
+            decode (responseBody resp) `shouldSatisfy` \case
+                Just (Object km) -> KM.lookup "dataVersion" km == Just Null
+                _ -> False
+
         it "GET /api/v1/openapi.json returns an OpenAPI 3 document with 'paths'" $ \b -> do
             -- The OpenAPI spec is served at /api/v1/openapi.json (not /openapi).
             -- We check the actual contract (openapi+paths keys), not the byte

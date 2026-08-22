@@ -25,6 +25,7 @@ data AppEnv = AppEnv
     , aePassword :: !(Maybe String)
     , aeHostingConfig :: !(Maybe Config.HostingConfig)
     , aeClassificationPresets :: ![Config.ClassificationPreset]
+    , aeDataVersion :: !(Maybe Config.DataVersion)
     }
 
 newtype AppM a = AppM {unAppM :: ReaderT AppEnv Handler a}
