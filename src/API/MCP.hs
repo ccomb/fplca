@@ -51,7 +51,7 @@ import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
-import Network.HTTP.Types.Header (RequestHeaders, hAccept, hHost)
+import Network.HTTP.Types.Header (RequestHeaders, hAccept, hAllow, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
@@ -177,18 +177,6 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
             wantsSse = "text/event-stream" `BS.isInfixOf` acceptHdr
         st <- readIORef stateRef
         case method of
-            -- GET: open SSE stream for server-initiated messages.
-            -- VoLCA is stateless so we return an empty stream immediately.
-            "GET" ->
-                respond $
-                    responseLBS
-                        status200
-                        [ (hContentType, "text/event-stream; charset=utf-8")
-                        , ("Cache-Control", "no-cache")
-                        , ("Connection", "keep-alive")
-                        , ("Mcp-Session-Id", TE.encodeUtf8 (mcpSessionId st))
-                        ]
-                        ""
             "POST" -> do
                 body <- strictRequestBody req
                 case eitherDecode body of
@@ -210,11 +198,18 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
                                 if wantsSse
                                     then respond $ sseResponse (mcpSessionId st) val
                                     else respond $ jsonResponse (mcpSessionId st) val
+            -- Everything else, GET included. A GET opens the stream a server
+            -- uses to speak first; VoLCA never does, and answering it with a
+            -- stream that closes at once reads to a client as a dropped
+            -- connection, which it reconnects, forever. 405 says there is no
+            -- stream to open, and the client stops asking.
             _ ->
-                respond $
-                    responseLBS status405 [(hContentType, "application/json")] $
-                        encode $
-                            rpcError Null (-32700) "Method not allowed"
+                respond
+                    $ responseLBS
+                        status405
+                        [(hContentType, "application/json"), (hAllow, "POST")]
+                    $ encode
+                    $ rpcError Null (-32700) "Method not allowed"
   where
     jsonResponse sid v =
         responseLBS
