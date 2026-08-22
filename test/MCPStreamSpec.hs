@@ -10,10 +10,12 @@ and the client stops asking.
 -}
 module MCPStreamSpec (spec) where
 
+import Data.ByteString (ByteString)
 import Data.IORef
 import Network.HTTP.Types (Method)
+import Network.HTTP.Types.Header (hAllow)
 import Network.HTTP.Types.Status (statusCode)
-import Network.Wai (defaultRequest, requestMethod, responseStatus)
+import Network.Wai (defaultRequest, requestMethod, responseHeaders, responseStatus)
 import Network.Wai.Internal (ResponseReceived (..))
 import Test.Hspec
 
@@ -21,21 +23,24 @@ import API.MCP (mcpApp)
 import Config (defaultConfig)
 import Database.Manager (initDatabaseManager)
 
--- | Drive one request of the given method through the endpoint, report its status.
-status :: Method -> IO Int
-status m = do
+{- | Drive one request of the given method through the endpoint,
+report its status and the methods it says are allowed.
+-}
+answer :: Method -> IO (Int, Maybe ByteString)
+answer m = do
     manager <- initDatabaseManager defaultConfig True
     app <- mcpApp manager [] False Nothing Nothing (pure ())
     ref <- newIORef Nothing
     _ <- app defaultRequest{requestMethod = m} $ \resp -> do
         writeIORef ref (Just resp)
         pure ResponseReceived
-    maybe (fail "no response") (pure . statusCode . responseStatus) =<< readIORef ref
+    let read' resp = (statusCode (responseStatus resp), lookup hAllow (responseHeaders resp))
+    maybe (fail "no response") (pure . read') =<< readIORef ref
 
 spec :: Spec
 spec = describe "the /mcp endpoint" $ do
     it "refuses a GET rather than hand back a stream that closes at once" $
-        status "GET" `shouldReturn` 405
+        answer "GET" `shouldReturn` (405, Just "POST")
 
     it "refuses a DELETE the same way" $
-        status "DELETE" `shouldReturn` 405
+        answer "DELETE" `shouldReturn` (405, Just "POST")

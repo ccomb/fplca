@@ -51,7 +51,7 @@ import qualified Method.Explain as Explain
 import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), SimilarReason (..), UncharacterizedFlow (..), applyLongTermMode, computeLCIAScoreAuto, computeLCIAScoreFromTables, computeMappingStats, defaultUncharacterizedOpts, inventoryContributions, longTermModeFromExclude)
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
-import Network.HTTP.Types.Header (RequestHeaders, hAccept, hHost)
+import Network.HTTP.Types.Header (RequestHeaders, hAccept, hAllow, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Service
@@ -204,10 +204,12 @@ mcpApp dbManager presets hasFrontend mHosting mName markActivity = do
             -- connection, which it reconnects, forever. 405 says there is no
             -- stream to open, and the client stops asking.
             _ ->
-                respond $
-                    responseLBS status405 [(hContentType, "application/json")] $
-                        encode $
-                            rpcError Null (-32700) "Method not allowed"
+                respond
+                    $ responseLBS
+                        status405
+                        [(hContentType, "application/json"), (hAllow, "POST")]
+                    $ encode
+                    $ rpcError Null (-32700) "Method not allowed"
   where
     jsonResponse sid v =
         responseLBS

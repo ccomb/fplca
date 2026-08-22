@@ -10,7 +10,10 @@
   for as long as both are up: one such pair sent 71 644 requests in 21 hours,
   and on an engine holding several gigabytes of loaded data each wake cost a
   full garbage collection, so the engine burned two and a half cores doing
-  nothing. A 405 says there is no stream to open, and the client stops asking.
+  nothing. A 405 says there is no stream to open, and the client stops
+  asking, and it is what the protocol asks of a server that offers no such
+  stream. This reads as a fix and not a removal: no working client relied
+  on the old answer, the one observed behaviour was the loop.
 
 ## [0.10.0] - 2026-08-22
 
