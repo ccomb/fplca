@@ -82,9 +82,29 @@ Open a small follow-up PR:
 +version:             0.7.1-dev
 ```
 
-Pick the next patch (e.g. `0.7.1-dev`) or next minor (`0.8.0-dev`)
-depending on what's planned. The point is that `main` is never sitting
-on a released version — the `-dev` suffix marks "in flight".
+This is where the *next* release number is decided: step 1 above reads
+the target straight from `volca.cabal`, so nothing infers it later. The
+number warns users of one thing: whether a script that works today
+survives the coming release.
+
+- Something a working client relies on goes away or changes meaning: a
+  field, a route or an MCP tool removed, a unit or an identifier
+  redefined, in short anything that forces pyvolca to raise
+  `REQUIRED_WIRE`. **Minor**, `0.8.0-dev`. From `1.0.0` on the same rule
+  reads **major**, `2.0.0-dev`.
+- Everything else, however large: **patch**, `0.7.1-dev`. New routes,
+  tools, formats, configuration keys and fields are additive, and so is
+  a wire revision: `currentWireVersion` counts what the engine learnt to
+  say, not what it stopped saying. From `1.0.0` on, additions read
+  **minor** and fixes **patch**.
+
+A removal is never a surprise: the release that introduces a replacement
+keeps the old shape, marked `deprecated` in the OpenAPI document, and the
+next minor (major from `1.0.0` on) is the earliest that may drop it. Not
+knowing yet counts as nothing removed, so pick the patch; if a removal
+lands after all, the release PR raises the version at the same time it
+drops the `-dev` suffix. The point is that `main` is never sitting on a
+released version, the `-dev` suffix marks "in flight".
 
 ## One-liner installers
 
