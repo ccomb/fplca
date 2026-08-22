@@ -18,6 +18,75 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.10.0] - 2026-08-22
+
+The minor is for one rename: `Decomposition.electricity_kwh` is now
+`electricity_mj`. Everything else here is additive or keeps its old name
+working.
+
+### Changed
+
+- **`Decomposition.electricity_kwh` is now `electricity_mj`**, and holds
+  megajoules rather than kilowatt hours. The engine measures energy in
+  megajoules from v0.10.0, so the electricity a decomposition reports is
+  read back with `filter_unit="MJ"`. A script reading the old attribute
+  raises `AttributeError` rather than returning a number in the wrong unit,
+  which is the reason this is a rename and not a silent change of contents.
+- `BioExchange.existing` and `BioExchange.named` are now
+  `BioExchange.from_id` and `BioExchange.from_name`, named for the one thing
+  that separates them: how the exchange designates its flow. `existing`,
+  `named` and `introducing` keep working and warn, naming their replacement,
+  until pyvolca 1.0.
+- A method can be asked for by name as readily as by UUID, and the
+  collection carrying it no longer has to be named: `get_impacts(pid, "Water
+  use")` scores. `collection` lost its old default of `"methods"`, a name
+  nothing ever loads, which is why that call used to fail whatever you
+  passed; a whole-collection call runs against the only loaded collection.
+  Nothing is guessed: an unknown method, a name two collections carry, or
+  several collections loaded with none named raises before the request
+  leaves, naming the candidates. Such a refusal carries no HTTP status, so
+  read the exception itself rather than `status_code`.
+- `search_flows` answers with every kind of flow and says which each one is.
+  It used to be documented as returning biosphere flows, which was never
+  true.
+
+### Added
+
+- `search_flows(kind=...)` keeps one kind of flow: `"technosphere"`,
+  `"biosphere"` or `"waste"`. `Flow.kind` says which each result is. A value
+  that is none of the three is refused before the request leaves rather than
+  quietly ignored, which would have read as "no flow of that kind exists".
+  Needs an engine >= v0.10.0.
+- `WasteExchange.role` says what a waste line does, as a `WasteRole`:
+  `TREATS_WASTE` for a line the activity treats, `SENT_TO_TREATMENT` for an
+  output whose treatment was found, `FINAL_WASTE_FLOW` for one naming no
+  treatment, and `TREATMENT_NOT_LOADED` for one naming a treatment no loaded
+  database ships. The last two both used to arrive as a waste with no
+  target, so a complete end-of-life flow and a missing dependency read
+  alike. `None` against an engine older than v0.10.0, which does not say.
+  Needs an engine >= v0.10.0 for a value.
+- `ServerVersion.data_version` names the reference-data bundle the engine
+  reads. Two engines of one version answering differently differ on this
+  field. `None` when the engine ships no bundle, or is too old to say.
+  Needs an engine >= v0.10.0.
+- A database's two quality reports can be taken as CSV.
+  Needs an engine >= v0.10.0.
+- The PyPI listing links the changelog.
+
+### Fixed
+
+- A biosphere exchange naming its flow in words reaches the flow the
+  database already declares under that name and compartment, instead of
+  always creating one. Writing `Nitrogen, total` in water used to mint a
+  second flow of that name, which no characterization method knows, so the
+  emission scored as zero beside the curated one it was meant to be. A name
+  nothing answers to still brings a flow into the database with the warning
+  it always carried, and a name two flows answer to is refused with both
+  identifiers. This is engine-side; the client change is that
+  `BioExchange.from_name` is the documented way to reach it.
+- A flow name found by a search is found again by a filter. Both sides now
+  read a query the same way: every word, in any order, punctuation optional.
+
 ## [0.9.2] - 2026-08-04
 
 ### Added
