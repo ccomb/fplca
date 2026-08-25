@@ -43,7 +43,7 @@ licensesValue =
                 , "version" .= Version.version
                 , "license" .= ("Apache-2.0" :: Text)
                 , "copyright" .= ("Copyright (c) 2024-present Christophe Combelles and contributors" :: Text)
-                , "homepage" .= ("https://volca.run/" :: Text)
+                , "homepage" .= ("https://www.volca.run/" :: Text)
                 ]
         , "components" .= componentList
         , "haskell_dependencies_url" .= ("https://github.com/ccomb/volca/blob/main/THIRD_PARTY_LICENSES.md" :: Text)
