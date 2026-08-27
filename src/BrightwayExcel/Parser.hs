@@ -257,8 +257,9 @@ rowFields headers row =
     M.fromList [(lbl, v) | (i, lbl) <- headers, Just v <- [M.lookup i row]]
 
 {- | The labels a header row spells more than once. 'rowFields' keys on the
-label, so only the rightmost column of each survives; the reader is told which
-ones rather than losing a column in silence.
+label, so one column of each survives per row and which one is whichever
+carries a value; the reader is told which labels rather than losing a column in
+silence.
 -}
 duplicateLabels :: [(Int, Text)] -> [Text]
 duplicateLabels headers =
@@ -331,7 +332,7 @@ rawToActivity cfg ra =
             ++ [ "activity '" <> raName ra <> "': no reference product; activity will not be scoreable"
                | not (any exchangeIsReference exchanges')
                ]
-            ++ [ "activity '" <> raName ra <> "': column '" <> lbl <> "' appears more than once; only the rightmost is read"
+            ++ [ "activity '" <> raName ra <> "': column '" <> lbl <> "' appears more than once; one of them is read per row and the others are dropped"
                | lbl <- duplicateLabels (raHeaders ra)
                ]
 
