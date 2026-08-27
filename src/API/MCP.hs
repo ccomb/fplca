@@ -14,9 +14,7 @@ import Data.Aeson.KeyMap (KeyMap)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
-import Data.Function (on)
 import Data.IORef
-import Data.List (nubBy)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
@@ -1378,14 +1376,17 @@ callCompareImpacts dbManager rid args =
                 if scoreB /= 0
                     then abs delta / abs scoreB * 100
                     else 0
-            -- Summed, not overwritten: 'flowKey' drops the UUID on purpose, so
+            -- Gathered, not overwritten: 'flowKey' drops the UUID on purpose, so
             -- two flows that differ only by it are one flow on this axis and both
             -- contributions belong to its total. Every number below is read back
-            -- from these maps, so the two sides are compared on the same basis.
-            aMap = M.fromListWith (+) [(flowKey f, c) | (f, _, c) <- irContribs irA]
-            bMap = M.fromListWith (+) [(flowKey f, c) | (f, _, c) <- irContribs irB]
-            aTop = topFlows topN (irContribs irA)
-            bTop = topFlows topN (irContribs irB)
+            -- from these maps, and so is the ranking, so the two sides are
+            -- compared and ordered on the same basis.
+            alignedA = alignContribs (irContribs irA)
+            alignedB = alignContribs (irContribs irB)
+            aMap = M.map snd alignedA
+            bMap = M.map snd alignedB
+            aTop = topFlows topN alignedA
+            bTop = topFlows topN alignedB
             common =
                 [ object
                     [ "flow_name" .= bfName f
@@ -1449,11 +1450,20 @@ callCompareImpacts dbManager rid args =
             , "contribution" .= c
             ]
 
-    -- The distinct flows behind the n largest contributions, in order. Two rows
-    -- sharing a 'flowKey' are one flow for this comparison, so the first of them
-    -- stands for the group and the aligned maps carry their summed contribution.
-    topFlows :: Int -> [(BiosphereFlow, a, Double)] -> [BiosphereFlow]
-    topFlows n = nubBy ((==) `on` flowKey) . map (\(f, _, _) -> f) . take n
+    -- Contributions gathered on the key the two sides are compared by. The rows
+    -- arrive largest first, so the first of a key keeps its spelling for
+    -- display while the total is what the comparison ranks and reports.
+    alignContribs :: [(BiosphereFlow, Double, Double)] -> M.Map (Text, Text, Text) (BiosphereFlow, Double)
+    alignContribs contribs =
+        M.fromListWith
+            (\(_, cNew) (f, cOld) -> (f, cOld + cNew))
+            [(flowKey f, (f, c)) | (f, _, c) <- contribs]
+
+    -- The n flows contributing most on that key. Ranking single rows instead
+    -- would leave out a flow whose rows each fall outside the window while
+    -- their total leads it.
+    topFlows :: Int -> M.Map (Text, Text, Text) (BiosphereFlow, Double) -> [BiosphereFlow]
+    topFlows n = map fst . take n . L.sortOn (\(_, c) -> negate (abs c)) . M.elems
 
     -- Align flows across databases by (normalized name, medium, subcompartment).
     -- UUIDs differ across DBs by construction — see Method/Mapping comments.

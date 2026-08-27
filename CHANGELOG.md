@@ -20,13 +20,15 @@
   identifier the schema always said it was rather than a bare activity
   identifier. Every database cache is rebuilt on first load.
 - Asking for an activity by its identifier alone no longer answers with one of
-  its coproducts. The same index that misdirected exchanges also served the
+  its coproducts, and says so rather than reporting the activity as missing. The same index that misdirected exchanges also served the
   bare activity identifier the API, the CLI and the edit journal accept, and it
   held a single row per activity, so an allocated activity resolved to whichever
   coproduct was recorded last. Such an identifier is now refused rather than
   answered wrongly, which is what the code beside it already claimed to do: it
-  names one row only when the activity was written as one. Every database cache
-  is rebuilt on first load.
+  names one row only when the activity was written as one. The refusal says the
+  activity is there and asks for the product alongside it, with a 400 rather
+  than the 404 that would send the caller looking for data the engine holds.
+  Every database cache is rebuilt on first load.
 - An input that names only the product it consumes no longer gets a supplier
   drawn at random. The same product is often made by several activities, one
   per geography, and the index from a product to its producer kept only one of
@@ -53,10 +55,12 @@
   construction. Two flows in one database can carry the same three, and only
   the last was kept, so its neighbour's contribution vanished from the
   comparison or was reported as present on one side only. Both sides are now
-  read from the same summed totals.
+  read from the same summed totals, and the largest contributions are chosen
+  on those totals too, so a flow split across two lines that together lead the
+  comparison is no longer left out of it.
 - Loading a Brightway workbook now says when a column heading appears twice.
-  Only the rightmost such column was read, and the others were dropped without
-  a word.
+  Only one such column is read on any given row, and the others were dropped
+  without a word.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads
