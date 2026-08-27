@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Fixed
+- An exchange now names the coproduct it actually asks for. A dataset whose
+  production is allocated is written as one activity per coproduct, all
+  sharing one activity identifier, and the engine kept an index from that
+  identifier to a single one of those activities. So an input for a cheese
+  could come back naming the whey permeate produced alongside it, and the
+  same swap reached the tree export, the list of activities that use a flow,
+  and the matrix debug export. Scores were never affected: they are computed
+  from the pair (activity, product), which is the resolution everything now
+  uses. What was affected is everything a client does with the identifier it
+  was given back, starting with asking for that activity, or substituting it.
+  Three visible consequences: an activity written as several coproducts is
+  now several nodes in a tree instead of one, an input whose declared supplier
+  is in no loaded database is a node of its own type (`MissingNode`) rather
+  than a branch that vanished, and a loop node's `loopTarget` is the process
+  identifier the schema always said it was rather than a bare activity
+  identifier. Every database cache is rebuilt on first load.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads
