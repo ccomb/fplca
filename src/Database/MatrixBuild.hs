@@ -15,6 +15,7 @@ module Database.MatrixBuild (
     buildTechTriples,
     buildBioTriples,
     findProducer,
+    linkedProducer,
 ) where
 
 import Control.Applicative ((<|>))
@@ -101,6 +102,19 @@ findProducer :: M.Map (UUID, UUID) ProcessId -> Exchange -> Maybe ProcessId
 findProducer lkp ex =
     exchangeProcessLinkId ex
         <|> (exchangeActivityLinkId ex >>= \actUUID -> M.lookup (actUUID, exchangeFlowId ex) lkp)
+
+{- | The row a consumer names as this exchange's target: the row the matrix
+routes it through, else the row its activity link alone names. Keying on the
+activity UUID alone answers with an arbitrary product of a multi-product
+activity, which is what this exists to avoid. The fallback still keeps the
+targets of links whose (activity, flow) pair is no row at all: the matrix drops
+such an exchange, so the row named is one no score charged, but that is a
+lesser evil than dropping targets that answer today.
+-}
+linkedProducer :: Database -> Exchange -> Maybe ProcessId
+linkedProducer db ex =
+    findProducer (dbProcessIdLookup db) ex
+        <|> (exchangeActivityLinkId ex >>= findProcessIdByActivityUUID db)
 
 {- | Warning text for an exchange whose declared producer cannot be located.
 Zero-amount placeholder exchanges produce no warning.

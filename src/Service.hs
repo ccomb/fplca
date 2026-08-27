@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.MatrixBuild (findProducer)
+import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
@@ -1091,21 +1091,14 @@ crossDBLinkToTarget link =
         (cdlLocation link)
         (supplierRefText link)
 
--- | EcoSpold path: resolve a target by activity UUID.
-resolveByActivityUUID :: Database -> UUID -> Maybe TargetRef
-resolveByActivityUUID db linkId
-    | linkId == UUID.nil = Nothing
-    | otherwise = do
-        pid <- findProcessIdByActivityUUID db linkId
-        act <- getActivity db pid
-        pure (activityToTarget db pid act)
+-- | The target one row names, when that row is in the database.
+targetOf :: Database -> ProcessId -> Maybe TargetRef
+targetOf db pid = activityToTarget db pid <$> getActivity db pid
 
 -- | SimaPro path: resolve a target by product flow UUID.
 resolveByProductFlow :: UnitConfig -> Database -> UUID -> Maybe TargetRef
-resolveByProductFlow cfg db fId = do
-    pid <- findProcessIdByProductFlowWithFallback cfg db fId
-    act <- getActivity db pid
-    pure (activityToTarget db pid act)
+resolveByProductFlow cfg db fId =
+    findProcessIdByProductFlowWithFallback cfg db fId >>= targetOf db
 
 -- | Cross-database link resolution (orphan waste outputs, missing tech links).
 resolveByCrossDBLink :: M.Map UUID CrossDBLink -> UUID -> Maybe TargetRef
@@ -1118,16 +1111,23 @@ a multi-product activity, and would name a treatment for a pair the matrix never
 routed.
 -}
 resolveByRoutedProducer :: Database -> Exchange -> Maybe TargetRef
-resolveByRoutedProducer db ex = do
-    pid <- findProducer (dbProcessIdLookup db) ex
-    act <- getActivity db pid
-    pure (activityToTarget db pid act)
+resolveByRoutedProducer db ex = findProducer (dbProcessIdLookup db) ex >>= targetOf db
+
+{- | The target an incoming link names: the routed row, else the row its
+activity UUID alone names ('linkedProducer'). An input's link is a statement
+about where the flow comes from, so answering it with a row of the right
+activity but the wrong product is what this replaces.
+-}
+resolveByLinkedProducer :: Database -> Exchange -> Maybe TargetRef
+resolveByLinkedProducer db ex = linkedProducer db ex >>= targetOf db
 
 {- | Resolve the target activity (if any) for one exchange. Technosphere broken
 links (linkId set but unresolvable) do NOT fall through to the product-flow
 path — that matches the original behaviour. Use '<|>' to chain fallbacks only
-where the original code did. A waste output is the one arm resolved the way the
-matrix routes it; the others answer from the activity UUID alone.
+where the original code did. Every linked arm resolves the way the matrix
+routes it; a waste output is the one that stops there, with no fallback to the
+activity UUID, because a link it cannot route is a treatment this database does
+not hold and reporting a row for it would hide that.
 -}
 resolveTarget ::
     UnitConfig ->
@@ -1136,13 +1136,13 @@ resolveTarget ::
     Exchange ->
     Maybe TargetRef
 resolveTarget cfg db links = \case
-    TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
+    ex@TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
-        | lid /= UUID.nil -> resolveByActivityUUID db lid
+        | lid /= UUID.nil -> resolveByLinkedProducer db ex
         | otherwise -> resolveByProductFlow cfg db fid <|> resolveByCrossDBLink links fid
     BiosphereExchange{} -> Nothing
-    WasteExchange{waIsInput = True, waActivityLinkId = lid}
-        | lid /= UUID.nil -> resolveByActivityUUID db lid
+    ex@WasteExchange{waIsInput = True, waActivityLinkId = lid}
+        | lid /= UUID.nil -> resolveByLinkedProducer db ex
         | otherwise -> Nothing
     -- An output's link names the activity that treats the waste, exactly as an
     -- input's names the one that supplies it. Reading it as no target at all
@@ -1297,10 +1297,9 @@ getAllProductsForActivity db groupKey =
 -- | Get target activity for technosphere navigation.
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
 getTargetActivity db exchange = do
-    targetId <- exchangeActivityLinkId exchange
-    targetActivity <- findActivityByActivityUUID db targetId
-    processId <- findProcessIdForActivity db targetActivity
-    pure (mkActivitySummary db processId targetActivity)
+    pid <- linkedProducer db exchange
+    act <- getActivity db pid
+    pure (mkActivitySummary db pid act)
 
 {- | Get reference product as FlowDetail (if exists). Reference products are
 technosphere by definition.

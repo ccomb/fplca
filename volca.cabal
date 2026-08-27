@@ -251,6 +251,7 @@ test-suite lca-tests
                      , SupplyChainSpec
                      , HotspotSpec
                      , TreeSpec
+                     , CoproductTargetSpec
                      , ServiceSpec
                      , CrossLinkingSpec
                      , CrossDBActivityLinkSpec
