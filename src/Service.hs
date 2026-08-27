@@ -2868,29 +2868,26 @@ exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either 
 exportMatrixDebugData database processIdText opts = do
     case resolveActivityAndProcessId database processIdText of
         Left err -> return $ Left err
-        Right (_processId, targetActivity) -> do
-            case refActivityUUID processIdText of
-                Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> processIdText
-                Just activityUuid -> do
-                    matrixData <- MatrixExport.extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
-                    let inventoryList = MatrixExport.mdInventoryVector matrixData
-                        bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
-                        inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
+        Right (processId, targetActivity) -> do
+            matrixData <- MatrixExport.extractMatrixDebugInfo database processId (debugFlowFilter opts)
+            let inventoryList = MatrixExport.mdInventoryVector matrixData
+                bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
+                inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
 
-                    Progress.reportProgress Progress.Info $ "DEBUG: Starting CSV export to " ++ debugOutput opts
-                    MatrixExport.exportMatrixDebugCSVs (debugOutput opts) matrixData
-                    Progress.reportProgress Progress.Info "DEBUG: CSV export completed"
+            Progress.reportProgress Progress.Info $ "DEBUG: Starting CSV export to " ++ debugOutput opts
+            MatrixExport.exportMatrixDebugCSVs (debugOutput opts) matrixData
+            Progress.reportProgress Progress.Info "DEBUG: CSV export completed"
 
-                    let summary =
-                            M.fromList
-                                [ ("activity_uuid" :: Text, UUID.toText activityUuid)
-                                , ("activity_name" :: Text, activityName targetActivity)
-                                , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
-                                , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
-                                , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
-                                , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
-                                ]
-                    return $ Right $ toJSON summary
+            let summary =
+                    M.fromList
+                        [ ("activity_uuid" :: Text, maybe "" (UUID.toText . prActivity) (processIdToRef database processId))
+                        , ("activity_name" :: Text, activityName targetActivity)
+                        , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
+                        , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
+                        , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
+                        , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
+                        ]
+            return $ Right $ toJSON summary
 
 -- | Export matrices in universal matrix format (delegates to Matrix.Export)
 exportUniversalMatrixFormat :: FilePath -> Database -> IO ()
