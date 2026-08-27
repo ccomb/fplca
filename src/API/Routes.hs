@@ -1442,13 +1442,9 @@ getActivityTree dbName processId = do
     dbManager <- asks aeDbManager
     maxTreeDepth <- asks aeMaxTreeDepth
     (db, _) <- requireDatabaseByName dbName
-    withValidatedActivity db processId $ \_activity -> do
-        case refActivityUUID processId of
-            Nothing -> throwError err400{errBody = "Invalid activity UUID format"}
-            Just activityUuid -> do
-                unitCfg <- liftIO $ getMergedUnitConfig dbManager
-                let loopAwareTree = buildLoopAwareTree unitCfg db activityUuid maxTreeDepth
-                return $ Service.convertToTreeExport db processId maxTreeDepth loopAwareTree
+    root <- either throwServiceError pure (Service.resolveActivityAndProcessId db processId)
+    unitCfg <- liftIO $ getMergedUnitConfig dbManager
+    return $ Service.convertToTreeExport db processId maxTreeDepth (buildLoopAwareTree unitCfg db maxTreeDepth root)
 
 {- | Inventory with optional substitutions; goes through the cross-DB
 back-substitution path so dep-DB inventories merge into the response.

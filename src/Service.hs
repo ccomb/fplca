@@ -39,9 +39,8 @@ import qualified Search.Fuzzy as Fuzzy
 import qualified Search.Normalize as Normalize
 import SharedSolver (SharedSolver, getFactorization, solveWithSharedSolver)
 import qualified SharedSolver
-import Tree (buildLoopAwareTree)
 import Types
-import UnitConversion (UnitConfig, convertUnit, defaultUnitConfig, unitsCompatible)
+import UnitConversion (UnitConfig, convertUnit, unitsCompatible)
 
 {- | Fields shared by every activity-oriented endpoint (search, supply chain,
 consumers). Split out from the endpoint-specific filters so each filter
@@ -363,23 +362,16 @@ findProcessIdByProductFlowWithFallback unitCfg db flowUUID =
             (ex : _) -> getUnitNameForExchange (dbUnits db') ex
             [] -> ""
 
-{- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
-For all node types, we attempt to return ProcessId format for consistency
+{- | Node id of a tree node, in ProcessId format. Every node but one names the
+row it was built from; a declared link no row satisfies has none to name, so it
+answers with the UUID it carries under a prefix no process id can wear.
 -}
 getTreeNodeId :: Database -> LoopAwareTree -> Text
-getTreeNodeId db (TreeLeaf activity) =
-    case findProcessIdForActivity db activity of
-        Just processId -> processIdToText db processId
-        Nothing -> "unknown-activity" -- Fallback
-getTreeNodeId db (TreeLoop uuid _ _) =
-    -- Use ProcessId format for consistency, maintain UUID_UUID format even in fallback
-    case findProcessIdByActivityUUID db uuid of
-        Just processId -> processIdToText db processId
-        Nothing -> processRefText (ProcessRef uuid uuid) -- Fallback maintains ProcessId format
-getTreeNodeId db (TreeNode activity _) =
-    case findProcessIdForActivity db activity of
-        Just processId -> processIdToText db processId
-        Nothing -> "unknown-activity" -- Fallback
+getTreeNodeId db = \case
+    TreeLeaf pid _ -> processIdToText db pid
+    TreeNode pid _ _ -> processIdToText db pid
+    TreeLoop pid _ _ -> processIdToText db pid
+    TreeMissing uuid _ _ -> "missing:" <> UUID.toText uuid
 
 -- | Count potential children for navigation (technosphere inputs that could be expanded)
 countPotentialChildren :: Database -> Activity -> Int
@@ -390,8 +382,7 @@ countPotentialChildren db activity =
         , isTechnosphereExchange ex
         , exchangeIsInput ex
         , not (exchangeIsReference ex)
-        , Just targetUUID <- [exchangeActivityLinkId ex]
-        , Just _ <- [findProcessIdByActivityUUID db targetUUID]
+        , Just _ <- [linkedProducer db ex]
         ]
 
 -- | Helper to extract compartment from flow category
@@ -486,12 +477,12 @@ mkActivityExportNode db activity nodeId depth parentId =
         , enCompartment = Nothing
         }
 
-{- | ExportNode for a TreeLoop. Looks up the referenced activity for its real
-unit and location; falls back to "N/A" sentinels when the referent is missing.
+{- | ExportNode for a TreeLoop. Reads the row it points at for its real unit
+and location; falls back to "N/A" sentinels when the referent is missing.
 -}
-mkLoopExportNode :: Database -> UUID -> Text -> Text -> Int -> Maybe Text -> ExportNode
-mkLoopExportNode db uuid nodeId name loopDepth parentId =
-    let (actualLocation, actualUnit) = case findActivityByActivityUUID db uuid of
+mkLoopExportNode :: Database -> ProcessId -> Text -> Text -> Int -> Maybe Text -> ExportNode
+mkLoopExportNode db pid nodeId name loopDepth parentId =
+    let (actualLocation, actualUnit) = case getActivity db pid of
             Just act -> (activityLocation act, activityUnit act)
             Nothing -> ("N/A", "N/A")
      in ExportNode
@@ -502,11 +493,31 @@ mkLoopExportNode db uuid nodeId name loopDepth parentId =
             , enUnit = actualUnit
             , enNodeType = LoopNode
             , enDepth = loopDepth
-            , enLoopTarget = Just (UUID.toText uuid)
+            , enLoopTarget = Just (processIdToText db pid)
             , enParentId = parentId
             , enChildrenCount = 0
             , enCompartment = Nothing
             }
+
+{- | ExportNode for a TreeMissing: a link the source declares that no row in
+this database satisfies. It gets a node of its own so the branch stays visible,
+and no loop target, having no row to point at.
+-}
+mkMissingExportNode :: Text -> Text -> Int -> Maybe Text -> ExportNode
+mkMissingExportNode nodeId name missingDepth parentId =
+    ExportNode
+        { enId = nodeId
+        , enName = name
+        , enDescription = ["Declared link, not loaded"]
+        , enLocation = ""
+        , enUnit = ""
+        , enNodeType = MissingNode
+        , enDepth = missingDepth
+        , enLoopTarget = Nothing
+        , enParentId = parentId
+        , enChildrenCount = 0
+        , enCompartment = Nothing
+        }
 
 {- | Attach biosphere nodes/edges to the accumulator when we're at the root of
 the tree (depth == 0). Below the root we leave the accumulator untouched to
@@ -538,16 +549,20 @@ mkTechnosphereTreeEdge units fromPid toPid quantity flow =
 -- | Extract nodes and edges from a 'LoopAwareTree'.
 extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
 extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
-    TreeLeaf activity ->
+    TreeLeaf _ activity ->
         let nodeId = getTreeNodeId db tree
             nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
             (nodes'', edges') = withRootBiosphere db activity nodeId depth (nodes', edgeAcc)
          in (nodes'', edges', TreeStats 1 0 1)
-    TreeLoop uuid name loopDepth ->
+    TreeLoop pid name loopDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkLoopExportNode db uuid nodeId name loopDepth parentId) nodeAcc
+            nodes' = M.insert nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) nodeAcc
          in (nodes', edgeAcc, TreeStats 1 1 0)
-    TreeNode activity children ->
+    TreeMissing _ name missingDepth ->
+        let nodeId = getTreeNodeId db tree
+            nodes' = M.insert nodeId (mkMissingExportNode nodeId name missingDepth parentId) nodeAcc
+         in (nodes', edgeAcc, TreeStats 1 0 1)
+    TreeNode _ activity children ->
         let nodeId = getTreeNodeId db tree
             nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
             (childNodes, childEdges, childStats) = foldr (processChild nodeId) (nodes', edgeAcc, TreeStats 1 0 0) children
@@ -576,20 +591,6 @@ convertToTreeExport db _rootProcessId maxDepth tree =
                 , tmExpandableNodes = length [() | (_, node) <- M.toList nodes, enChildrenCount node > 0]
                 }
      in TreeExport metadata nodes edges
-
--- | Get activity tree as rich TreeExport with configurable depth
-getActivityTree :: Database -> Text -> Int -> Maybe Text -> Either ServiceError Value
-getActivityTree db queryText maxDepth nameFilter = do
-    (_processId, _activity) <- resolveActivityAndProcessId db queryText
-    case refActivityUUID queryText of
-        Just activityUuid ->
-            let loopAwareTree = buildLoopAwareTree defaultUnitConfig db activityUuid maxDepth
-                treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
-                filtered = case nameFilter of
-                    Nothing -> treeExport
-                    Just pat -> filterTreeExport pat treeExport
-             in Right $ toJSON filtered
-        Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> queryText
 
 {- | Post-filter a TreeExport by name: keep matching nodes plus all their ancestors up to root.
 Uses the enParentId chain already stored in each ExportNode — no extra graph traversal.

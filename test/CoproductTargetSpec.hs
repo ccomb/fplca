@@ -3,7 +3,7 @@
 {- | An allocated dataset is one activity written as one row per coproduct, all
 sharing an activity UUID. Anything keyed on that UUID alone therefore answers
 with an arbitrary one of them. These tests pin the places a consumer reads a
-coproduct back.
+coproduct back: the target of an exchange, and the tree it descends.
 
 The fixture is built so the wrong answer is visible: the input names the
 coproduct with the /lower/ product UUID, which is exactly the row a
@@ -16,9 +16,10 @@ import Data.Text (Text)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..))
+import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), NodeType (..), TreeExport (..))
 import Database (buildDatabaseWithMatrices)
 import qualified Service
+import Tree (buildLoopAwareTree)
 import Types
 import UnitConversion (defaultUnitConfig)
 
@@ -36,6 +37,31 @@ spec = do
         it "reports a waste output whose treatment is not loaded as such" $ do
             db <- untreatedWasteFixture
             wasteLineOf db `shouldBe` (Nothing, Just TreatmentNotLoaded)
+
+    describe "the tree" $ do
+        it "descends into the coproduct the input asks for" $ do
+            db <- twoCoproductFixture
+            case treeOfConsumer db of
+                Right (TreeNode _ _ [(_, _, TreeLeaf pid _)]) -> processIdToText db pid `shouldBe` pidText milkId
+                Right other -> expectationFailure ("unexpected tree shape: " <> show (shapeOf other))
+                Left err -> expectationFailure (show err)
+
+        it "keeps a declared link no row satisfies as a visible node" $ do
+            db <- danglingLinkFixture
+            case treeOfConsumer db of
+                Right (TreeNode _ _ [(_, _, TreeMissing uuid _ _)]) -> uuid `shouldBe` ghostActId
+                Right other -> expectationFailure ("unexpected tree shape: " <> show (shapeOf other))
+                Left err -> expectationFailure (show err)
+
+        it "exports that node instead of dropping the branch" $ do
+            db <- danglingLinkFixture
+            case treeOfConsumer db of
+                Left err -> expectationFailure (show err)
+                Right tree -> do
+                    let export = Service.convertToTreeExport db (pidText consumerProdId) 10 tree
+                        missing = [n | n <- M.elems (teNodes export), enNodeType n == MissingNode]
+                    map enLoopTarget missing `shouldBe` [Nothing]
+                    length (teEdges export) `shouldBe` 1
 
 -- ---------------------------------------------------------------------------
 -- Reading one exchange back
@@ -66,6 +92,18 @@ wasteLineOf db = case consumerRow db of
             [ewu] -> (ewuTargetProcessId ewu, ewuWasteRole ewu)
             _ -> (Just "no waste output", Nothing)
 
+treeOfConsumer :: Database -> Either Text LoopAwareTree
+treeOfConsumer db = case consumerRow db of
+    Nothing -> Left "no consumer row"
+    Just root -> Right (buildLoopAwareTree defaultUnitConfig db 10 root)
+
+-- | Constructor names only, so a shape mismatch reports something readable.
+shapeOf :: LoopAwareTree -> [Text]
+shapeOf (TreeLeaf _ _) = ["leaf"]
+shapeOf (TreeLoop{}) = ["loop"]
+shapeOf (TreeMissing{}) = ["missing"]
+shapeOf (TreeNode _ _ children) = "node" : concatMap (\(_, _, t) -> shapeOf t) children
+
 consumerRow :: Database -> Maybe (ProcessId, Activity)
 consumerRow db = do
     pid <- findProcessId db consumerActId consumerProdId
@@ -81,6 +119,12 @@ the one with the lower product UUID.
 -}
 twoCoproductFixture :: IO Database
 twoCoproductFixture = buildFixture (consumerActivity [milkInput] []) supplierRows supplierFlows
+
+{- | The same consumer, its input naming an activity no row in the database
+carries.
+-}
+danglingLinkFixture :: IO Database
+danglingLinkFixture = buildFixture (consumerActivity [ghostInput] []) supplierRows supplierFlows
 
 {- | A consumer whose waste output names a treatment the database does not hold
 at that pair. The treatment activity is present, but under another flow, so an
@@ -137,6 +181,10 @@ consumerActivity inputs outputs =
 -- | An input naming the supplier's lower-UUID coproduct.
 milkInput :: Exchange
 milkInput = techExchange milkId 2.0 Input supplierActId
+
+-- | An input naming an activity the database does not hold.
+ghostInput :: Exchange
+ghostInput = techExchange milkId 2.0 Input ghostActId
 
 {- | A waste output naming the supplier: the activity exists, no row of it
 produces the waste flow, so nothing routes it.
@@ -221,8 +269,9 @@ mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 {- | The supplier's two products are ordered on purpose: 'milkId' is the one a
 map keyed on the activity UUID alone drops.
 -}
-supplierActId, milkId, creamId, consumerActId, consumerProdId, scrapId, kgUnitId :: UUID
+supplierActId, milkId, creamId, consumerActId, consumerProdId, ghostActId, scrapId, kgUnitId :: UUID
 supplierActId = mkUUID 1
+ghostActId = mkUUID 77
 milkId = mkUUID 2
 creamId = mkUUID 9
 consumerActId = mkUUID 3

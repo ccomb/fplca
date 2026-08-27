@@ -577,11 +577,17 @@ data ActivityTree
     = Leaf !Activity
     | Node !Activity ![(Double, ActivityTree)] -- Activities and weighted sub-activities
 
--- | Loop-aware tree for SVG export
+{- | Loop-aware tree for SVG export. Every node that exists names the row it
+sits at, so an allocated activity written as several coproduct rows is several
+nodes here rather than one. A declared link that no row satisfies is its own
+constructor: it keeps the branch visible instead of dropping it, and it is the
+only node with no row to name.
+-}
 data LoopAwareTree
-    = TreeLeaf !Activity
-    | TreeNode !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Activity + (quantity, child product flow, subtree)
-    | TreeLoop !UUID !Text !Int -- Loop reference: UUID + ActivityName + Depth
+    = TreeLeaf !ProcessId !Activity
+    | TreeNode !ProcessId !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Row + activity + (quantity, child product flow, subtree)
+    | TreeLoop !ProcessId !Text !Int -- Already visited, or depth/budget spent: row + ActivityName + Depth
+    | TreeMissing !UUID !Text !Int -- Declared link no row satisfies: activity UUID + name + Depth
 
 -- | Technosphere flow database (deduplicated by UUID)
 type TechFlowDB = M.Map UUID TechnosphereFlow

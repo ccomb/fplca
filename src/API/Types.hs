@@ -314,7 +314,7 @@ data ExportNode = ExportNode
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped ExportNode)
 
-data NodeType = ActivityNode | LoopNode | BiosphereEmissionNode | BiosphereResourceNode
+data NodeType = ActivityNode | LoopNode | MissingNode | BiosphereEmissionNode | BiosphereResourceNode
     deriving (Eq, Show, Generic)
     deriving anyclass (ToSchema)
 
