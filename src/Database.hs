@@ -5,6 +5,7 @@
 module Database where
 
 import qualified Data.IntSet as IS
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -164,7 +165,10 @@ buildProductIndex activities processIdTable techFlowDb =
             ]
      in
         ProductIndex
-            { piByUUID = M.fromList [(prodUUID, pid) | (pid, prodUUID, _, _) <- entries]
+            { -- One flow, every row producing it: several is the ordinary shape of a
+              -- product made in more than one geography, and 'M.fromList' would
+              -- have kept whichever row came last.
+              piByUUID = M.fromListWith (flip (<>)) [(prodUUID, pid :| []) | (pid, prodUUID, _, _) <- entries]
             , piByName = M.fromListWith (++) [(name, [pid]) | (pid, _, name, _) <- entries]
             , piByLocation = M.fromListWith (++) [(loc, [pid]) | (pid, _, _, loc) <- entries, not (T.null loc)]
             }

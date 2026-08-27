@@ -35,6 +35,7 @@ import GHC.Generics (Generic)
 
 import Control.Lens ((&), (?~))
 import Data.List (find, nub)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
 import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
@@ -884,7 +885,7 @@ data MatrixFactorization = MatrixFactorization
 Used for: (1) upstream link resolution for SimaPro data, (2) future product search
 -}
 data ProductIndex = ProductIndex
-    { piByUUID :: !(M.Map UUID ProcessId) -- Product flow UUID → ProcessId (for upstream links)
+    { piByUUID :: !(M.Map UUID (NonEmpty ProcessId)) -- Product flow UUID → the rows producing it (for upstream links)
     , piByName :: !(M.Map Text [ProcessId]) -- Normalized product name → [ProcessId] (for search)
     , piByLocation :: !(M.Map Text [ProcessId]) -- Location → [ProcessId] (for search)
     }
@@ -1067,13 +1068,20 @@ findActivityByActivityUUID db searchUUID = do
     pid <- M.lookup searchUUID (dbActivityUUIDIndex db)
     getActivity db pid
 
-{- | Find supplier ProcessId by product flow UUID
+{- | Find supplier ProcessId by product flow UUID.
 ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlowId is valid.
-Uses the ProductIndex to resolve the supplier activity from the product flow.
+
+Answers only when exactly one row produces the flow. A product made in several
+geographies is produced by several rows, and naming one of them would answer a
+question the caller never asked; 'Service.findProcessIdByProductFlowWithFallback'
+applies the same rule to its name-and-unit rung.
 -}
 findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =
-    M.lookup flowUUID (piByUUID $ dbProductIndex db)
+    M.lookup flowUUID (piByUUID $ dbProductIndex db) >>= soleProducer
+  where
+    soleProducer (pid :| []) = Just pid
+    soleProducer (_ :| (_ : _)) = Nothing
 
 {- | Look up an exchange's flow on the appropriate side. Each exchange variant
 has exactly one flow side by construction (tech, bio, or waste), so the

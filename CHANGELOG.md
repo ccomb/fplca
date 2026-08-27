@@ -19,6 +19,13 @@
   than a branch that vanished, and a loop node's `loopTarget` is the process
   identifier the schema always said it was rather than a bare activity
   identifier. Every database cache is rebuilt on first load.
+- An input that names only the product it consumes no longer gets a supplier
+  drawn at random. The same product is often made by several activities, one
+  per geography, and the index from a product to its producer kept only one of
+  them, so such an input was attached to whichever producer came last. It is
+  now left unresolved when the product alone does not say which activity is
+  meant, the same rule the name-and-unit fallback beside it already applied.
+  Scores are unaffected: they never read that index.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads

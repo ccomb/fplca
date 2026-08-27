@@ -261,7 +261,8 @@ History of manual bumps:
      the unit name) and so the activity's process id. Value changes with no
      type change, which the fingerprint alone would accept.
 - 17: the flow index now lists the rows that use a flow, not their activity
-     UUIDs. The fingerprint hashes the identity of Database, never the types
+     UUIDs, and the product index lists every row producing a flow instead of
+     one. The fingerprint hashes the identity of Database, never the types
      inside it, so an old cache would pass the check and be decoded reading
      16-byte UUIDs as 4-byte row numbers.
 

@@ -230,6 +230,7 @@ test-suite lca-tests
                      , MatrixConstructionSpec
                      , WasteTreatmentSignSpec
                      , InventorySpec
+                     , IndexInjectivitySpec
                      , MatrixExportSpec
                      , MethodSpec
                      , MethodPatchSpec
