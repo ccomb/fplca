@@ -74,6 +74,8 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 - **No wildcard patterns on sum types** — exhaustive matches only. They hide incomplete matches from the compiler.
 - **No runtime crashes**: never use `error`, `throw`, `undefined`, or partial functions (`head`, `fromJust`). Functions that can fail must return `Either Text a` or `Maybe a`, never crash.
 - **No silent errors or silent misbehaviour**: never return zero, empty, or a fallback value when a lookup fails, a unit conversion can't be done, or data is missing. Surface it: `Either Text a` propagated to a 4xx/5xx, a `reportProgress Warning` log line, or a `toolError` in MCP. A score that silently undercounts is worse than a clear failure — the consumer can't tell something is wrong.
+- **An index asserts that its key determines its value.** `fromList` silences duplicate keys, so a key that is only part of a wider identity (an activity UUID taken from the (activity, product) pair, a normalised name taken from a name) quietly keeps one row and drops the rest. Either the key really is the primary key, or the honest type is `Map k (NonEmpty v)` and every reader has to say what it does with several.
+- **A comment that says "arbitrary", "the first match" or "one of them" is describing a bug, not a behaviour.** Put the multiplicity in the type, or open an issue.
 - Builds are `-Wall`-clean — introduce no new warnings (incomplete patterns, unused binds). This is what backs the exhaustive-match rule above.
 
 ### Code style
