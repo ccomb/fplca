@@ -19,6 +19,11 @@
   than a branch that vanished, and a loop node's `loopTarget` is the process
   identifier the schema always said it was rather than a bare activity
   identifier. Every database cache is rebuilt on first load.
+- The wire revision moves to 12. A tree export can now report a node type a
+  client has not seen, for a link naming a row no loaded database holds, so a
+  client has to be able to tell a new engine from an old one before asking.
+  pyvolca knows revision 12 and no longer warns that the engine is newer than
+  it is.
 - Asking for an activity by its identifier alone no longer answers with one of
   its coproducts, and says so rather than reporting the activity as missing. The same index that misdirected exchanges also served the
   bare activity identifier the API, the CLI and the edit journal accept, and it

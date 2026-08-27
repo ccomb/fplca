@@ -1295,7 +1295,10 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 11: the @dataVersion@ the version route reports; revision 10: the
+(revision 12: the @MissingNode@ a tree export reports where a link names a
+row no loaded database holds, and the @missing:@ prefixed id such a node and
+its edge carry in place of a process id;
+revision 11: the @dataVersion@ the version route reports; revision 10: the
 @wasteRole@ an activity's waste lines report;
 revision 9: the @kind@ a flow search reports and filters on;
 revision 8: the two quality reports as downloadable CSV;
@@ -1310,7 +1313,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 11
+currentWireVersion = 12
 
 getVersion :: AppM Value
 getVersion = do
