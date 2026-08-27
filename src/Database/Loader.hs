@@ -261,10 +261,11 @@ History of manual bumps:
      the unit name) and so the activity's process id. Value changes with no
      type change, which the fingerprint alone would accept.
 - 17: the flow index now lists the rows that use a flow, not their activity
-     UUIDs, and the product index lists every row producing a flow instead of
-     one. The fingerprint hashes the identity of Database, never the types
-     inside it, so an old cache would pass the check and be decoded reading
-     16-byte UUIDs as 4-byte row numbers.
+     UUIDs, and the product and activity indexes list every row a flow or an
+     activity was written as instead of one. The fingerprint hashes the
+     identity of Database, never the types inside it, so an old cache would
+     pass the check and be decoded reading 16-byte UUIDs as 4-byte row
+     numbers, or one row number as a list of them.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.

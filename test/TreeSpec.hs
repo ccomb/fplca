@@ -118,7 +118,7 @@ rootOf db uuid = do
 rootByName :: Database -> Text -> Maybe (ProcessId, Activity)
 rootByName db name =
     case [ (pid, act)
-         | (_, pid) <- M.toList (dbActivityUUIDIndex db)
+         | pid <- [0 .. dbActivityCount db - 1]
          , Just act <- [getActivity db pid]
          , activityName act == name
          ] of

@@ -900,7 +900,7 @@ data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int32) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
-    , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
+    , dbActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId)) -- Activity UUID → the rows that activity was written as
     , dbActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId]) -- 'activityGroupKey' → the ProcessIds of one source block (its coproducts)
     , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
@@ -1049,24 +1049,22 @@ findProcessId :: Database -> UUID -> UUID -> Maybe ProcessId
 findProcessId db actUUID prodUUID =
     M.lookup (actUUID, prodUUID) (dbProcessIdLookup db)
 
-{- | Find any ProcessId matching an activity UUID
-Returns the first ProcessId found with the given activity UUID.
-ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds),
-so we must translate from UUID → ProcessId to handle multi-product activities.
+{- | The row an activity UUID names, when it names one.
+
+An EcoSpold link and a bare activity UUID typed into the API both carry the
+activity alone, while a row is a pair. An allocated activity is written as one
+row per coproduct, so the UUID names several and there is no way to tell which
+one the caller meant: answering with any of them is guesswork the caller cannot
+see. Callers that hold the product too should use 'findProcessId'.
 -}
 findProcessIdByActivityUUID :: Database -> UUID -> Maybe ProcessId
 findProcessIdByActivityUUID db searchUUID =
-    M.lookup searchUUID (dbActivityUUIDIndex db)
+    M.lookup searchUUID (dbActivityUUIDIndex db) >>= sole
 
-{- | Find activity by activity UUID (returns first matching product)
-ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
-When multiple products exist for one activity, this returns an arbitrary match.
-Uses O(1) Map lookup for efficient resolution
--}
-findActivityByActivityUUID :: Database -> UUID -> Maybe Activity
-findActivityByActivityUUID db searchUUID = do
-    pid <- M.lookup searchUUID (dbActivityUUIDIndex db)
-    getActivity db pid
+-- | The one element of a 'NonEmpty' that has exactly one.
+sole :: NonEmpty a -> Maybe a
+sole (x :| []) = Just x
+sole (_ :| (_ : _)) = Nothing
 
 {- | Find supplier ProcessId by product flow UUID.
 ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlowId is valid.
@@ -1078,10 +1076,7 @@ applies the same rule to its name-and-unit rung.
 -}
 findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =
-    M.lookup flowUUID (piByUUID $ dbProductIndex db) >>= soleProducer
-  where
-    soleProducer (pid :| []) = Just pid
-    soleProducer (_ :| (_ : _)) = Nothing
+    M.lookup flowUUID (piByUUID $ dbProductIndex db) >>= sole
 
 {- | Look up an exchange's flow on the appropriate side. Each exchange variant
 has exactly one flow side by construction (tech, bio, or waste), so the

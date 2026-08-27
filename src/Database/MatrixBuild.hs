@@ -21,6 +21,7 @@ module Database.MatrixBuild (
 import Control.Applicative ((<|>))
 import Data.Foldable (fold)
 import Data.Int (Int32)
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -40,7 +41,7 @@ activity of each row is the one its key maps to.
 data InterningTables = InterningTables
     { itProcessIdTable :: !(V.Vector (UUID, UUID))
     , itProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId)
-    , itActivityUUIDIndex :: !(M.Map UUID ProcessId)
+    , itActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId))
     , itActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId])
     , itActivities :: !(V.Vector Activity)
     , itActivityCount :: !Int32
@@ -51,7 +52,10 @@ buildInterningTables activityMap =
     InterningTables
         { itProcessIdTable = V.fromList [k | (_, k, _) <- indexed]
         , itProcessIdLookup = M.fromList [(k, pid) | (pid, k, _) <- indexed]
-        , itActivityUUIDIndex = M.fromList [(actUUID, pid) | (pid, (actUUID, _), _) <- indexed]
+        , -- One activity, every row it was written as: an allocated activity is
+          -- written once per coproduct, and 'M.fromList' would have kept
+          -- whichever row came last.
+          itActivityUUIDIndex = M.fromListWith (flip (<>)) [(actUUID, pid :| []) | (pid, (actUUID, _), _) <- indexed]
         , itActivityProductsIndex =
             M.fromListWith (++) [(activityGroupKey actUUID act, [pid]) | (pid, (actUUID, _), act) <- indexed]
         , itActivities = V.fromList [act | (_, _, act) <- indexed]
@@ -104,12 +108,12 @@ findProducer lkp ex =
         <|> (exchangeActivityLinkId ex >>= \actUUID -> M.lookup (actUUID, exchangeFlowId ex) lkp)
 
 {- | The row a consumer names as this exchange's target: the row the matrix
-routes it through, else the row its activity link alone names. Keying on the
-activity UUID alone answers with an arbitrary product of a multi-product
-activity, which is what this exists to avoid. The fallback still keeps the
-targets of links whose (activity, flow) pair is no row at all: the matrix drops
-such an exchange, so the row named is one no score charged, but that is a
-lesser evil than dropping targets that answer today.
+routes it through, else the row its activity link alone names. The fallback
+keeps the targets of links whose (activity, flow) pair is no row at all: the
+matrix drops such an exchange, so the row named is one no score charged, but
+that is a lesser evil than dropping targets that answer today. It answers only
+for an activity written as a single row, so an allocated activity reached this
+way is left without a target rather than given the wrong coproduct.
 -}
 linkedProducer :: Database -> Exchange -> Maybe ProcessId
 linkedProducer db ex =

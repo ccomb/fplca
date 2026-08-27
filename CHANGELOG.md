@@ -19,6 +19,14 @@
   than a branch that vanished, and a loop node's `loopTarget` is the process
   identifier the schema always said it was rather than a bare activity
   identifier. Every database cache is rebuilt on first load.
+- Asking for an activity by its identifier alone no longer answers with one of
+  its coproducts. The same index that misdirected exchanges also served the
+  bare activity identifier the API, the CLI and the edit journal accept, and it
+  held a single row per activity, so an allocated activity resolved to whichever
+  coproduct was recorded last. Such an identifier is now refused rather than
+  answered wrongly, which is what the code beside it already claimed to do: it
+  names one row only when the activity was written as one. Every database cache
+  is rebuilt on first load.
 - An input that names only the product it consumes no longer gets a supplier
   drawn at random. The same product is often made by several activities, one
   per geography, and the index from a product to its producer kept only one of
