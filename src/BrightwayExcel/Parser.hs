@@ -256,6 +256,17 @@ rowFields :: [(Int, Text)] -> Row -> M.Map Text CellValue
 rowFields headers row =
     M.fromList [(lbl, v) | (i, lbl) <- headers, Just v <- [M.lookup i row]]
 
+{- | The labels a header row spells more than once. 'rowFields' keys on the
+label, so only the rightmost column of each survives; the reader is told which
+ones rather than losing a column in silence.
+-}
+duplicateLabels :: [(Int, Text)] -> [Text]
+duplicateLabels headers =
+    [ lbl
+    | (lbl, n) <- M.toList (M.fromListWith (+) [(lbl, 1 :: Int) | (_, lbl) <- headers])
+    , n > 1
+    ]
+
 -- ---------------------------------------------------------------------------
 -- Domain construction (pure)
 -- ---------------------------------------------------------------------------
@@ -319,6 +330,9 @@ rawToActivity cfg ra =
                ]
             ++ [ "activity '" <> raName ra <> "': no reference product; activity will not be scoreable"
                | not (any exchangeIsReference exchanges')
+               ]
+            ++ [ "activity '" <> raName ra <> "': column '" <> lbl <> "' appears more than once; only the rightmost is read"
+               | lbl <- duplicateLabels (raHeaders ra)
                ]
 
     location = fromMaybe "" (metaText meta "location")

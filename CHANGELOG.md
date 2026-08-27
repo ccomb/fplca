@@ -54,6 +54,9 @@
   the last was kept, so its neighbour's contribution vanished from the
   comparison or was reported as present on one side only. Both sides are now
   read from the same summed totals.
+- Loading a Brightway workbook now says when a column heading appears twice.
+  Only the rightmost such column was read, and the others were dropped without
+  a word.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads
