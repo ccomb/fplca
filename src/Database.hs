@@ -114,6 +114,9 @@ buildIndexesWithProcessIds activityVec processIdTable =
         activityUUIDs = [actUUID | (actUUID, _) <- V.toList processIdTable]
         activities = V.toList activityVec
         activityPairs = zip activityUUIDs activities
+        -- The process id table is in row order, so the row of each activity is
+        -- its position in it.
+        rows = zip [0 ..] activities
 
         nameIdx =
             M.fromListWith
@@ -128,7 +131,7 @@ buildIndexesWithProcessIds activityVec processIdTable =
         flowIdx =
             M.fromListWith
                 (++)
-                [ (exchangeFlowId ex, [uuid]) | (uuid, activity) <- activityPairs, ex <- exchanges activity
+                [ (exchangeFlowId ex, [pid]) | (pid, activity) <- rows, ex <- exchanges activity
                 ]
 
         unitIdx =

@@ -1318,14 +1318,10 @@ getActivityReferenceProductDetail db activity = do
 -- | Get activities that use a specific flow as ActivitySummary list.
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
 getActivitiesUsingFlow db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> []
-        Just activityUUIDs ->
-            [ mkActivitySummary db processId proc
-            | procUUID <- S.toList (S.fromList activityUUIDs)
-            , Just proc <- [findActivityByActivityUUID db procUUID]
-            , Just processId <- [findProcessIdForActivity db proc]
-            ]
+    [ mkActivitySummary db pid act
+    | pid <- maybe [] (S.toList . S.fromList) (M.lookup flowUUID (idxByFlow (dbIndexes db)))
+    , Just act <- [getActivity db pid]
+    ]
 
 {- | Sentinel returned only when an exchange's unit UUID failed to resolve.
 The exchange unit-name field already surfaces the same gap via

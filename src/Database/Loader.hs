@@ -260,6 +260,10 @@ History of manual bumps:
      dimensionless, which changes the product flow's UUID (it is derived from
      the unit name) and so the activity's process id. Value changes with no
      type change, which the fingerprint alone would accept.
+- 17: the flow index now lists the rows that use a flow, not their activity
+     UUIDs. The fingerprint hashes the identity of Database, never the types
+     inside it, so an old cache would pass the check and be decoded reading
+     16-byte UUIDs as 4-byte row numbers.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -267,7 +271,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 16
+     in hi `xor` lo `xor` 17
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

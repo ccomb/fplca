@@ -761,8 +761,11 @@ type NameIndex = M.Map Text [UUID] -- Name -> [ActivityUUID]
 -- | Index by location - geographic search
 type LocationIndex = M.Map Text [UUID] -- Location -> [ActivityUUID]
 
--- | Index by flow - find activities that use a given flow
-type FlowIndex = M.Map UUID [UUID] -- FlowID -> [ActivityUUID]
+{- | Index by flow - find the rows that use a given flow. Keyed on the row and
+not on the activity UUID, so an activity written as several coproduct rows is
+listed once per row rather than once per activity.
+-}
+type FlowIndex = M.Map UUID [ProcessId] -- FlowID -> [ProcessId]
 
 -- | Index of exchanges by flow - find all exchanges using a flow
 type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]

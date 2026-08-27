@@ -3,7 +3,8 @@
 {- | An allocated dataset is one activity written as one row per coproduct, all
 sharing an activity UUID. Anything keyed on that UUID alone therefore answers
 with an arbitrary one of them. These tests pin the places a consumer reads a
-coproduct back: the target of an exchange, and the tree it descends.
+coproduct back: the target of an exchange, the tree it descends, and the rows
+that use a flow.
 
 The fixture is built so the wrong answer is visible: the input names the
 coproduct with the /lower/ product UUID, which is exactly the row a
@@ -62,6 +63,12 @@ spec = do
                         missing = [n | n <- M.elems (teNodes export), enNodeType n == MissingNode]
                     map enLoopTarget missing `shouldBe` [Nothing]
                     length (teEdges export) `shouldBe` 1
+
+    describe "the activities that use a flow" $
+        it "lists every coproduct row that carries it" $ do
+            db <- twoCoproductFixture
+            map prsProcessId (Service.getActivitiesUsingFlow db milkId)
+                `shouldBe` [pidText milkId, pidText creamId, consumerPid]
 
 -- ---------------------------------------------------------------------------
 -- Reading one exchange back
@@ -282,3 +289,6 @@ kgUnitId = mkUUID 10
 -- | Process id text of a supplier coproduct row.
 pidText :: UUID -> Text
 pidText prodId = UUID.toText supplierActId <> "_" <> UUID.toText prodId
+
+consumerPid :: Text
+consumerPid = UUID.toText consumerActId <> "_" <> UUID.toText consumerProdId
