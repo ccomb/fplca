@@ -34,6 +34,14 @@
   now left unresolved when the product alone does not say which activity is
   meant, the same rule the name-and-unit fallback beside it already applied.
   Scores are unaffected: they never read that index.
+- Loading an EcoSpold 1 database no longer attaches an input to a supplier in
+  the wrong country. When an input names its product but no location, the
+  loader looked the product name up in an index that kept one dataset per name.
+  An EcoSpold 1 product name carries no location, so one name covers every
+  geography the product is made in: in a 11 947 dataset database, 787 names
+  cover 4 526 datasets, and the location always tells them apart. The index now
+  keeps all of them and the loader leaves the input unresolved, and says so in
+  the unlinked report, when the name alone does not say which dataset is meant.
 - Exporting an allocated activity to EcoSpold 1 no longer moves the links that
   point at it. Each coproduct is written as its own dataset with its own
   number, and an input naming that supplier now carries the number of the

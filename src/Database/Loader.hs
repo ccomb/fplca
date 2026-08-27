@@ -67,6 +67,7 @@ module Database.Loader (
 
     -- * Internal Linking
     fixSimaProActivityLinks,
+    fixEcoSpold1ActivityLinks,
 
     -- * Reporting
     reportCrossDBLinkingStats,
@@ -327,11 +328,15 @@ could not convert), instead of forming a link that aborts the whole load.
 -}
 type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
 
-{- | Type alias for name-only supplier lookup with location (for EcoSpold1)
-Maps normalizedProductName → (activityUUID, productUUID, location)
-Used when exchange has no location attribute to find the activity's actual location
+{- | Name-only supplier lookup for EcoSpold1, mapping a normalized product name
+to every dataset producing it as @(activityUUID, productUUID, location)@.
+
+Several is the ordinary shape here, not the exception: an EcoSpold1 product name
+carries no location, so one name covers every geography the product is made in.
+That is why the value is a 'NE.NonEmpty' and why both readers refuse a name that
+covers more than one dataset instead of taking whichever it finds.
 -}
-type SupplierByNameWithLocation = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
+type SupplierByNameWithLocation = M.Map T.Text (NE.NonEmpty (UUID.UUID, UUID.UUID, T.Text))
 
 -- | Dataset number → (activityUUID, productUUID) for EcoSpold1 Tier 1 linking
 type DatasetNumberIndex = M.Map Int (UUID.UUID, UUID.UUID)
@@ -439,14 +444,14 @@ buildSupplierIndexByName unitDB activities techFlowDb =
                 ]
      in M.union exactIndex prefixIndex
 
-{- | Build name-only supplier index with location for EcoSpold1 linking
-Used when exchange has no location attribute to find the activity's actual location
-Maps normalizedProductName → (activityUUID, productUUID, activityLocation)
+{- | Build the name-only supplier index for EcoSpold1 linking, keeping every
+dataset a name covers rather than the last one seen.
 -}
 buildSupplierIndexByNameWithLocation :: ActivityMap -> TechFlowDB -> SupplierByNameWithLocation
 buildSupplierIndexByNameWithLocation activities techFlowDb =
-    M.fromList
-        [ (normalizeText (tfName flow), (actUUID, prodUUID, activityLocation act))
+    M.fromListWith
+        (flip (<>))
+        [ (normalizeText (tfName flow), (actUUID, prodUUID, activityLocation act) NE.:| [])
         | ((actUUID, prodUUID), act) <- M.toList activities
         , ex <- exchanges act
         , exchangeIsReference ex
@@ -551,18 +556,18 @@ fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{tec
                         _ ->
                             -- Tier 2: name + location lookup
                             let normalizedLoc = fromMaybe loc (M.lookup loc elcLocationAliases)
+                                soleSupplier = M.lookup (normalizeText (tfName flow)) elcNameIndex >>= sole
                                 lookupLoc
-                                    | T.null normalizedLoc =
-                                        case M.lookup (normalizeText (tfName flow)) elcNameIndex of
-                                            Just (_, _, actLoc) -> actLoc
-                                            Nothing -> normalizedLoc
+                                    | T.null normalizedLoc = maybe normalizedLoc (\(_, _, actLoc) -> actLoc) soleSupplier
                                     | otherwise = normalizedLoc
                                 key = (normalizeText (tfName flow), lookupLoc)
                              in case M.lookup key elcSupplierIndex of
                                     Just (actUUID, prodUUID) -> linked actUUID prodUUID
                                     Nothing ->
-                                        -- Tier 3: name-only fallback (safe for EcoSpold1 where names include {LOCATION})
-                                        case M.lookup (normalizeText (tfName flow)) elcNameIndex of
+                                        -- Tier 3: the name alone, and only when it
+                                        -- covers a single dataset. A name shared by
+                                        -- several geographies names none of them.
+                                        case soleSupplier of
                                             Just (actUUID, prodUUID, _) -> linked actUUID prodUUID
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
