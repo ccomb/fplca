@@ -47,6 +47,13 @@
   number, and an input naming that supplier now carries the number of the
   coproduct it asks for. It carried whichever coproduct was written last, so
   reading the exported file back attached the input to the wrong product.
+- Comparing two impacts adds up the flows it treats as one instead of keeping
+  one of them. The comparison aligns the two databases on a flow's name,
+  medium and subcompartment, because their identifiers are unrelated by
+  construction. Two flows in one database can carry the same three, and only
+  the last was kept, so its neighbour's contribution vanished from the
+  comparison or was reported as present on one side only. Both sides are now
+  read from the same summed totals.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads

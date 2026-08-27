@@ -14,7 +14,9 @@ import Data.Aeson.KeyMap (KeyMap)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import Data.Function (on)
 import Data.IORef
+import Data.List (nubBy)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
@@ -1376,10 +1378,14 @@ callCompareImpacts dbManager rid args =
                 if scoreB /= 0
                     then abs delta / abs scoreB * 100
                     else 0
-            aTop = take topN (irContribs irA)
-            bTop = take topN (irContribs irB)
-            aMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irA]
-            bMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irB]
+            -- Summed, not overwritten: 'flowKey' drops the UUID on purpose, so
+            -- two flows that differ only by it are one flow on this axis and both
+            -- contributions belong to its total. Every number below is read back
+            -- from these maps, so the two sides are compared on the same basis.
+            aMap = M.fromListWith (+) [(flowKey f, c) | (f, _, c) <- irContribs irA]
+            bMap = M.fromListWith (+) [(flowKey f, c) | (f, _, c) <- irContribs irB]
+            aTop = topFlows topN (irContribs irA)
+            bTop = topFlows topN (irContribs irB)
             common =
                 [ object
                     [ "flow_name" .= bfName f
@@ -1389,19 +1395,22 @@ callCompareImpacts dbManager rid args =
                     , "b_contrib" .= cB
                     , "delta" .= (cA - cB)
                     ]
-                | (f, _, cA) <- aTop
+                | f <- aTop
                 , let k = flowKey f
+                , Just cA <- [M.lookup k aMap]
                 , Just cB <- [M.lookup k bMap]
                 ]
             aOnly =
                 [ encodeContrib f c
-                | (f, _, c) <- aTop
+                | f <- aTop
                 , M.notMember (flowKey f) bMap
+                , Just c <- [M.lookup (flowKey f) aMap]
                 ]
             bOnly =
                 [ encodeContrib f c
-                | (f, _, c) <- bTop
+                | f <- bTop
                 , M.notMember (flowKey f) aMap
+                , Just c <- [M.lookup (flowKey f) bMap]
                 ]
         pure $
             toolSuccessJson rid $
@@ -1439,6 +1448,12 @@ callCompareImpacts dbManager rid args =
             , "compartment" .= bfCompartmentSub f
             , "contribution" .= c
             ]
+
+    -- The distinct flows behind the n largest contributions, in order. Two rows
+    -- sharing a 'flowKey' are one flow for this comparison, so the first of them
+    -- stands for the group and the aligned maps carry their summed contribution.
+    topFlows :: Int -> [(BiosphereFlow, a, Double)] -> [BiosphereFlow]
+    topFlows n = nubBy ((==) `on` flowKey) . map (\(f, _, _) -> f) . take n
 
     -- Align flows across databases by (normalized name, medium, subcompartment).
     -- UUIDs differ across DBs by construction — see Method/Mapping comments.
