@@ -125,6 +125,11 @@ matchClassifications activity filters =
 data ServiceError
     = InvalidUUID Text
     | InvalidProcessId Text
+    | {- | A bare activity UUID naming an activity written as several rows. The
+      activity exists, so this is not a not-found; it is under-specified, and
+      the caller has to name the product too.
+      -}
+      AmbiguousActivity Text
     | ActivityNotFound Text
     | FlowNotFound Text
     | MatrixError Text -- Generic error from matrix computations
@@ -162,14 +167,24 @@ resolveActivityAndProcessId db queryText =
     notFound = ActivityNotFound queryText
     -- A syntactically valid identifier that does not resolve is not-found, not
     -- a format error. Only genuinely malformed input is 'InvalidProcessId'.
+    -- An activity written as several rows is neither: it is there, and the
+    -- query names it without saying which of its products is meant.
     findPid
         | Just ref <- parseProcessRef queryText = maybe (Left notFound) Right (findProcessId db (prActivity ref) (prProduct ref))
         -- Bare activity UUID fallback (EcoInvent compatibility).
-        | Just uuid <- UUID.fromText queryText = maybe (Left notFound) Right (findProcessIdByActivityUUID db uuid)
+        | Just uuid <- UUID.fromText queryText = case M.lookup uuid (dbActivityUUIDIndex db) of
+            Just (pid NE.:| []) -> Right pid
+            Just rows -> Left (AmbiguousActivity (ambiguous rows))
+            Nothing -> Left notFound
         | otherwise =
             Left $ InvalidProcessId $ "Query must be a ProcessId (activityUUID_productUUID) or a valid UUID: " <> queryText
     resolveActivity pid =
         maybe (Left notFound) (\act -> Right (pid, act)) (findActivityByProcessId db pid)
+    ambiguous rows =
+        queryText
+            <> " names an activity written as "
+            <> T.pack (show (NE.length rows))
+            <> " processes, one per product it makes. Name one of them as activityUUID_productUUID."
 
 {- | Validate that a ProcessId exists in the matrix activity index
 This check ensures we fail fast with clear error messages before expensive matrix operations
@@ -2087,6 +2102,7 @@ resolveRootOnly db t
         case resolveActivityAndProcessId db t of
             Right (pid, _) -> Right pid
             Left (InvalidProcessId msg) -> Left msg
+            Left (AmbiguousActivity msg) -> Left msg
             Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
             Left e -> Left (T.pack (show e))
 

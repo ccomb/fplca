@@ -530,6 +530,9 @@ serviceErrorToServerError :: Service.ServiceError -> ServerError
 serviceErrorToServerError = \case
     Service.InvalidUUID msg -> err400{errBody = utf8Body msg}
     Service.InvalidProcessId msg -> err400{errBody = utf8Body msg}
+    -- The activity is there; the query does not say which of its products.
+    -- A 404 would send the caller looking for data that is present.
+    Service.AmbiguousActivity msg -> err400{errBody = utf8Body msg}
     Service.ActivityNotFound _ -> err404{errBody = "Activity not found"}
     Service.FlowNotFound _ -> err404{errBody = "Flow not found"}
     -- MatrixError covers singular Sherman-Morrison, missing technosphere links,
@@ -931,7 +934,19 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
             ]
         valid = [(pidText, pidNum, act) | (pidText, Right (pidNum, act)) <- resolved]
         notFound = [pidText | (pidText, Left (Service.ActivityNotFound _)) <- resolved]
-        invalid = [pidText | (pidText, Left (Service.InvalidProcessId _)) <- resolved]
+        -- An under-specified id is unusable as sent, like a malformed one, and
+        -- belongs in a bucket rather than in neither.
+        invalid =
+            [ pidText
+            | (pidText, Left err) <- resolved
+            , case err of
+                Service.InvalidProcessId _ -> True
+                Service.AmbiguousActivity _ -> True
+                Service.InvalidUUID _ -> False
+                Service.ActivityNotFound _ -> False
+                Service.FlowNotFound _ -> False
+                Service.MatrixError _ -> False
+            ]
         validPidNums = [pidNum | (_, pidNum, _) <- valid]
     t0 <- liftIO getCurrentTime
     sols0 <- solutionsWithDeps dbName db sharedSolver validPidNums
@@ -1262,6 +1277,7 @@ withActivityAndMethod dbName collectionName processIdText methodIdText k = do
     case Service.resolveActivityAndProcessId db processIdText of
         Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
         Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
+        Left (Service.AmbiguousActivity msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
         Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
         Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
 
@@ -1804,6 +1820,8 @@ getActivityPathTo dbName processIdText targetParam = do
         Left (Service.ActivityNotFound msg) ->
             throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
         Left (Service.InvalidProcessId msg) ->
+            throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
+        Left (Service.AmbiguousActivity msg) ->
             throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
         Left err ->
             throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}

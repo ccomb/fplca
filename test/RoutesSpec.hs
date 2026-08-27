@@ -191,6 +191,8 @@ errorMappingSpec = describe "serviceErrorToServerError (HTTP status contract)" $
         errHTTPCode (serviceErrorToServerError (InvalidUUID "x")) `shouldBe` 400
     it "maps InvalidProcessId to 400" $
         errHTTPCode (serviceErrorToServerError (InvalidProcessId "x")) `shouldBe` 400
+    it "maps AmbiguousActivity to 400, not the 404 of a missing one" $
+        errHTTPCode (serviceErrorToServerError (AmbiguousActivity "x")) `shouldBe` 400
     it "maps ActivityNotFound to 404" $
         errHTTPCode (serviceErrorToServerError (ActivityNotFound "x")) `shouldBe` 404
     it "maps FlowNotFound to 404" $
