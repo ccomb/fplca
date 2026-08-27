@@ -239,6 +239,39 @@ linkedDb link =
     -- The consumer's input consumes the supplier's product and links to it.
     consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing]
 
+{- | A supplier written as two coproduct rows sharing one activity UUID, and a
+consumer whose input names the first of them. Canonical order gives the two
+supplier rows datasets 1 and 2, so a link resolved on the pair re-emits 1 while
+a link resolved on the activity UUID alone re-emits whichever row the index kept.
+-}
+coproductDb :: SimpleDatabase
+coproductDb =
+    SimpleDatabase
+        { sdbActivities =
+            M.fromList
+                [ ((supU, prodAU), mkAct "aaa supplier" prodAU [])
+                , ((supU, prodBU), mkAct "aaa supplier" prodBU [])
+                , ((conU, conU), mkAct "bbb consumer" conU [inputOnA])
+                ]
+        , sdbTechFlows =
+            M.fromList
+                [ (prodAU, TechnosphereFlow prodAU "aaa product a" kgUnit M.empty Nothing Nothing)
+                , (prodBU, TechnosphereFlow prodBU "aaa product b" kgUnit M.empty Nothing Nothing)
+                , (conU, TechnosphereFlow conU "bbb consumer" kgUnit M.empty Nothing Nothing)
+                ]
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = units1
+        }
+  where
+    supU = supplierLink
+    prodAU = read "44444444-0000-4000-8000-00000000000a"
+    prodBU = read "44444444-0000-4000-8000-00000000000b"
+    conU = read "33333333-0000-4000-8000-000000000001"
+    mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+    inputOnA = TechnosphereExchange prodAU 2.0 kgUnit Input supU Nothing "" Nothing Nothing
+
 {- | The supplier's stored activity UUID — the first component of its
 'sdbActivities' key, and the value a solver-resolved input carries in
 'techActivityLinkId'. Deliberately a literal in a different namespace from
@@ -499,6 +532,16 @@ spec = do
             -- The link targets a UUID not among the exported datasets, so its
             -- dataset number is unknown; fail loudly instead of mislabelling it.
             checkEcoSpold1Exportable (linkedDb danglingLink) `shouldSatisfy` isLeft
+
+        it "names the coproduct the link asks for, not the activity's last row" $
+            -- The supplier is allocated into two datasets sharing one activity
+            -- UUID; the consumer's input names the first. Keyed on the activity
+            -- UUID alone the index kept only the second, and the parser read the
+            -- link back as a link to the other coproduct.
+            roundTripSupplierLinks coproductDb `shouldBe` Right [1]
+
+        it "passes the export-boundary check for a link naming one coproduct" $
+            checkEcoSpold1Exportable coproductDb `shouldBe` Right ()
 
         it "preserves a linked input semantically across a write→parse round-trip" $
             -- SimpleDatabase carries no supplier link, so a bare re-parse can't

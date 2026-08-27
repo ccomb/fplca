@@ -173,23 +173,28 @@ component of its 'sdbActivities' key — that a technosphere input's
 'techActivityLinkId' points at. Shared by the writer and
 'checkEcoSpold1Exportable'.
 -}
-orderedActivities :: ActivityMap -> [(UUID, Activity)]
+orderedActivities :: ActivityMap -> [((UUID, UUID), Activity)]
 orderedActivities =
     sortOn (\(_, a) -> (activityName a, activityLocation a))
-        . map (\((actU, _), a) -> (actU, a))
         . M.toList
 
-{- | Map each supplier activity's stored UUID to the dataset number it is assigned
-in canonical order. A technosphere input links to its supplier by
-'techActivityLinkId' — the supplier's stored activity UUID, the first component of
-its 'sdbActivities' key — and the parser reads the input's @number@ attribute back
-as that supplier dataset number ('EcoSpold.Parser1.closeExchange'). Keying by the
-stored UUID rather than re-deriving one lets a link resolve whatever namespace the
-source format minted the UUID in.
+{- | Map each exported row to the dataset number it is assigned in canonical
+order. A technosphere input names its supplier by the pair 'techActivityLinkId'
+plus 'techFlowId' — the supplier row's 'sdbActivities' key — and the parser reads
+the input's @number@ attribute back as that supplier dataset number
+('EcoSpold.Parser1.closeExchange'). Keying by the stored UUIDs rather than
+re-deriving them lets a link resolve whatever namespace the source format minted
+them in.
+
+The key is the whole pair because an allocated activity is exported as one
+dataset per coproduct, each with its own number. Keying on the activity UUID
+alone kept one of them and gave every link to that supplier the number of an
+arbitrary coproduct, which the parser then read back as a link to the wrong
+product.
 -}
-supplierNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
+supplierNumberIndex :: [((UUID, UUID), Activity)] -> M.Map (UUID, UUID) Int
 supplierNumberIndex ordered =
-    M.fromList [(actU, n) | (n, (actU, _)) <- zip [1 ..] ordered]
+    M.fromList [(key, n) | (n, (key, _)) <- zip [1 ..] ordered]
 
 {- | Map each flow that is not a reference product to the number the export
 gives it, once, across every dataset that carries it.
@@ -202,7 +207,7 @@ happens to occupy, which is exactly the splintering the parser stopped doing.
 Numbers start above the dataset numbers, which occupy @1 .. length ordered@ and
 are what a reference product and a linked input carry.
 -}
-flowNumberIndex :: [(UUID, Activity)] -> M.Map UUID Int
+flowNumberIndex :: [((UUID, UUID), Activity)] -> M.Map UUID Int
 flowNumberIndex ordered =
     M.fromList (zip flows [length ordered + 1 ..])
   where
@@ -222,10 +227,10 @@ emit silently wrong data:
   * __Dangling supplier links.__ The format names a supplier from a
     technosphere input's @number@ attribute, which the parser reads as the
     supplier's dataset number. The writer can only re-emit that number when the
-    linked supplier activity is itself being exported (present in
-    'supplierNumberIndex'). A linked input pointing at an activity absent from
-    the database would otherwise force a positional index the parser would
-    misread as a different supplier.
+    supplier row the link names — the (activity, product) pair — is itself being
+    exported (present in 'supplierNumberIndex'). A linked input naming a pair
+    absent from the database would otherwise force a positional index the parser
+    would misread as a different supplier.
 
   * __Reference inputs.__ EcoSpold1 has no marker for a reference /input/, so
     the writer would emit @outputGroup 0@ and the parser would read it back as
@@ -330,9 +335,9 @@ checkEcoSpold1Exportable db =
     danglingLinks =
         [ (activityName act, link)
         | act <- M.elems (sdbActivities db)
-        , TechnosphereExchange{techRole = Input, techActivityLinkId = link} <- exchanges act
+        , TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid} <- exchanges act
         , link /= UUID.nil
-        , not (M.member link index)
+        , not (M.member (link, fid) index)
         ]
     amountOffenders =
         [ (activityName act, amt)
@@ -392,7 +397,7 @@ data Resolvers = Resolvers
     , rBio :: !BioFlowDB
     , rWaste :: !WasteFlowDB
     , rUnits :: !UnitDB
-    , rSupplierNumbers :: !(M.Map UUID Int)
+    , rSupplierNumbers :: !(M.Map (UUID, UUID) Int)
     , rFlowNumbers :: !(M.Map UUID Int)
     }
 
@@ -476,17 +481,18 @@ two agree on one number for one product. Everything else — co-products,
 biosphere, waste, and unlinked inputs — carries the number its flow was given
 once for the whole export ('flowNumberIndex').
 
-'checkEcoSpold1Exportable' guarantees any resolved link is present in the
-supplier index before export, so that fallback is unreachable on the wired-up
-path; the flow index covers every non-reference exchange by construction.
+'checkEcoSpold1Exportable' guarantees any resolved link's (activity, product)
+pair is present in the supplier index before export, so that fallback is
+unreachable on the wired-up path; the flow index covers every non-reference
+exchange by construction.
 -}
 exchangeNumber :: Resolvers -> Int -> Exchange -> Int
 exchangeNumber res datasetNum ex
     | exchangeIsReference ex = datasetNum
     | otherwise = case ex of
-        TechnosphereExchange{techRole = Input, techActivityLinkId = link}
+        TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid}
             | link /= UUID.nil ->
-                M.findWithDefault flowNum link (rSupplierNumbers res)
+                M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
         TechnosphereExchange{} -> flowNum
         BiosphereExchange{} -> flowNum
         WasteExchange{} -> flowNum

@@ -26,6 +26,11 @@
   now left unresolved when the product alone does not say which activity is
   meant, the same rule the name-and-unit fallback beside it already applied.
   Scores are unaffected: they never read that index.
+- Exporting an allocated activity to EcoSpold 1 no longer moves the links that
+  point at it. Each coproduct is written as its own dataset with its own
+  number, and an input naming that supplier now carries the number of the
+  coproduct it asks for. It carried whichever coproduct was written last, so
+  reading the exported file back attached the input to the wrong product.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads
