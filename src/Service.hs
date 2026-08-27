@@ -39,6 +39,7 @@ import qualified Search.Fuzzy as Fuzzy
 import qualified Search.Normalize as Normalize
 import SharedSolver (SharedSolver, getFactorization, solveWithSharedSolver)
 import qualified SharedSolver
+import Tree (childTarget)
 import Types
 import UnitConversion (UnitConfig, convertUnit, unitsCompatible)
 
@@ -373,7 +374,12 @@ getTreeNodeId db = \case
     TreeLoop pid _ _ -> processIdToText db pid
     TreeMissing uuid _ _ -> "missing:" <> UUID.toText uuid
 
--- | Count potential children for navigation (technosphere inputs that could be expanded)
+{- | Count potential children for navigation (technosphere inputs that could be
+expanded). It counts what the traversal descends into, 'Tree.childTarget', so a
+node's count and the edges leaving it in the same export agree: an input whose
+declared supplier is in no loaded database is a child too, the one the export
+names a missing node.
+-}
 countPotentialChildren :: Database -> Activity -> Int
 countPotentialChildren db activity =
     length
@@ -382,7 +388,7 @@ countPotentialChildren db activity =
         , isTechnosphereExchange ex
         , exchangeIsInput ex
         , not (exchangeIsReference ex)
-        , Just _ <- [linkedProducer db ex]
+        , Just _ <- [childTarget db ex]
         ]
 
 -- | Helper to extract compartment from flow category
@@ -2863,12 +2869,16 @@ getConsumers db dbName processIdText cnf = do
 
     Right $ ConsumersResponse (SearchResults page total offset limit hasMore 0.0) edges
 
--- | Export matrix debug data (delegates to Matrix.Export)
+{- | Export matrix debug data (delegates to Matrix.Export). The row's own
+reference is read up front rather than defaulted later: the summary states the
+activity it exported, and a row the process id table cannot name is a broken
+database, not an empty field.
+-}
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either ServiceError Value)
 exportMatrixDebugData database processIdText opts = do
-    case resolveActivityAndProcessId database processIdText of
+    case resolveActivityAndProcessId database processIdText >>= withRef of
         Left err -> return $ Left err
-        Right (processId, targetActivity) -> do
+        Right (processId, targetActivity, ref) -> do
             matrixData <- MatrixExport.extractMatrixDebugInfo database processId (debugFlowFilter opts)
             let inventoryList = MatrixExport.mdInventoryVector matrixData
                 bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
@@ -2880,7 +2890,7 @@ exportMatrixDebugData database processIdText opts = do
 
             let summary =
                     M.fromList
-                        [ ("activity_uuid" :: Text, maybe "" (UUID.toText . prActivity) (processIdToRef database processId))
+                        [ ("activity_uuid" :: Text, UUID.toText (prActivity ref))
                         , ("activity_name" :: Text, activityName targetActivity)
                         , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
                         , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
@@ -2888,6 +2898,12 @@ exportMatrixDebugData database processIdText opts = do
                         , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
                         ]
             return $ Right $ toJSON summary
+  where
+    withRef (pid, act) =
+        maybe
+            (Left (InvalidUUID ("No activity reference for " <> processIdText)))
+            (\ref -> Right (pid, act, ref))
+            (processIdToRef database pid)
 
 -- | Export matrices in universal matrix format (delegates to Matrix.Export)
 exportUniversalMatrixFormat :: FilePath -> Database -> IO ()

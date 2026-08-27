@@ -298,16 +298,22 @@ data TreeMetadata = TreeMetadata
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped TreeMetadata)
 
+{- | One node of a tree export. Every node names the row it sits at, in
+ProcessId format, save a 'MissingNode': it stands for a link no row satisfies,
+so it has none to name and wears "missing:" and the activity identifier
+instead. Anything reading an id as a process id has to allow for that one, here
+and on the two ends of an edge.
+-}
 data ExportNode = ExportNode
-    { enId :: Text -- Changed to Text (ProcessId format)
+    { enId :: Text -- ProcessId format, or "missing:<activityUUID>" on a MissingNode
     , enName :: Text
     , enDescription :: [Text]
     , enLocation :: Text
     , enUnit :: Text
     , enNodeType :: NodeType
     , enDepth :: Int
-    , enLoopTarget :: Maybe Text -- Changed to Text (ProcessId format)
-    , enParentId :: Maybe Text -- Changed to Text (ProcessId format) -- For navigation back up
+    , enLoopTarget :: Maybe Text -- ProcessId format; set on a LoopNode alone
+    , enParentId :: Maybe Text -- Node id of the parent, for navigation back up
     , enChildrenCount :: Int -- Number of potential children for expandability
     , enCompartment :: Maybe Text -- Biosphere compartment (air/water/soil), only for BiosphereNodes
     }
@@ -323,8 +329,8 @@ data EdgeType = TechnosphereEdge | BiosphereEmissionEdge | BiosphereResourceEdge
     deriving anyclass (ToSchema)
 
 data TreeEdge = TreeEdge
-    { teFrom :: Text -- Changed to Text (ProcessId format)
-    , teTo :: Text -- Changed to Text (ProcessId format)
+    { teFrom :: Text -- Node id, as ExportNode carries it
+    , teTo :: Text -- Node id, as ExportNode carries it
     , teFlow :: FlowInfo
     , teQuantity :: Double
     , teUnit :: Text

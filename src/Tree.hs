@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Tree (buildLoopAwareTree) where
+module Tree (buildLoopAwareTree, childTarget) where
 
 import Control.Monad.Trans.State.Strict (State, evalState, get, modify)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Text (Text)
 import Database.MatrixBuild (linkedProducer)
 import Numeric.Natural (Natural)
 import Types
@@ -19,18 +20,17 @@ isTechnosphereInput ex =
         WasteExchange{} -> False -- waste flows aren't upstream tech inputs in the tree-builder sense
 
 {- | Get converted exchange amount ensuring unit compatibility.
-Converts exchange amount to the target activity's reference unit for proper scaling.
-A target that resolved to nothing has no reference unit, so the amount is left
-as the exchange states it.
+Converts the exchange amount into the unit the edge carrying it declares, for
+proper scaling. Either side reading "unknown" leaves the amount as the exchange
+states it, there being nothing to convert between.
 -}
-getConvertedExchangeAmount :: UnitConfig -> Database -> Exchange -> Maybe Activity -> Double
-getConvertedExchangeAmount unitCfg db exchange mTarget =
+getConvertedExchangeAmount :: UnitConfig -> Database -> Exchange -> Text -> Double
+getConvertedExchangeAmount unitCfg db exchange targetUnit =
     let originalAmount = exchangeAmount exchange
         exchangeUnitName = maybe "unknown" unitName (M.lookup (exchangeUnitId exchange) (dbUnits db))
-        targetReferenceUnit = maybe "unknown" activityUnit mTarget
-     in if exchangeUnitName == "unknown" || targetReferenceUnit == "unknown"
+     in if exchangeUnitName == "unknown" || targetUnit == "unknown"
             then originalAmount
-            else convertExchangeAmount unitCfg exchangeUnitName targetReferenceUnit originalAmount
+            else convertExchangeAmount unitCfg exchangeUnitName targetUnit originalAmount
 
 {- | Read-only context threaded through tree construction. @tcMaxDepth@ is a
 'Natural' so negative depths are unrepresentable; the public entrypoint
@@ -55,8 +55,13 @@ childTarget db ex =
         Just row -> Just (Right row)
         Nothing -> Left <$> exchangeActivityLinkId ex
 
-childActivity :: ChildTarget -> Maybe Activity
-childActivity = either (const Nothing) (Just . snd)
+{- | The unit the amount on the edge to this child is stated in: the row's own
+reference unit when there is a row, and otherwise the flow's, which is what the
+edge is labelled with either way. A missing target with no unit of its own would
+leave a number in the exchange's unit under a label naming another.
+-}
+childUnit :: Database -> TechnosphereFlow -> ChildTarget -> Text
+childUnit db flow = either (const (getUnitNameForTechFlow (dbUnits db) flow)) (activityUnit . snd)
 
 {- | Build loop-aware tree for SVG export with maximum depth and a fixed
 per-tree node budget (300) to keep export latency bounded. Negative
@@ -105,7 +110,7 @@ buildChildren cfg (ex : exs) visited depth = do
         then pure []
         else case (childTarget db ex, M.lookup (exchangeFlowId ex) (dbTechFlows db)) of
             (Just target, Just flow) -> do
-                let amount = getConvertedExchangeAmount (tcUnitConfig cfg) db ex (childActivity target)
+                let amount = getConvertedExchangeAmount (tcUnitConfig cfg) db ex (childUnit db flow target)
                 subtree <- buildTarget cfg target visited depth
                 rest <- buildChildren cfg exs visited depth
                 pure ((amount, flow, subtree) : rest)

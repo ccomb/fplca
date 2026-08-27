@@ -17,12 +17,12 @@ import Data.Text (Text)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), NodeType (..), TreeExport (..))
+import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), NodeType (..), TreeEdge (..), TreeExport (..))
 import Database (buildDatabaseWithMatrices)
 import qualified Service
 import Tree (buildLoopAwareTree)
 import Types
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
 
 spec :: Spec
 spec = do
@@ -64,6 +64,21 @@ spec = do
                     map enLoopTarget missing `shouldBe` [Nothing]
                     length (teEdges export) `shouldBe` 1
 
+        it "states the amount reaching it in the unit the edge is labelled with" $ do
+            db <- danglingLinkGramsFixture
+            case consumerRow db of
+                Nothing -> expectationFailure "no consumer row"
+                Just root ->
+                    -- 2000 g of a flow measured in kg, on an edge that says kg.
+                    let tree = buildLoopAwareTree gramsAware db 10 root
+                     in case teEdges (Service.convertToTreeExport db (pidText consumerProdId) 10 tree) of
+                            [edge] -> (teQuantity edge, teUnit edge) `shouldBe` (2.0, "kg")
+                            other -> expectationFailure ("expected one edge, got " <> show (length other))
+
+        it "counts a link no row satisfies among the children it can expand" $ do
+            db <- danglingLinkFixture
+            map enChildrenCount (rootNodes db) `shouldBe` [1]
+
     describe "the activities that use a flow" $
         it "lists every coproduct row that carries it" $ do
             db <- twoCoproductFixture
@@ -104,6 +119,16 @@ treeOfConsumer db = case consumerRow db of
     Nothing -> Left "no consumer row"
     Just root -> Right (buildLoopAwareTree defaultUnitConfig db 10 root)
 
+-- | The exported nodes sitting at depth 0.
+rootNodes :: Database -> [ExportNode]
+rootNodes db = case treeOfConsumer db of
+    Left _ -> []
+    Right tree ->
+        [ n
+        | n <- M.elems (teNodes (Service.convertToTreeExport db (pidText consumerProdId) 10 tree))
+        , enDepth n == 0
+        ]
+
 -- | Constructor names only, so a shape mismatch reports something readable.
 shapeOf :: LoopAwareTree -> [Text]
 shapeOf (TreeLeaf _ _) = ["leaf"]
@@ -132,6 +157,14 @@ carries.
 -}
 danglingLinkFixture :: IO Database
 danglingLinkFixture = buildFixture (consumerActivity [ghostInput] []) supplierRows supplierFlows
+
+{- | The same, the input stated in grams while the flow is measured in
+kilogrammes. Nothing resolves, so nothing carries a reference unit but the
+flow, and the edge is labelled with it.
+-}
+danglingLinkGramsFixture :: IO Database
+danglingLinkGramsFixture =
+    buildFixture (consumerActivity [ghostInput{techAmount = 2000.0, techUnitId = gUnitId}] []) supplierRows supplierFlows
 
 {- | A consumer whose waste output names a treatment the database does not hold
 at that pair. The treatment activity is present, but under another flow, so an
@@ -268,7 +301,22 @@ wasteFlow fid name =
         }
 
 unitTable :: M.Map UUID Unit
-unitTable = M.singleton kgUnitId Unit{unitId = kgUnitId, unitName = "kg", unitSymbol = "kg", unitComment = ""}
+unitTable =
+    M.fromList
+        [ (kgUnitId, Unit{unitId = kgUnitId, unitName = "kg", unitSymbol = "kg", unitComment = ""})
+        , (gUnitId, Unit{unitId = gUnitId, unitName = "g", unitSymbol = "g", unitComment = ""})
+        ]
+
+{- | The default unit table knows no gramme, and a conversion it cannot make
+leaves the amount alone, which would hide the very thing the edge test is
+about.
+-}
+gramsAware :: UnitConfig
+gramsAware =
+    defaultUnitConfig
+        { ucUnits = M.insert "g" (UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001) (ucUnits defaultUnitConfig)
+        , ucOriginalKeys = M.insert "g" "g" (ucOriginalKeys defaultUnitConfig)
+        }
 
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
@@ -276,9 +324,10 @@ mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 {- | The supplier's two products are ordered on purpose: 'milkId' is the one a
 map keyed on the activity UUID alone drops.
 -}
-supplierActId, milkId, creamId, consumerActId, consumerProdId, ghostActId, scrapId, kgUnitId :: UUID
+supplierActId, milkId, creamId, consumerActId, consumerProdId, ghostActId, scrapId, kgUnitId, gUnitId :: UUID
 supplierActId = mkUUID 1
 ghostActId = mkUUID 77
+gUnitId = mkUUID 11
 milkId = mkUUID 2
 creamId = mkUUID 9
 consumerActId = mkUUID 3
