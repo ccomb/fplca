@@ -2,7 +2,6 @@
 
 module TreeSpec (spec) where
 
-import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.UUID as UUID
 import GoldenData
