@@ -18,6 +18,19 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.10.1] - 2026-08-28
+
+### Changed
+
+- This build knows wire revision 12, so it no longer warns that an engine
+  running v0.11.0 speaks a format newer than it understands. Revision 12 adds
+  the node type a tree export reports for a link that names a row no loaded
+  database holds. Nothing else moves: the oldest revision this client accepts
+  is still 2, and it still runs against any engine from v0.9.1 on.
+- The documentation link points at `www.volca.run`, which is the host that
+  answers. `volca.run` without the prefix does not, so the link shown on PyPI,
+  the one in the README and the one in the package docstring all led nowhere.
+
 ## [0.10.0] - 2026-08-22
 
 The minor is for one rename: `Decomposition.electricity_kwh` is now
