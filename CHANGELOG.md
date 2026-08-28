@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.0] - 2026-08-28
 
 ### Fixed
 - An exchange now names the coproduct it actually asks for. A dataset whose
