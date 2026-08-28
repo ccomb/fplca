@@ -230,6 +230,7 @@ test-suite lca-tests
                      , MatrixConstructionSpec
                      , WasteTreatmentSignSpec
                      , InventorySpec
+                     , IndexInjectivitySpec
                      , MatrixExportSpec
                      , MethodSpec
                      , MethodPatchSpec
@@ -251,6 +252,7 @@ test-suite lca-tests
                      , SupplyChainSpec
                      , HotspotSpec
                      , TreeSpec
+                     , CoproductTargetSpec
                      , ServiceSpec
                      , CrossLinkingSpec
                      , CrossDBActivityLinkSpec

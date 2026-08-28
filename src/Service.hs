@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.MatrixBuild (findProducer)
+import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
@@ -39,9 +39,9 @@ import qualified Search.Fuzzy as Fuzzy
 import qualified Search.Normalize as Normalize
 import SharedSolver (SharedSolver, getFactorization, solveWithSharedSolver)
 import qualified SharedSolver
-import Tree (buildLoopAwareTree)
+import Tree (childTarget)
 import Types
-import UnitConversion (UnitConfig, convertUnit, defaultUnitConfig, unitsCompatible)
+import UnitConversion (UnitConfig, convertUnit, unitsCompatible)
 
 {- | Fields shared by every activity-oriented endpoint (search, supply chain,
 consumers). Split out from the endpoint-specific filters so each filter
@@ -125,6 +125,11 @@ matchClassifications activity filters =
 data ServiceError
     = InvalidUUID Text
     | InvalidProcessId Text
+    | {- | A bare activity UUID naming an activity written as several rows. The
+      activity exists, so this is not a not-found; it is under-specified, and
+      the caller has to name the product too.
+      -}
+      AmbiguousActivity Text
     | ActivityNotFound Text
     | FlowNotFound Text
     | MatrixError Text -- Generic error from matrix computations
@@ -162,14 +167,24 @@ resolveActivityAndProcessId db queryText =
     notFound = ActivityNotFound queryText
     -- A syntactically valid identifier that does not resolve is not-found, not
     -- a format error. Only genuinely malformed input is 'InvalidProcessId'.
+    -- An activity written as several rows is neither: it is there, and the
+    -- query names it without saying which of its products is meant.
     findPid
         | Just ref <- parseProcessRef queryText = maybe (Left notFound) Right (findProcessId db (prActivity ref) (prProduct ref))
         -- Bare activity UUID fallback (EcoInvent compatibility).
-        | Just uuid <- UUID.fromText queryText = maybe (Left notFound) Right (findProcessIdByActivityUUID db uuid)
+        | Just uuid <- UUID.fromText queryText = case M.lookup uuid (dbActivityUUIDIndex db) of
+            Just (pid NE.:| []) -> Right pid
+            Just rows -> Left (AmbiguousActivity (ambiguous rows))
+            Nothing -> Left notFound
         | otherwise =
             Left $ InvalidProcessId $ "Query must be a ProcessId (activityUUID_productUUID) or a valid UUID: " <> queryText
     resolveActivity pid =
         maybe (Left notFound) (\act -> Right (pid, act)) (findActivityByProcessId db pid)
+    ambiguous rows =
+        queryText
+            <> " names an activity written as "
+            <> T.pack (show (NE.length rows))
+            <> " processes, one per product it makes. Name one of them as activityUUID_productUUID."
 
 {- | Validate that a ProcessId exists in the matrix activity index
 This check ensures we fail fast with clear error messages before expensive matrix operations
@@ -363,25 +378,23 @@ findProcessIdByProductFlowWithFallback unitCfg db flowUUID =
             (ex : _) -> getUnitNameForExchange (dbUnits db') ex
             [] -> ""
 
-{- | Helper to get node ID from LoopAwareTree (returns ProcessId format)
-For all node types, we attempt to return ProcessId format for consistency
+{- | Node id of a tree node, in ProcessId format. Every node but one names the
+row it was built from; a declared link no row satisfies has none to name, so it
+answers with the UUID it carries under a prefix no process id can wear.
 -}
 getTreeNodeId :: Database -> LoopAwareTree -> Text
-getTreeNodeId db (TreeLeaf activity) =
-    case findProcessIdForActivity db activity of
-        Just processId -> processIdToText db processId
-        Nothing -> "unknown-activity" -- Fallback
-getTreeNodeId db (TreeLoop uuid _ _) =
-    -- Use ProcessId format for consistency, maintain UUID_UUID format even in fallback
-    case findProcessIdByActivityUUID db uuid of
-        Just processId -> processIdToText db processId
-        Nothing -> processRefText (ProcessRef uuid uuid) -- Fallback maintains ProcessId format
-getTreeNodeId db (TreeNode activity _) =
-    case findProcessIdForActivity db activity of
-        Just processId -> processIdToText db processId
-        Nothing -> "unknown-activity" -- Fallback
+getTreeNodeId db = \case
+    TreeLeaf pid _ -> processIdToText db pid
+    TreeNode pid _ _ -> processIdToText db pid
+    TreeLoop pid _ _ -> processIdToText db pid
+    TreeMissing uuid _ _ -> "missing:" <> UUID.toText uuid
 
--- | Count potential children for navigation (technosphere inputs that could be expanded)
+{- | Count potential children for navigation (technosphere inputs that could be
+expanded). It counts what the traversal descends into, 'Tree.childTarget', so a
+node's count and the edges leaving it in the same export agree: an input whose
+declared supplier is in no loaded database is a child too, the one the export
+names a missing node.
+-}
 countPotentialChildren :: Database -> Activity -> Int
 countPotentialChildren db activity =
     length
@@ -390,8 +403,7 @@ countPotentialChildren db activity =
         , isTechnosphereExchange ex
         , exchangeIsInput ex
         , not (exchangeIsReference ex)
-        , Just targetUUID <- [exchangeActivityLinkId ex]
-        , Just _ <- [findProcessIdByActivityUUID db targetUUID]
+        , Just _ <- [childTarget db ex]
         ]
 
 -- | Helper to extract compartment from flow category
@@ -486,12 +498,12 @@ mkActivityExportNode db activity nodeId depth parentId =
         , enCompartment = Nothing
         }
 
-{- | ExportNode for a TreeLoop. Looks up the referenced activity for its real
-unit and location; falls back to "N/A" sentinels when the referent is missing.
+{- | ExportNode for a TreeLoop. Reads the row it points at for its real unit
+and location; falls back to "N/A" sentinels when the referent is missing.
 -}
-mkLoopExportNode :: Database -> UUID -> Text -> Text -> Int -> Maybe Text -> ExportNode
-mkLoopExportNode db uuid nodeId name loopDepth parentId =
-    let (actualLocation, actualUnit) = case findActivityByActivityUUID db uuid of
+mkLoopExportNode :: Database -> ProcessId -> Text -> Text -> Int -> Maybe Text -> ExportNode
+mkLoopExportNode db pid nodeId name loopDepth parentId =
+    let (actualLocation, actualUnit) = case getActivity db pid of
             Just act -> (activityLocation act, activityUnit act)
             Nothing -> ("N/A", "N/A")
      in ExportNode
@@ -502,11 +514,31 @@ mkLoopExportNode db uuid nodeId name loopDepth parentId =
             , enUnit = actualUnit
             , enNodeType = LoopNode
             , enDepth = loopDepth
-            , enLoopTarget = Just (UUID.toText uuid)
+            , enLoopTarget = Just (processIdToText db pid)
             , enParentId = parentId
             , enChildrenCount = 0
             , enCompartment = Nothing
             }
+
+{- | ExportNode for a TreeMissing: a link the source declares that no row in
+this database satisfies. It gets a node of its own so the branch stays visible,
+and no loop target, having no row to point at.
+-}
+mkMissingExportNode :: Text -> Text -> Int -> Maybe Text -> ExportNode
+mkMissingExportNode nodeId name missingDepth parentId =
+    ExportNode
+        { enId = nodeId
+        , enName = name
+        , enDescription = ["Declared link, not loaded"]
+        , enLocation = ""
+        , enUnit = ""
+        , enNodeType = MissingNode
+        , enDepth = missingDepth
+        , enLoopTarget = Nothing
+        , enParentId = parentId
+        , enChildrenCount = 0
+        , enCompartment = Nothing
+        }
 
 {- | Attach biosphere nodes/edges to the accumulator when we're at the root of
 the tree (depth == 0). Below the root we leave the accumulator untouched to
@@ -538,16 +570,20 @@ mkTechnosphereTreeEdge units fromPid toPid quantity flow =
 -- | Extract nodes and edges from a 'LoopAwareTree'.
 extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
 extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
-    TreeLeaf activity ->
+    TreeLeaf _ activity ->
         let nodeId = getTreeNodeId db tree
             nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
             (nodes'', edges') = withRootBiosphere db activity nodeId depth (nodes', edgeAcc)
          in (nodes'', edges', TreeStats 1 0 1)
-    TreeLoop uuid name loopDepth ->
+    TreeLoop pid name loopDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkLoopExportNode db uuid nodeId name loopDepth parentId) nodeAcc
+            nodes' = M.insert nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) nodeAcc
          in (nodes', edgeAcc, TreeStats 1 1 0)
-    TreeNode activity children ->
+    TreeMissing _ name missingDepth ->
+        let nodeId = getTreeNodeId db tree
+            nodes' = M.insert nodeId (mkMissingExportNode nodeId name missingDepth parentId) nodeAcc
+         in (nodes', edgeAcc, TreeStats 1 0 1)
+    TreeNode _ activity children ->
         let nodeId = getTreeNodeId db tree
             nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
             (childNodes, childEdges, childStats) = foldr (processChild nodeId) (nodes', edgeAcc, TreeStats 1 0 0) children
@@ -576,20 +612,6 @@ convertToTreeExport db _rootProcessId maxDepth tree =
                 , tmExpandableNodes = length [() | (_, node) <- M.toList nodes, enChildrenCount node > 0]
                 }
      in TreeExport metadata nodes edges
-
--- | Get activity tree as rich TreeExport with configurable depth
-getActivityTree :: Database -> Text -> Int -> Maybe Text -> Either ServiceError Value
-getActivityTree db queryText maxDepth nameFilter = do
-    (_processId, _activity) <- resolveActivityAndProcessId db queryText
-    case refActivityUUID queryText of
-        Just activityUuid ->
-            let loopAwareTree = buildLoopAwareTree defaultUnitConfig db activityUuid maxDepth
-                treeExport = convertToTreeExport db queryText maxDepth loopAwareTree
-                filtered = case nameFilter of
-                    Nothing -> treeExport
-                    Just pat -> filterTreeExport pat treeExport
-             in Right $ toJSON filtered
-        Nothing -> Left $ InvalidUUID $ "Invalid activity UUID: " <> queryText
 
 {- | Post-filter a TreeExport by name: keep matching nodes plus all their ancestors up to root.
 Uses the enParentId chain already stored in each ExportNode — no extra graph traversal.
@@ -1091,21 +1113,14 @@ crossDBLinkToTarget link =
         (cdlLocation link)
         (supplierRefText link)
 
--- | EcoSpold path: resolve a target by activity UUID.
-resolveByActivityUUID :: Database -> UUID -> Maybe TargetRef
-resolveByActivityUUID db linkId
-    | linkId == UUID.nil = Nothing
-    | otherwise = do
-        pid <- findProcessIdByActivityUUID db linkId
-        act <- getActivity db pid
-        pure (activityToTarget db pid act)
+-- | The target one row names, when that row is in the database.
+targetOf :: Database -> ProcessId -> Maybe TargetRef
+targetOf db pid = activityToTarget db pid <$> getActivity db pid
 
 -- | SimaPro path: resolve a target by product flow UUID.
 resolveByProductFlow :: UnitConfig -> Database -> UUID -> Maybe TargetRef
-resolveByProductFlow cfg db fId = do
-    pid <- findProcessIdByProductFlowWithFallback cfg db fId
-    act <- getActivity db pid
-    pure (activityToTarget db pid act)
+resolveByProductFlow cfg db fId =
+    findProcessIdByProductFlowWithFallback cfg db fId >>= targetOf db
 
 -- | Cross-database link resolution (orphan waste outputs, missing tech links).
 resolveByCrossDBLink :: M.Map UUID CrossDBLink -> UUID -> Maybe TargetRef
@@ -1118,16 +1133,23 @@ a multi-product activity, and would name a treatment for a pair the matrix never
 routed.
 -}
 resolveByRoutedProducer :: Database -> Exchange -> Maybe TargetRef
-resolveByRoutedProducer db ex = do
-    pid <- findProducer (dbProcessIdLookup db) ex
-    act <- getActivity db pid
-    pure (activityToTarget db pid act)
+resolveByRoutedProducer db ex = findProducer (dbProcessIdLookup db) ex >>= targetOf db
+
+{- | The target an incoming link names: the routed row, else the row its
+activity UUID alone names ('linkedProducer'). An input's link is a statement
+about where the flow comes from, so answering it with a row of the right
+activity but the wrong product is what this replaces.
+-}
+resolveByLinkedProducer :: Database -> Exchange -> Maybe TargetRef
+resolveByLinkedProducer db ex = linkedProducer db ex >>= targetOf db
 
 {- | Resolve the target activity (if any) for one exchange. Technosphere broken
 links (linkId set but unresolvable) do NOT fall through to the product-flow
 path — that matches the original behaviour. Use '<|>' to chain fallbacks only
-where the original code did. A waste output is the one arm resolved the way the
-matrix routes it; the others answer from the activity UUID alone.
+where the original code did. Every linked arm resolves the way the matrix
+routes it; a waste output is the one that stops there, with no fallback to the
+activity UUID, because a link it cannot route is a treatment this database does
+not hold and reporting a row for it would hide that.
 -}
 resolveTarget ::
     UnitConfig ->
@@ -1136,13 +1158,13 @@ resolveTarget ::
     Exchange ->
     Maybe TargetRef
 resolveTarget cfg db links = \case
-    TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
+    ex@TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
-        | lid /= UUID.nil -> resolveByActivityUUID db lid
+        | lid /= UUID.nil -> resolveByLinkedProducer db ex
         | otherwise -> resolveByProductFlow cfg db fid <|> resolveByCrossDBLink links fid
     BiosphereExchange{} -> Nothing
-    WasteExchange{waIsInput = True, waActivityLinkId = lid}
-        | lid /= UUID.nil -> resolveByActivityUUID db lid
+    ex@WasteExchange{waIsInput = True, waActivityLinkId = lid}
+        | lid /= UUID.nil -> resolveByLinkedProducer db ex
         | otherwise -> Nothing
     -- An output's link names the activity that treats the waste, exactly as an
     -- input's names the one that supplies it. Reading it as no target at all
@@ -1297,10 +1319,9 @@ getAllProductsForActivity db groupKey =
 -- | Get target activity for technosphere navigation.
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
 getTargetActivity db exchange = do
-    targetId <- exchangeActivityLinkId exchange
-    targetActivity <- findActivityByActivityUUID db targetId
-    processId <- findProcessIdForActivity db targetActivity
-    pure (mkActivitySummary db processId targetActivity)
+    pid <- linkedProducer db exchange
+    act <- getActivity db pid
+    pure (mkActivitySummary db pid act)
 
 {- | Get reference product as FlowDetail (if exists). Reference products are
 technosphere by definition.
@@ -1318,14 +1339,10 @@ getActivityReferenceProductDetail db activity = do
 -- | Get activities that use a specific flow as ActivitySummary list.
 getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
 getActivitiesUsingFlow db flowUUID =
-    case M.lookup flowUUID (idxByFlow $ dbIndexes db) of
-        Nothing -> []
-        Just activityUUIDs ->
-            [ mkActivitySummary db processId proc
-            | procUUID <- S.toList (S.fromList activityUUIDs)
-            , Just proc <- [findActivityByActivityUUID db procUUID]
-            , Just processId <- [findProcessIdForActivity db proc]
-            ]
+    [ mkActivitySummary db pid act
+    | pid <- maybe [] (S.toList . S.fromList) (M.lookup flowUUID (idxByFlow (dbIndexes db)))
+    , Just act <- [getActivity db pid]
+    ]
 
 {- | Sentinel returned only when an exchange's unit UUID failed to resolve.
 The exchange unit-name field already surfaces the same gap via
@@ -2085,6 +2102,7 @@ resolveRootOnly db t
         case resolveActivityAndProcessId db t of
             Right (pid, _) -> Right pid
             Left (InvalidProcessId msg) -> Left msg
+            Left (AmbiguousActivity msg) -> Left msg
             Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
             Left e -> Left (T.pack (show e))
 
@@ -2867,34 +2885,41 @@ getConsumers db dbName processIdText cnf = do
 
     Right $ ConsumersResponse (SearchResults page total offset limit hasMore 0.0) edges
 
--- | Export matrix debug data (delegates to Matrix.Export)
+{- | Export matrix debug data (delegates to Matrix.Export). The row's own
+reference is read up front rather than defaulted later: the summary states the
+activity it exported, and a row the process id table cannot name is a broken
+database, not an empty field.
+-}
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either ServiceError Value)
 exportMatrixDebugData database processIdText opts = do
-    case resolveActivityAndProcessId database processIdText of
+    case resolveActivityAndProcessId database processIdText >>= withRef of
         Left err -> return $ Left err
-        Right (_processId, targetActivity) -> do
-            case refActivityUUID processIdText of
-                Nothing -> return $ Left $ InvalidUUID $ "Invalid activity UUID: " <> processIdText
-                Just activityUuid -> do
-                    matrixData <- MatrixExport.extractMatrixDebugInfo database activityUuid (debugFlowFilter opts)
-                    let inventoryList = MatrixExport.mdInventoryVector matrixData
-                        bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
-                        inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
+        Right (processId, targetActivity, ref) -> do
+            matrixData <- MatrixExport.extractMatrixDebugInfo database processId (debugFlowFilter opts)
+            let inventoryList = MatrixExport.mdInventoryVector matrixData
+                bioFlowUUIDs = MatrixExport.mdBioFlowUUIDs matrixData
+                inventory = M.fromList $ zip (V.toList bioFlowUUIDs) inventoryList
 
-                    Progress.reportProgress Progress.Info $ "DEBUG: Starting CSV export to " ++ debugOutput opts
-                    MatrixExport.exportMatrixDebugCSVs (debugOutput opts) matrixData
-                    Progress.reportProgress Progress.Info "DEBUG: CSV export completed"
+            Progress.reportProgress Progress.Info $ "DEBUG: Starting CSV export to " ++ debugOutput opts
+            MatrixExport.exportMatrixDebugCSVs (debugOutput opts) matrixData
+            Progress.reportProgress Progress.Info "DEBUG: CSV export completed"
 
-                    let summary =
-                            M.fromList
-                                [ ("activity_uuid" :: Text, UUID.toText activityUuid)
-                                , ("activity_name" :: Text, activityName targetActivity)
-                                , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
-                                , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
-                                , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
-                                , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
-                                ]
-                    return $ Right $ toJSON summary
+            let summary =
+                    M.fromList
+                        [ ("activity_uuid" :: Text, UUID.toText (prActivity ref))
+                        , ("activity_name" :: Text, activityName targetActivity)
+                        , ("total_inventory_flows" :: Text, T.pack $ show $ M.size inventory)
+                        , ("matrix_debug_exported" :: Text, "CSV_EXPORTED")
+                        , ("supply_chain_file" :: Text, T.pack $ debugOutput opts ++ "_supply_chain.csv")
+                        , ("biosphere_matrix_file" :: Text, T.pack $ debugOutput opts ++ "_biosphere_matrix.csv")
+                        ]
+            return $ Right $ toJSON summary
+  where
+    withRef (pid, act) =
+        maybe
+            (Left (InvalidUUID ("No activity reference for " <> processIdText)))
+            (\ref -> Right (pid, act, ref))
+            (processIdToRef database pid)
 
 -- | Export matrices in universal matrix format (delegates to Matrix.Export)
 exportUniversalMatrixFormat :: FilePath -> Database -> IO ()

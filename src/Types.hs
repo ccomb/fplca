@@ -35,6 +35,7 @@ import GHC.Generics (Generic)
 
 import Control.Lens ((&), (?~))
 import Data.List (find, nub)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
 import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
@@ -577,11 +578,17 @@ data ActivityTree
     = Leaf !Activity
     | Node !Activity ![(Double, ActivityTree)] -- Activities and weighted sub-activities
 
--- | Loop-aware tree for SVG export
+{- | Loop-aware tree for SVG export. Every node that exists names the row it
+sits at, so an allocated activity written as several coproduct rows is several
+nodes here rather than one. A declared link that no row satisfies is its own
+constructor: it keeps the branch visible instead of dropping it, and it is the
+only node with no row to name.
+-}
 data LoopAwareTree
-    = TreeLeaf !Activity
-    | TreeNode !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Activity + (quantity, child product flow, subtree)
-    | TreeLoop !UUID !Text !Int -- Loop reference: UUID + ActivityName + Depth
+    = TreeLeaf !ProcessId !Activity
+    | TreeNode !ProcessId !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Row + activity + (quantity, child product flow, subtree)
+    | TreeLoop !ProcessId !Text !Int -- Already visited, or depth/budget spent: row + ActivityName + Depth
+    | TreeMissing !UUID !Text !Int -- Declared link no row satisfies: activity UUID + name + Depth
 
 -- | Technosphere flow database (deduplicated by UUID)
 type TechFlowDB = M.Map UUID TechnosphereFlow
@@ -755,8 +762,11 @@ type NameIndex = M.Map Text [UUID] -- Name -> [ActivityUUID]
 -- | Index by location - geographic search
 type LocationIndex = M.Map Text [UUID] -- Location -> [ActivityUUID]
 
--- | Index by flow - find activities that use a given flow
-type FlowIndex = M.Map UUID [UUID] -- FlowID -> [ActivityUUID]
+{- | Index by flow - find the rows that use a given flow. Keyed on the row and
+not on the activity UUID, so an activity written as several coproduct rows is
+listed once per row rather than once per activity.
+-}
+type FlowIndex = M.Map UUID [ProcessId] -- FlowID -> [ProcessId]
 
 -- | Index of exchanges by flow - find all exchanges using a flow
 type ExchangeIndex = M.Map UUID [(UUID, Exchange)] -- FlowID -> [(ActivityID, Exchange)]
@@ -875,7 +885,7 @@ data MatrixFactorization = MatrixFactorization
 Used for: (1) upstream link resolution for SimaPro data, (2) future product search
 -}
 data ProductIndex = ProductIndex
-    { piByUUID :: !(M.Map UUID ProcessId) -- Product flow UUID → ProcessId (for upstream links)
+    { piByUUID :: !(M.Map UUID (NonEmpty ProcessId)) -- Product flow UUID → the rows producing it (for upstream links)
     , piByName :: !(M.Map Text [ProcessId]) -- Normalized product name → [ProcessId] (for search)
     , piByLocation :: !(M.Map Text [ProcessId]) -- Location → [ProcessId] (for search)
     }
@@ -890,7 +900,7 @@ data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int32) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
-    , dbActivityUUIDIndex :: !(M.Map UUID ProcessId) -- Activity UUID → ProcessId (for O(1) lookups)
+    , dbActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId)) -- Activity UUID → the rows that activity was written as
     , dbActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId]) -- 'activityGroupKey' → the ProcessIds of one source block (its coproducts)
     , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
@@ -1039,32 +1049,34 @@ findProcessId :: Database -> UUID -> UUID -> Maybe ProcessId
 findProcessId db actUUID prodUUID =
     M.lookup (actUUID, prodUUID) (dbProcessIdLookup db)
 
-{- | Find any ProcessId matching an activity UUID
-Returns the first ProcessId found with the given activity UUID.
-ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds),
-so we must translate from UUID → ProcessId to handle multi-product activities.
+{- | The row an activity UUID names, when it names one.
+
+An EcoSpold link and a bare activity UUID typed into the API both carry the
+activity alone, while a row is a pair. An allocated activity is written as one
+row per coproduct, so the UUID names several and there is no way to tell which
+one the caller meant: answering with any of them is guesswork the caller cannot
+see. Callers that hold the product too should use 'findProcessId'.
 -}
 findProcessIdByActivityUUID :: Database -> UUID -> Maybe ProcessId
 findProcessIdByActivityUUID db searchUUID =
-    M.lookup searchUUID (dbActivityUUIDIndex db)
+    M.lookup searchUUID (dbActivityUUIDIndex db) >>= sole
 
-{- | Find activity by activity UUID (returns first matching product)
-ESSENTIAL for EcoSpold data: exchange links only contain activity UUIDs (not full ProcessIds).
-When multiple products exist for one activity, this returns an arbitrary match.
-Uses O(1) Map lookup for efficient resolution
--}
-findActivityByActivityUUID :: Database -> UUID -> Maybe Activity
-findActivityByActivityUUID db searchUUID = do
-    pid <- M.lookup searchUUID (dbActivityUUIDIndex db)
-    getActivity db pid
+-- | The one element of a 'NonEmpty' that has exactly one.
+sole :: NonEmpty a -> Maybe a
+sole (x :| []) = Just x
+sole (_ :| (_ : _)) = Nothing
 
-{- | Find supplier ProcessId by product flow UUID
+{- | Find supplier ProcessId by product flow UUID.
 ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlowId is valid.
-Uses the ProductIndex to resolve the supplier activity from the product flow.
+
+Answers only when exactly one row produces the flow. A product made in several
+geographies is produced by several rows, and naming one of them would answer a
+question the caller never asked; 'Service.findProcessIdByProductFlowWithFallback'
+applies the same rule to its name-and-unit rung.
 -}
 findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =
-    M.lookup flowUUID (piByUUID $ dbProductIndex db)
+    M.lookup flowUUID (piByUUID $ dbProductIndex db) >>= sole
 
 {- | Look up an exchange's flow on the appropriate side. Each exchange variant
 has exactly one flow side by construction (tech, bio, or waste), so the

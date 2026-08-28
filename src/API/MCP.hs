@@ -1376,10 +1376,17 @@ callCompareImpacts dbManager rid args =
                 if scoreB /= 0
                     then abs delta / abs scoreB * 100
                     else 0
-            aTop = take topN (irContribs irA)
-            bTop = take topN (irContribs irB)
-            aMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irA]
-            bMap = M.fromList [(flowKey f, c) | (f, _, c) <- irContribs irB]
+            -- Gathered, not overwritten: 'flowKey' drops the UUID on purpose, so
+            -- two flows that differ only by it are one flow on this axis and both
+            -- contributions belong to its total. Every number below is read back
+            -- from these maps, and so is the ranking, so the two sides are
+            -- compared and ordered on the same basis.
+            alignedA = alignContribs (irContribs irA)
+            alignedB = alignContribs (irContribs irB)
+            aMap = M.map snd alignedA
+            bMap = M.map snd alignedB
+            aTop = topFlows topN alignedA
+            bTop = topFlows topN alignedB
             common =
                 [ object
                     [ "flow_name" .= bfName f
@@ -1389,19 +1396,22 @@ callCompareImpacts dbManager rid args =
                     , "b_contrib" .= cB
                     , "delta" .= (cA - cB)
                     ]
-                | (f, _, cA) <- aTop
+                | f <- aTop
                 , let k = flowKey f
+                , Just cA <- [M.lookup k aMap]
                 , Just cB <- [M.lookup k bMap]
                 ]
             aOnly =
                 [ encodeContrib f c
-                | (f, _, c) <- aTop
+                | f <- aTop
                 , M.notMember (flowKey f) bMap
+                , Just c <- [M.lookup (flowKey f) aMap]
                 ]
             bOnly =
                 [ encodeContrib f c
-                | (f, _, c) <- bTop
+                | f <- bTop
                 , M.notMember (flowKey f) aMap
+                , Just c <- [M.lookup (flowKey f) bMap]
                 ]
         pure $
             toolSuccessJson rid $
@@ -1439,6 +1449,21 @@ callCompareImpacts dbManager rid args =
             , "compartment" .= bfCompartmentSub f
             , "contribution" .= c
             ]
+
+    -- Contributions gathered on the key the two sides are compared by. The rows
+    -- arrive largest first, so the first of a key keeps its spelling for
+    -- display while the total is what the comparison ranks and reports.
+    alignContribs :: [(BiosphereFlow, Double, Double)] -> M.Map (Text, Text, Text) (BiosphereFlow, Double)
+    alignContribs contribs =
+        M.fromListWith
+            (\(_, cNew) (f, cOld) -> (f, cOld + cNew))
+            [(flowKey f, (f, c)) | (f, _, c) <- contribs]
+
+    -- The n flows contributing most on that key. Ranking single rows instead
+    -- would leave out a flow whose rows each fall outside the window while
+    -- their total leads it.
+    topFlows :: Int -> M.Map (Text, Text, Text) (BiosphereFlow, Double) -> [BiosphereFlow]
+    topFlows n = map fst . take n . L.sortOn (\(_, c) -> negate (abs c)) . M.elems
 
     -- Align flows across databases by (normalized name, medium, subcompartment).
     -- UUIDs differ across DBs by construction — see Method/Mapping comments.

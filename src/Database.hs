@@ -5,6 +5,7 @@
 module Database where
 
 import qualified Data.IntSet as IS
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -114,6 +115,9 @@ buildIndexesWithProcessIds activityVec processIdTable =
         activityUUIDs = [actUUID | (actUUID, _) <- V.toList processIdTable]
         activities = V.toList activityVec
         activityPairs = zip activityUUIDs activities
+        -- The process id table is in row order, so the row of each activity is
+        -- its position in it.
+        rows = zip [0 ..] activities
 
         nameIdx =
             M.fromListWith
@@ -128,7 +132,7 @@ buildIndexesWithProcessIds activityVec processIdTable =
         flowIdx =
             M.fromListWith
                 (++)
-                [ (exchangeFlowId ex, [uuid]) | (uuid, activity) <- activityPairs, ex <- exchanges activity
+                [ (exchangeFlowId ex, [pid]) | (pid, activity) <- rows, ex <- exchanges activity
                 ]
 
         unitIdx =
@@ -161,7 +165,10 @@ buildProductIndex activities processIdTable techFlowDb =
             ]
      in
         ProductIndex
-            { piByUUID = M.fromList [(prodUUID, pid) | (pid, prodUUID, _, _) <- entries]
+            { -- One flow, every row producing it: several is the ordinary shape of a
+              -- product made in more than one geography, and 'M.fromList' would
+              -- have kept whichever row came last.
+              piByUUID = M.fromListWith (flip (<>)) [(prodUUID, pid :| []) | (pid, prodUUID, _, _) <- entries]
             , piByName = M.fromListWith (++) [(name, [pid]) | (pid, _, name, _) <- entries]
             , piByLocation = M.fromListWith (++) [(loc, [pid]) | (pid, _, _, loc) <- entries, not (T.null loc)]
             }

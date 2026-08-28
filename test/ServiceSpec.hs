@@ -11,6 +11,7 @@ import API.Types (
     TreeExport (..),
     TreeMetadata (..),
  )
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -115,6 +116,15 @@ spec = do
                 Left (ActivityNotFound _) -> return ()
                 Left err -> expectationFailure $ "Expected ActivityNotFound but got: " ++ show err
                 Right _ -> expectationFailure "Expected ActivityNotFound but got a hit"
+
+        it "refuses a bare activity UUID naming an activity written as several processes" $ do
+            db <- loadSampleDatabase "SAMPLE.switching"
+            case M.keys (M.filter ((> 1) . NE.length) (dbActivityUUIDIndex db)) of
+                [] -> expectationFailure "fixture no longer has an activity written as several rows"
+                (actUUID : _) -> case resolveActivityAndProcessId db (toText actUUID) of
+                    Left (AmbiguousActivity _) -> return ()
+                    Left err -> expectationFailure $ "Expected AmbiguousActivity but got: " ++ show err
+                    Right _ -> expectationFailure "Expected AmbiguousActivity but got a hit"
 
         it "returns InvalidProcessId for a genuinely malformed query" $ do
             db <- loadSampleDatabase "SAMPLE.min3"

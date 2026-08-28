@@ -3,6 +3,69 @@
 ## [Unreleased]
 
 ### Fixed
+- An exchange now names the coproduct it actually asks for. A dataset whose
+  production is allocated is written as one activity per coproduct, all
+  sharing one activity identifier, and the engine kept an index from that
+  identifier to a single one of those activities. So an input for a cheese
+  could come back naming the whey permeate produced alongside it, and the
+  same swap reached the tree export, the list of activities that use a flow,
+  and the matrix debug export. Scores were never affected: they are computed
+  from the pair (activity, product), which is the resolution everything now
+  uses. What was affected is everything a client does with the identifier it
+  was given back, starting with asking for that activity, or substituting it.
+  Three visible consequences: an activity written as several coproducts is
+  now several nodes in a tree instead of one, an input whose declared supplier
+  is in no loaded database is a node of its own type (`MissingNode`) rather
+  than a branch that vanished, and a loop node's `loopTarget` is the process
+  identifier the schema always said it was rather than a bare activity
+  identifier. Every database cache is rebuilt on first load.
+- The wire revision moves to 12. A tree export can now report a node type a
+  client has not seen, for a link naming a row no loaded database holds, so a
+  client has to be able to tell a new engine from an old one before asking.
+  pyvolca knows revision 12 and no longer warns that the engine is newer than
+  it is.
+- Asking for an activity by its identifier alone no longer answers with one of
+  its coproducts, and says so rather than reporting the activity as missing. The same index that misdirected exchanges also served the
+  bare activity identifier the API, the CLI and the edit journal accept, and it
+  held a single row per activity, so an allocated activity resolved to whichever
+  coproduct was recorded last. Such an identifier is now refused rather than
+  answered wrongly, which is what the code beside it already claimed to do: it
+  names one row only when the activity was written as one. The refusal says the
+  activity is there and asks for the product alongside it, with a 400 rather
+  than the 404 that would send the caller looking for data the engine holds.
+  Every database cache is rebuilt on first load.
+- An input that names only the product it consumes no longer gets a supplier
+  drawn at random. The same product is often made by several activities, one
+  per geography, and the index from a product to its producer kept only one of
+  them, so such an input was attached to whichever producer came last. It is
+  now left unresolved when the product alone does not say which activity is
+  meant, the same rule the name-and-unit fallback beside it already applied.
+  Scores are unaffected: they never read that index.
+- Loading an EcoSpold 1 database no longer attaches an input to a supplier in
+  the wrong country. When an input names its product but no location, the
+  loader looked the product name up in an index that kept one dataset per name.
+  An EcoSpold 1 product name carries no location, so one name covers every
+  geography the product is made in: in a 11 947 dataset database, 787 names
+  cover 4 526 datasets, and the location always tells them apart. The index now
+  keeps all of them and the loader leaves the input unresolved, and says so in
+  the unlinked report, when the name alone does not say which dataset is meant.
+- Exporting an allocated activity to EcoSpold 1 no longer moves the links that
+  point at it. Each coproduct is written as its own dataset with its own
+  number, and an input naming that supplier now carries the number of the
+  coproduct it asks for. It carried whichever coproduct was written last, so
+  reading the exported file back attached the input to the wrong product.
+- Comparing two impacts adds up the flows it treats as one instead of keeping
+  one of them. The comparison aligns the two databases on a flow's name,
+  medium and subcompartment, because their identifiers are unrelated by
+  construction. Two flows in one database can carry the same three, and only
+  the last was kept, so its neighbour's contribution vanished from the
+  comparison or was reported as present on one side only. Both sides are now
+  read from the same summed totals, and the largest contributions are chosen
+  on those totals too, so a flow split across two lines that together lead the
+  comparison is no longer left out of it.
+- Loading a Brightway workbook now says when a column heading appears twice.
+  Only one such column is read on any given row, and the others were dropped
+  without a word.
 - A `GET /mcp` is now refused with 405 instead of answered with an empty
   stream. That stream is how a server speaks to a client unprompted; VoLCA
   never speaks first, so it was returned already closed, which a client reads

@@ -43,7 +43,6 @@ data MatrixDebugInfo = MatrixDebugInfo
     , mdBioTriples :: U.Vector SparseTriple
     , mdActivityIndex :: V.Vector Int32
     , mdBioFlowUUIDs :: V.Vector UUID
-    , mdTargetUUID :: UUID
     , mdTargetProcessId :: ProcessId
     , mdDatabase :: Database
     , mdSupplyVector :: [Double]
@@ -51,9 +50,13 @@ data MatrixDebugInfo = MatrixDebugInfo
     , mdInventoryVector :: [Double]
     }
 
--- | Extract matrix debug information from Database
-extractMatrixDebugInfo :: Database -> UUID -> Maybe Text -> IO MatrixDebugInfo
-extractMatrixDebugInfo database targetUUID flowFilter = do
+{- | Extract matrix debug information from Database. The target arrives as the
+row it is, which is the row the caller resolved: an activity UUID would have to
+be resolved again here, and would answer with an arbitrary product of an
+activity written as several coproduct rows.
+-}
+extractMatrixDebugInfo :: Database -> ProcessId -> Maybe Text -> IO MatrixDebugInfo
+extractMatrixDebugInfo database targetProcessId flowFilter = do
     let activities = dbActivities database
         bioFlows = dbBioFlows database
         techTriples = dbTechnosphereTriples database
@@ -63,9 +66,6 @@ extractMatrixDebugInfo database targetUUID flowFilter = do
         activityCount = dbActivityCount database
         bioFlowCount = dbBiosphereCount database
 
-        targetProcessId = case findProcessIdByActivityUUID database targetUUID of
-            Just pid -> pid
-            Nothing -> error $ "Activity " <> show targetUUID <> " has no ProcessId in database for debug-matrices"
         demandVec = buildDemandVectorFromIndex activityIndexVec targetProcessId
         demandList = toList demandVec
 
@@ -102,7 +102,6 @@ extractMatrixDebugInfo database targetUUID flowFilter = do
             , mdBioTriples = filteredBioTriples
             , mdActivityIndex = activityIndexVec
             , mdBioFlowUUIDs = bioFlowUUIDs
-            , mdTargetUUID = targetUUID
             , mdTargetProcessId = targetProcessId
             , mdDatabase = database
             , mdSupplyVector = supplyList

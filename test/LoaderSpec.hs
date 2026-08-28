@@ -426,6 +426,34 @@ spec = do
             usFoundLinks summary `shouldBe` 1
 
     -- -----------------------------------------------------------------------
+    -- fixEcoSpold1ActivityLinks (name-only fallback, EcoSpold1 style)
+    -- -----------------------------------------------------------------------
+    describe "fixEcoSpold1ActivityLinks" $ do
+        let consumerUUID = read "cccccccc-0000-0000-0000-000000000003" :: UUID.UUID
+            breadUUID = read "bbbbbbbb-0000-0000-0000-000000000003" :: UUID.UUID
+            wheatFR = ((actUUID1, flowUUID1), minimalActivity "wheat production" "FR" [refExchange flowUUID1])
+            wheatDE = ((actUUID2, flowUUID2), minimalActivity "wheat production" "DE" [refExchange flowUUID2])
+            bread =
+                ( (consumerUUID, breadUUID)
+                , minimalActivity "bread production" "CH" [refExchange breadUUID, inputExchange flowUUID1 ""]
+                )
+            flowNames = [(flowUUID1, "Wheat"), (flowUUID2, "Wheat"), (breadUUID, "Bread")]
+            -- The supplier the consumer's unlocated wheat input ends up naming.
+            wheatLink sdb =
+                [ link
+                | Just act <- [M.lookup (consumerUUID, breadUUID) (sdbActivities sdb)]
+                , TechnosphereExchange{techRole = Input, techActivityLinkId = link} <- exchanges act
+                ]
+
+        it "leaves an unlocated input unlinked when the product name covers several geographies" $ do
+            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, wheatDE, bread] flowNames)
+            wheatLink fixed `shouldBe` [UUID.nil]
+
+        it "links an unlocated input when the product name covers one dataset" $ do
+            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
+            wheatLink fixed `shouldBe` [actUUID1]
+
+    -- -----------------------------------------------------------------------
     -- countTotalTechInputs / countUnlinkedExchanges / collectUnlinkedProductNames
     -- (integration tests via SAMPLE.min3)
     -- -----------------------------------------------------------------------

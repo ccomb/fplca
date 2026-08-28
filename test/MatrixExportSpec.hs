@@ -2,9 +2,9 @@
 
 module MatrixExportSpec (spec) where
 
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.UUID as UUID
 import Matrix.Export (
     MatrixDebugInfo (..),
     escapeCsvField,
@@ -155,29 +155,25 @@ spec = do
     describe "extractMatrixDebugInfo" $ do
         it "returns supply, demand, and inventory vectors of correct length" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            info <- extractMatrixDebugInfo db targetUUID Nothing
+            info <- extractMatrixDebugInfo db (targetRow db) Nothing
             let n = fromIntegral (dbActivityCount db)
             length (mdSupplyVector info) `shouldBe` n
             length (mdDemandVector info) `shouldBe` n
 
         it "demand vector has exactly one non-zero entry" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            info <- extractMatrixDebugInfo db targetUUID Nothing
+            info <- extractMatrixDebugInfo db (targetRow db) Nothing
             length (filter (/= 0.0) (mdDemandVector info)) `shouldBe` 1
 
         it "inventory vector is non-empty (has biosphere contributions)" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            info <- extractMatrixDebugInfo db targetUUID Nothing
+            info <- extractMatrixDebugInfo db (targetRow db) Nothing
             any (/= 0.0) (mdInventoryVector info) `shouldBe` True
 
         it "flow filter restricts biosphere triples" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            infoAll <- extractMatrixDebugInfo db targetUUID Nothing
-            infoFiltered <- extractMatrixDebugInfo db targetUUID (Just "carbon")
+            infoAll <- extractMatrixDebugInfo db (targetRow db) Nothing
+            infoFiltered <- extractMatrixDebugInfo db (targetRow db) (Just "carbon")
             -- Filtered should have ≤ triples than unfiltered
             let nAll = length (mdInventoryVector infoAll)
                 nFiltered = length (mdInventoryVector infoFiltered)
@@ -186,8 +182,7 @@ spec = do
     describe "exportMatrixDebugCSVs" $ do
         it "creates supply chain and biosphere CSV files" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            info <- extractMatrixDebugInfo db targetUUID Nothing
+            info <- extractMatrixDebugInfo db (targetRow db) Nothing
             withSystemTempDirectory "acv-debug" $ \tmpDir -> do
                 let base = tmpDir </> "debug"
                 exportMatrixDebugCSVs base info
@@ -198,11 +193,20 @@ spec = do
 
         it "supply chain CSV has one row per activity" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
-            let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID.UUID
-            info <- extractMatrixDebugInfo db targetUUID Nothing
+            info <- extractMatrixDebugInfo db (targetRow db) Nothing
             withSystemTempDirectory "acv-debug" $ \tmpDir -> do
                 let base = tmpDir </> "debug"
                 exportMatrixDebugCSVs base info
                 content <- TIO.readFile (base ++ "_supply_chain.csv")
                 -- header + 3 activities (SAMPLE.min3)
                 length (lines (T.unpack content)) `shouldBe` 4
+
+{- | The row SAMPLE.min3's activity X sits at. Row 0 when it is missing, which
+only happens if the fixture changes: the assertions below would then fail on a
+different activity rather than on a resolution error, which is the shape hspec
+reports best.
+-}
+targetRow :: Database -> ProcessId
+targetRow db =
+    let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID
+     in fromMaybe 0 (findProcessIdByActivityUUID db targetUUID)
