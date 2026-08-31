@@ -16,6 +16,7 @@ module SimaPro.Parser (
     GlobalParams (..),
     emptyProcessBlock,
     fallbackAmounts,
+    dropAmbiguousNativeIds,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -748,12 +749,49 @@ setMetadata key value block = case key of
 simaproNamespace :: UUID
 simaproNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "simapro.pre.nl")
 
--- | Generate deterministic activity UUID from Activity (uses name + location)
+{- | Generate deterministic activity UUID from an Activity.
+
+A SimaPro block publishes its own identifier on the "Process identifier" line,
+and that is what names the activity when it is there. It is what the producer
+says the dataset is, it survives a re-export of the same version, and it
+survives the producer changing the spelling or the case of a name.
+
+Without it the identifier falls back to the name and the location, folded in
+case for the same reason the flow name is: two exports of one database write
+one product two ways. 'dropAmbiguousNativeIds' has already taken away any
+identifier that named more than one process, so this stays a total function of
+the activity.
+-}
 generateActivityUUID :: Activity -> UUID
 generateActivityUUID act =
-    UUID5.generateNamed
-        simaproNamespace
-        (BS.unpack $ TE.encodeUtf8 $ "activity:" <> activityName act <> "@" <> activityLocation act)
+    UUID5.generateNamed simaproNamespace . BS.unpack . TE.encodeUtf8 $ case activityNativeId act of
+        Just (NativeProcessId nativeId) -> "process:" <> nativeId
+        Nothing -> "activity:" <> T.toCaseFold (activityName act) <> "@" <> activityLocation act
+
+{- | Take a native identifier away from the activities when it names more than
+one process.
+
+Every coproduct of one block shares the block's identifier, which is the point:
+they are one process with several outputs. Two /different/ blocks sharing one
+is a naming mistake on the producer's side, and the identifier then names
+neither: those activities fall back to their name and location. The file still
+loads, and the identifiers dropped are returned so the caller can name them.
+-}
+dropAmbiguousNativeIds :: [Activity] -> ([Activity], [Text])
+dropAmbiguousNativeIds activities =
+    (map forget activities, S.toList ambiguous)
+  where
+    named =
+        M.fromListWith
+            S.union
+            [ (nativeId, S.singleton (activityName act, activityLocation act))
+            | act <- activities
+            , Just (NativeProcessId nativeId) <- [activityNativeId act]
+            ]
+    ambiguous = M.keysSet (M.filter ((> 1) . S.size) named)
+    forget act = case activityNativeId act of
+        Just (NativeProcessId nativeId) | nativeId `S.member` ambiguous -> act{activityNativeId = Nothing}
+        _ -> act
 
 {- | Generate deterministic flow UUID from name and compartment.
 
@@ -1594,7 +1632,13 @@ parseSimaProCSV unitCfg path = do
                 (T.unpack raw)
                 (T.unpack name)
                 fallback
-    let activities = map (\(a, _, _, _, _) -> a) converted
+    let (activities, ambiguousIds) = dropAmbiguousNativeIds (map (\(a, _, _, _, _) -> a) converted)
+    forM_ ambiguousIds $ \nativeId ->
+        reportProgress Warning $
+            printf
+                "process identifier '%s' names more than one process; those blocks are identified by name and location instead"
+                (T.unpack nativeId)
+    let
         allTechFlows = concatMap (\(_, tf, _, _, _) -> tf) converted
         allBioFlows = concatMap (\(_, _, bf, _, _) -> bf) converted
         allWasteFlows = concatMap (\(_, _, _, wf, _) -> wf) converted

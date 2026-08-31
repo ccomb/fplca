@@ -1368,6 +1368,35 @@ spec = do
             fmap bfUnitId (M.lookup (exchangeFlowId resource) bioFlows)
                 `shouldBe` Just (generateUnitUUID "mj")
 
+    describe "what a process identifier is made of" $ do
+        let processIds = map (\a -> (generateActivityUUID a, getReferenceProductUUID a))
+            oneBlock spelling =
+                parseIdentifiedBlocksCSV
+                    [("AGRIBALU000000003101635", "Blending, from must {FR} U", [spelling <> ";l;1;100;not defined;material;"])]
+
+        it "does not move when the producer changes the case of a name" $ do
+            written <- oneBlock "French production mix, at plant, 1 L of must {FR} U"
+            rewritten <- oneBlock "french production mix, at plant, 1 l of must {FR} U"
+            processIds written `shouldBe` processIds rewritten
+
+        it "does not move when a reference unit is renamed in the table" $ do
+            -- The drift release 0.10.0 walked into: "cubic meter" became "m3"
+            -- in units.csv and twelve percent of Agribalyse changed identity
+            -- with no datum touched.
+            let block = [("AGRIBALU000000003101635", "Blending {FR} U", ["Must {FR} U;l;1;100;not defined;material;"])]
+            before <- parseIdentifiedBlocksWith (volumeUnitConfig "cubic meter") block
+            after <- parseIdentifiedBlocksWith (volumeUnitConfig "m3") block
+            processIds before `shouldBe` processIds after
+
+        it "falls back to the name when one identifier names two processes" $ do
+            activities <-
+                parseIdentifiedBlocksCSV
+                    [ ("DUPLICATE0001", "First process {FR} U", ["First product {FR} U;kg;1;100;not defined;material;"])
+                    , ("DUPLICATE0001", "Second process {FR} U", ["Second product {FR} U;kg;1;100;not defined;material;"])
+                    ]
+            map activityNativeId activities `shouldBe` [Nothing, Nothing]
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 2
+
     describe "SimaPro multi-product processes (coproducts)" $ do
         -- One Process block declares 5 coproducts with mass-allocation formulas.
         -- The 5 resulting Activity records must share one activityUUID (so
@@ -1440,11 +1469,10 @@ spec = do
             S.fromList (map activityName activities)
                 `shouldBe` S.singleton "Tuna, main product {FR} U"
 
-        it "groups the coproducts of one block, and only those" $ do
-            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so three
-            -- unrelated lorry blocks carry one name and hash to one activityUUID.
-            -- The products index must still keep them apart, because the block
-            -- identifier does.
+        it "keeps two blocks apart when one truncated name covers both" $ do
+            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so
+            -- unrelated lorry blocks carry one name. They are still two
+            -- processes, and the identifier each one publishes says so.
             let truncated = "market for transport, freight, lorry with refrigeration machine, 7.5-16 ton, die"
             activities <-
                 parseIdentifiedBlocksCSV
@@ -1456,8 +1484,7 @@ spec = do
                     [ Just (NativeProcessId "TraiEVEA000064241304182")
                     , Just (NativeProcessId "TraiEVEA000064241304183")
                     ]
-            -- The collision this fix deliberately keeps: one UUID, two blocks.
-            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 2
             map length (productGroups activities) `shouldBe` [1, 1]
 
         it "groups a block's coproducts together under its own identifier" $ do
@@ -1541,7 +1568,11 @@ parseSectionCSV =
 @Process name@ and @Products@ rows. Activities come back in file order.
 -}
 parseIdentifiedBlocksCSV :: [(BS.ByteString, BS.ByteString, [BS.ByteString])] -> IO [Activity]
-parseIdentifiedBlocksCSV blocks =
+parseIdentifiedBlocksCSV = parseIdentifiedBlocksWith defaultUnitConfig
+
+-- | 'parseIdentifiedBlocksCSV' under a chosen unit table.
+parseIdentifiedBlocksWith :: UnitConfig -> [(BS.ByteString, BS.ByteString, [BS.ByteString])] -> IO [Activity]
+parseIdentifiedBlocksWith unitCfg blocks =
     withSystemTempFile "identified-blocks-test.csv" $ \path handle -> do
         let header =
                 [ "{SimaPro 9.6.0.1}"
@@ -1570,7 +1601,7 @@ parseIdentifiedBlocksCSV blocks =
                     ++ ["", "End", ""]
         BS.hPut handle (BS.intercalate "\r\n" (header ++ concatMap block blocks))
         hClose handle
-        (activities, _, _, _, _) <- parseOrFail defaultUnitConfig path
+        (activities, _, _, _, _) <- parseOrFail unitCfg path
         pure activities
 
 {- | The coproduct groups the products index builds, as their sizes, ordered by
@@ -1675,6 +1706,22 @@ parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     BS.hPut handle commaCSV
     hClose handle
     parseOrFail defaultUnitConfig path
+
+{- | A volume table whose reference unit carries the spelling the caller
+chooses. Renaming it is exactly what release 0.10.0 did, and no identifier may
+follow it.
+-}
+volumeUnitConfig :: Text -> UnitConfig
+volumeUnitConfig reference =
+    UnitConfig
+        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        , ucUnits =
+            M.fromList
+                [ (reference, UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 1.0)
+                , ("l", UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 0.001)
+                ]
+        , ucOriginalKeys = M.fromList [(reference, reference), ("l", "l")]
+        }
 
 {- | Unit config knowing a non-canonical spelling in two dimensions: g (mass)
 and kWh (energy), so a row written in either has somewhere to be converted to.
