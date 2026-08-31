@@ -64,6 +64,12 @@ methane =
         , bfCompartment = Just (Compartment "air" Nothing)
         }
 
+{- | The root's own flow under the name the dependency also uses, with a lower
+UUID so the merged map iterates it before the dependency's homonym.
+-}
+rootRiverWater :: BiosphereFlow
+rootRiverWater = riverWater{bfId = mkUUID 500}
+
 {- | A CF named for the method's own spelling of the substance. Only the synonym
 bridge ties it to a flow, so it resolves nothing unless the flow is in reach.
 -}
@@ -174,6 +180,18 @@ spec = do
                 DM.effectiveMethodMappings manager "root" collection root $
                     mkMethod "Climate change" [namedCF "Methane" 29.8]
             reachedFlows mappings `shouldBe` reachedFlows soloMappings
+
+        it "binds a name both databases declare to the root's own flow" $ do
+            -- pickByCompartment reads its candidates in order, so a name index
+            -- rebuilt over the merged map hands the homonym that sorts first —
+            -- the dependency's — a factor the root used to resolve itself. The
+            -- synonym fan-out downstream reaches both, which is its job; what
+            -- the cascade picks here is the root's.
+            (manager, root) <- setup [rootRiverWater]
+            mappings <-
+                DM.mapMethodToFlowsCached manager "root" collection root $
+                    mkMethod "Water use" [namedCF "Water, river" 6.98]
+            reachedFlows mappings `shouldBe` [bfId rootRiverWater]
 
         it "drops a dependent's cached mapping when the dependency changes" $ do
             (manager, root) <- setup []

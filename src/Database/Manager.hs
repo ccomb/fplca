@@ -639,14 +639,18 @@ flow to the coarse rungs — no synonym bridge, no proxy edge, no regional
 projection — and the score changes without anything reporting a gap.
 -}
 getFlowClosure :: DatabaseManager -> Text -> Database -> IO FlowClosure
-getFlowClosure manager dbName db = do
-    cached <- readTVarIO (dmFlowClosureCache manager)
+getFlowClosure manager dbName db = atomically $ do
+    cached <- readTVar (dmFlowClosureCache manager)
     case M.lookup dbName cached of
         Just closure -> pure closure
         Nothing -> do
-            loaded <- readTVarIO (dmLoadedDbs manager)
+            -- The union is built inside the transaction that publishes it, so a
+            -- dependency edit committing mid-build invalidates this read of
+            -- 'dmLoadedDbs' and the closure is rebuilt rather than cached
+            -- against flows that no longer exist.
+            loaded <- readTVar (dmLoadedDbs manager)
             let !closure = flowClosure db (dependencyClosure loaded dbName)
-            atomically $ modifyTVar' (dmFlowClosureCache manager) (M.insert dbName closure)
+            modifyTVar' (dmFlowClosureCache manager) (M.insert dbName closure)
             pure closure
 
 {- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
@@ -722,8 +726,9 @@ buildMethodTablesFor manager dbName collection db method = do
     -- usual cause is a method whose parser defaulted the direction (no
     -- metadata). Warn so the loss is distinguishable from a genuinely
     -- uncharacterized flow.
+    closure <- getFlowClosure manager dbName db
     let dirExcluded =
-            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (dbFlowsByName db) expanded
+            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
     unless (null dirExcluded) $
         reportProgress Warning $
             "[LCIA "

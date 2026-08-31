@@ -1235,15 +1235,22 @@ data FlowClosure = FlowClosure
 ownFlowClosure :: Database -> FlowClosure
 ownFlowClosure db = FlowClosure (dbBioFlows db) (dbFlowsByName db) (dbFlowsByCAS db)
 
-{- | The closure of a database over its dependencies. The root is unioned first,
-so a UUID two databases both declare keeps the root's metadata — the same
-precedence the matcher cascade applies when it prefers the root's own flow.
+{- | The closure of a database over its dependencies. The root comes first
+everywhere: a UUID two databases both declare keeps the root's metadata, and a
+name or CAS two of them declare under /different/ UUIDs still resolves to the
+root's flow, since 'Method.Mapping.pickByCompartment' reads its candidates in
+order. Adding a dependency therefore never moves a resolution the root already
+had.
 -}
 flowClosure :: Database -> [Database] -> FlowClosure
 flowClosure root [] = ownFlowClosure root
 flowClosure root deps =
-    let !merged = M.unions (dbBioFlows root : map dbBioFlows deps)
-     in FlowClosure merged (buildFlowNameIndex merged) (buildFlowCASIndex merged)
+    let !depFlows = M.unions (map dbBioFlows deps) `M.difference` dbBioFlows root
+        !merged = M.union (dbBioFlows root) depFlows
+     in FlowClosure
+            merged
+            (M.unionWith (++) (dbFlowsByName root) (buildFlowNameIndex depFlows))
+            (M.unionWith (++) (dbFlowsByCAS root) (buildFlowCASIndex depFlows))
 
 {- | Fill empty @bfCAS@ from registry name→CAS bindings, then rebuild the CAS
 index so the native CAS bridge fires. Holes only — a CAS the database itself
