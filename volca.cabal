@@ -280,6 +280,7 @@ test-suite lca-tests
                      , MappingSpec
                      , MethodSetTablesSpec
                      , MethodCollectionCacheSpec
+                     , DependencyFlowClosureSpec
                      , MethodResolveSpec
                      , ChemSynonymsSpec
                      , SubstanceRegistrySpec

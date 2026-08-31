@@ -496,7 +496,7 @@ data FlowContributionEntry = FlowContributionEntry
     , fcoCategory :: Text -- Medium only (e.g. "air")
     , fcoCompartment :: Maybe Text -- Sub-compartment (e.g. "urban air")
     , fcoCfValue :: Double -- Raw characterization factor value
-    , fcoMatchKind :: Maybe Text -- How the factor was found ("exact_name", "cas_number", …); absent for a flow the method's tables never walked
+    , fcoMatchKind :: Maybe Text -- How the factor was found ("exact_name", "cas_number", …); absent for a flow no rung of the cascade reached
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowContributionEntry)

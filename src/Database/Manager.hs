@@ -180,7 +180,8 @@ import Method.Mapping (
     fillBroadcastVector,
     fillRegionalActivityWeights,
     isExclusionCF,
-    mapMethodToFlows,
+    mapContextFor,
+    mapMethodFlows,
     mtExactCF,
     mtFallbackCF,
     mtRegionalActivityWeights,
@@ -218,6 +219,7 @@ import Types (
     CrossDBLink (..),
     CrossDBLinkingStats (..),
     Database (..),
+    FlowClosure (..),
     GeographyPolicy (..),
     LinkBlocker (..),
     LocationFallback (..),
@@ -239,6 +241,7 @@ import Types (
     enrichBioFlowCAS,
     exchangeFlowId,
     exchangeIsReference,
+    flowClosure,
     initializeRuntimeFields,
     toSimpleDatabase,
     unresolvedCount,
@@ -606,7 +609,49 @@ data DatabaseManager = DatabaseManager
     {- ^ Memoized merge of every loaded unit-definition set.
     Invalidated on 'dmLoadedUnitDefs' mutation.
     -}
+    , dmFlowClosureCache :: !(TVar (Map Text FlowClosure))
+    {- ^ Memoized 'FlowClosure' per root database: the flows its
+    characterization has to reach, its dependencies' included. Invalidated
+    with that database's method caches, which are built from it.
+    -}
     }
+
+{- | The databases a root reaches, transitively, through 'dbDependsOn'. The
+root itself is excluded, and a name already seen is not walked again, so a
+dependency cycle terminates instead of looping.
+-}
+dependencyClosure :: Map Text LoadedDatabase -> Text -> [Database]
+dependencyClosure loaded root = go (S.singleton root) (depsOf root)
+  where
+    depsOf name = maybe [] (dbDependsOn . ldDatabase) (M.lookup name loaded)
+    go _ [] = []
+    go seen (name : rest)
+        | S.member name seen = go seen rest
+        | otherwise = case M.lookup name loaded of
+            Nothing -> go (S.insert name seen) rest
+            Just ld -> ldDatabase ld : go (S.insert name seen) (rest ++ depsOf name)
+
+{- | The flows a database's characterization has to reach, memoized per root.
+
+Scoring reads the merged inventory of the whole cross-database solve, so a
+mapping cascade built on the root's own flows alone leaves every dependency
+flow to the coarse rungs — no synonym bridge, no proxy edge, no regional
+projection — and the score changes without anything reporting a gap.
+-}
+getFlowClosure :: DatabaseManager -> Text -> Database -> IO FlowClosure
+getFlowClosure manager dbName db = atomically $ do
+    cached <- readTVar (dmFlowClosureCache manager)
+    case M.lookup dbName cached of
+        Just closure -> pure closure
+        Nothing -> do
+            -- The union is built inside the transaction that publishes it, so a
+            -- dependency edit committing mid-build invalidates this read of
+            -- 'dmLoadedDbs' and the closure is rebuilt rather than cached
+            -- against flows that no longer exist.
+            loaded <- readTVar (dmLoadedDbs manager)
+            let !closure = flowClosure db (dependencyClosure loaded dbName)
+            modifyTVar' (dmFlowClosureCache manager) (M.insert dbName closure)
+            pure closure
 
 {- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
 The mapping depends only on (database, method), not on the process being evaluated.
@@ -618,7 +663,9 @@ mapMethodToFlowsCached manager dbName collection db method = do
     case M.lookup key cache of
         Just cached -> return cached
         Nothing -> do
-            result <- mapMethodToFlows db method
+            closure <- getFlowClosure manager dbName db
+            let ctx = mapContextFor closure (fromMaybe emptySynonymDB (dbSynonymDB db))
+            result <- mapMethodFlows ctx method
             atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
             return result
 
@@ -638,13 +685,14 @@ shares a synonym group with (see 'dropExcludedMappings').
 effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 effectiveMethodMappings manager dbName collection db method = do
     mappings <- mapMethodToFlowsCached manager dbName collection db method
+    closure <- getFlowClosure manager dbName db
     let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-        proxyTargets = ProxyTargets (dbFlowsByName db) (dbFlowsByCAS db) (dbBioFlows db)
+        proxyTargets = ProxyTargets (fcByName closure) (fcByCAS closure) (fcByUUID closure)
     pure $
         dropExcludedMappings (filter isExclusionCF (methodFactors method)) $
             expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-                projectRegionalResourceFlows synDB (dbBioFlows db) $
-                    expandSynonymMappings synDB (dbFlowsByName db) mappings
+                projectRegionalResourceFlows synDB (fcByUUID closure) $
+                    expandSynonymMappings synDB (fcByName closure) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
@@ -678,8 +726,9 @@ buildMethodTablesFor manager dbName collection db method = do
     -- usual cause is a method whose parser defaulted the direction (no
     -- metadata). Warn so the loss is distinguishable from a genuinely
     -- uncharacterized flow.
+    closure <- getFlowClosure manager dbName db
     let dirExcluded =
-            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (dbFlowsByName db) expanded
+            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
     unless (null dirExcluded) $
         reportProgress Warning $
             "[LCIA "
@@ -770,6 +819,11 @@ caller installs a slot and runs the build; others block on the same result
 rather than duplicating the work. @onSuccess@ runs in the slot-clearing
 transaction, so a built value lands in its cache atomically with the release. A
 failed build clears the slot — the next caller retries — and re-throws.
+
+A cache purge that ran while the build was in flight takes the slot away. The
+value was computed from the state that purge invalidated, so the owner returns
+it to its callers but does not put it in the cache: publishing it would refill,
+behind the purge's back, exactly what the purge emptied.
 -}
 singleFlight ::
     (Ord k) =>
@@ -792,8 +846,10 @@ singleFlight inflightVar key onSuccess build = do
         else do
             result <- try build
             atomically $ do
-                modifyTVar' inflightVar (M.delete key)
-                either (const (pure ())) onSuccess result
+                inflight <- readTVar inflightVar
+                when (M.lookup key inflight == Just slot) $ do
+                    writeTVar inflightVar (M.delete key inflight)
+                    either (const (pure ())) onSuccess result
                 putTMVar slot result
             either Control.Exception.throwIO pure result
 
@@ -933,20 +989,44 @@ clearMethodMappingCache manager = atomically $ do
     writeTVar (dmMethodIndexCache manager) M.empty
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
+    writeTVar (dmFlowClosureCache manager) M.empty
 
-{- | Clear cached flow mappings for a specific database.
+{- | Clear cached flow mappings for a specific database, and for every database
+that depends on it: a mapping is built over the root's flow closure, so a
+dependency that changes invalidates its dependents' tables as much as its own.
+
 The merged flow/unit snapshots span every loaded DB, so a single-DB mutation
 still invalidates them fully.
 -}
 clearMethodMappingCacheForDb :: DatabaseManager -> Text -> IO ()
 clearMethodMappingCacheForDb manager dbName = atomically $ do
-    modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodTablesInflight manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
-    modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey (\(dn, _, _) _ -> dn /= dbName))
+    loaded <- readTVar (dmLoadedDbs manager)
+    let stale = dependentsClosure loaded dbName
+        keep (dn, _, _) _ = not (S.member dn stale)
+    modifyTVar' (dmMethodMappingCache manager) (M.filterWithKey keep)
+    modifyTVar' (dmMethodTablesCache manager) (M.filterWithKey keep)
+    modifyTVar' (dmMethodTablesInflight manager) (M.filterWithKey keep)
+    modifyTVar' (dmMethodSetTablesCache manager) (M.filterWithKey keep)
+    modifyTVar' (dmMethodIndexCache manager) (M.filterWithKey keep)
+    modifyTVar' (dmFlowClosureCache manager) (M.filterWithKey (\dn _ -> not (S.member dn stale)))
     writeTVar (dmMergedFlowMetadataCache manager) Nothing
     writeTVar (dmMergedUnitConfigCache manager) Nothing
+
+{- | A database and everything that reaches it through 'dbDependsOn',
+transitively. The seen set is what makes a dependency cycle terminate.
+-}
+dependentsClosure :: Map Text LoadedDatabase -> Text -> S.Set Text
+dependentsClosure loaded = go S.empty . pure
+  where
+    go seen [] = seen
+    go seen (name : rest)
+        | S.member name seen = go seen rest
+        | otherwise = go (S.insert name seen) (rest ++ directDependents name)
+    directDependents name =
+        [ other
+        | (other, ld) <- M.toList loaded
+        , name `elem` dbDependsOn (ldDatabase ld)
+        ]
 
 {- | Initialize database manager from config
 Pre-loads databases with load=true at startup
@@ -1051,6 +1131,7 @@ initDatabaseManager config noCache = do
                 <> " ignored)"
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
+    flowClosureCacheVar <- newTVarIO M.empty
 
     let manager =
             DatabaseManager
@@ -1082,6 +1163,7 @@ initDatabaseManager config noCache = do
                 , dmCasBindings = substanceCasBindings
                 , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
                 , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
+                , dmFlowClosureCache = flowClosureCacheVar
                 }
 
     -- Auto-load active reference data (flow synonyms, compartment mappings, units)
