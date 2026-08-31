@@ -2122,6 +2122,9 @@ computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec _hier tables
             -- this method's business — they just all go through the broadcast
             -- tables — so score its own slice flat instead of contributing a
             -- zero that reads exactly like a database with nothing to say.
+            -- Unlike the fast path this walks the DB's biosphere triples once
+            -- per score call; precompute it the way
+            -- 'fillRegionalActivityWeights' does if a batch ever makes it hot.
             | M.null (mtRegionalizedCF tables) ->
                 Right
                     ( loScore
@@ -2978,8 +2981,11 @@ up that method's tables in each DB's 'MethodSetTables' and summing the
 per-DB dot products via 'sumRegionalizedLCIAScoreCrossDB'.
 
 A DB whose 'MethodSetTables' has no entry for a given methodId (mismatched
-sets) contributes 0 for that method — the same neutral element as a DB
-whose mappings caught none of the method's regional CFs.
+sets) is skipped, and its emissions are dropped from that method's sum. This
+is not the same as a DB whose mappings caught none of the method's regional
+CFs: that one is scored flat by 'computeRegionalizedLCIAScore'. Method sets
+are built from one collection and are expected to agree, so the skip is a
+defensive case rather than a live one.
 -}
 scoreRegionalCrossDB ::
     UnitConfig ->

@@ -294,7 +294,7 @@ class FlowContribution(FromJson):
     category: str  # e.g. "air/urban air"
     cf_value: float = 0.0  # raw characterization factor
     compartment: str | None = None
-    match_kind: str | None = None  # how the factor was found; None when the method's tables never walked this flow
+    match_kind: str | None = None  # how the factor was found; None when no factor in the method reaches this flow
 
 
 @dataclass

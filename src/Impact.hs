@@ -19,13 +19,16 @@ took its total from here and its shares from there would publish percentages
 that no longer sum. The contributions have to move with the total, and that
 walk does not exist yet.
 
-Two further gaps, both older than this module and neither fixed by it:
+One further gap, older than this module and not fixed by it: long-term-emission
+filtering applies to the inventory only, so the regionalized path ignores
+@exclude_long_term@. A database whose regional factors all arrive from a
+dependency now takes that path, so it stops honouring the flag — which is what
+the dependency it mirrors already did.
 
-  * The dispatch below asks the /root/ database's tables whether the method is
-    regionalized. A root database with no matching regional factors scores its
-    dependencies' regional flows flat.
-  * Long-term-emission filtering applies to the inventory only, so the
-    regionalized path ignores @exclude_long_term@.
+The dispatch below still asks the /root/ database's tables whether the method is
+regionalized. That reads right now only because those tables are built over the
+root's flow closure and so carry its dependencies' regional factors; it is a
+property of the method, and asking one database's tables for it is incidental.
 -}
 module Impact (
     scoreSolution,

@@ -21,6 +21,16 @@
   emissions were dropped whole rather than scored against the broadcast
   factors, which is where a flow with no regional factor belongs.
 
+### Changed
+- A database whose regional factors all come from a database it depends on is
+  now scored on the regionalized path, like the database it mirrors. Two
+  consequences, both of them that path's existing behaviour reaching a new set
+  of databases: `exclude_long_term` is ignored there, so a request that used it
+  against such a database stops filtering; and the per-flow shares reported
+  next to a score are still computed region-blind, so they no longer add up to
+  a regionalized total. Both were already the case for a database carrying its
+  own regional factors.
+
 ## [0.11.0] - 2026-08-28
 
 ### Fixed
