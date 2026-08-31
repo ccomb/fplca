@@ -139,12 +139,27 @@ spec = do
                 comp = Compartment "air" "unspecified" ""
             fmap bfId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fid1
 
-        it "falls back to first candidate when no medium matches" $ do
+        it "answers nothing when no candidate is in the stated medium" $ do
+            -- A row for an emission to air does not describe a water flow of
+            -- the same name, so the name matcher has found nothing and the
+            -- cascade is free to try the next one.
             fid1 <- nextRandom
             let fWater = mkFlow fid1 "co2" "water" Nothing
                 byName = M.singleton "co2" [fWater]
                 comp = Compartment "air" "" ""
-            fmap bfId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fid1
+            fmap bfId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Nothing
+
+        it "does not read a long-term subcompartment as the immediate one" $ do
+            -- "low. pop." is contained in "low. pop., long-term"; a delayed
+            -- emission is not the immediate one, so the row takes the flow at
+            -- the subcompartment it names and not the one merely containing it.
+            fidLongTerm <- nextRandom
+            fidNow <- nextRandom
+            let fLongTerm = mkFlow fidLongTerm "co2" "air" (Just "low. pop., long-term")
+                fNow = mkFlow fidNow "co2" "air" (Just "low. pop.")
+                byName = M.singleton "co2" [fLongTerm, fNow]
+                comp = Compartment "air" "low. pop." ""
+            fmap bfId (findFlowByNameComp byName "co2" (Just comp)) `shouldBe` Just fidNow
 
     describe "findFlowByCAS" $ do
         it "finds flow by CAS number" $ do

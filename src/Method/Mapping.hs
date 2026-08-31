@@ -362,12 +362,36 @@ selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits 
         Nothing -> True
         Just (Compartment med sub _) ->
             maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
-    -- An empty sub means the row constrains only the medium; a stated sub
-    -- must match the flow's, or the row would silently widen to the whole
-    -- medium. Qualifiers are ignored here as 'buildMethodTables' ignores them.
-    subFits sub c =
-        T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
-    mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+    subFits sub c = subcompartmentFits sub (fromMaybe "" (VT.compartmentSub c))
+    mediumEq = sameMedium
+
+{- | Two spellings of one medium. Folded in case and put through
+'normalizeMedium', so a method writing "Natural resource" meets a flow filed
+under "resource".
+-}
+sameMedium :: Text -> Text -> Bool
+sameMedium a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+
+{- | Does a flow's medium satisfy the one a method row states? The row's medium
+may be the broader spelling of the flow's, as "air" is of "urban air", which is
+the row widening to cover a narrower filing and not the other way round. An
+empty statement constrains nothing.
+-}
+mediumFits :: Text -> Text -> Bool
+mediumFits stated actual =
+    T.null stated || sameMedium stated actual || norm stated `T.isInfixOf` norm actual
+  where
+    norm = normalizeMedium . T.toCaseFold
+
+{- | Does a flow's subcompartment satisfy the one a method row states? An empty
+statement constrains only the medium; a stated one must be the flow's, folded in
+case and nothing more. Containment would make a row written for "low. pop." the
+exact match of a flow at "low. pop., long-term", a distinction every method that
+draws it draws on purpose. Qualifiers are ignored, as 'buildMethodTables'
+ignores them.
+-}
+subcompartmentFits :: Text -> Text -> Bool
+subcompartmentFits stated actual = T.null stated || T.toCaseFold stated == T.toCaseFold actual
 
 {- | Is that flow taken back by any of these exclusion rows? The predicates are
 built once for the row set, then run over as many flows as the caller has.
@@ -580,32 +604,26 @@ buildSynGroupFlows ctx cfs =
                 , Just gid <- [lookupSynonymGroup (viewFor (mcfDirection cf) synDB) (mcfFlowName cf)]
                 ]
 
-{- | Pick the best flow match based on compartment preference. The flow's own
-compartment now lives in 'bfCompartment' as a structured 'Types.Compartment'
-(medium + optional sub); we compare against the method-side 3-field
-'Method.Types.Compartment' here.
+{- | The flow a method row's compartment names, among the flows sharing its
+name: the one whose subcompartment the row states, else any in the row's
+medium. The flow's own compartment lives in 'bfCompartment' as a structured
+'Types.Compartment'; the row states the method-side 3-field
+'Method.Types.Compartment'.
+
+A compartment a row states is a condition, not a preference. When no candidate
+is in that medium this answers Nothing, so 'resolveCF' moves on to the next
+matcher and the mapping counts say what they mean. It used to return the first
+candidate whatever its medium, which reported a name match on a flow the row
+does not describe, and stopped the cascade before CAS could try.
 -}
 pickByCompartment :: [BiosphereFlow] -> Maybe Compartment -> Maybe BiosphereFlow
 pickByCompartment [] _ = Nothing
 pickByCompartment (f : _) Nothing = Just f
-pickByCompartment (f : fs) (Just comp) = Just $
-    case find (exactCompMatch comp) (f : fs) of
-        Just m -> m
-        Nothing -> fromMaybe f (find (mediumMatch comp) (f : fs))
+pickByCompartment flows (Just (Compartment med sub _)) =
+    find exactMatch flows <|> find inMedium flows
   where
-    exactCompMatch (Compartment med sub _) fl =
-        let cat = T.toLower (VT.bfCompartmentName fl)
-            subcomp = maybe "" T.toLower (VT.bfCompartmentSub fl)
-         in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
-
-    mediumMatch (Compartment med _ _) fl =
-        matchMedium med (T.toLower (VT.bfCompartmentName fl))
-
-    matchMedium med cat
-        | T.null med = True
-        | med == cat = True
-        | med `T.isInfixOf` cat = True
-        | otherwise = False
+    inMedium fl = mediumFits med (VT.bfCompartmentName fl)
+    exactMatch fl = inMedium fl && subcompartmentFits sub (fromMaybe "" (VT.bfCompartmentSub fl))
 
 {- | Per-strategy counts of mapping results in one pass.
 Each 'MatchStrategy' must be named below — adding a new variant is a
