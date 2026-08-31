@@ -379,7 +379,7 @@ productRowOut cfg meta isRef f =
     rawUnit = fromMaybe "" (fieldText f "unit" <|> metaText meta "unit")
     rawAmount = fromMaybe 1 (fieldNum f "amount" <|> metaNum meta "production amount")
     (effUnit, effAmount) = canonicalRow cfg rawUnit rawAmount
-    flowUUID = generateFlowUUID name "" effUnit
+    flowUUID = generateFlowUUID name ""
     unitUUID = generateUnitUUID effUnit
     exch =
         TechnosphereExchange
@@ -420,7 +420,7 @@ technosphereRowOut cfg actName f
   where
     name = fromMaybe "" (fieldText f "reference product" <|> fieldText f "name")
     (unitName', amount) = canonicalRow cfg (fromMaybe "" (fieldText f "unit")) (fromMaybe 0 (fieldNum f "amount"))
-    flowUUID = generateFlowUUID name "" unitName'
+    flowUUID = generateFlowUUID name ""
     unitUUID = generateUnitUUID unitName'
     exch =
         TechnosphereExchange
@@ -450,7 +450,7 @@ biosphereRowOut cfg actName f
     name = fromMaybe "" (fieldText f "name")
     (unitName', amount) = canonicalRow cfg (fromMaybe "" (fieldText f "unit")) (fromMaybe 0 (fieldNum f "amount"))
     (comp, sub) = splitCategories (fromMaybe "" (fieldText f "categories"))
-    flowUUID = generateFlowUUID name (normalizeSimaProCompartment comp sub) unitName'
+    flowUUID = generateFlowUUID name (normalizeSimaProCompartment comp sub)
     unitUUID = generateUnitUUID unitName'
     exch =
         BiosphereExchange

@@ -755,10 +755,22 @@ generateActivityUUID act =
         simaproNamespace
         (BS.unpack $ TE.encodeUtf8 $ "activity:" <> activityName act <> "@" <> activityLocation act)
 
--- | Generate deterministic flow UUID from name, compartment, unit
-generateFlowUUID :: Text -> Text -> Text -> UUID
-generateFlowUUID name compartment unit =
-    UUID5.generateNamed simaproNamespace (BS.unpack $ TE.encodeUtf8 $ "flow:" <> name <> ":" <> compartment <> ":" <> unit)
+{- | Generate deterministic flow UUID from name and compartment.
+
+The unit is deliberately absent. It is a property of the row, not of the flow:
+the same substance written in g by one block and in kg by another is one flow,
+and 'canonicalRow' has already brought both rows to the reference unit of the
+dimension. Keeping the unit in the key also made the identifier depend on the
+engine's own unit table, so renaming a reference unit moved identifiers no data
+had touched.
+
+The name is folded in case for the same reason: two exports of one database
+disagree on the case of a product name, and a flow is not two flows because a
+producer capitalised it differently.
+-}
+generateFlowUUID :: Text -> Text -> UUID
+generateFlowUUID name compartment =
+    UUID5.generateNamed simaproNamespace (BS.unpack $ TE.encodeUtf8 $ "flow:" <> T.toCaseFold name <> ":" <> compartment)
 
 {- | Canonical (compartment, subcompartment) string for SimaPro flow UUIDs.
 
@@ -1130,7 +1142,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
         prodRowLoc = foldMap locatedLocation reading
         rawAmount = resolveAmount env prAmountRaw prAmount
         (effUnitName, amount) = canonicalRow unitCfg prUnit rawAmount
-        flowUUID = generateFlowUUID cleanName "" effUnitName
+        flowUUID = generateFlowUUID cleanName ""
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix prComment
         exchange =
@@ -1218,7 +1230,7 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
         cleanName = maybe terName locatedName reading
         location = foldMap locatedLocation reading
         (effUnitName, resolvedAmount) = canonicalRow unitCfg terUnit (resolveAmount env terAmountRaw terAmount)
-        flowUUID = generateFlowUUID cleanName "" effUnitName
+        flowUUID = generateFlowUUID cleanName ""
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix terComment
         exchange =
@@ -1269,7 +1281,7 @@ bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
         -- compartment case or the SimaPro CF placeholder '(unspecified)'
         -- (which inventory rows leave blank in the same medium).
         (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment) effUnitName
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment)
         unitUUID = generateUnitUUID effUnitName
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
@@ -1319,7 +1331,7 @@ wasteRowToExchange unitCfg env BioExchangeRow{..} =
         -- for these flows before they were reclassified -- so impact methods
         -- that match by the (name, "waste") combination keep matching.
         (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment) effUnitName
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment)
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =

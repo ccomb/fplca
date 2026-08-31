@@ -307,12 +307,14 @@ parseCFRow cfg line =
                 -- UUID hashed via the shared 'generateFlowUUID' +
                 -- 'normalizeSimaProCompartment' so the CF side and
                 -- 'SimaPro.Parser.bioRowToExchange' produce the same UUID for
-                -- the same flow.
+                -- the same flow. The unit stays out of the hash on both sides:
+                -- a factor written per kg answers an inventory row written per
+                -- g, and 'convertForCharacterization' puts the quantity on the
+                -- factor's basis. 'mcfUnit' keeps the unit the method states.
                 !flowRef =
                     generateFlowUUID
                         rawName
                         (normalizeSimaProCompartment (decodeBS comp) (decodeBS sub))
-                        cfUnitT
                 !cf =
                     MethodCF
                         { mcfFlowRef = flowRef

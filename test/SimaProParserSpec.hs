@@ -1082,15 +1082,15 @@ spec = do
             generateUnitUUID "kg" `shouldNotBe` generateUnitUUID "MJ"
 
         it "generateFlowUUID is deterministic" $
-            generateFlowUUID "CO2" "air" "kg" `shouldBe` generateFlowUUID "CO2" "air" "kg"
+            generateFlowUUID "CO2" "air" `shouldBe` generateFlowUUID "CO2" "air"
 
         it "generateFlowUUID differs when compartment differs" $
-            generateFlowUUID "CO2" "air" "kg" `shouldNotBe` generateFlowUUID "CO2" "water" "kg"
+            generateFlowUUID "CO2" "air" `shouldNotBe` generateFlowUUID "CO2" "water"
 
     describe "indexFlows" $ do
         let kg = generateUnitUUID "kg"
             mj = generateUnitUUID "mj"
-            flow name unitRef = TechnosphereFlow (generateFlowUUID name "" "") name unitRef M.empty Nothing Nothing
+            flow name unitRef = TechnosphereFlow (generateFlowUUID name "") name unitRef M.empty Nothing Nothing
             names = M.fromList [(kg, "kg"), (mj, "mj")]
 
         it "folds two rows of one flow into a single entry when the unit agrees" $
@@ -1109,46 +1109,44 @@ spec = do
     -- ('Method.ParserSimaPro') both hash flow UUIDs via 'generateFlowUUID'
     -- composed with 'normalizeSimaProCompartment'. These tests pin the
     -- invariant that the two call sites land on the same UUID for the same
-    -- elementary flow — the bug they prevent silently routed every regional,
-    -- non-kg or '(unspecified)'-sub CF through the slower name cascade.
+    -- elementary flow — the bug they prevent silently routed every regional
+    -- or '(unspecified)'-sub CF through the slower name cascade.
     -- -----------------------------------------------------------------------
     describe "CF / biosphere flow UUID alignment" $ do
-        let cfSide name comp sub =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub)
-            bioSide name comp sub =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub)
+        let cfSide name comp sub = generateFlowUUID name (normalizeSimaProCompartment comp sub)
+            bioSide name comp sub = generateFlowUUID name (normalizeSimaProCompartment comp sub)
 
-        it "regional water in m³: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
-            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
-                `shouldBe` bioSide "Water, FR" "resource" "" "m3"
-
-        it "non-kg energy resource: CF unit must come from the CF row, not 'kg'" $
-            cfSide "Energy, gross calorific value, in biomass" "Raw" "(unspecified)" "MJ"
-                `shouldBe` bioSide "Energy, gross calorific value, in biomass" "resource" "" "MJ"
+        it "regional water: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
+            cfSide "Water, FR" "Raw" "(unspecified)"
+                `shouldBe` bioSide "Water, FR" "resource" ""
 
         it "regional air emission: CF 'Air'/'(unspecified)' matches bio 'air'/blank" $
-            cfSide "Nitrogen dioxide, FR" "Air" "(unspecified)" "kg"
-                `shouldBe` bioSide "Nitrogen dioxide, FR" "air" "" "kg"
+            cfSide "Nitrogen dioxide, FR" "Air" "(unspecified)"
+                `shouldBe` bioSide "Nitrogen dioxide, FR" "air" ""
 
         it "subcompartment case is normalized on both sides" $
-            cfSide "NOx" "Air" "Low. Pop." "kg"
-                `shouldBe` bioSide "NOx" "air" "low. pop." "kg"
+            cfSide "NOx" "Air" "Low. Pop." `shouldBe` bioSide "NOx" "air" "low. pop."
 
         it "CF 'resources' header matches bio 'resource' literal" $
-            cfSide "Iron" "Resources" "in ground" "kg"
-                `shouldBe` bioSide "Iron" "resource" "in ground" "kg"
-
-        it "differs when units differ (kg vs m³ are distinct flows)" $
-            cfSide "Water" "Raw" "(unspecified)" "kg"
-                `shouldNotBe` cfSide "Water" "Raw" "(unspecified)" "m3"
+            cfSide "Iron" "Resources" "in ground" `shouldBe` bioSide "Iron" "resource" "in ground"
 
         it "differs when the regional suffix differs" $
-            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
-                `shouldNotBe` cfSide "Water, DE" "Raw" "(unspecified)" "m3"
+            cfSide "Water, FR" "Raw" "(unspecified)"
+                `shouldNotBe` cfSide "Water, DE" "Raw" "(unspecified)"
 
-        it "preserves the unit signal in the hash (CF unit is not stripped)" $
-            generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "m3"
-                `shouldNotBe` generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "kg"
+    -- -----------------------------------------------------------------------
+    -- What the flow identifier is made of
+    -- -----------------------------------------------------------------------
+    describe "flow identity" $ do
+        it "is the same flow whatever unit the row states" $
+            generateFlowUUID "Water" "resource" `shouldBe` generateFlowUUID "Water" "resource"
+
+        it "is the same flow whatever case the producer wrote" $
+            generateFlowUUID "Blending, from must, 1 L" ""
+                `shouldBe` generateFlowUUID "blending, from must, 1 l" ""
+
+        it "still separates two names that differ by more than case" $
+            generateFlowUUID "Water, FR" "" `shouldNotBe` generateFlowUUID "Water, DE" ""
 
     -- -----------------------------------------------------------------------
     -- Uncovered CSV sections
