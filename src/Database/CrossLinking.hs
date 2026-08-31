@@ -717,9 +717,6 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 Nothing -> []
          in firstNonEmpty [byExact, bySynonym]
 
-    -- Try each prefix from compound name splitting; for each prefix run the
-    -- same (exact, then synonym) sub-cascade; return the first prefix that
-    -- yields anything.
     classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
     classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =
         case acceptableLocation lcGeographyPolicy lcLocationHierarchy (Location queryLoc) (Location seLocation) of
