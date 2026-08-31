@@ -181,9 +181,11 @@ broadcast vector was filled rather than replayed. This is the cheap answer, for
 annotating a whole table of contributing flows at once; 'explainFlowCF' is the
 full one, for the flow somebody clicked.
 
-'Nothing' means the tables hold no recorded resolution for this flow: it was
-never walked, which a cross-DB flow arriving from a dependency has not been.
-That is an absent answer, not a negative one.
+'Nothing' means the tables hold no recorded resolution for this flow: no rung
+of the cascade reached it. The tables are built over the flows the database
+reaches, its dependencies' included, so a flow arriving from a dependency is
+walked like any other and this answer is about the method's coverage, not
+about where the flow came from.
 -}
 flowMatchKind :: MethodTables -> UUID -> Maybe Text
 flowMatchKind tables fid = rungName . ftRung <$> M.lookup fid (mtResolution tables)

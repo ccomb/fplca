@@ -388,9 +388,8 @@ description r = case r of
         \eutrophication, land use, water scarcity, resource depletion. Prefer this \
         \over web estimates for grounded, database-backed answers. Each \
         \contributing flow carries 'match_kind': how its factor was found, in \
-        \the rung names documented on explain_cf; null means the method's \
-        \tables never walked this flow (it arrived from a dependency database), \
-        \not that it is uncharacterized. Ask explain_cf for the full story on \
+        \the rung names documented on explain_cf; null means no factor in the \
+        \method reaches this flow. Ask explain_cf for the full story on \
         \one flow."
             <> webUrlTip "impacts"
     ComputeSensitivity ->
@@ -455,8 +454,7 @@ description r = case r of
         \contribute most to a specific impact category. Answers 'which emissions \
         \drive my climate change score?'. Each flow carries 'match_kind': how \
         \its factor was found, in the rung names documented on explain_cf; null \
-        \means the method's tables never walked this flow (it arrived from a \
-        \dependency database), not that it is uncharacterized. Ask explain_cf \
+        \means no factor in the method reaches this flow. Ask explain_cf \
         \for the full story on one flow."
             <> webUrlTip "contributing-flows"
     GetContributingActivities ->
