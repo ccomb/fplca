@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+- A database whose inventory comes from a database it depends on is now
+  characterized with the same factors as that database itself. The cascade
+  that ties a method's factors to a database's flows was built over the root
+  database's own flows alone, while scoring reads the merged inventory of the
+  whole cross-database solve. A dependency's flow therefore only ever reached
+  the rungs that need no flow to point at: never the synonym bridge, never the
+  proxy edges, never the regional projection. Measured on eight processes
+  written against Agribalyse, that lost 13% of fossil climate change; and
+  because a database with no regional factor of its own is scored on the flat
+  path, it also put water use 78 times too high, land use at zero and fossil
+  resource use at 44% of its value. The mapping is now built over the flows
+  the database reaches, its dependencies' included, and the scores match the
+  dependency's own. A database that depends on none is unaffected.
+- A database taking part in a cross-database regionalized score no longer
+  contributes zero when it carries no regional factor for the method. Its
+  emissions were dropped whole rather than scored against the broadcast
+  factors, which is where a flow with no regional factor belongs.
+
 ## [0.11.0] - 2026-08-28
 
 ### Fixed

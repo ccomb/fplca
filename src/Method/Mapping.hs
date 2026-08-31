@@ -23,6 +23,7 @@ module Method.Mapping (
     dropExcludedMappings,
     exclusionWarning,
     buildMapContext,
+    mapContextFor,
 
     -- * LCIA scoring
     CF (..),
@@ -136,14 +137,14 @@ import Data.Word (Word8)
 import GHC.Generics (Generic)
 
 import qualified Data.Set as Set
-import Matrix (Inventory, Vector, chunksOf)
+import Matrix (Inventory, Vector, applyBiosphereMatrix, chunksOf)
 import Method.ChemSynonyms (ChemSynonyms, expandedTokens)
 import Method.Types
 import Progress (ProgressLevel (..), reportProgress)
 import SubstanceRegistry (nonEmptyCAS, normalizeCAS)
 import qualified SubstanceRegistry as SR
 import SynonymDB
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), ProcessId, SparseTriple (..), Unit (..), UnitDB)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), FlowClosure (..), ProcessId, SparseTriple (..), Unit (..), UnitDB, ownFlowClosure)
 import qualified Types as VT
 import UnitConversion (UnitConfig, convertUnit, isKnownUnit, normalizeToCanonical, normalizeUnit, unitsCompatible)
 
@@ -225,17 +226,26 @@ data MapContext = MapContext
     -}
     }
 
--- | Build a MapContext from a Database (convenience for callers)
-buildMapContext :: Database -> MapContext
-buildMapContext db =
+{- | Build a MapContext over the flows a database's characterization has to
+reach, which is its dependencies' as much as its own — see 'FlowClosure'.
+-}
+mapContextFor :: FlowClosure -> SynonymDB -> MapContext
+mapContextFor closure synDB =
     MapContext
-        { mcBioFlowsByUUID = dbBioFlows db
-        , mcBioFlowsByName = dbFlowsByName db
-        , mcBioFlowsByCAS = dbFlowsByCAS db
-        , mcSynonymDB = fromMaybe emptySynonymDB (dbSynonymDB db)
+        { mcBioFlowsByUUID = fcByUUID closure
+        , mcBioFlowsByName = fcByName closure
+        , mcBioFlowsByCAS = fcByCAS closure
+        , mcSynonymDB = synDB
         , mcActivities = M.empty
         , mcSynGroupFlows = M.empty
         }
+
+{- | Build a MapContext from one Database alone. For callers holding no manager
+and therefore no dependencies to close over — the CLI, and the tests.
+-}
+buildMapContext :: Database -> MapContext
+buildMapContext db =
+    mapContextFor (ownFlowClosure db) (fromMaybe emptySynonymDB (dbSynonymDB db))
 
 {- | Map every method CF to a database biosphere flow via the built-in matcher
 cascade ('resolveCF'). Each CF resolves independently (no cross-CF state), so
@@ -2101,18 +2111,22 @@ computeRegionalizedLCIAScore ::
     M.Map Location [Location] ->
     MethodTables ->
     Either Text Double
-computeRegionalizedLCIAScore _unitConfig _unitDB _flowDB _db scalingVec _hier tables =
+computeRegionalizedLCIAScore unitConfig unitDB flowDB db scalingVec _hier tables =
     case mtRegionalActivityWeights tables of
         Just raw -> scoreFromPrecomputed raw scalingVec
         Nothing
             -- Cross-DB scoring passes per-DB tables in; a dep DB whose flow
             -- mappings caught none of this method's regional CFs has empty
             -- 'mtRegionalizedCF', so 'fillRegionalActivityWeights' left
-            -- 'mtRegionalActivityWeights' unfilled. Treat as a 0
-            -- contribution rather than erroring — non-regional emissions
-            -- from that DB are handled by the broadcast pass for which the
-            -- DB built 'rawWeights' from its own broadcast cell.
-            | M.null (mtRegionalizedCF tables) -> Right 0
+            -- 'mtRegionalActivityWeights' unfilled. Its emissions are still
+            -- this method's business — they just all go through the broadcast
+            -- tables — so score its own slice flat instead of contributing a
+            -- zero that reads exactly like a database with nothing to say.
+            | M.null (mtRegionalizedCF tables) ->
+                Right
+                    ( loScore
+                        (computeLCIAScoreFromTables unitConfig unitDB flowDB (applyBiosphereMatrix db scalingVec) tables)
+                    )
             | otherwise ->
                 Left
                     "Regionalized score requested but precomputed activity weights\

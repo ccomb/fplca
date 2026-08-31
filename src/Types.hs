@@ -1216,6 +1216,35 @@ addFlowNameIndexToDatabase db =
         , dbProductSearchIndex = buildProductSearchIndex (dbActivities db) (dbTechFlows db)
         }
 
+{- | The biosphere flows a database's characterization has to reach: its own,
+plus those of every database it depends on.
+
+A cross-database inventory carries the dependencies' flows, so a matcher
+cascade built on the root's flows alone resolves nothing for them — the
+synonym, proxy and regional bridges all need a flow to point at. The score
+then loses whatever those bridges would have found, silently, because the
+inventory is right and only the factors are missing.
+-}
+data FlowClosure = FlowClosure
+    { fcByUUID :: !BioFlowDB
+    , fcByName :: !(M.Map Text [BiosphereFlow])
+    , fcByCAS :: !(M.Map Text [BiosphereFlow])
+    }
+
+-- | The closure of a database that depends on nothing: its own prebuilt indexes.
+ownFlowClosure :: Database -> FlowClosure
+ownFlowClosure db = FlowClosure (dbBioFlows db) (dbFlowsByName db) (dbFlowsByCAS db)
+
+{- | The closure of a database over its dependencies. The root is unioned first,
+so a UUID two databases both declare keeps the root's metadata — the same
+precedence the matcher cascade applies when it prefers the root's own flow.
+-}
+flowClosure :: Database -> [Database] -> FlowClosure
+flowClosure root [] = ownFlowClosure root
+flowClosure root deps =
+    let !merged = M.unions (dbBioFlows root : map dbBioFlows deps)
+     in FlowClosure merged (buildFlowNameIndex merged) (buildFlowCASIndex merged)
+
 {- | Fill empty @bfCAS@ from registry name→CAS bindings, then rebuild the CAS
 index so the native CAS bridge fires. Holes only — a CAS the database itself
 provided is authoritative and never overwritten, which bounds any risk from a
