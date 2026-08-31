@@ -81,6 +81,12 @@
   by location, wins. They are duplicates of each other, a block exported twice
   under a name differing by a typo, so either answers; what must not happen is
   the answer moving because identity is minted differently.
+- The quality report gains the other half of a pair it only had one side of: an
+  input naming a product no reference product of this database supplies, beside
+  the reference product nothing consumes. Expected of a foreground database,
+  which draws its background from another; a hole in one meant to stand alone.
+  On the Agribalyse 4.0 export of 13 May 2026 it names the nine that were being
+  filled with a supplier nobody asked for.
 - Every database cache is rebuilt on first load.
 
 ## [0.11.0] - 2026-08-28
