@@ -10,7 +10,8 @@ amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
-database consumes, geography no dataset declared (read off the name
+database consumes, inputs no reference product in the database supplies,
+geography no dataset declared (read off the name
 or filled in by the loader instead), land transformation whose "to" and
 "from" areas don't balance within an activity, oxygen-demand or
 organic-carbon measures reported in a physically impossible order, CAS
@@ -111,6 +112,7 @@ data QualityReport = QualityReport
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
+    , qrUnsuppliedInputs :: !QualityCheck
     , qrLandTransformationBalance :: !QualityCheck
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
@@ -135,6 +137,7 @@ qualityChecks r =
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
     , qrUnconsumedProducts r
+    , qrUnsuppliedInputs r
     , qrLandTransformationBalance r
     , qrOxygenDemandOrder r
     , qrInvalidCas r
@@ -236,6 +239,7 @@ qualityReport dbName db =
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
+        , qrUnsuppliedInputs = QualityCheck True (worstFirst unsuppliedOffenders)
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
@@ -522,6 +526,27 @@ qualityReport dbName db =
         , [refEx] <- [filter exchangeIsReference (exchanges act)]
         , exchangeFlowId refEx `S.notMember` usedFlowIds
         , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
+        ]
+
+    {- The other direction: an input naming a product no reference product of
+    this database supplies. Expected of a foreground database, which draws its
+    background from another; a hole in one that is meant to stand alone. Either
+    way the engine says so rather than resolving the input to something else,
+    which is what a shortened or mistyped product name used to get.
+    -}
+    suppliedFlowIds =
+        S.fromList [exchangeFlowId ex | act <- acts, ex <- exchanges act, exchangeIsReference ex]
+    needsSupplier ex = case ex of
+        TechnosphereExchange{techRole = role} -> role `elem` [Input, ReferenceInput, Coproduct]
+        BiosphereExchange{} -> False
+        WasteExchange{} -> False
+    unsuppliedOffenders =
+        [ offender InfoSev key act (Just (anyFlowName fid)) "no reference product of this database supplies this input; it comes from a database this one depends on, or from nowhere"
+        | (key, act) <- entries
+        , ex <- exchanges act
+        , needsSupplier ex
+        , let fid = exchangeFlowId ex
+        , fid `S.notMember` suppliedFlowIds
         ]
 
     -- Land transformation is conserved: a parcel changed into one use was

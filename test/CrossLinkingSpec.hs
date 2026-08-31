@@ -71,57 +71,6 @@ spec = do
             normalizeText "bio\x202Fgas" `shouldBe` "bio gas"
 
     -- -----------------------------------------------------------------------
-    -- stripTrailingDBTag
-    -- -----------------------------------------------------------------------
-    describe "stripTrailingDBTag" $ do
-        it "strips '(WFLDB)' suffix" $
-            stripTrailingDBTag "wheat (WFLDB)" `shouldBe` Just "wheat"
-
-        it "strips '(AGRIBALYSE)' suffix" $
-            stripTrailingDBTag "tomato (AGRIBALYSE)" `shouldBe` Just "tomato"
-
-        it "returns Nothing when no tag present" $
-            stripTrailingDBTag "wheat" `shouldBe` Nothing
-
-        it "returns Nothing for lowercase content" $
-            stripTrailingDBTag "wheat (organic)" `shouldBe` Nothing
-
-        it "returns Nothing for empty string" $
-            stripTrailingDBTag "" `shouldBe` Nothing
-
-    -- -----------------------------------------------------------------------
-    -- stripTrailingLocationSuffix
-    -- -----------------------------------------------------------------------
-    describe "stripTrailingLocationSuffix" $ do
-        it "strips '/CA U' suffix" $
-            stripTrailingLocationSuffix "wheat (WFLDB)/CA U" `shouldBe` Just "wheat (WFLDB)"
-
-        it "strips '/GLO S' suffix" $
-            stripTrailingLocationSuffix "electricity/GLO S" `shouldBe` Just "electricity"
-
-        it "returns Nothing when no slash present" $
-            stripTrailingLocationSuffix "wheat" `shouldBe` Nothing
-
-        it "returns Nothing when suffix has wrong format" $
-            stripTrailingLocationSuffix "a/b/c" `shouldBe` Nothing
-
-    -- -----------------------------------------------------------------------
-    -- extractProductPrefixes
-    -- -----------------------------------------------------------------------
-    describe "extractProductPrefixes" $ do
-        it "splits on '//' separator" $
-            extractProductPrefixes "wheat//[GLO] wheat production" `shouldContain` ["wheat"]
-
-        it "splits on ' {' separator" $
-            extractProductPrefixes "electricity {FR}" `shouldContain` ["electricity"]
-
-        it "strips DB tag" $
-            extractProductPrefixes "wheat (WFLDB)" `shouldContain` ["wheat"]
-
-        it "returns empty list for plain name with no separator" $
-            extractProductPrefixes "wheat" `shouldBe` []
-
-    -- -----------------------------------------------------------------------
     -- extractBracketedLocation
     -- -----------------------------------------------------------------------
     describe "extractBracketedLocation" $ do
@@ -194,19 +143,6 @@ spec = do
             let synDB = buildFromPairs [("co2", "carbon dioxide")]
             -- After normalization both resolve to the same group in a symmetric pair
             matchProductName synDB "CO2" "carbon dioxide" `shouldSatisfy` (>= 45)
-
-    -- -----------------------------------------------------------------------
-    -- extractProductPrefixes — additional cases
-    -- -----------------------------------------------------------------------
-    describe "extractProductPrefixes (additional)" $ do
-        it "strips location suffix /CA U" $
-            extractProductPrefixes "wheat (WFLDB)/CA U" `shouldContain` ["wheat (WFLDB)"]
-
-        it "strips both tag and location suffix" $
-            extractProductPrefixes "wheat (WFLDB)/CA U" `shouldContain` ["wheat"]
-
-        it "splits on ' |' separator" $
-            extractProductPrefixes "heat | natural gas | CH" `shouldContain` ["heat"]
 
     -- -----------------------------------------------------------------------
     -- isSubregionOf — additional location pairs

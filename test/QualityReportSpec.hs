@@ -509,6 +509,25 @@ spec = do
             qcOffenders (qrUnconsumedProducts (reportOf (mkActivity "no reference" [input flourFlow 1.0])))
                 `shouldBe` []
 
+    describe "unsupplied inputs check" $ do
+        it "flags an input no reference product of the database supplies" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])]
+                check = qrUnsuppliedInputs (qualityReport "testdb" db)
+            severities check `shouldBe` [InfoSev]
+            processIds check `shouldBe` [pidOf actA prodA]
+
+        it "passes when the database produces what it consumes" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrUnsuppliedInputs (qualityReport "testdb" db)) `shouldBe` []
+
+        it "says nothing about a biosphere exchange, which has no supplier" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow, bioExchange flourFlow 1.0])]
+            qcOffenders (qrUnsuppliedInputs (qualityReport "testdb" db)) `shouldBe` []
+
     describe "land transformation balance check" $ do
         it "flags an activity whose transformed-from and transformed-to areas diverge" $ do
             let act = mkActivity "land clearing" [reference breadFlow, bioExchange transFromFlow 10, bioExchange transToFlow 4]

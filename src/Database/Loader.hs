@@ -130,7 +130,6 @@ import Database.CrossLinking (
     defaultLinkingThreshold,
     emptyAliasMap,
     extractBracketedLocation,
-    extractProductPrefixes,
     findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
@@ -421,28 +420,32 @@ buildSupplierIndex activities techFlowDb =
         , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
         ]
 
-{- | Build name-only supplier index for SimaPro linking
-Uses the normalized product name + extracted prefixes (no location required).
-Exact names take priority via M.union.
+{- | Build name-only supplier index for SimaPro linking, on the reference
+product name and nothing else.
+
+When several activities produce one product name they are duplicates of each
+other, a block exported twice under a name that differs by a typo, and either
+answers. Which one is picked must not depend on the identifiers, or a change in
+how identity is minted would silently move the supply chain: the first by
+activity name, then by location, wins. The identifier breaks a tie only between
+two rows the file itself gives no way to tell apart.
+
+The duplication is a defect in its own right, and 'Database.Quality' reports it
+as one.
 -}
 buildSupplierIndexByName :: UnitDB -> ActivityMap -> TechFlowDB -> NameOnlyIndex
 buildSupplierIndexByName unitDB activities techFlowDb =
-    let entries =
-            [ (tfName flow, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))
+    M.map (\candidates -> let (_, _, _, entry) = minimum candidates in entry) $
+        M.fromListWith
+            (<>)
+            [ ( normalizeText (tfName flow)
+              , [(activityName act, activityLocation act, actUUID, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))]
+              )
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
             , exchangeIsReference ex
             , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
             ]
-        exactIndex = M.fromList [(normalizeText name, val) | (name, val) <- entries]
-        prefixIndex =
-            M.fromList
-                [ (normalizeText p, val)
-                | (name, val) <- entries
-                , p <- extractProductPrefixes name
-                , normalizeText p /= normalizeText name
-                ]
-     in M.union exactIndex prefixIndex
 
 {- | Build the name-only supplier index for EcoSpold1 linking, keeping every
 dataset a name covers rather than the last one seen.
@@ -736,10 +739,13 @@ linkUnitsCompatible unitConfig consumerUnit supplierUnit =
 Inputs and non-reference outputs (coproducts / avoided-production credits)
 are eligible for relinking. A candidate is accepted only if its
 reference-product unit is dimensionally compatible with the consumer exchange
-('linkUnitsCompatible'); an incompatible candidate is skipped (falling through
-to the prefix fallback, then to unlinked) rather than forming a link the matrix
-builder cannot convert — which would otherwise abort the whole load. Returns
-(fixed exchange, UnlinkedSummary).
+('linkUnitsCompatible'); an incompatible candidate is skipped rather than
+forming a link the matrix builder cannot convert — which would otherwise abort
+the whole load.
+
+There is no second guess. An input naming a product no activity of this
+database produces stays unlinked, and the cross-database linker gets its turn
+on it. Returns (fixed exchange, UnlinkedSummary).
 -}
 fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
@@ -757,18 +763,9 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
                         Just (actUUID, prodUUID) ->
                             (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
                         Nothing ->
-                            let prefixes = extractProductPrefixes (tfName flow)
-                                tryPrefix [] = Nothing
-                                tryPrefix (p : ps) = case M.lookup (normalizeText p) idx >>= accept of
-                                    Just result -> Just result
-                                    Nothing -> tryPrefix ps
-                             in case tryPrefix prefixes of
-                                    Just (actUUID, prodUUID) ->
-                                        (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
-                                    Nothing ->
-                                        let unlinked = UnlinkedExchange (tfName flow) loc
-                                            unlinkedMap = M.singleton consumerName [unlinked]
-                                         in (ex, UnlinkedSummary unlinkedMap 1 0 1)
+                            let unlinked = UnlinkedExchange (tfName flow) loc
+                                unlinkedMap = M.singleton consumerName [unlinked]
+                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)

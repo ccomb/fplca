@@ -53,16 +53,34 @@
   them being dropped in silence.
 - The SimaPro writer emits the "Process identifier" line it always read.
   Exporting a database and reading it back used to rename every process in it.
-- Scores of a SimaPro database move, and not because of the identity. An input
-  that names a product no reference product matches exactly falls back to a
-  prefix of that name, and the index from a prefix to its producer keeps one
-  producer, whichever the map happened to hold last, in activity-identifier
-  order. In Agribalyse 4.0, 2797 prefixes name several producers. Every
-  identifier moved here, so the producer kept moved with it: sunflower grain now
-  draws its urea from the Chinese market rather than the North American one, and
-  its organic-carcinogen score with it. Measured over 250 activities, half the
-  category readings move, by 0.13% at the median and by up to 43%. The choice
-  was already arbitrary; what changed is which arbitrary answer comes out.
+- An input is no longer answered with a supplier the file did not name. When a
+  product name matched no reference product, the engine fell back to a prefix of
+  that name: the text before the first `//`, ` {`, ` [` or ` |`. What follows
+  those separators is the geography and the model variant, which is exactly what
+  tells two producers apart, so `Urea {RoW}| urea production` was answered with
+  whichever activity named `Urea …` the map happened to hold last. Measured on
+  ten SimaPro exports the rule earns nothing: on seven of them every input
+  already has an exact producer, and it fires on ten rows of one Agribalyse 4.0
+  export and one row of Ginko, eight of those eleven choosing among several
+  candidates. Between databases it is worse: of the 169 lines pastoeco resolves
+  in Agribalyse 3.2, 148 match by name and 21 by prefix, 17 of them ambiguously,
+  one choosing among 148 electricity markets. The rule is gone on both sides. An
+  input nobody supplies stays unlinked, and the cross-database linker gets its
+  turn on it.
+- Scores of a SimaPro database fall where an invented supplier used to be
+  counted. On the Agribalyse 4.0 export of 13 May 2026, ten inputs name
+  ecoinvent unit processes the export does not carry: four French fertiliser
+  mixes and one lorry. They were being answered with a market of another
+  geography, so every product fertilised in France carried a burden its file
+  never asked for. Over a sample of 250 activities half the category readings
+  move, and every one of them moves down, by 0.5% at the median and by up to
+  56%. The engine reports those ten as unlinked, where it used to report 169113
+  of 169113 resolved.
+- When several activities produce one product name, which of them supplies an
+  input no longer depends on the identifiers: the first by activity name, then
+  by location, wins. They are duplicates of each other, a block exported twice
+  under a name differing by a typo, so either answers; what must not happen is
+  the answer moving because identity is minted differently.
 - Every database cache is rebuilt on first load.
 
 ## [0.11.0] - 2026-08-28

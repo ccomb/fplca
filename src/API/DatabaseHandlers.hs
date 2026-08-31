@@ -403,6 +403,7 @@ qualityReportToAPI mLimit r =
         , qraTruncatedNameCollisions = checkToAPI mLimit (Quality.qrTruncatedNameCollisions r)
         , qraMissingPedigree = checkToAPI mLimit (Quality.qrMissingPedigree r)
         , qraUnconsumedProducts = checkToAPI mLimit (Quality.qrUnconsumedProducts r)
+        , qraUnsuppliedInputs = checkToAPI mLimit (Quality.qrUnsuppliedInputs r)
         , qraLandTransformationBalance = checkToAPI mLimit (Quality.qrLandTransformationBalance r)
         , qraOxygenDemandOrder = checkToAPI mLimit (Quality.qrOxygenDemandOrder r)
         , qraInvalidCas = checkToAPI mLimit (Quality.qrInvalidCas r)

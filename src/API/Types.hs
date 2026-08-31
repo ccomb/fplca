@@ -963,6 +963,7 @@ data QualityReportAPI = QualityReportAPI
     , qraTruncatedNameCollisions :: QualityCheckAPI
     , qraMissingPedigree :: QualityCheckAPI
     , qraUnconsumedProducts :: QualityCheckAPI
+    , qraUnsuppliedInputs :: QualityCheckAPI
     , qraLandTransformationBalance :: QualityCheckAPI
     , qraOxygenDemandOrder :: QualityCheckAPI
     , qraInvalidCas :: QualityCheckAPI

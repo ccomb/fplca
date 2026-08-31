@@ -58,6 +58,7 @@ everyCheck =
         , qraTruncatedNameCollisions = finding "truncated name collisions"
         , qraMissingPedigree = finding "missing pedigree"
         , qraUnconsumedProducts = finding "unconsumed products"
+        , qraUnsuppliedInputs = finding "unsupplied inputs"
         , qraLandTransformationBalance = finding "land transformation balance"
         , qraOxygenDemandOrder = finding "oxygen demand order"
         , qraInvalidCas = finding "invalid cas"
@@ -81,6 +82,7 @@ oneFinding detail =
         , qraTruncatedNameCollisions = quiet
         , qraMissingPedigree = quiet
         , qraUnconsumedProducts = quiet
+        , qraUnsuppliedInputs = quiet
         , qraLandTransformationBalance = quiet
         , qraOxygenDemandOrder = quiet
         , qraInvalidCas = quiet
@@ -144,6 +146,7 @@ spec = describe "Quality report CSV" $ do
                        , "truncated_name_collisions"
                        , "missing_pedigree"
                        , "unconsumed_products"
+                       , "unsupplied_inputs"
                        , "land_transformation_balance"
                        , "oxygen_demand_order"
                        , "invalid_cas"
