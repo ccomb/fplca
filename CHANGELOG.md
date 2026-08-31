@@ -42,6 +42,12 @@
   and all four are gains: "Fluorochloridone" now picks up its factor through
   CAS, which the method spells "Flurochloridone", where the name matcher used
   to answer with a flow in the wrong compartment and leave it uncharacterized.
+- A supply chain names the row that supplies an input, or names none. When
+  several rows produce one product flow, the display path used to elect the one
+  whose unit was dimensionally compatible with the input. That rule was written
+  when the unit was part of a flow identifier and two spellings of one product
+  were two flows; every row is now recorded in the reference unit of its
+  dimension, so the rivals share a unit and the rule elects nobody anyway.
 - What identifies a dataset read from a SimaPro CSV or a Brightway Excel
   workbook is now what the file publishes, not what the engine calls things.
   Two problems came from the old rule. The unit was part of a flow identifier,
