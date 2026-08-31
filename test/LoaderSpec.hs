@@ -58,6 +58,10 @@ minimalActivity name loc exs =
         , activityFormulaCheck = Nothing
         }
 
+-- | The same activity, filed in the source's obsolete category.
+retired :: Activity -> Activity
+retired act = act{activityClassification = M.singleton "Category" "Autres\\Obsolete"}
+
 refExchange :: UUID.UUID -> Exchange
 refExchange fid =
     TechnosphereExchange
@@ -345,6 +349,23 @@ spec = do
             -- "whitout" sorts before "without", and holds flowUUID2.
             M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
                 `shouldBe` Just (actUUID2, flowUUID2, "unknown")
+
+        it "lets the block the source retired lose the tie" $ do
+            -- The same pair, one of them now filed under an obsolete
+            -- category. The file says which of the two it means, so the name
+            -- sort is not consulted and the block still in service supplies.
+            let acts =
+                    M.fromList
+                        [ ((actUUID1, flowUUID1), minimalActivity "Pork, meat without bone" "FR" [refExchange flowUUID1])
+                        , ((actUUID2, flowUUID2), retired (minimalActivity "Pork, meat whitout bone" "FR" [refExchange flowUUID2]))
+                        ]
+                flows =
+                    M.fromList
+                        [ (flowUUID1, minimalFlow flowUUID1 "Pork, bone")
+                        , (flowUUID2, minimalFlow flowUUID2 "Pork, bone")
+                        ]
+            M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
+                `shouldBe` Just (actUUID1, flowUUID1, "unknown")
 
         it "does not index a prefix of a product name" $ do
             -- "Urea {RER}| urea production" and "Urea {RoW}| urea production"

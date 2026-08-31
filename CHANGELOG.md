@@ -76,23 +76,32 @@
   move, and every one of them moves down, by 0.5% at the median and by up to
   56%. The engine reports those ten as unlinked, where it used to report 169113
   of 169113 resolved.
-- When several activities produce one product name, which of them supplies an
-  input no longer depends on the identifiers: the first by activity name, then
-  by location, wins. What that rule cannot know is which twin the file meant:
-  on Agribalyse 4.0 it lands on the retired copy of the pork slaughterhouse
-  block, because "whitout" sorts before "without". Any rule would land
-  somewhere; what must not happen is the answer moving because identity is
-  minted differently, and what must not stay quiet is that a rule of ours
-  answered at all, which the next entry is for.
-- The quality report says when two activities declare one product. Which of
-  them answers an input naming it is settled by a rule of ours, on a question
-  only the file can settle, so the file has to be told. The duplicate-activities
-  check cannot see these, because it groups on the activity name and the two
-  spell theirs differently. On the Agribalyse 4.0 export of 13 May 2026 it finds
-  twenty, and they are one case: the pork slaughterhouse block shipped twice,
-  once current and once retired under `Autres\Obsolete`, their process names a
-  typo apart ("whitout" against "without"), declaring the same ten products. The
-  retired one is what currently supplies the whole downstream pork chain.
+- When several activities produce one product name, the file says which one to
+  use: a retired block is filed under an obsolete category, and the block still
+  in service supplies. On the Agribalyse 4.0 export of 13 May 2026 that settles
+  all ten of its duplicated products, which are the ten coproducts of a pork
+  slaughterhouse block shipped twice, once under `Autres\Obsolete`. Until now
+  the retired copy won, because "whitout" sorts before "without". The category
+  is a convention of the tool that writes these files, which shows retired
+  processes under an `Obsolete` subcategory and warns whenever a calculation
+  reaches one: 1036 of Agribalyse 4.0's 22822 product rows carry it, and 2551
+  of ecoinvent 3.11's 28594. Two blocks the file gives no way to tell apart are
+  still ordered by activity name then by location, never by identifier: a
+  change in how identity is minted must not move a supply chain.
+- Scores of a SimaPro database move where a retired block was supplying.
+  Measured on Agribalyse 4.0 over 1062 activities, 771 of them in the pork
+  chain and 291 drawn at random, 11453 of 26550 category readings move, on 800
+  activities: 9739 rise and 1714 fall, by 1.1% at the median and 1.5% at the
+  ninth decile. The largest is black pudding, at 2.8x on several categories: it
+  is mostly pork blood, and blood is one of the ten coproducts the two blocks
+  allocate differently.
+- The quality report says when two activities declare one product, since only
+  one of them can supply it. The duplicate-activities check cannot see these,
+  because it groups on the activity name and the two spell theirs differently.
+  On the Agribalyse 4.0 export of 13 May 2026 it finds twenty, and they are one
+  case: the pork slaughterhouse block shipped twice, once current and once
+  retired under `Autres\Obsolete`, their process names a typo apart ("whitout"
+  against "without"), declaring the same ten products.
 - The quality report gains the other half of a pair it only had one side of: an
   input naming a product no reference product of this database supplies, beside
   the reference product nothing consumes. Expected of a foreground database,

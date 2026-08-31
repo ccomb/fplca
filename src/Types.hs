@@ -573,6 +573,22 @@ identifier fall back to grouping by activity UUID, as before.
 activityGroupKey :: UUID -> Activity -> (UUID, Maybe NativeProcessId)
 activityGroupKey actUUID act = (actUUID, activityNativeId act)
 
+{- | Is this dataset filed in its source's obsolete category?
+
+The tool that writes SimaPro CSV files keeps a retired process in the export,
+under a category whose last segment is @Obsolete@ (@Others\\Obsolete@, or
+@Autres\\Obsolete@ in a French export). Such a process still carries its
+exchanges and still computes; what its author says is that a newer one has
+replaced it, and the writing tool warns whenever a calculation reaches one.
+Read here on the @Category@ classification, which is the cell the block's
+product row carries. Formats with no such convention never say yes.
+-}
+activityIsObsolete :: Activity -> Bool
+activityIsObsolete =
+    maybe False (elem "obsolete" . map T.toCaseFold . T.splitOn "\\")
+        . M.lookup "Category"
+        . activityClassification
+
 -- | LCA computation tree (recursive representation)
 data ActivityTree
     = Leaf !Activity

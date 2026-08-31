@@ -424,22 +424,26 @@ buildSupplierIndex activities techFlowDb =
 product name and nothing else.
 
 When several activities produce one product name they are duplicates of each
-other, a block exported twice under a name that differs by a typo, and either
-answers. Which one is picked must not depend on the identifiers, or a change in
-how identity is minted would silently move the supply chain: the first by
-activity name, then by location, wins. The identifier breaks a tie only between
-two rows the file itself gives no way to tell apart.
+other, a block exported twice, most often because one of the two has been
+retired. The file says which: a retired block is filed under an obsolete
+category, and 'activityIsObsolete' reads it, so the block still in service
+supplies and the retired one supplies nothing. On the Agribalyse 4.0 export of
+13 May 2026 that settles all ten of its duplicated products.
+
+Two blocks the file gives no way to tell apart are ordered by activity name
+then by location, never by identifier: a change in how identity is minted must
+not move a supply chain. The identifier breaks the last tie only.
 
 The duplication is a defect in its own right, and 'Database.Quality' reports it
-as one.
+as one, along with an input a retired block supplies.
 -}
 buildSupplierIndexByName :: UnitDB -> ActivityMap -> TechFlowDB -> NameOnlyIndex
 buildSupplierIndexByName unitDB activities techFlowDb =
-    M.map (\candidates -> let (_, _, _, entry) = minimum candidates in entry) $
+    M.map (\candidates -> let (_, _, _, _, entry) = minimum candidates in entry) $
         M.fromListWith
             (<>)
             [ ( normalizeText (tfName flow)
-              , [(activityName act, activityLocation act, actUUID, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))]
+              , [(activityIsObsolete act, activityName act, activityLocation act, actUUID, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))]
               )
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
