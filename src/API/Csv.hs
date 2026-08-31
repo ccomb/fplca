@@ -52,6 +52,7 @@ qualityReportCsv r =
         [ ("reference_product", qraReferenceProduct r)
         , ("allocation_sums", qraAllocationSums r)
         , ("duplicate_activities", qraDuplicateActivities r)
+        , ("duplicate_products", qraDuplicateProducts r)
         , ("suspicious_amounts", qraSuspiciousAmounts r)
         , ("missing_metadata", qraMissingMetadata r)
         , ("undeclared_geography", qraUndeclaredGeography r)

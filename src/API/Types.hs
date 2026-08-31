@@ -956,6 +956,7 @@ data QualityReportAPI = QualityReportAPI
     , qraReferenceProduct :: QualityCheckAPI
     , qraAllocationSums :: QualityCheckAPI
     , qraDuplicateActivities :: QualityCheckAPI
+    , qraDuplicateProducts :: QualityCheckAPI
     , qraSuspiciousAmounts :: QualityCheckAPI
     , qraMissingMetadata :: QualityCheckAPI
     , qraUndeclaredGeography :: QualityCheckAPI

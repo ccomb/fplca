@@ -78,9 +78,21 @@
   of 169113 resolved.
 - When several activities produce one product name, which of them supplies an
   input no longer depends on the identifiers: the first by activity name, then
-  by location, wins. They are duplicates of each other, a block exported twice
-  under a name differing by a typo, so either answers; what must not happen is
-  the answer moving because identity is minted differently.
+  by location, wins. What that rule cannot know is which twin the file meant:
+  on Agribalyse 4.0 it lands on the retired copy of the pork slaughterhouse
+  block, because "whitout" sorts before "without". Any rule would land
+  somewhere; what must not happen is the answer moving because identity is
+  minted differently, and what must not stay quiet is that a rule of ours
+  answered at all, which the next entry is for.
+- The quality report says when two activities declare one product. Which of
+  them answers an input naming it is settled by a rule of ours, on a question
+  only the file can settle, so the file has to be told. The duplicate-activities
+  check cannot see these, because it groups on the activity name and the two
+  spell theirs differently. On the Agribalyse 4.0 export of 13 May 2026 it finds
+  twenty, and they are one case: the pork slaughterhouse block shipped twice,
+  once current and once retired under `Autres\Obsolete`, their process names a
+  typo apart ("whitout" against "without"), declaring the same ten products. The
+  retired one is what currently supplies the whole downstream pork chain.
 - The quality report gains the other half of a pair it only had one side of: an
   input naming a product no reference product of this database supplies, beside
   the reference product nothing consumes. Expected of a foreground database,

@@ -6,6 +6,7 @@ A score tells you whether a database computes; it says nothing about whether
 the dataset is well formed. These checks look for the structural defects a
 score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
+products two activities both declare,
 amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
@@ -105,6 +106,7 @@ data QualityReport = QualityReport
     , qrReferenceProduct :: !QualityCheck
     , qrAllocationSums :: !QualityCheck
     , qrDuplicateActivities :: !QualityCheck
+    , qrDuplicateProducts :: !QualityCheck
     , qrSuspiciousAmounts :: !QualityCheck
     , qrMissingMetadata :: !QualityCheck
     , qrUndeclaredGeography :: !QualityCheck
@@ -130,6 +132,7 @@ qualityChecks r =
     [ qrReferenceProduct r
     , qrAllocationSums r
     , qrDuplicateActivities r
+    , qrDuplicateProducts r
     , qrSuspiciousAmounts r
     , qrMissingMetadata r
     , qrUndeclaredGeography r
@@ -232,6 +235,7 @@ qualityReport dbName db =
         , qrReferenceProduct = QualityCheck True (worstFirst referenceOffenders)
         , qrAllocationSums = QualityCheck allocationApplicable (worstFirst allocationOffenders)
         , qrDuplicateActivities = QualityCheck True (worstFirst duplicateOffenders)
+        , qrDuplicateProducts = QualityCheck True (worstFirst duplicateProductOffenders)
         , qrSuspiciousAmounts = QualityCheck True (worstFirst amountOffenders)
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
         , qrUndeclaredGeography = QualityCheck True (worstFirst geographyOffenders)
@@ -355,6 +359,35 @@ qualityReport dbName db =
             T.pack (show n) <> " identical entries (same name, location and reference product)"
         | ((name, location, productName), (Min pid, Sum n)) <- M.toList duplicateGroups
         , n > 1
+        ]
+
+    {- Two activities declaring one product. The supplier index is keyed by the
+    product, so an input naming it is answered by one of them and the others
+    supply nothing. Which one answers is settled by a rule of ours, on a
+    question only the file can answer, and a stale twin left in an export wins
+    as easily as the current entry. Reported per activity, each naming the
+    others, so the maker can see both ends of the collision.
+    -}
+    productProducers =
+        M.fromListWith
+            (<>)
+            [ (exchangeFlowId refEx, [(key, act)])
+            | (key, act) <- entries
+            , [refEx] <- [filter exchangeIsReference (exchanges act)]
+            ]
+    otherProducerNames as = case S.toAscList (S.fromList (map activityName as)) of
+        names ->
+            T.intercalate ", " (map (\n -> "\"" <> n <> "\"") (take 3 names))
+                <> if length names > 3
+                    then " and " <> T.pack (show (length names - 3)) <> " more"
+                    else ""
+    duplicateProductOffenders =
+        [ offender WarningSev key act (Just (anyFlowName fid)) $
+            "this product is also the reference product of " <> otherProducerNames others <> "; an input naming it is answered by one of them"
+        | (fid, group) <- M.toList productProducers
+        , (key, act) <- group
+        , let others = [a | (k, a) <- group, k /= key]
+        , not (null others)
         ]
 
     -- A non-finite amount poisons every downstream sum; a zero reference amount

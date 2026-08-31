@@ -396,6 +396,7 @@ qualityReportToAPI mLimit r =
         , qraReferenceProduct = checkToAPI mLimit (Quality.qrReferenceProduct r)
         , qraAllocationSums = checkToAPI mLimit (Quality.qrAllocationSums r)
         , qraDuplicateActivities = checkToAPI mLimit (Quality.qrDuplicateActivities r)
+        , qraDuplicateProducts = checkToAPI mLimit (Quality.qrDuplicateProducts r)
         , qraSuspiciousAmounts = checkToAPI mLimit (Quality.qrSuspiciousAmounts r)
         , qraMissingMetadata = checkToAPI mLimit (Quality.qrMissingMetadata r)
         , qraUndeclaredGeography = checkToAPI mLimit (Quality.qrUndeclaredGeography r)

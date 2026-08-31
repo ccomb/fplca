@@ -325,6 +325,37 @@ spec = do
             let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
             qcOffenders (qrDuplicateActivities (qualityReport "testdb" db)) `shouldBe` []
 
+    describe "duplicate products check" $ do
+        it "flags two activities declaring one reference product" $ do
+            -- The shape a stale export leaves behind: one block kept, one
+            -- retired, both still declaring the product, their names apart by
+            -- a typo so the duplicate-activities check cannot see them.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "pork, meat whitout bone" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "pork, meat without bone" [reference breadFlow])
+                        ]
+                check = qrDuplicateProducts (qualityReport "testdb" db)
+            severities check `shouldBe` [WarningSev, WarningSev]
+            details check
+                `shouldBe` [ "this product is also the reference product of \"pork, meat without bone\"; an input naming it is answered by one of them"
+                           , "this product is also the reference product of \"pork, meat whitout bone\"; an input naming it is answered by one of them"
+                           ]
+            processIds check `shouldBe` [pidOf actA prodA, pidOf actB prodB]
+            map qoProductName (qcOffenders check) `shouldBe` [Just "bread", Just "bread"]
+
+        it "passes a product only one activity declares" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bakery" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
+        it "skips entries whose reference is broken, leaving them to the reference check" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
     describe "suspicious amounts check" $ do
         it "flags a non-finite amount" $ do
             let check = qrSuspiciousAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow (0 / 0)]))

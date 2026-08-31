@@ -51,6 +51,7 @@ everyCheck =
         , qraReferenceProduct = finding "reference product"
         , qraAllocationSums = finding "allocation sums"
         , qraDuplicateActivities = finding "duplicate activities"
+        , qraDuplicateProducts = finding "duplicate products"
         , qraSuspiciousAmounts = finding "suspicious amounts"
         , qraMissingMetadata = finding "missing metadata"
         , qraUndeclaredGeography = finding "undeclared geography"
@@ -75,6 +76,7 @@ oneFinding detail =
         , qraReferenceProduct = finding detail
         , qraAllocationSums = quiet
         , qraDuplicateActivities = quiet
+        , qraDuplicateProducts = quiet
         , qraSuspiciousAmounts = quiet
         , qraMissingMetadata = quiet
         , qraUndeclaredGeography = quiet
@@ -139,6 +141,7 @@ spec = describe "Quality report CSV" $ do
                        , "reference_product"
                        , "allocation_sums"
                        , "duplicate_activities"
+                       , "duplicate_products"
                        , "suspicious_amounts"
                        , "missing_metadata"
                        , "undeclared_geography"
