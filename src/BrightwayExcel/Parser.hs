@@ -73,6 +73,7 @@ import Progress (ProgressLevel (..), reportProgress)
 import SimaPro.Parser (
     generateFlowUUID,
     generateUnitUUID,
+    indexFlows,
     normalizeSimaProCompartment,
  )
 import Types
@@ -133,15 +134,13 @@ parseBrightwayExcel cfg path = do
                 bioFlows = concat [fs | (_, _, fs, _, _) <- results]
                 units = concat [us | (_, _, _, us, _) <- results]
                 warnings = concat [ws | (_, _, _, _, ws) <- results] ++ mapMaybe skippedSheetWarning skipped
+                unitDB = M.fromList [(unitId u, u) | u <- units]
+                unitNames = M.map unitName unitDB
             mapM_ (reportProgress Warning . T.unpack) warnings
-            pure $
-                Right
-                    ( activities
-                    , M.fromList [(tfId f, f) | f <- techFlows]
-                    , M.fromList [(bfId f, f) | f <- bioFlows]
-                    , M.empty
-                    , M.fromList [(unitId u, u) | u <- units]
-                    )
+            pure $ do
+                techFlowDB <- indexFlows unitNames (\f -> (tfId f, tfUnitId f, tfName f)) techFlows
+                bioFlowDB <- indexFlows unitNames (\f -> (bfId f, bfUnitId f, bfName f)) bioFlows
+                pure (activities, techFlowDB, bioFlowDB, M.empty, unitDB)
 
 {- | A worksheet is imported only when its first cell (A1) is a non-empty string
 that is not the sentinel @"skip"@ (matches @bw2io@'s @valid_first_cell@).

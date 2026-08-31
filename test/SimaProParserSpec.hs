@@ -7,6 +7,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Loader (getReferenceProductUUID)
 import Database.MatrixBuild (InterningTables (..), buildInterningTables)
 import Expr (evaluate, isExpression, normalizeExpr)
@@ -24,6 +25,7 @@ import SimaPro.Parser (
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    indexFlows,
     normalizeSimaProCompartment,
     parseAmount,
     parseBioRow,
@@ -38,17 +40,21 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (
     Activity (..),
+    BioFlowDB,
     BiosphereFlow,
     Exchange (..),
     LocationSource (..),
     NativeActivityType (..),
     NativeProcessId (..),
     Pedigree (..),
+    TechFlowDB,
     TechRole (..),
-    TechnosphereFlow,
+    TechnosphereFlow (..),
     UUID,
     Unit (..),
+    UnitDB,
     WasteFlow,
+    WasteFlowDB,
     exchangeComment,
     exchangeFlowId,
     exchangeIsInput,
@@ -111,7 +117,7 @@ parseTestCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biospher
 parseTestCSV = withSystemTempFile "test.csv" $ \path handle -> do
     BS.hPut handle testCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with waste treatment process and waste-to-treatment demand
 wasteTestCSV :: BS.ByteString
@@ -198,14 +204,14 @@ parseWasteNoAllocCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID 
 parseWasteNoAllocCSV = withSystemTempFile "waste-noalloc-test.csv" $ \path handle -> do
     BS.hPut handle wasteNoAllocCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Parse the waste test CSV via a temp file
 parseWasteCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseWasteCSV = withSystemTempFile "waste-test.csv" $ \path handle -> do
     BS.hPut handle wasteTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | Test CSV where one flow is both a producer's reference product (carrying
 the SimaPro "Category" column) and a later process's Materials/fuels input
@@ -261,7 +267,7 @@ parseSharedFlowCategoryCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map
 parseSharedFlowCategoryCSV = withSystemTempFile "shared-flow-cat-test.csv" $ \path handle -> do
     BS.hPut handle sharedFlowCategoryCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- ============================================================================
 -- Expression evaluator tests
@@ -312,7 +318,7 @@ parseParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosphe
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
     BS.hPut handle paramTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with database-level parameters
 dbParamTestCSV :: BS.ByteString
@@ -352,7 +358,7 @@ parseDbParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosp
 parseDbParamCSV = withSystemTempFile "dbparam-test.csv" $ \path handle -> do
     BS.hPut handle dbParamTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with yield chain formula (most common pattern in Agribalyse)
 yieldChainTestCSV :: BS.ByteString
@@ -396,7 +402,7 @@ parseYieldChainCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Bi
 parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     BS.hPut handle yieldChainTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | The shape Agribalyse writes a pesticide emission mix in: the amount is
 summed in place, and one term drops its integer part (@,067@).
@@ -439,7 +445,7 @@ parseSummedAmountCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID 
 parseSummedAmountCSV = withSystemTempFile "summed-amount-test.csv" $ \path handle -> do
     BS.hPut handle summedAmountTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- Helper: get all tech input amounts
 techInputAmounts :: Activity -> [Double]
@@ -1081,6 +1087,21 @@ spec = do
         it "generateFlowUUID differs when compartment differs" $
             generateFlowUUID "CO2" "air" "kg" `shouldNotBe` generateFlowUUID "CO2" "water" "kg"
 
+    describe "indexFlows" $ do
+        let kg = generateUnitUUID "kg"
+            mj = generateUnitUUID "mj"
+            flow name unitRef = TechnosphereFlow (generateFlowUUID name "" "") name unitRef M.empty Nothing Nothing
+            names = M.fromList [(kg, "kg"), (mj, "mj")]
+
+        it "folds two rows of one flow into a single entry when the unit agrees" $
+            M.size <$> indexFlows names (\f -> (tfId f, tfUnitId f, tfName f)) [flow "steel" kg, flow "steel" kg]
+                `shouldBe` Right 1
+
+        it "refuses two rows of one flow written in units no conversion relates" $
+            case indexFlows names (\f -> (tfId f, tfUnitId f, tfName f)) [flow "heat" mj, flow "heat" kg] of
+                Left err -> err `shouldSatisfy` \e -> "heat" `T.isInfixOf` e && "mj" `T.isInfixOf` e && "kg" `T.isInfixOf` e
+                Right db -> expectationFailure ("expected a refusal, got " ++ show (M.size db))
+
     -- -----------------------------------------------------------------------
     -- CF ↔ biosphere UUID alignment (regression: see PR #65)
     --
@@ -1535,7 +1556,7 @@ parseIdentifiedBlocksCSV blocks =
                     ++ ["", "End", ""]
         BS.hPut handle (BS.intercalate "\r\n" (header ++ concatMap block blocks))
         hClose handle
-        (activities, _, _, _, _) <- parseSimaProCSV defaultUnitConfig path
+        (activities, _, _, _, _) <- parseOrFail defaultUnitConfig path
         pure activities
 
 {- | The coproduct groups the products index builds, as their sizes, ordered by
@@ -1575,7 +1596,7 @@ parseProductsCSV procName productsRows =
                            ]
         BS.hPut handle content
         hClose handle
-        parseSimaProCSV defaultUnitConfig path
+        parseOrFail defaultUnitConfig path
 
 parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseNamedCSV procName sectionLines =
@@ -1607,7 +1628,7 @@ parseNamedCSV procName sectionLines =
                            ]
         BS.hPut handle content
         hClose handle
-        parseSimaProCSV defaultUnitConfig path
+        parseOrFail defaultUnitConfig path
 
 -- | CSV with comma as separator
 commaCSV :: BS.ByteString
@@ -1639,7 +1660,7 @@ parseCommaCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosphe
 parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     BS.hPut handle commaCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Unit config that knows about "ton" (1000 kg) in addition to kg.
 tonUnitConfig :: UnitConfig
@@ -1684,7 +1705,7 @@ parseTonRefCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosph
 parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
     BS.hPut handle tonRefCSV
     hClose handle
-    parseSimaProCSV tonUnitConfig path
+    parseOrFail tonUnitConfig path
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
@@ -1744,7 +1765,7 @@ parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUI
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | Single-product CSV with an empty Process name field. Mirrors mono-product
 SimaPro exports that leave the "Process name" line blank: the parser must
@@ -1782,4 +1803,10 @@ parseNoProcessNameCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID
 parseNoProcessNameCSV = withSystemTempFile "no-process-name.csv" $ \path handle -> do
     BS.hPut handle noProcessNameCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
+
+{- | Parse, failing the example when the parser refuses the file. The parser
+now returns 'Left' for a flow written in two units no conversion relates.
+-}
+parseOrFail :: UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+parseOrFail cfg path = either (fail . show) pure =<< parseSimaProCSV cfg path

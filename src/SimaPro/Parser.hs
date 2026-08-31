@@ -20,6 +20,7 @@ module SimaPro.Parser (
     generateFlowUUID,
     generateUnitUUID,
     normalizeSimaProCompartment,
+    indexFlows,
     extractLocation,
     Located (..),
     NameReading (..),
@@ -43,7 +44,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
-import Control.Monad (forM_, mfilter)
+import Control.Monad (foldM, forM_, mfilter)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
@@ -1507,7 +1508,36 @@ Reference-product amounts are normalized to the canonical base unit of their
 dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
 construction yields per-base-unit columns.
 -}
-parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+
+{- | Index flows by their identifier, refusing a pair that disagrees on the unit.
+
+Two rows of the same name and compartment land on one entry. When their units
+convert into each other the conversion at ingest has already brought both to
+the reference unit of the dimension, so they agree. When no conversion relates
+them -- an energy against a mass -- nothing can make them one flow, and
+'M.fromList' would silently keep whichever row came last. Refuse the file
+instead, naming the flow and both units.
+-}
+indexFlows :: M.Map UUID.UUID Text -> (a -> (UUID.UUID, UUID.UUID, Text)) -> [a] -> Either Text (M.Map UUID.UUID a)
+indexFlows unitNames identity = foldM add M.empty
+  where
+    add acc flow =
+        let (flowId, unitRef, name) = identity flow
+         in case identity <$> M.lookup flowId acc of
+                Just (_, seen, _)
+                    | seen /= unitRef ->
+                        Left $
+                            "flow '"
+                                <> name
+                                <> "' is written in two units that no conversion relates ('"
+                                <> nameOf seen
+                                <> "' and '"
+                                <> nameOf unitRef
+                                <> "'), so they cannot be one flow"
+                _ -> Right (M.insert flowId flow acc)
+    nameOf u = M.findWithDefault (UUID.toText u) u unitNames
+
+parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO (Either Text ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB))
 parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
@@ -1554,40 +1584,46 @@ parseSimaProCSV unitCfg path = do
     -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
     -- by construction (tech flows hash with empty compartment, bio flows hash
     -- with their compartment, waste flows hash with "waste" compartment).
-    let techFlowDB = M.fromList [(tfId f, f) | f <- allTechFlows]
-        -- Fill empty flow CAS from the file's own substance registry (the
-        -- trailing name;unit;cas blocks) so the native CAS bridge fires on a
-        -- SimaPro export, which otherwise carries no per-flow CAS at all.
-        (bioFlowDB, casConflicts) = fillCASFromRegistry substanceCAS (M.fromList [(bfId f, f) | f <- allBioFlows])
-        wasteFlowDB = M.fromList [(wfId f, f) | f <- allWasteFlows]
-        unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+    let unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+        unitNames = M.map unitName unitDB
+        indexed = do
+            techFlowDB <- indexFlows unitNames (\f -> (tfId f, tfUnitId f, tfName f)) allTechFlows
+            -- Fill empty flow CAS from the file's own substance registry (the
+            -- trailing name;unit;cas blocks) so the native CAS bridge fires on
+            -- a SimaPro export, which otherwise carries no per-flow CAS at all.
+            bioIndexed <- indexFlows unitNames (\f -> (bfId f, bfUnitId f, bfName f)) allBioFlows
+            wasteFlowDB <- indexFlows unitNames (\f -> (wfId f, wfUnitId f, wfName f)) allWasteFlows
+            pure (techFlowDB, fillCASFromRegistry substanceCAS bioIndexed, wasteFlowDB)
 
-    forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
-        reportProgress Warning $
-            printf
-                "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
-                (T.unpack n)
-                (T.unpack kept)
-                (T.unpack ignored)
+    case indexed of
+        Left err -> pure (Left err)
+        Right (techFlowDB, (bioFlowDB, casConflicts), wasteFlowDB) -> do
+            forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
+                reportProgress Warning $
+                    printf
+                        "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
+                        (T.unpack n)
+                        (T.unpack kept)
+                        (T.unpack ignored)
 
-    -- Force evaluation before returning
-    let !numActivities = length activities
-    let !numTechFlows = M.size techFlowDB
-    let !numBioFlows = M.size bioFlowDB
-    let !numBioFlowsCAS = length [() | f <- M.elems bioFlowDB, maybe False (not . T.null) (bfCAS f)]
-    let !numWasteFlows = M.size wasteFlowDB
-    let !numUnits = M.size unitDB
+            -- Force evaluation before returning
+            let !numActivities = length activities
+            let !numTechFlows = M.size techFlowDB
+            let !numBioFlows = M.size bioFlowDB
+            let !numBioFlowsCAS = length [() | f <- M.elems bioFlowDB, maybe False (not . T.null) (bfCAS f)]
+            let !numWasteFlows = M.size wasteFlowDB
+            let !numUnits = M.size unitDB
 
-    endTime <- getCurrentTime
-    let duration = realToFrac (diffUTCTime endTime startTime) :: Double
-    reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
-    reportProgress Info $ printf "  Activities: %d processes" numActivities
-    reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
-    reportProgress Info $ printf "  Biosphere flows: %d unique (%d carry a CAS)" numBioFlows numBioFlowsCAS
-    reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
-    reportProgress Info $ printf "  Units: %d unique" numUnits
+            endTime <- getCurrentTime
+            let duration = realToFrac (diffUTCTime endTime startTime) :: Double
+            reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
+            reportProgress Info $ printf "  Activities: %d processes" numActivities
+            reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
+            reportProgress Info $ printf "  Biosphere flows: %d unique (%d carry a CAS)" numBioFlows numBioFlowsCAS
+            reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
+            reportProgress Info $ printf "  Units: %d unique" numUnits
 
-    return (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
+            return (Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB))
   where
     -- Strip Windows \r from ByteString (fast, often no-op)
     stripCR :: BS.ByteString -> BS.ByteString

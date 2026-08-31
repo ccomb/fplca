@@ -18,8 +18,8 @@ import SimaPro.Parser (parseSimaProCSV)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
-import Types (BioFlowDB, BiosphereFlow (..))
-import UnitConversion (defaultUnitConfig)
+import Types (Activity, BioFlowDB, BiosphereFlow (..), TechFlowDB, UnitDB, WasteFlowDB)
+import UnitConversion (UnitConfig, defaultUnitConfig)
 
 {- | One process emitting four substances, then a trailer substance registry
 giving three of them a CAS. Methane and fossil CO2 are listed under the
@@ -90,7 +90,7 @@ parseRegistryCSV :: IO BioFlowDB
 parseRegistryCSV = withSystemTempFile "registry-cas-test.csv" $ \path handle -> do
     BS.hPut handle registryCSV
     hClose handle
-    (_, _, bioFlowDB, _, _) <- parseSimaProCSV defaultUnitConfig path
+    (_, _, bioFlowDB, _, _) <- parseOrFail defaultUnitConfig path
     pure bioFlowDB
 
 casOf :: Text -> BioFlowDB -> Maybe Text
@@ -120,3 +120,9 @@ spec = describe "SimaPro trailing substance registry backfills flow CAS" $ do
         -- The later Waterborne block re-binds Methane to 56-23-5; the
         -- Airborne binding came first in the file and must survive.
         casOf "Methane" db `shouldBe` Just "74-82-8"
+
+{- | Parse, failing the example when the parser refuses the file. The parser
+now returns 'Left' for a flow written in two units no conversion relates.
+-}
+parseOrFail :: UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+parseOrFail cfg path = either (fail . show) pure =<< parseSimaProCSV cfg path

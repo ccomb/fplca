@@ -630,24 +630,26 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
-    (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
+    parsed <- SimaPro.parseSimaProCSV unitConfig csvPath
+    case parsed of
+        Left err -> return (Left err)
+        Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) ->
+            if null activities
+                then return $ Left "No activities found in SimaPro CSV file."
+                else do
+                    -- Build ActivityMap with generated ProcessIds
+                    -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
+                    let procMap =
+                            M.fromList
+                                [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
+                                | act <- activities
+                                ]
 
-    if null activities
-        then return $ Left "No activities found in SimaPro CSV file."
-        else do
-            -- Build ActivityMap with generated ProcessIds
-            -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-            let procMap =
-                    M.fromList
-                        [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
-                        | act <- activities
-                        ]
+                    -- Build initial database
+                    let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
 
-            -- Build initial database
-            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
-
-            -- Fix activity links using supplier lookup (same as EcoSpold1)
-            Right <$> fixSimaProActivityLinks unitConfig simpleDb
+                    -- Fix activity links using supplier lookup (same as EcoSpold1)
+                    Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Load a Brightway Excel (.xlsx) inventory.
 
