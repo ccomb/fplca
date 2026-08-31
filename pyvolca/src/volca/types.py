@@ -2173,8 +2173,8 @@ class ActivityInput:
     something on a supplier link cannot be sent on an emission.
 
     You do not choose the ``process_id``. The engine mints it from the name,
-    location, product name and product unit, which is what makes writing the
-    same activity twice a correction of one row rather than two rows. One
+    the location and the product name, case-insensitively, which is what makes
+    writing the same activity twice a correction of one row rather than two. One
     reference product per activity: coproducts and allocation are not supported
     yet, and this type does not pretend they are.
     """

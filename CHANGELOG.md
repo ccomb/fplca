@@ -31,6 +31,40 @@
   a regionalized total. Both were already the case for a database carrying its
   own regional factors.
 
+### Changed
+- What identifies a dataset read from a SimaPro CSV or a Brightway Excel
+  workbook is now what the file publishes, not what the engine calls things.
+  Two problems came from the old rule. The unit was part of a flow identifier,
+  so renaming a reference unit in the engine's own table moved about twelve
+  percent of Agribalyse process ids in release 0.10.0 without a single number
+  changing. And an activity was named after its process name, so two exports of
+  one Agribalyse that disagree on the case of a product name gave the same
+  dataset two identifiers on two servers. From now on an activity is named by
+  the "Process identifier" its block publishes, and a flow by its name folded in
+  case and its compartment. The identifiers of these two formats therefore move
+  once more, and `volca/examples/process_id_remap` converts a stored list.
+  EcoSpold 1 and 2 and ILCD are untouched: they carry identifiers of their own.
+- Every row of these two formats is recorded in the reference unit of its
+  dimension, where only the reference product was before. An input written in
+  grams is held in kilograms, one written in kWh in MJ, and displays and
+  exports show it in that unit. No score moves: the matrix already converted
+  what it summed. Two rows that would land on one flow in units no conversion
+  relates, an energy against a mass, are now refused by name rather than one of
+  them being dropped in silence.
+- The SimaPro writer emits the "Process identifier" line it always read.
+  Exporting a database and reading it back used to rename every process in it.
+- Scores of a SimaPro database move, and not because of the identity. An input
+  that names a product no reference product matches exactly falls back to a
+  prefix of that name, and the index from a prefix to its producer keeps one
+  producer, whichever the map happened to hold last, in activity-identifier
+  order. In Agribalyse 4.0, 2797 prefixes name several producers. Every
+  identifier moved here, so the producer kept moved with it: sunflower grain now
+  draws its urea from the Chinese market rather than the North American one, and
+  its organic-carcinogen score with it. Measured over 250 activities, half the
+  category readings move, by 0.13% at the median and by up to 43%. The choice
+  was already arbitrary; what changed is which arbitrary answer comes out.
+- Every database cache is rebuilt on first load.
+
 ## [0.11.0] - 2026-08-28
 
 ### Fixed
