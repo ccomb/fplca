@@ -68,15 +68,21 @@ docFlow = u "0d"
 tocFlow = u "0e"
 mercuryFlow = u "0f"
 
-actA, actB, prodA, prodB :: UUID
+actA, actB, actC, prodA, prodB, prodC :: UUID
 actA = u "0a"
 actB = u "0b"
+actC = u "0c"
 prodA = u "1a"
 prodB = u "1b"
+prodC = u "1c"
 
 -- ---------------------------------------------------------------------------
 -- Fixture building blocks
 -- ---------------------------------------------------------------------------
+
+-- | The same activity, filed in the source's obsolete category.
+obsolete :: Activity -> Activity
+obsolete act = act{activityClassification = M.insert "Category" "Others\\Obsolete" (activityClassification act)}
 
 mkActivity :: Text -> [Exchange] -> Activity
 mkActivity name exs =
@@ -558,6 +564,37 @@ spec = do
         it "says nothing about a biosphere exchange, which has no supplier" $ do
             let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow, bioExchange flourFlow 1.0])]
             qcOffenders (qrUnsuppliedInputs (qualityReport "testdb" db)) `shouldBe` []
+
+    describe "obsolete inputs check" $ do
+        it "flags an input only a retired dataset supplies" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), obsolete (mkActivity "old flour mill" [reference flourFlow]))
+                        ]
+                check = qrObsoleteInputs (qualityReport "testdb" db)
+            severities check `shouldBe` [WarningSev]
+            processIds check `shouldBe` [pidOf actA prodA]
+            map qoProductName (qcOffenders check) `shouldBe` [Just "flour"]
+
+        it "says nothing when a live dataset also supplies the product" $ do
+            -- The retired block and the one that replaced it declare one
+            -- product; the live one is what the linker answers with.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), obsolete (mkActivity "old flour mill" [reference flourFlow]))
+                        , ((actC, prodC), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrObsoleteInputs (qualityReport "testdb" db)) `shouldBe` []
+
+        it "says nothing about a database whose datasets are all in service" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrObsoleteInputs (qualityReport "testdb" db)) `shouldBe` []
 
     describe "land transformation balance check" $ do
         it "flags an activity whose transformed-from and transformed-to areas diverge" $ do

@@ -60,6 +60,7 @@ everyCheck =
         , qraMissingPedigree = finding "missing pedigree"
         , qraUnconsumedProducts = finding "unconsumed products"
         , qraUnsuppliedInputs = finding "unsupplied inputs"
+        , qraObsoleteInputs = finding "obsolete inputs"
         , qraLandTransformationBalance = finding "land transformation balance"
         , qraOxygenDemandOrder = finding "oxygen demand order"
         , qraInvalidCas = finding "invalid cas"
@@ -85,6 +86,7 @@ oneFinding detail =
         , qraMissingPedigree = quiet
         , qraUnconsumedProducts = quiet
         , qraUnsuppliedInputs = quiet
+        , qraObsoleteInputs = quiet
         , qraLandTransformationBalance = quiet
         , qraOxygenDemandOrder = quiet
         , qraInvalidCas = quiet
@@ -150,6 +152,7 @@ spec = describe "Quality report CSV" $ do
                        , "missing_pedigree"
                        , "unconsumed_products"
                        , "unsupplied_inputs"
+                       , "obsolete_inputs"
                        , "land_transformation_balance"
                        , "oxygen_demand_order"
                        , "invalid_cas"

@@ -61,6 +61,7 @@ qualityReportCsv r =
         , ("missing_pedigree", qraMissingPedigree r)
         , ("unconsumed_products", qraUnconsumedProducts r)
         , ("unsupplied_inputs", qraUnsuppliedInputs r)
+        , ("obsolete_inputs", qraObsoleteInputs r)
         , ("land_transformation_balance", qraLandTransformationBalance r)
         , ("oxygen_demand_order", qraOxygenDemandOrder r)
         , ("invalid_cas", qraInvalidCas r)

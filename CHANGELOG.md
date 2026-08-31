@@ -102,6 +102,13 @@
   case: the pork slaughterhouse block shipped twice, once current and once
   retired under `Autres\Obsolete`, their process names a typo apart ("whitout"
   against "without"), declaring the same ten products.
+- The quality report says when an input's only producer is a dataset the source
+  retired. Such a dataset still carries its exchanges and still computes, so
+  the score is a number; it is the superseded number, and its author expects it
+  to be replaced. This is the warning the tool that writes these files raises
+  when a calculation reaches one. On the Agribalyse 4.0 export of 13 May 2026
+  it names 874 inputs. A product a retired block and a live block both declare
+  is not named: the live one supplies it.
 - The quality report gains the other half of a pair it only had one side of: an
   input naming a product no reference product of this database supplies, beside
   the reference product nothing consumes. Expected of a foreground database,

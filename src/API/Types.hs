@@ -965,6 +965,7 @@ data QualityReportAPI = QualityReportAPI
     , qraMissingPedigree :: QualityCheckAPI
     , qraUnconsumedProducts :: QualityCheckAPI
     , qraUnsuppliedInputs :: QualityCheckAPI
+    , qraObsoleteInputs :: QualityCheckAPI
     , qraLandTransformationBalance :: QualityCheckAPI
     , qraOxygenDemandOrder :: QualityCheckAPI
     , qraInvalidCas :: QualityCheckAPI

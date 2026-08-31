@@ -12,6 +12,7 @@ with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
 database consumes, inputs no reference product in the database supplies,
+inputs a dataset the source retired supplies,
 geography no dataset declared (read off the name
 or filled in by the loader instead), land transformation whose "to" and
 "from" areas don't balance within an activity, oxygen-demand or
@@ -58,6 +59,7 @@ import Types (
     Unit (..),
     WasteFlow (..),
     activityGroupKey,
+    activityIsObsolete,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
@@ -115,6 +117,7 @@ data QualityReport = QualityReport
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
     , qrUnsuppliedInputs :: !QualityCheck
+    , qrObsoleteInputs :: !QualityCheck
     , qrLandTransformationBalance :: !QualityCheck
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
@@ -141,6 +144,7 @@ qualityChecks r =
     , qrMissingPedigree r
     , qrUnconsumedProducts r
     , qrUnsuppliedInputs r
+    , qrObsoleteInputs r
     , qrLandTransformationBalance r
     , qrOxygenDemandOrder r
     , qrInvalidCas r
@@ -244,6 +248,7 @@ qualityReport dbName db =
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
         , qrUnsuppliedInputs = QualityCheck True (worstFirst unsuppliedOffenders)
+        , qrObsoleteInputs = QualityCheck True (worstFirst obsoleteInputOffenders)
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
@@ -580,6 +585,24 @@ qualityReport dbName db =
         , needsSupplier ex
         , let fid = exchangeFlowId ex
         , fid `S.notMember` suppliedFlowIds
+        ]
+
+    {- An input whose every producer is a dataset the source filed as obsolete.
+    Such a dataset still carries its exchanges and still computes, so the score
+    is a number; it is the superseded number, and its author expects it to be
+    replaced. The tool that writes these files raises the same warning when a
+    calculation reaches one. A product one obsolete block and one live block
+    both declare is not flagged: the live one supplies it.
+    -}
+    obsoleteProductIds =
+        M.keysSet (M.filter (all (activityIsObsolete . snd)) productProducers)
+    obsoleteInputOffenders =
+        [ offender WarningSev key act (Just (anyFlowName fid)) "this input is supplied only by a dataset its source filed as obsolete, which the source expects to be replaced"
+        | (key, act) <- entries
+        , ex <- exchanges act
+        , needsSupplier ex
+        , let fid = exchangeFlowId ex
+        , fid `S.member` obsoleteProductIds
         ]
 
     -- Land transformation is conserved: a parcel changed into one use was
