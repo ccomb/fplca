@@ -41,7 +41,7 @@ import Test.Hspec
 import Types (
     Activity (..),
     BioFlowDB,
-    BiosphereFlow,
+    BiosphereFlow (..),
     Exchange (..),
     LocationSource (..),
     NativeActivityType (..),
@@ -1354,6 +1354,22 @@ spec = do
             techAmount (head refExs) `shouldBe` 1.0
             activityUnit steel `shouldBe` "kg"
 
+        it "converts an input row to the reference unit of its dimension" $ do
+            (activities, techFlows, _, _, _) <- parseMixedUnitsCSV
+            let act = head activities
+                input = head [ex | ex <- exchanges act, exchangeIsInput ex, case ex of TechnosphereExchange{} -> True; _ -> False]
+            techAmount input `shouldBe` 0.25
+            fmap tfUnitId (M.lookup (exchangeFlowId input) techFlows)
+                `shouldBe` Just (generateUnitUUID "kg")
+
+        it "converts a resource row to the reference unit of its dimension" $ do
+            (activities, _, bioFlows, _, _) <- parseMixedUnitsCSV
+            let act = head activities
+                resource = head [ex | ex <- exchanges act, case ex of BiosphereExchange{} -> True; _ -> False]
+            bioAmount resource `shouldBe` 3.6
+            fmap bfUnitId (M.lookup (exchangeFlowId resource) bioFlows)
+                `shouldBe` Just (generateUnitUUID "mj")
+
     describe "SimaPro multi-product processes (coproducts)" $ do
         -- One Process block declares 5 coproducts with mass-allocation formulas.
         -- The 5 resulting Activity records must share one activityUUID (so
@@ -1662,6 +1678,23 @@ parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     hClose handle
     parseOrFail defaultUnitConfig path
 
+{- | Unit config knowing a non-canonical spelling in two dimensions: g (mass)
+and kWh (energy), so a row written in either has somewhere to be converted to.
+-}
+mixedUnitConfig :: UnitConfig
+mixedUnitConfig =
+    UnitConfig
+        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        , ucUnits =
+            M.fromList
+                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
+                , ("mj", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 1.0)
+                , ("kwh", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 3.6)
+                ]
+        , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g"), ("mj", "mj"), ("kwh", "kWh")]
+        }
+
 -- | Unit config that knows about "ton" (1000 kg) in addition to kg.
 tonUnitConfig :: UnitConfig
 tonUnitConfig =
@@ -1706,6 +1739,46 @@ parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
     BS.hPut handle tonRefCSV
     hClose handle
     parseOrFail tonUnitConfig path
+
+{- | One block whose rows are written in units that are not the reference unit
+of their dimension: 250 g of feedstock and 1 kWh of energy taken from nature.
+-}
+mixedUnitsCSV :: BS.ByteString
+mixedUnitsCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Mixed units {FR} U"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Mixed units {FR} U;kg;1.0;100;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "Feedstock;g;250;Undefined;;;;;;"
+        , ""
+        , "Resources"
+        , "Energy, from nature;;kWh;1;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseMixedUnitsCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseMixedUnitsCSV = withSystemTempFile "mixed-units.csv" $ \path handle -> do
+    BS.hPut handle mixedUnitsCSV
+    hClose handle
+    parseOrFail mixedUnitConfig path
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True

@@ -71,6 +71,7 @@ import qualified Data.Vector as V
 import EcoSpold.Common (numericRefChar)
 import Progress (ProgressLevel (..), reportProgress)
 import SimaPro.Parser (
+    canonicalRow,
     generateFlowUUID,
     generateUnitUUID,
     indexFlows,
@@ -377,9 +378,7 @@ productRowOut cfg meta isRef f =
             fieldText f "reference product" <|> fieldText f "name" <|> metaText meta "reference product"
     rawUnit = fromMaybe "" (fieldText f "unit" <|> metaText meta "unit")
     rawAmount = fromMaybe 1 (fieldNum f "amount" <|> metaNum meta "production amount")
-    (effUnit, effAmount)
-        | isRef = fromMaybe (rawUnit, rawAmount) (UC.normalizeToCanonical cfg rawUnit rawAmount)
-        | otherwise = (rawUnit, rawAmount)
+    (effUnit, effAmount) = canonicalRow cfg rawUnit rawAmount
     flowUUID = generateFlowUUID name "" effUnit
     unitUUID = generateUnitUUID effUnit
     exch =
@@ -399,10 +398,10 @@ productRowOut cfg meta isRef f =
 
 -- | Build a technosphere or biosphere exchange from a non-production row.
 exchangeRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
-exchangeRowOut _cfg actName f =
+exchangeRowOut cfg actName f =
     case T.toLower <$> fieldText f "type" of
-        Just "technosphere" -> technosphereRowOut actName f
-        Just "biosphere" -> biosphereRowOut actName f
+        Just "technosphere" -> technosphereRowOut cfg actName f
+        Just "biosphere" -> biosphereRowOut cfg actName f
         Just other ->
             emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped exchange with unrecognized type '" <> other <> "'"]}
         Nothing ->
@@ -413,15 +412,14 @@ key 'Database.Loader.buildSupplierIndexByName' matches against), with the
 supplier location preserved for geography-aware cross-DB linking. Zero-amount
 rows are dropped (parity with the SimaPro importer).
 -}
-technosphereRowOut :: Text -> M.Map Text CellValue -> RowOut
-technosphereRowOut actName f
+technosphereRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
+technosphereRowOut cfg actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped technosphere row with no name"]}
     | amount == 0 = emptyRowOut
     | otherwise = RowOut (Just exch) [flow] [] [unit] []
   where
     name = fromMaybe "" (fieldText f "reference product" <|> fieldText f "name")
-    unitName' = fromMaybe "" (fieldText f "unit")
-    amount = fromMaybe 0 (fieldNum f "amount")
+    (unitName', amount) = canonicalRow cfg (fromMaybe "" (fieldText f "unit")) (fromMaybe 0 (fieldNum f "amount"))
     flowUUID = generateFlowUUID name "" unitName'
     unitUUID = generateUnitUUID unitName'
     exch =
@@ -444,14 +442,13 @@ a @natural resource@ compartment is read as an extraction ('Resource'),
 everything else as an 'Emission'. Flow UUIDs use the same normalized
 compartment string as the SimaPro importer so LCIA characterization matches.
 -}
-biosphereRowOut :: Text -> M.Map Text CellValue -> RowOut
-biosphereRowOut actName f
+biosphereRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
+biosphereRowOut cfg actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped biosphere row with no name"]}
     | otherwise = RowOut (Just exch) [] [flow] [unit] []
   where
     name = fromMaybe "" (fieldText f "name")
-    unitName' = fromMaybe "" (fieldText f "unit")
-    amount = fromMaybe 0 (fieldNum f "amount")
+    (unitName', amount) = canonicalRow cfg (fromMaybe "" (fieldText f "unit")) (fromMaybe 0 (fieldNum f "amount"))
     (comp, sub) = splitCategories (fromMaybe "" (fieldText f "categories"))
     flowUUID = generateFlowUUID name (normalizeSimaProCompartment comp sub) unitName'
     unitUUID = generateUnitUUID unitName'

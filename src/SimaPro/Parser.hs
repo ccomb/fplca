@@ -19,6 +19,7 @@ module SimaPro.Parser (
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    canonicalRow,
     normalizeSimaProCompartment,
     indexFlows,
     extractLocation,
@@ -996,15 +997,15 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     (avoidedExs, avoidedFlows, avoidedUnits) =
         unzip3 (productToExchange unitCfg env False <$> pbAvoidedProducts)
     (techMaybeExs, techFlows, techUnits) =
-        unzip3 (techRowToExchange env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
+        unzip3 (techRowToExchange unitCfg env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
     (bioExs, bioFlows, bioUnits) =
         unzip3 $
-            (bioRowToExchange env True "resource" <$> pbResources)
-                ++ (bioRowToExchange env False "air" <$> pbEmissionsAir)
-                ++ (bioRowToExchange env False "water" <$> pbEmissionsWater)
-                ++ (bioRowToExchange env False "soil" <$> pbEmissionsSoil)
+            (bioRowToExchange unitCfg env True "resource" <$> pbResources)
+                ++ (bioRowToExchange unitCfg env False "air" <$> pbEmissionsAir)
+                ++ (bioRowToExchange unitCfg env False "water" <$> pbEmissionsWater)
+                ++ (bioRowToExchange unitCfg env False "soil" <$> pbEmissionsSoil)
     (wasteExs, wasteFlows, wasteUnits) =
-        unzip3 (wasteRowToExchange env <$> pbFinalWaste)
+        unzip3 (wasteRowToExchange unitCfg env <$> pbFinalWaste)
 
     -- Exchanges/flows/units shared by every coproduct (scaled per product below).
     -- Tech rows with a zero amount yield no exchange but still contribute a flow.
@@ -1101,17 +1102,26 @@ scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex *
 scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
 scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 
+{- | The reference unit of a row's dimension, and the row's amount in it.
+
+Every row is recorded in the reference unit of its dimension (kg for a mass,
+mj for an energy, m3 for a volume), so one flow carries one unit and a matrix
+row never sums two of them. A unit the table does not know is left as written:
+an import stays tolerant, and the matrix builder in "Database" surfaces the
+unknown unit with its own message.
+-}
+canonicalRow :: UnitConversion.UnitConfig -> Text -> Double -> (Text, Double)
+canonicalRow unitCfg unit amount =
+    fromMaybe (unit, amount) (UnitConversion.normalizeToCanonical unitCfg unit amount)
+
 {- | Convert product row to exchange, flow, and unit in one pass.
 
-For reference products ('isRef == True'), the declared amount is converted to
-the canonical base unit of its dimension (kg for mass, mj for energy, m3 for
-volume, and so on). This ensures 'activityNormFactor' and the resulting matrix
-column are expressed per 1 base unit: a reference declared as "1 ton" would
-otherwise produce impacts 1000x too large.
-
-If the unit is unknown to the config or its dimension has no base unit, the
-raw values are kept (the downstream matrix builder in 'Database.hs' surfaces
-unknown-unit errors with a clear message).
+The declared amount is converted to the reference unit of its dimension by
+'canonicalRow', reference product and coproduct alike. For the reference that
+is what makes 'activityNormFactor' and the matrix column read per 1 base unit:
+a reference declared as "1 ton" would otherwise produce impacts 1000x too
+large. For a coproduct it is what lets the row carry the same identifier as
+the input that consumes it elsewhere.
 -}
 productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
 productToExchange unitCfg env isRef ProductRow{..} =
@@ -1119,10 +1129,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
         cleanName = maybe prName locatedName reading
         prodRowLoc = foldMap locatedLocation reading
         rawAmount = resolveAmount env prAmountRaw prAmount
-        (effUnitName, amount) =
-            if isRef
-                then fromMaybe (prUnit, rawAmount) (UnitConversion.normalizeToCanonical unitCfg prUnit rawAmount)
-                else (prUnit, rawAmount)
+        (effUnitName, amount) = canonicalRow unitCfg prUnit rawAmount
         flowUUID = generateFlowUUID cleanName "" effUnitName
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix prComment
@@ -1205,14 +1212,14 @@ parsePedigreePrefix raw =
 {- | Convert technosphere row to exchange (if non-zero), flow, and unit.
 Always returns the flow/unit; exchange is Nothing for zero-amount rows.
 -}
-techRowToExchange :: M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
-techRowToExchange env TechExchangeRow{..} =
+techRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
+techRowToExchange unitCfg env TechExchangeRow{..} =
     let reading = extractLocation terName
         cleanName = maybe terName locatedName reading
         location = foldMap locatedLocation reading
-        flowUUID = generateFlowUUID cleanName "" terUnit
-        unitUUID = generateUnitUUID terUnit
-        resolvedAmount = resolveAmount env terAmountRaw terAmount
+        (effUnitName, resolvedAmount) = canonicalRow unitCfg terUnit (resolveAmount env terAmountRaw terAmount)
+        flowUUID = generateFlowUUID cleanName "" effUnitName
+        unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix terComment
         exchange =
             if resolvedAmount == 0
@@ -1239,15 +1246,15 @@ techRowToExchange env TechExchangeRow{..} =
                 , tfCAS = Nothing
                 , tfSubstanceId = Nothing
                 }
-        unit = Unit{unitId = unitUUID, unitName = terUnit, unitSymbol = terUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
 
 {- | Convert biosphere row to exchange, flow, and unit in one pass
 The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
 and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
 -}
-bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
-bioRowToExchange env isInput compartment BioExchangeRow{..} =
+bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
+bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
     let
         -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
         -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
@@ -1261,9 +1268,9 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
         -- 'Method.ParserSimaPro' agree on the hash, regardless of sub-
         -- compartment case or the SimaPro CF placeholder '(unspecified)'
         -- (which inventory rows leave blank in the same medium).
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment) berUnit
-        unitUUID = generateUnitUUID berUnit
-        amount = resolveAmount env berAmountRaw berAmount
+        (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment) effUnitName
+        unitUUID = generateUnitUUID effUnitName
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =
@@ -1293,7 +1300,7 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                         then Nothing
                         else Just (Compartment compartment subcomp)
                 }
-        unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in
         (exchange, flow, unit)
 
@@ -1303,17 +1310,17 @@ kind so the cross-DB linker doesn't try to find a producer (these are
 end-of-life markers, not technosphere demands). Modelled as an output
 (waIsInput = False) -- the activity generates the waste.
 -}
-wasteRowToExchange :: M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
-wasteRowToExchange env BioExchangeRow{..} =
+wasteRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
+wasteRowToExchange unitCfg env BioExchangeRow{..} =
     let
         cleanName = berName
         -- Compartment "waste" keeps the UUID generation aligned with
         -- whatever historical biosphere-side hashing the SimaPro path used
         -- for these flows before they were reclassified -- so impact methods
         -- that match by the (name, "waste") combination keep matching.
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment) berUnit
-        unitUUID = generateUnitUUID berUnit
-        amount = resolveAmount env berAmountRaw berAmount
+        (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment) effUnitName
+        unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =
             WasteExchange
@@ -1338,7 +1345,7 @@ wasteRowToExchange env BioExchangeRow{..} =
                 , wfCAS = Nothing
                 , wfSubstanceId = Nothing
                 }
-        unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in
         (exchange, flow, unit)
 
