@@ -770,9 +770,6 @@ executeFlowMappingCommand fmt database manager opts = do
                             putStrLn $ "  by CAS:     " ++ show (msByCAS stats)
                             putStrLn $ "  by Name:    " ++ show (msByName stats)
                             putStrLn $ "  by Synonym: " ++ show (msBySynonym stats)
-                            when (msByFuzzy stats > 0) $
-                                putStrLn $
-                                    "  by Fuzzy:   " ++ show (msByFuzzy stats)
                             when (msByProxy stats > 0) $
                                 putStrLn $
                                     "  by Proxy:   " ++ show (msByProxy stats)
@@ -829,7 +826,6 @@ executeFlowMappingCommand fmt database manager opts = do
                                         , "byCAS" .= msByCAS stats
                                         , "byName" .= msByName stats
                                         , "bySynonym" .= msBySynonym stats
-                                        , "byFuzzy" .= msByFuzzy stats
                                         , "byProxy" .= msByProxy stats
                                         , "unmatched" .= msUnmatched stats
                                         , "dbBiosphereFlows" .= dbBioCount
@@ -878,7 +874,6 @@ strategyText ByUUID = "uuid"
 strategyText ByCAS = "cas"
 strategyText ByName = "name"
 strategyText BySynonym = "synonym"
-strategyText ByFuzzy = "fuzzy"
 strategyText ByProxy = "proxy"
 strategyText NoMatch = "none"
 

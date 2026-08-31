@@ -95,7 +95,6 @@ module Method.Mapping (
 
     -- * Matching strategies
     MatchStrategy (..),
-    strategyFromText,
     strategyToText,
     findFlowByUUID,
     findFlowByName,
@@ -158,8 +157,6 @@ data MatchStrategy
       ByName
     | -- | Via synonym group
       BySynonym
-    | -- | Fuzzy string matching
-      ByFuzzy
     | {- | Via a typed @ProxyFor@ edge: a CF borrowed from another flow, scaled
       by the edge's conversion factor. An approximation, ranked below every
       direct match so an explicit CF always wins.
@@ -183,9 +180,9 @@ data MappingStats = MappingStats
     , msByName :: !Int
     -- ^ Matched by name
     , msBySynonym :: !Int
-    -- ^ Matched by synonym
-    , msByFuzzy :: !Int
-    -- ^ Matched by fuzzy
+    {- ^ Matched by synonym
+    ^ Matched by fuzzy
+    -}
     , msByProxy :: !Int
     -- ^ Matched via a @ProxyFor@ edge
     , msUnmatched :: !Int
@@ -201,12 +198,11 @@ instance Semigroup MappingStats where
             (msByCAS a + msByCAS b)
             (msByName a + msByName b)
             (msBySynonym a + msBySynonym b)
-            (msByFuzzy a + msByFuzzy b)
             (msByProxy a + msByProxy b)
             (msUnmatched a + msUnmatched b)
 
 instance Monoid MappingStats where
-    mempty = MappingStats 0 0 0 0 0 0 0 0
+    mempty = MappingStats 0 0 0 0 0 0 0
 
 -- | Everything the CF matcher cascade needs, precomputed once per method.
 data MapContext = MapContext
@@ -486,26 +482,14 @@ exclusionWarning flows cf
   where
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
--- | Wire name for a match strategy, the inverse of 'strategyFromText'.
+-- | Wire name for a match strategy.
 strategyToText :: MatchStrategy -> Text
 strategyToText ByUUID = "uuid"
 strategyToText ByCAS = "cas"
 strategyToText ByName = "name"
 strategyToText BySynonym = "synonym"
-strategyToText ByFuzzy = "fuzzy"
 strategyToText ByProxy = "proxy"
 strategyToText NoMatch = "none"
-
--- | Convert strategy text back to MatchStrategy
-strategyFromText :: Text -> MatchStrategy
-strategyFromText t = case T.toLower t of
-    "uuid" -> ByUUID
-    "cas" -> ByCAS
-    "name" -> ByName
-    "synonym" -> BySynonym
-    "fuzzy" -> ByFuzzy
-    "proxy" -> ByProxy
-    _ -> ByFuzzy -- Unknown strategies map to fuzzy
 
 -- ──────────────────────────────────────────────
 -- Low-level matching functions (used by built-in MapperHandles)
@@ -638,7 +622,6 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByCAS) = one{msByCAS = 1}
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
-    tally (Just ByFuzzy) = one{msByFuzzy = 1}
     tally (Just ByProxy) = one{msByProxy = 1}
     -- 'NoMatch' is not produced by the current matchers; this row exists only
     -- to keep the match exhaustive. Counts as unmatched if ever introduced.
@@ -1244,7 +1227,6 @@ strategyPriority ByUUID = 0
 strategyPriority ByName = 1
 strategyPriority BySynonym = 2
 strategyPriority ByCAS = 3
-strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 

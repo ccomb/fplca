@@ -90,7 +90,6 @@ strategyReach ByName = Exact
 strategyReach ByUUID = Exact
 strategyReach ByCAS = Bridged
 strategyReach BySynonym = Bridged
-strategyReach ByFuzzy = Bridged
 strategyReach ByProxy = Bridged
 strategyReach NoMatch = Bridged
 

@@ -133,6 +133,13 @@
   filled with a supplier nobody asked for.
 - Every database cache is rebuilt on first load.
 
+### Removed
+- The fuzzy match strategy, which nothing produced. No matcher ever returned
+  it, so its counter was always zero and its label never appeared; what it did
+  do was swallow an unknown strategy name, which read back as "fuzzy" instead
+  of being refused. The `byFuzzy` line disappears from the CLI's method mapping
+  report and its JSON. The HTTP API never carried it.
+
 ## [0.11.0] - 2026-08-28
 
 ### Fixed

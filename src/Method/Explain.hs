@@ -307,8 +307,6 @@ provenanceSentence provenance = case bpStrategy provenance of
         "That line was tied to this flow by CAS number when the method was loaded."
     ByProxy ->
         "That line stands in for a related substance, and its factor was scaled by a curated conversion factor."
-    ByFuzzy ->
-        "That line was tied to this flow by an approximate name match when the method was loaded."
     NoMatch ->
         "No database flow claimed that line when the method was loaded; it is filed under the name the method itself uses."
 

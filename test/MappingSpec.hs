@@ -90,14 +90,6 @@ gOnlyUnitConfig =
 
 spec :: Spec
 spec = do
-    describe "strategyFromText" $ do
-        it "parses uuid" $ strategyFromText "uuid" `shouldBe` ByUUID
-        it "parses cas" $ strategyFromText "CAS" `shouldBe` ByCAS
-        it "parses name" $ strategyFromText "Name" `shouldBe` ByName
-        it "parses synonym" $ strategyFromText "synonym" `shouldBe` BySynonym
-        it "parses fuzzy" $ strategyFromText "fuzzy" `shouldBe` ByFuzzy
-        it "unknown falls back to fuzzy" $ strategyFromText "xyz" `shouldBe` ByFuzzy
-
     describe "findFlowByUUID" $ do
         it "finds a flow by its UUID" $ do
             fid <- nextRandom
@@ -655,15 +647,7 @@ spec = do
             )
             cases
 
-    describe "computeMappingStats (ByFuzzy and BySynonym)" $ do
-        it "counts ByFuzzy matches" $ do
-            fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
-                cf = mkCF "co2" Nothing 1.0
-                stats = computeMappingStats [(cf, Just (flow, ByFuzzy))]
-            msByFuzzy stats `shouldBe` 1
-            msBySynonym stats `shouldBe` 0
-
+    describe "computeMappingStats" $ do
         it "counts BySynonym matches" $ do
             fid <- nextRandom
             let flow = mkFlow fid "co2" "air" Nothing
