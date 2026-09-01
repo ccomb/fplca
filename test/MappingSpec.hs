@@ -19,7 +19,7 @@ import Method.Types (Compartment (..), EnergyDensity (..), FlowDirection (..), M
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
-import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -62,15 +62,14 @@ unitNamed n = Unit{unitId = nil, unitName = n, unitSymbol = n, unitComment = ""}
 -- | UnitConfig with both kg and g (mass) so g→kg conversion succeeds.
 gKgUnitConfig :: UnitConfig
 gKgUnitConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
-        }
+    mkUnitConfig
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("g", "g")])
 
 {- | UnitConfig whose mass dimension has NO canonical base (g only, no kg at
 factor 1.0), so 'normalizeToCanonical' fails — exercises the result-expression
@@ -78,11 +77,10 @@ branch's hard-fail to 0.
 -}
 gOnlyUnitConfig :: UnitConfig
 gOnlyUnitConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits = M.fromList [("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)]
-        , ucOriginalKeys = M.fromList [("g", "g")]
-        }
+    mkUnitConfig
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        (M.fromList [("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)])
+        (M.fromList [("g", "g")])
 
 -- ---------------------------------------------------------------------------
 -- Spec
@@ -453,11 +451,10 @@ spec = do
         let kgDef = UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0
             m3Def = UnitDef [0, 3, 0, 0, 0, 0, 0, 0] 1.0
             cfg =
-                UnitConfig
-                    { ucDimensionOrder = []
-                    , ucUnits = M.fromList [("kg", kgDef), ("m3", m3Def)]
-                    , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3")]
-                    }
+                mkUnitConfig
+                    []
+                    (M.fromList [("kg", kgDef), ("m3", m3Def)])
+                    (M.fromList [("kg", "kg"), ("m3", "m3")])
             cfPerKg = (mkCFComp "Gas, natural/kg" "natural resource" "" 43.1){mcfUnit = "kg"}
             cfPerM3 = (mkCFComp "Gas, natural/m3" "natural resource" "" 34.5){mcfUnit = "m3"}
 
@@ -708,11 +705,10 @@ spec = do
             let kgDef = UnitConversion.UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0
                 gDef = UnitConversion.UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0e-3
                 cfg =
-                    UnitConversion.UnitConfig
-                        { UnitConversion.ucDimensionOrder = []
-                        , UnitConversion.ucUnits = M.fromList [("kg", kgDef), ("g", gDef)]
-                        , UnitConversion.ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g")]
-                        }
+                    UnitConversion.mkUnitConfig
+                        []
+                        (M.fromList [("kg", kgDef), ("g", gDef)])
+                        (M.fromList [("kg", "kg"), ("g", "g")])
             fid <- nextRandom
             uidKg <- nextRandom
             let flow = (mkFlow fid "co2" "air" Nothing){bfUnitId = uidKg}
@@ -784,16 +780,15 @@ spec = do
         -- kg-denominated CF matched by an m3 flow is refused and scores 0 —
         -- exactly the silent undercount this scan exists to surface.
         let cfg =
-                UnitConfig
-                    { ucDimensionOrder = []
-                    , ucUnits =
-                        M.fromList
-                            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                            , ("m3", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
-                            , ("mj", UnitDef [0, 0, 1, 0, 0, 0, 0, 0] 1.0)
-                            ]
-                    , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3"), ("mj", "MJ")]
-                    }
+                mkUnitConfig
+                    []
+                    ( M.fromList
+                        [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+                        , ("m3", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
+                        , ("mj", UnitDef [0, 0, 1, 0, 0, 0, 0, 0] 1.0)
+                        ]
+                    )
+                    (M.fromList [("kg", "kg"), ("m3", "m3"), ("mj", "MJ")])
             fillWith densities unitName' cf = do
                 fid <- nextRandom
                 uid <- nextRandom

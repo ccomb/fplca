@@ -462,8 +462,8 @@ engine reports ``success=false``.
 Write new activities into a database that can hold them.
 
 Each activity's ``process_id`` is minted by the engine from its name,
-location, product name and product unit (you do not choose it), and
-comes back in ``written``. Writing the same activity twice is therefore
+its location, and its product name and unit (you do not choose it),
+and comes back in ``written``. Writing the same activity twice is therefore
 a conflict, not a second row; use `replace_activity` to correct
 one that is already there.
 
@@ -951,8 +951,8 @@ Returns the updated ``DatabaseSetupInfo`` dict.
 Rewrite one activity the database already holds, keeping its identity.
 
 ``process_id`` must be the identity ``activity`` mints to; that is,
-the name, location, product name and product unit must be the ones the
-row already has. Change any of those and you are describing a different
+the name, the location, and the product name and unit must be the ones
+the row already has, spelling and case included. Change any of those and you are describing a different
 activity, which the engine refuses rather than writing to a second row;
 create that one and delete the old one instead.
 
@@ -1368,8 +1368,8 @@ The inventory is three lists rather than one, so a field that means
 something on a supplier link cannot be sent on an emission.
 
 You do not choose the ``process_id``. The engine mints it from the name,
-location, product name and product unit, which is what makes writing the
-same activity twice a correction of one row rather than two rows. One
+the location, and the product name and unit, which is what makes writing
+the same activity twice a correction of one row rather than two. One
 reference product per activity: coproducts and allocation are not supported
 yet, and this type does not pretend they are.
 

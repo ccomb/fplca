@@ -16,10 +16,13 @@ module SimaPro.Parser (
     GlobalParams (..),
     emptyProcessBlock,
     fallbackAmounts,
+    dropAmbiguousNativeIds,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    canonicalRow,
     normalizeSimaProCompartment,
+    indexFlows,
     extractLocation,
     Located (..),
     NameReading (..),
@@ -43,7 +46,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate)
-import Control.Monad (forM_, mfilter)
+import Control.Monad (foldM, forM_, mfilter)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BL
@@ -746,17 +749,66 @@ setMetadata key value block = case key of
 simaproNamespace :: UUID
 simaproNamespace = UUID5.generateNamed UUID5.namespaceURL (BS.unpack $ TE.encodeUtf8 "simapro.pre.nl")
 
--- | Generate deterministic activity UUID from Activity (uses name + location)
+{- | Generate deterministic activity UUID from an Activity.
+
+A SimaPro block publishes its own identifier on the "Process identifier" line,
+and that is what names the activity when it is there. It is what the producer
+says the dataset is, it survives a re-export of the same version, and it
+survives the producer changing the spelling or the case of a name.
+
+Without it the identifier falls back to the name and the location, folded in
+case for the same reason the flow name is: two exports of one database write
+one product two ways. 'dropAmbiguousNativeIds' has already taken away any
+identifier that named more than one process, so this stays a total function of
+the activity.
+-}
 generateActivityUUID :: Activity -> UUID
 generateActivityUUID act =
-    UUID5.generateNamed
-        simaproNamespace
-        (BS.unpack $ TE.encodeUtf8 $ "activity:" <> activityName act <> "@" <> activityLocation act)
+    UUID5.generateNamed simaproNamespace . BS.unpack . TE.encodeUtf8 $ case activityNativeId act of
+        Just (NativeProcessId nativeId) -> "process:" <> nativeId
+        Nothing -> "activity:" <> T.toCaseFold (activityName act) <> "@" <> activityLocation act
 
--- | Generate deterministic flow UUID from name, compartment, unit
-generateFlowUUID :: Text -> Text -> Text -> UUID
-generateFlowUUID name compartment unit =
-    UUID5.generateNamed simaproNamespace (BS.unpack $ TE.encodeUtf8 $ "flow:" <> name <> ":" <> compartment <> ":" <> unit)
+{- | Take a native identifier away from the activities when it names more than
+one process.
+
+Every coproduct of one block shares the block's identifier, which is the point:
+they are one process with several outputs. Two /different/ blocks sharing one
+is a naming mistake on the producer's side, and the identifier then names
+neither: those activities fall back to their name and location. The file still
+loads, and the identifiers dropped are returned so the caller can name them.
+-}
+dropAmbiguousNativeIds :: [Activity] -> ([Activity], [Text])
+dropAmbiguousNativeIds activities =
+    (map forget activities, S.toList ambiguous)
+  where
+    named =
+        M.fromListWith
+            S.union
+            [ (nativeId, S.singleton (activityName act, activityLocation act))
+            | act <- activities
+            , Just (NativeProcessId nativeId) <- [activityNativeId act]
+            ]
+    ambiguous = M.keysSet (M.filter ((> 1) . S.size) named)
+    forget act = case activityNativeId act of
+        Just (NativeProcessId nativeId) | nativeId `S.member` ambiguous -> act{activityNativeId = Nothing}
+        _ -> act
+
+{- | Generate deterministic flow UUID from name and compartment.
+
+The unit is deliberately absent. It is a property of the row, not of the flow:
+the same substance written in g by one block and in kg by another is one flow,
+and 'canonicalRow' has already brought both rows to the reference unit of the
+dimension. Keeping the unit in the key also made the identifier depend on the
+engine's own unit table, so renaming a reference unit moved identifiers no data
+had touched.
+
+The name is folded in case for the same reason: two exports of one database
+disagree on the case of a product name, and a flow is not two flows because a
+producer capitalised it differently.
+-}
+generateFlowUUID :: Text -> Text -> UUID
+generateFlowUUID name compartment =
+    UUID5.generateNamed simaproNamespace (BS.unpack $ TE.encodeUtf8 $ "flow:" <> T.toCaseFold name <> ":" <> compartment)
 
 {- | Canonical (compartment, subcompartment) string for SimaPro flow UUIDs.
 
@@ -995,15 +1047,15 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     (avoidedExs, avoidedFlows, avoidedUnits) =
         unzip3 (productToExchange unitCfg env False <$> pbAvoidedProducts)
     (techMaybeExs, techFlows, techUnits) =
-        unzip3 (techRowToExchange env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
+        unzip3 (techRowToExchange unitCfg env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
     (bioExs, bioFlows, bioUnits) =
         unzip3 $
-            (bioRowToExchange env True "resource" <$> pbResources)
-                ++ (bioRowToExchange env False "air" <$> pbEmissionsAir)
-                ++ (bioRowToExchange env False "water" <$> pbEmissionsWater)
-                ++ (bioRowToExchange env False "soil" <$> pbEmissionsSoil)
+            (bioRowToExchange unitCfg env True "resource" <$> pbResources)
+                ++ (bioRowToExchange unitCfg env False "air" <$> pbEmissionsAir)
+                ++ (bioRowToExchange unitCfg env False "water" <$> pbEmissionsWater)
+                ++ (bioRowToExchange unitCfg env False "soil" <$> pbEmissionsSoil)
     (wasteExs, wasteFlows, wasteUnits) =
-        unzip3 (wasteRowToExchange env <$> pbFinalWaste)
+        unzip3 (wasteRowToExchange unitCfg env <$> pbFinalWaste)
 
     -- Exchanges/flows/units shared by every coproduct (scaled per product below).
     -- Tech rows with a zero amount yield no exchange but still contribute a flow.
@@ -1100,17 +1152,26 @@ scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex *
 scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
 scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 
+{- | The reference unit of a row's dimension, and the row's amount in it.
+
+Every row is recorded in the reference unit of its dimension (kg for a mass,
+mj for an energy, m3 for a volume), so one flow carries one unit and a matrix
+row never sums two of them. A unit the table does not know is left as written:
+an import stays tolerant, and the matrix builder in "Database" surfaces the
+unknown unit with its own message.
+-}
+canonicalRow :: UnitConversion.UnitConfig -> Text -> Double -> (Text, Double)
+canonicalRow unitCfg unit amount =
+    fromMaybe (unit, amount) (UnitConversion.normalizeToCanonical unitCfg unit amount)
+
 {- | Convert product row to exchange, flow, and unit in one pass.
 
-For reference products ('isRef == True'), the declared amount is converted to
-the canonical base unit of its dimension (kg for mass, mj for energy, m3 for
-volume, and so on). This ensures 'activityNormFactor' and the resulting matrix
-column are expressed per 1 base unit: a reference declared as "1 ton" would
-otherwise produce impacts 1000x too large.
-
-If the unit is unknown to the config or its dimension has no base unit, the
-raw values are kept (the downstream matrix builder in 'Database.hs' surfaces
-unknown-unit errors with a clear message).
+The declared amount is converted to the reference unit of its dimension by
+'canonicalRow', reference product and coproduct alike. For the reference that
+is what makes 'activityNormFactor' and the matrix column read per 1 base unit:
+a reference declared as "1 ton" would otherwise produce impacts 1000x too
+large. For a coproduct it is what lets the row carry the same identifier as
+the input that consumes it elsewhere.
 -}
 productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
 productToExchange unitCfg env isRef ProductRow{..} =
@@ -1118,11 +1179,8 @@ productToExchange unitCfg env isRef ProductRow{..} =
         cleanName = maybe prName locatedName reading
         prodRowLoc = foldMap locatedLocation reading
         rawAmount = resolveAmount env prAmountRaw prAmount
-        (effUnitName, amount) =
-            if isRef
-                then fromMaybe (prUnit, rawAmount) (UnitConversion.normalizeToCanonical unitCfg prUnit rawAmount)
-                else (prUnit, rawAmount)
-        flowUUID = generateFlowUUID cleanName "" effUnitName
+        (effUnitName, amount) = canonicalRow unitCfg prUnit rawAmount
+        flowUUID = generateFlowUUID cleanName ""
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix prComment
         exchange =
@@ -1204,14 +1262,14 @@ parsePedigreePrefix raw =
 {- | Convert technosphere row to exchange (if non-zero), flow, and unit.
 Always returns the flow/unit; exchange is Nothing for zero-amount rows.
 -}
-techRowToExchange :: M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
-techRowToExchange env TechExchangeRow{..} =
+techRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
+techRowToExchange unitCfg env TechExchangeRow{..} =
     let reading = extractLocation terName
         cleanName = maybe terName locatedName reading
         location = foldMap locatedLocation reading
-        flowUUID = generateFlowUUID cleanName "" terUnit
-        unitUUID = generateUnitUUID terUnit
-        resolvedAmount = resolveAmount env terAmountRaw terAmount
+        (effUnitName, resolvedAmount) = canonicalRow unitCfg terUnit (resolveAmount env terAmountRaw terAmount)
+        flowUUID = generateFlowUUID cleanName ""
+        unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix terComment
         exchange =
             if resolvedAmount == 0
@@ -1238,15 +1296,15 @@ techRowToExchange env TechExchangeRow{..} =
                 , tfCAS = Nothing
                 , tfSubstanceId = Nothing
                 }
-        unit = Unit{unitId = unitUUID, unitName = terUnit, unitSymbol = terUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in (exchange, flow, unit)
 
 {- | Convert biosphere row to exchange, flow, and unit in one pass
 The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
 and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
 -}
-bioRowToExchange :: M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
-bioRowToExchange env isInput compartment BioExchangeRow{..} =
+bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
+bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
     let
         -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
         -- `Water, FR`, …) as distinct elementary flows. EF 3.1 (and any
@@ -1260,9 +1318,9 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
         -- 'Method.ParserSimaPro' agree on the hash, regardless of sub-
         -- compartment case or the SimaPro CF placeholder '(unspecified)'
         -- (which inventory rows leave blank in the same medium).
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment) berUnit
-        unitUUID = generateUnitUUID berUnit
-        amount = resolveAmount env berAmountRaw berAmount
+        (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment)
+        unitUUID = generateUnitUUID effUnitName
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =
@@ -1292,7 +1350,7 @@ bioRowToExchange env isInput compartment BioExchangeRow{..} =
                         then Nothing
                         else Just (Compartment compartment subcomp)
                 }
-        unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in
         (exchange, flow, unit)
 
@@ -1302,17 +1360,17 @@ kind so the cross-DB linker doesn't try to find a producer (these are
 end-of-life markers, not technosphere demands). Modelled as an output
 (waIsInput = False) -- the activity generates the waste.
 -}
-wasteRowToExchange :: M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
-wasteRowToExchange env BioExchangeRow{..} =
+wasteRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
+wasteRowToExchange unitCfg env BioExchangeRow{..} =
     let
         cleanName = berName
         -- Compartment "waste" keeps the UUID generation aligned with
         -- whatever historical biosphere-side hashing the SimaPro path used
         -- for these flows before they were reclassified -- so impact methods
         -- that match by the (name, "waste") combination keep matching.
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment) berUnit
-        unitUUID = generateUnitUUID berUnit
-        amount = resolveAmount env berAmountRaw berAmount
+        (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment)
+        unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
         exchange =
             WasteExchange
@@ -1337,7 +1395,7 @@ wasteRowToExchange env BioExchangeRow{..} =
                 , wfCAS = Nothing
                 , wfSubstanceId = Nothing
                 }
-        unit = Unit{unitId = unitUUID, unitName = berUnit, unitSymbol = berUnit, unitComment = ""}
+        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in
         (exchange, flow, unit)
 
@@ -1507,7 +1565,36 @@ Reference-product amounts are normalized to the canonical base unit of their
 dimension (e.g. 1 t → 1000 kg) during parsing, so downstream matrix
 construction yields per-base-unit columns.
 -}
-parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+
+{- | Index flows by their identifier, refusing a pair that disagrees on the unit.
+
+Two rows of the same name and compartment land on one entry. When their units
+convert into each other the conversion at ingest has already brought both to
+the reference unit of the dimension, so they agree. When no conversion relates
+them -- an energy against a mass -- nothing can make them one flow, and
+'M.fromList' would silently keep whichever row came last. Refuse the file
+instead, naming the flow and both units.
+-}
+indexFlows :: M.Map UUID.UUID Text -> (a -> (UUID.UUID, UUID.UUID, Text)) -> [a] -> Either Text (M.Map UUID.UUID a)
+indexFlows unitNames identity = foldM add M.empty
+  where
+    add acc flow =
+        let (flowId, unitRef, name) = identity flow
+         in case identity <$> M.lookup flowId acc of
+                Just (_, seen, _)
+                    | seen /= unitRef ->
+                        Left $
+                            "flow '"
+                                <> name
+                                <> "' is written in two units that no conversion relates ('"
+                                <> nameOf seen
+                                <> "' and '"
+                                <> nameOf unitRef
+                                <> "'), so they cannot be one flow"
+                _ -> Right (M.insert flowId flow acc)
+    nameOf u = M.findWithDefault (UUID.toText u) u unitNames
+
+parseSimaProCSV :: UnitConversion.UnitConfig -> FilePath -> IO (Either Text ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB))
 parseSimaProCSV unitCfg path = do
     reportProgress Info $ "Loading SimaPro CSV file: " ++ path
     startTime <- getCurrentTime
@@ -1545,7 +1632,13 @@ parseSimaProCSV unitCfg path = do
                 (T.unpack raw)
                 (T.unpack name)
                 fallback
-    let activities = map (\(a, _, _, _, _) -> a) converted
+    let (activities, ambiguousIds) = dropAmbiguousNativeIds (map (\(a, _, _, _, _) -> a) converted)
+    forM_ ambiguousIds $ \nativeId ->
+        reportProgress Warning $
+            printf
+                "process identifier '%s' names more than one process; those blocks are identified by name and location instead"
+                (T.unpack nativeId)
+    let
         allTechFlows = concatMap (\(_, tf, _, _, _) -> tf) converted
         allBioFlows = concatMap (\(_, _, bf, _, _) -> bf) converted
         allWasteFlows = concatMap (\(_, _, _, wf, _) -> wf) converted
@@ -1554,40 +1647,46 @@ parseSimaProCSV unitCfg path = do
     -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
     -- by construction (tech flows hash with empty compartment, bio flows hash
     -- with their compartment, waste flows hash with "waste" compartment).
-    let techFlowDB = M.fromList [(tfId f, f) | f <- allTechFlows]
-        -- Fill empty flow CAS from the file's own substance registry (the
-        -- trailing name;unit;cas blocks) so the native CAS bridge fires on a
-        -- SimaPro export, which otherwise carries no per-flow CAS at all.
-        (bioFlowDB, casConflicts) = fillCASFromRegistry substanceCAS (M.fromList [(bfId f, f) | f <- allBioFlows])
-        wasteFlowDB = M.fromList [(wfId f, f) | f <- allWasteFlows]
-        unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+    let unitDB = M.fromList [(unitId u, u) | u <- allUnits]
+        unitNames = M.map unitName unitDB
+        indexed = do
+            techFlowDB <- indexFlows unitNames (\f -> (tfId f, tfUnitId f, tfName f)) allTechFlows
+            -- Fill empty flow CAS from the file's own substance registry (the
+            -- trailing name;unit;cas blocks) so the native CAS bridge fires on
+            -- a SimaPro export, which otherwise carries no per-flow CAS at all.
+            bioIndexed <- indexFlows unitNames (\f -> (bfId f, bfUnitId f, bfName f)) allBioFlows
+            wasteFlowDB <- indexFlows unitNames (\f -> (wfId f, wfUnitId f, wfName f)) allWasteFlows
+            pure (techFlowDB, fillCASFromRegistry substanceCAS bioIndexed, wasteFlowDB)
 
-    forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
-        reportProgress Warning $
-            printf
-                "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
-                (T.unpack n)
-                (T.unpack kept)
-                (T.unpack ignored)
+    case indexed of
+        Left err -> pure (Left err)
+        Right (techFlowDB, (bioFlowDB, casConflicts), wasteFlowDB) -> do
+            forM_ casConflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
+                reportProgress Warning $
+                    printf
+                        "substance registry binds '%s' to two CAS (%s kept, %s ignored)"
+                        (T.unpack n)
+                        (T.unpack kept)
+                        (T.unpack ignored)
 
-    -- Force evaluation before returning
-    let !numActivities = length activities
-    let !numTechFlows = M.size techFlowDB
-    let !numBioFlows = M.size bioFlowDB
-    let !numBioFlowsCAS = length [() | f <- M.elems bioFlowDB, maybe False (not . T.null) (bfCAS f)]
-    let !numWasteFlows = M.size wasteFlowDB
-    let !numUnits = M.size unitDB
+            -- Force evaluation before returning
+            let !numActivities = length activities
+            let !numTechFlows = M.size techFlowDB
+            let !numBioFlows = M.size bioFlowDB
+            let !numBioFlowsCAS = length [() | f <- M.elems bioFlowDB, maybe False (not . T.null) (bfCAS f)]
+            let !numWasteFlows = M.size wasteFlowDB
+            let !numUnits = M.size unitDB
 
-    endTime <- getCurrentTime
-    let duration = realToFrac (diffUTCTime endTime startTime) :: Double
-    reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
-    reportProgress Info $ printf "  Activities: %d processes" numActivities
-    reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
-    reportProgress Info $ printf "  Biosphere flows: %d unique (%d carry a CAS)" numBioFlows numBioFlowsCAS
-    reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
-    reportProgress Info $ printf "  Units: %d unique" numUnits
+            endTime <- getCurrentTime
+            let duration = realToFrac (diffUTCTime endTime startTime) :: Double
+            reportProgress Info $ printf "SimaPro parsing completed in %.2fs:" duration
+            reportProgress Info $ printf "  Activities: %d processes" numActivities
+            reportProgress Info $ printf "  Technosphere flows: %d unique" numTechFlows
+            reportProgress Info $ printf "  Biosphere flows: %d unique (%d carry a CAS)" numBioFlows numBioFlowsCAS
+            reportProgress Info $ printf "  Waste flows: %d unique" numWasteFlows
+            reportProgress Info $ printf "  Units: %d unique" numUnits
 
-    return (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
+            return (Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB))
   where
     -- Strip Windows \r from ByteString (fast, often no-op)
     stripCR :: BS.ByteString -> BS.ByteString

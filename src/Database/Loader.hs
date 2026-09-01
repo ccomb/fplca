@@ -79,6 +79,7 @@ module Database.Loader (
     generateActivityUUIDFromActivity,
     datasetUUIDFromPath,
     getReferenceProductUUID,
+    indexActivities,
     UnlinkedSummary (..),
     buildSupplierIndex,
     buildSupplierIndexByName,
@@ -105,7 +106,7 @@ import qualified Data.Map as M
 -- per dataset) is real, and the lazy API would stack one unforced merge per
 -- occurrence, holding every superseded record until something forced the chain.
 import qualified Data.Map.Strict as MS
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
@@ -130,7 +131,6 @@ import Database.CrossLinking (
     defaultLinkingThreshold,
     emptyAliasMap,
     extractBracketedLocation,
-    extractProductPrefixes,
     findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
@@ -267,6 +267,12 @@ History of manual bumps:
      identity of Database, never the types inside it, so an old cache would
      pass the check and be decoded reading 16-byte UUIDs as 4-byte row
      numbers, or one row number as a list of them.
+- 18: a dataset read from SimaPro or Brightway Excel is identified by the
+     identifier its file publishes, a flow by its name folded in case and its
+     compartment with no unit, and every row is recorded in the reference unit
+     of its dimension. Process ids, flow ids and amounts all move, and none of
+     it changes a type, so an old cache would pass the fingerprint and answer
+     with identifiers no request would name again.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -274,7 +280,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 17
+     in hi `xor` lo `xor` 18
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -316,6 +322,38 @@ getReferenceProductUUID act =
     case filter exchangeIsReference (exchanges act) of
         (ref : _) -> exchangeFlowId ref
         [] -> UUID.nil -- No reference product found
+
+{- | Key the activities of a name-linked file by @(activityUUID, productUUID)@,
+naming every key two blocks claimed.
+
+A block with no published identifier is named by its name folded in case and
+its location, so two blocks whose names differ only in case claim one key, and
+a map keeps one activity: the last read, as 'M.fromList' always did. Keeping it
+in silence is what is not acceptable, since the other block's inventory goes
+with it, so each contested key is described for the caller to report.
+-}
+indexActivities :: [Activity] -> (ActivityMap, [T.Text])
+indexActivities activities =
+    (M.map NE.head grouped, mapMaybe contested (M.elems grouped))
+  where
+    grouped :: M.Map (UUID.UUID, UUID.UUID) (NE.NonEmpty Activity)
+    grouped =
+        M.fromListWith
+            (<>)
+            [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), pure act)
+            | act <- activities
+            ]
+    contested :: NE.NonEmpty Activity -> Maybe T.Text
+    contested group = describe (NE.head group) . NE.toList <$> snd (NE.uncons group)
+    describe :: Activity -> [Activity] -> T.Text
+    describe kept dropped =
+        "'"
+            <> activityName kept
+            <> "' and "
+            <> T.intercalate ", " ["'" <> activityName act <> "'" | act <- dropped]
+            <> " are one activity at '"
+            <> activityLocation kept
+            <> "': they differ only in case, no process identifier tells them apart, and only the last read keeps its inventory"
 
 -- | Type alias for supplier lookup index (with location)
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
@@ -421,28 +459,36 @@ buildSupplierIndex activities techFlowDb =
         , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
         ]
 
-{- | Build name-only supplier index for SimaPro linking
-Uses the normalized product name + extracted prefixes (no location required).
-Exact names take priority via M.union.
+{- | Build name-only supplier index for SimaPro linking, on the reference
+product name and nothing else.
+
+When several activities produce one product name they are duplicates of each
+other, a block exported twice, most often because one of the two has been
+retired. The file says which: a retired block is filed under an obsolete
+category, and 'activityIsObsolete' reads it, so the block still in service
+supplies and the retired one supplies nothing. On the Agribalyse 4.0 export of
+13 May 2026 that settles all ten of its duplicated products.
+
+Two blocks the file gives no way to tell apart are ordered by activity name
+then by location, never by identifier: a change in how identity is minted must
+not move a supply chain. The identifier breaks the last tie only.
+
+The duplication is a defect in its own right, and 'Database.Quality' reports it
+as one, along with an input a retired block supplies.
 -}
 buildSupplierIndexByName :: UnitDB -> ActivityMap -> TechFlowDB -> NameOnlyIndex
 buildSupplierIndexByName unitDB activities techFlowDb =
-    let entries =
-            [ (tfName flow, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))
+    M.map (\candidates -> let (_, _, _, _, entry) = minimum candidates in entry) $
+        M.fromListWith
+            (<>)
+            [ ( normalizeText (tfName flow)
+              , [(activityIsObsolete act, activityName act, activityLocation act, actUUID, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))]
+              )
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
             , exchangeIsReference ex
             , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
             ]
-        exactIndex = M.fromList [(normalizeText name, val) | (name, val) <- entries]
-        prefixIndex =
-            M.fromList
-                [ (normalizeText p, val)
-                | (name, val) <- entries
-                , p <- extractProductPrefixes name
-                , normalizeText p /= normalizeText name
-                ]
-     in M.union exactIndex prefixIndex
 
 {- | Build the name-only supplier index for EcoSpold1 linking, keeping every
 dataset a name covers rather than the last one seen.
@@ -630,24 +676,23 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
-    (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvPath
+    parsed <- SimaPro.parseSimaProCSV unitConfig csvPath
+    case parsed of
+        Left err -> return (Left err)
+        Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) ->
+            if null activities
+                then return $ Left "No activities found in SimaPro CSV file."
+                else do
+                    -- Build ActivityMap with generated ProcessIds
+                    -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
+                    let (procMap, collisions) = indexActivities activities
+                    forM_ collisions $ reportProgress Warning . T.unpack
 
-    if null activities
-        then return $ Left "No activities found in SimaPro CSV file."
-        else do
-            -- Build ActivityMap with generated ProcessIds
-            -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-            let procMap =
-                    M.fromList
-                        [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
-                        | act <- activities
-                        ]
+                    -- Build initial database
+                    let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
 
-            -- Build initial database
-            let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
-
-            -- Fix activity links using supplier lookup (same as EcoSpold1)
-            Right <$> fixSimaProActivityLinks unitConfig simpleDb
+                    -- Fix activity links using supplier lookup (same as EcoSpold1)
+                    Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Load a Brightway Excel (.xlsx) inventory.
 
@@ -665,12 +710,9 @@ loadBrightwayExcel unitConfig xlsxPath = do
         Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
             | null activities -> return $ Left "No activities found in Brightway Excel file."
             | otherwise -> do
-                let procMap =
-                        M.fromList
-                            [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
-                            | act <- activities
-                            ]
+                let (procMap, collisions) = indexActivities activities
                     simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
+                forM_ collisions $ reportProgress Warning . T.unpack
                 Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references
@@ -734,10 +776,13 @@ linkUnitsCompatible unitConfig consumerUnit supplierUnit =
 Inputs and non-reference outputs (coproducts / avoided-production credits)
 are eligible for relinking. A candidate is accepted only if its
 reference-product unit is dimensionally compatible with the consumer exchange
-('linkUnitsCompatible'); an incompatible candidate is skipped (falling through
-to the prefix fallback, then to unlinked) rather than forming a link the matrix
-builder cannot convert — which would otherwise abort the whole load. Returns
-(fixed exchange, UnlinkedSummary).
+('linkUnitsCompatible'); an incompatible candidate is skipped rather than
+forming a link the matrix builder cannot convert — which would otherwise abort
+the whole load.
+
+There is no second guess. An input naming a product no activity of this
+database produces stays unlinked, and the cross-database linker gets its turn
+on it. Returns (fixed exchange, UnlinkedSummary).
 -}
 fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
@@ -755,18 +800,9 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
                         Just (actUUID, prodUUID) ->
                             (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
                         Nothing ->
-                            let prefixes = extractProductPrefixes (tfName flow)
-                                tryPrefix [] = Nothing
-                                tryPrefix (p : ps) = case M.lookup (normalizeText p) idx >>= accept of
-                                    Just result -> Just result
-                                    Nothing -> tryPrefix ps
-                             in case tryPrefix prefixes of
-                                    Just (actUUID, prodUUID) ->
-                                        (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
-                                    Nothing ->
-                                        let unlinked = UnlinkedExchange (tfName flow) loc
-                                            unlinkedMap = M.singleton consumerName [unlinked]
-                                         in (ex, UnlinkedSummary unlinkedMap 1 0 1)
+                            let unlinked = UnlinkedExchange (tfName flow) loc
+                                unlinkedMap = M.singleton consumerName [unlinked]
+                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, UnlinkedSummary M.empty 1 0 1)

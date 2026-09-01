@@ -51,6 +51,7 @@ everyCheck =
         , qraReferenceProduct = finding "reference product"
         , qraAllocationSums = finding "allocation sums"
         , qraDuplicateActivities = finding "duplicate activities"
+        , qraDuplicateProducts = finding "duplicate products"
         , qraSuspiciousAmounts = finding "suspicious amounts"
         , qraMissingMetadata = finding "missing metadata"
         , qraUndeclaredGeography = finding "undeclared geography"
@@ -58,6 +59,8 @@ everyCheck =
         , qraTruncatedNameCollisions = finding "truncated name collisions"
         , qraMissingPedigree = finding "missing pedigree"
         , qraUnconsumedProducts = finding "unconsumed products"
+        , qraUnsuppliedInputs = finding "unsupplied inputs"
+        , qraObsoleteInputs = finding "obsolete inputs"
         , qraLandTransformationBalance = finding "land transformation balance"
         , qraOxygenDemandOrder = finding "oxygen demand order"
         , qraInvalidCas = finding "invalid cas"
@@ -74,6 +77,7 @@ oneFinding detail =
         , qraReferenceProduct = finding detail
         , qraAllocationSums = quiet
         , qraDuplicateActivities = quiet
+        , qraDuplicateProducts = quiet
         , qraSuspiciousAmounts = quiet
         , qraMissingMetadata = quiet
         , qraUndeclaredGeography = quiet
@@ -81,6 +85,8 @@ oneFinding detail =
         , qraTruncatedNameCollisions = quiet
         , qraMissingPedigree = quiet
         , qraUnconsumedProducts = quiet
+        , qraUnsuppliedInputs = quiet
+        , qraObsoleteInputs = quiet
         , qraLandTransformationBalance = quiet
         , qraOxygenDemandOrder = quiet
         , qraInvalidCas = quiet
@@ -137,6 +143,7 @@ spec = describe "Quality report CSV" $ do
                        , "reference_product"
                        , "allocation_sums"
                        , "duplicate_activities"
+                       , "duplicate_products"
                        , "suspicious_amounts"
                        , "missing_metadata"
                        , "undeclared_geography"
@@ -144,6 +151,8 @@ spec = describe "Quality report CSV" $ do
                        , "truncated_name_collisions"
                        , "missing_pedigree"
                        , "unconsumed_products"
+                       , "unsupplied_inputs"
+                       , "obsolete_inputs"
                        , "land_transformation_balance"
                        , "oxygen_demand_order"
                        , "invalid_cas"

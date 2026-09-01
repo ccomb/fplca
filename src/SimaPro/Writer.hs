@@ -467,6 +467,7 @@ yields an empty "Type" value, so @meta@ omits the line and a re-parse yields
 activityMetaLines :: Activity -> [(Text, Text)]
 activityMetaLines Activity{..} =
     [ ("Category type", M.findWithDefault "" "Category type" activityClassification)
+    , ("Process identifier", foldMap (\(NativeProcessId nativeId) -> nativeId) activityNativeId)
     , ("Process name", activityName)
     , ("Type", typeLabelOf activityNativeType)
     , ("Geography", activityLocation)

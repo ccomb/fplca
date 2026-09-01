@@ -956,6 +956,7 @@ data QualityReportAPI = QualityReportAPI
     , qraReferenceProduct :: QualityCheckAPI
     , qraAllocationSums :: QualityCheckAPI
     , qraDuplicateActivities :: QualityCheckAPI
+    , qraDuplicateProducts :: QualityCheckAPI
     , qraSuspiciousAmounts :: QualityCheckAPI
     , qraMissingMetadata :: QualityCheckAPI
     , qraUndeclaredGeography :: QualityCheckAPI
@@ -963,6 +964,8 @@ data QualityReportAPI = QualityReportAPI
     , qraTruncatedNameCollisions :: QualityCheckAPI
     , qraMissingPedigree :: QualityCheckAPI
     , qraUnconsumedProducts :: QualityCheckAPI
+    , qraUnsuppliedInputs :: QualityCheckAPI
+    , qraObsoleteInputs :: QualityCheckAPI
     , qraLandTransformationBalance :: QualityCheckAPI
     , qraOxygenDemandOrder :: QualityCheckAPI
     , qraInvalidCas :: QualityCheckAPI

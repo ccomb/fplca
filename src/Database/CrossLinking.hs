@@ -66,10 +66,7 @@ module Database.CrossLinking (
     locationHierarchy,
 
     -- * Compound Name Parsing
-    extractProductPrefixes,
     extractBracketedLocation,
-    stripTrailingDBTag,
-    stripTrailingLocationSuffix,
 
     -- * Text Normalization
     normalizeText,
@@ -78,7 +75,7 @@ module Database.CrossLinking (
 
 import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
-import Data.Char (isAlpha, isUpper)
+import Data.Char (isUpper)
 import Data.Foldable (find)
 import Data.List (maximumBy, nub)
 import qualified Data.Map.Strict as M
@@ -297,82 +294,6 @@ normalizeUnicode = T.map replaceChar
 normalizeText :: Text -> Text
 normalizeText = T.toLower . T.strip . normalizeUnicode
 
-{- | Separators that may appear between product name and additional info
-in SimaPro compound process names (e.g. "product//[GLO] activity name").
-Ordered by priority.
--}
-compoundSeparators :: [Text]
-compoundSeparators = ["//", " {", " [", " |"]
-
-{- | Strip a trailing database tag from a product name.
-Matches patterns like "(WFLDB)", "(AGRIBALYSE)", "(SALCA)" — a parenthesized
-suffix where the content is all uppercase letters.
-Returns Just strippedName if a tag was found, Nothing otherwise.
--}
-stripTrailingDBTag :: Text -> Maybe Text
-stripTrailingDBTag name
-    | T.null name = Nothing
-    | T.last name /= ')' = Nothing
-    | otherwise =
-        let withoutClose = T.init name -- drop trailing ')'
-            (before, tag) = T.breakOnEnd "(" withoutClose
-         in if T.null before
-                then Nothing -- no opening paren found
-                else
-                    let prefix = T.init before -- drop the '(' at end of 'before'
-                        stripped = T.strip prefix
-                     in if not (T.null tag)
-                            && T.all (\c -> isUpper c || c == '-') tag
-                            && T.any isAlpha tag -- at least one letter
-                            && not (T.null stripped)
-                            then Just stripped
-                            else Nothing
-
-{- | Strip a trailing @\/LOCATION MARKER@ suffix from a product name.
-WFLDB names use the pattern @ProductName (WFLDB)\/CA U@ where the suffix
-encodes location (2-3 uppercase letters) and unit type (1 uppercase letter).
--}
-stripTrailingLocationSuffix :: Text -> Maybe Text
-stripTrailingLocationSuffix name =
-    case T.breakOnEnd "/" name of
-        ("", _) -> Nothing
-        (beforeSlash, afterSlash) ->
-            case T.words afterSlash of
-                [loc, marker]
-                    | T.length loc >= 2
-                    , T.length loc <= 3
-                    , T.all isUpper loc
-                    , T.length marker == 1
-                    , T.all isUpper marker ->
-                        Just (T.stripEnd (T.init beforeSlash))
-                _ -> Nothing
-
-{- | Extract product name prefixes from a compound name.
-Tries splitting at each separator and returns candidate prefixes (stripped).
-Also tries stripping a trailing database tag like "(WFLDB)" and a trailing
-location suffix like "/CA U" (WFLDB convention).
-Returns empty list if no separator is found and no tag detected.
--}
-extractProductPrefixes :: Text -> [Text]
-extractProductPrefixes name =
-    let separatorPrefixes =
-            [ T.strip prefix
-            | sep <- compoundSeparators
-            , let (prefix, rest) = T.breakOn sep name
-            , not (T.null rest) -- separator was found
-            , not (T.null prefix) -- non-empty prefix
-            ]
-        tagStripped = case stripTrailingDBTag name of
-            Just stripped -> [stripped]
-            Nothing -> []
-        locationSuffixStripped = case stripTrailingLocationSuffix name of
-            Just stripped ->
-                stripped : case stripTrailingDBTag stripped of
-                    Just alsoTagStripped -> [alsoTagStripped]
-                    Nothing -> []
-            Nothing -> []
-     in separatorPrefixes ++ tagStripped ++ locationSuffixStripped
-
 {- | Extract a location code from any bracket pattern in a name.
 Tries {XX} first (standard LCA geography notation), then [XX] with
 validation to avoid chemical notation like [thio] or metadata like [Dummy].
@@ -408,14 +329,14 @@ This should be called once when a database is loaded
 buildIndexedDatabase :: Text -> SynonymDB -> SimpleDatabase -> IndexedDatabase
 buildIndexedDatabase dbName synDB db =
     let entries = buildSupplierEntries db
-        -- Index by normalized product name + extracted prefixes
+        -- Index by normalized product name, and by nothing else: a prefix of
+        -- a product name is a different product.
         byName =
             M.fromListWith
                 (++)
-                [ (normalizeText name, [entry])
+                [ (normalizeText prodName, [entry])
                 | (prodName, entry) <- entries
-                , name <- prodName : extractProductPrefixes prodName
-                , not (T.null (normalizeText name))
+                , not (T.null (normalizeText prodName))
                 ]
         -- Index by synonym group (for synonym matching)
         bySynonym =
@@ -481,14 +402,14 @@ This is the preferred method as it works with cached databases
 buildIndexedDatabaseFromDB :: Text -> SynonymDB -> Database -> IndexedDatabase
 buildIndexedDatabaseFromDB dbName synDB db =
     let entries = buildSupplierEntriesFromDB db
-        -- Index by normalized product name + extracted prefixes
+        -- Index by normalized product name, and by nothing else: a prefix of
+        -- a product name is a different product.
         byName =
             M.fromListWith
                 (++)
-                [ (normalizeText name, [entry])
+                [ (normalizeText prodName, [entry])
                 | (prodName, entry) <- entries
-                , name <- prodName : extractProductPrefixes prodName
-                , not (T.null (normalizeText name))
+                , not (T.null (normalizeText prodName))
                 ]
         -- Index by synonym group (for synonym matching)
         bySynonym =
@@ -665,14 +586,12 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
             -- non-empty result via 'firstNonEmpty':
             --   1. Exact product-name match across all indexed DBs.
             --   2. Synonym-group match if exact yielded nothing.
-            --   3. Prefix-splitting fallback for compound names (e.g. SimaPro).
             resolveCandidates $
                 firstNonEmpty
                     [ concatMap (lookupExact (normalizeText productName)) lcIndexedDatabases
                     , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
                         Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                         Nothing -> []
-                    , tryPrefixes (extractProductPrefixes productName)
                     ]
   where
     -- Effective location: if raw location is empty, try extracting from compound name
@@ -681,13 +600,13 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
             then extractBracketedLocation productName
             else location
 
-    -- Resolve an alias row's designated target: the exact/synonym/prefix
-    -- sub-cascade on the target name, then either the normal geography-policy
-    -- pipeline (no pinned location) or the literal designated link. A target
-    -- name that matches nowhere is a loud curated-mapping error
-    -- ('AliasTargetMissing'), never a silent 'NoNameMatch'.
+    -- Resolve an alias row's designated target by its name, then either the
+    -- normal geography-policy pipeline (no pinned location) or the literal
+    -- designated link. A target name that matches nowhere is a loud
+    -- curated-mapping error ('AliasTargetMissing'), never a silent
+    -- 'NoNameMatch'.
     resolveDesignated (AliasTarget targetName mTargetLoc) =
-        case firstNonEmpty [tryName targetName, tryPrefixes (extractProductPrefixes targetName)] of
+        case tryName targetName of
             [] -> CrossDBNotLinked (AliasTargetMissing targetName Nothing)
             candidates -> case mTargetLoc of
                 Nothing -> resolveCandidates candidates
@@ -797,12 +716,6 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                 Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                 Nothing -> []
          in firstNonEmpty [byExact, bySynonym]
-
-    -- Try each prefix from compound name splitting; for each prefix run the
-    -- same (exact, then synonym) sub-cascade; return the first prefix that
-    -- yields anything.
-    tryPrefixes :: [Text] -> [(Text, SupplierEntry)]
-    tryPrefixes = firstNonEmpty . map tryName
 
     classifyEntry :: Text -> (Text, SupplierEntry) -> Maybe ((Text, SupplierEntry), LocationKind)
     classifyEntry queryLoc entry@(_, SupplierEntry{seLocation}) =

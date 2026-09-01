@@ -131,9 +131,10 @@ module header on why @milk@ in @kg@ and @milk@ in @l@ are two flows.
 authoredProductUUID :: Text -> Text -> UUID
 authoredProductUUID productName unit = mintAuthored ["product", productName, unit]
 
-{- | Identity of a biosphere flow an author introduces. Same three coordinates
-the SimaPro parser mints on (name, compartment, unit), so re-declaring the
-same flow in a second activity reuses the first one instead of forking it.
+{- | Identity of a biosphere flow an author introduces: name, compartment and
+unit, so re-declaring the same flow in a second activity reuses the first one
+instead of forking it. An imported flow is identified by what its file says
+instead, which for SimaPro is the name and the compartment alone.
 -}
 authoredBioFlowUUID :: Text -> Compartment -> Text -> UUID
 authoredBioFlowUUID name comp unit =

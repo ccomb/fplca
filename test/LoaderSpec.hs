@@ -5,6 +5,7 @@ module LoaderSpec (spec) where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import System.Directory (createDirectoryIfMissing)
@@ -57,6 +58,10 @@ minimalActivity name loc exs =
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
         }
+
+-- | The same activity, filed in the source's obsolete category.
+retired :: Activity -> Activity
+retired act = act{activityClassification = M.singleton "Category" "Autres\\Obsolete"}
 
 refExchange :: UUID.UUID -> Exchange
 refExchange fid =
@@ -180,6 +185,44 @@ spec = do
             let a = minimalFlow flowUUID1 "flow-a"
                 b = minimalFlow flowUUID2 "flow-b"
             tfName (mergeTechFlows a b) `shouldBe` "flow-a"
+
+    -- -----------------------------------------------------------------------
+    describe "indexActivities" $ do
+        it "names the two spellings a case fold brings together, and keeps the last read" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    ]
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 1
+            map activityName (M.elems procMap) `shouldBe` ["steel, low-alloyed"]
+            length collisions `shouldBe` 1
+            head collisions `shouldSatisfy` \msg ->
+                all (`T.isInfixOf` msg) ["'Steel, low-alloyed'", "'steel, low-alloyed'", "GLO"]
+
+        it "says nothing about one spelling written twice at two locations" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "Steel, low-alloyed" "FR" [refExchange flowUUID1]
+                    ]
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
+
+        it "says nothing when the two blocks state two products" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "steel, low-alloyed" "GLO" [refExchange flowUUID2]
+                    ]
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
+
+        it "leaves blocks their file identifies alone" $ do
+            let published name = (minimalActivity name "GLO" [refExchange flowUUID1]){activityNativeId = Just (NativeProcessId name)}
+                (procMap, collisions) = indexActivities [published "Steel, low-alloyed", published "steel, low-alloyed"]
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
 
     -- -----------------------------------------------------------------------
     -- generateActivityUUIDFromActivity
@@ -328,6 +371,50 @@ spec = do
             -- empty UnitDB → reference unit resolves to the "unknown" sentinel
             M.lookup "wheat production" idx `shouldBe` Just (actUUID1, flowUUID1, "unknown")
 
+        it "picks a duplicate producer by name, never by identifier" $ do
+            -- The typo pair: two blocks exported under names differing by one
+            -- letter, both declaring the same product. Either answers, and the
+            -- one picked must not move when identity is minted differently.
+            let acts =
+                    M.fromList
+                        [ ((actUUID1, flowUUID1), minimalActivity "Pork, meat without bone" "FR" [refExchange flowUUID1])
+                        , ((actUUID2, flowUUID2), minimalActivity "Pork, meat whitout bone" "FR" [refExchange flowUUID2])
+                        ]
+                flows =
+                    M.fromList
+                        [ (flowUUID1, minimalFlow flowUUID1 "Pork, bone")
+                        , (flowUUID2, minimalFlow flowUUID2 "Pork, bone")
+                        ]
+            -- "whitout" sorts before "without", and holds flowUUID2.
+            M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
+                `shouldBe` Just (actUUID2, flowUUID2, "unknown")
+
+        it "lets the block the source retired lose the tie" $ do
+            -- The same pair, one of them now filed under an obsolete
+            -- category. The file says which of the two it means, so the name
+            -- sort is not consulted and the block still in service supplies.
+            let acts =
+                    M.fromList
+                        [ ((actUUID1, flowUUID1), minimalActivity "Pork, meat without bone" "FR" [refExchange flowUUID1])
+                        , ((actUUID2, flowUUID2), retired (minimalActivity "Pork, meat whitout bone" "FR" [refExchange flowUUID2]))
+                        ]
+                flows =
+                    M.fromList
+                        [ (flowUUID1, minimalFlow flowUUID1 "Pork, bone")
+                        , (flowUUID2, minimalFlow flowUUID2 "Pork, bone")
+                        ]
+            M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
+                `shouldBe` Just (actUUID1, flowUUID1, "unknown")
+
+        it "does not index a prefix of a product name" $ do
+            -- "Urea {RER}| urea production" and "Urea {RoW}| urea production"
+            -- are not the same product, and neither is "Urea".
+            let act = minimalActivity "urea market" "RER" [refExchange flowUUID1]
+                acts = M.fromList [((actUUID1, flowUUID1), act)]
+                flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Urea {RER}| market for urea | Cut-off, S")]
+                idx = buildSupplierIndexByName M.empty acts flows
+            M.keys idx `shouldBe` ["urea {rer}| market for urea | cut-off, s"]
+
         it "does not index non-reference exchanges" $ do
             let act =
                     minimalActivity
@@ -355,6 +442,17 @@ spec = do
         it "leaves exchange unlinked when supplier not in index" $ do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
                 idx = M.empty
+                ex = inputExchange flowUUID1 "GLO"
+                (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
+            techActivityLinkId fixed `shouldBe` UUID.nil
+            usMissingLinks summary `shouldBe` 1
+
+        it "leaves an input unlinked rather than resolving a prefix of its name" $ do
+            -- The nine rows of the Agribalyse 4.0 export that name an ecoinvent
+            -- unit process the export does not carry. Answering with the
+            -- Chinese market because both start with "Urea" is not an answer.
+            let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Urea {RoW}| urea production | Cut-off, S")]
+                idx = M.fromList [("urea", (actUUID1, flowUUID2, ""))]
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil

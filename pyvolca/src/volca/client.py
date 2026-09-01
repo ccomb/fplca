@@ -1007,8 +1007,8 @@ class Client:
         """Write new activities into a database that can hold them.
 
         Each activity's ``process_id`` is minted by the engine from its name,
-        location, product name and product unit (you do not choose it), and
-        comes back in ``written``. Writing the same activity twice is therefore
+        its location, and its product name and unit (you do not choose it),
+        and comes back in ``written``. Writing the same activity twice is therefore
         a conflict, not a second row; use :meth:`replace_activity` to correct
         one that is already there.
 
@@ -1048,8 +1048,8 @@ class Client:
         """Rewrite one activity the database already holds, keeping its identity.
 
         ``process_id`` must be the identity ``activity`` mints to; that is,
-        the name, location, product name and product unit must be the ones the
-        row already has. Change any of those and you are describing a different
+        the name, the location, and the product name and unit must be the ones
+        the row already has, spelling and case included. Change any of those and you are describing a different
         activity, which the engine refuses rather than writing to a second row;
         create that one and delete the old one instead.
 

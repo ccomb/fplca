@@ -7,6 +7,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Loader (getReferenceProductUUID)
 import Database.MatrixBuild (InterningTables (..), buildInterningTables)
 import Expr (evaluate, isExpression, normalizeExpr)
@@ -24,6 +25,7 @@ import SimaPro.Parser (
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
+    indexFlows,
     normalizeSimaProCompartment,
     parseAmount,
     parseBioRow,
@@ -38,17 +40,21 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (
     Activity (..),
-    BiosphereFlow,
+    BioFlowDB,
+    BiosphereFlow (..),
     Exchange (..),
     LocationSource (..),
     NativeActivityType (..),
     NativeProcessId (..),
     Pedigree (..),
+    TechFlowDB,
     TechRole (..),
-    TechnosphereFlow,
+    TechnosphereFlow (..),
     UUID,
     Unit (..),
+    UnitDB,
     WasteFlow,
+    WasteFlowDB,
     exchangeComment,
     exchangeFlowId,
     exchangeIsInput,
@@ -56,7 +62,7 @@ import Types (
     exchangePedigree,
     tfName,
  )
-import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit, mkUnitConfig)
 
 -- | Test CSV content with a quoted product name containing the delimiter (;)
 testCSV :: BS.ByteString
@@ -111,7 +117,7 @@ parseTestCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biospher
 parseTestCSV = withSystemTempFile "test.csv" $ \path handle -> do
     BS.hPut handle testCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with waste treatment process and waste-to-treatment demand
 wasteTestCSV :: BS.ByteString
@@ -198,14 +204,14 @@ parseWasteNoAllocCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID 
 parseWasteNoAllocCSV = withSystemTempFile "waste-noalloc-test.csv" $ \path handle -> do
     BS.hPut handle wasteNoAllocCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Parse the waste test CSV via a temp file
 parseWasteCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseWasteCSV = withSystemTempFile "waste-test.csv" $ \path handle -> do
     BS.hPut handle wasteTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | Test CSV where one flow is both a producer's reference product (carrying
 the SimaPro "Category" column) and a later process's Materials/fuels input
@@ -261,7 +267,7 @@ parseSharedFlowCategoryCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map
 parseSharedFlowCategoryCSV = withSystemTempFile "shared-flow-cat-test.csv" $ \path handle -> do
     BS.hPut handle sharedFlowCategoryCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- ============================================================================
 -- Expression evaluator tests
@@ -312,7 +318,7 @@ parseParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosphe
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
     BS.hPut handle paramTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with database-level parameters
 dbParamTestCSV :: BS.ByteString
@@ -352,7 +358,7 @@ parseDbParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosp
 parseDbParamCSV = withSystemTempFile "dbparam-test.csv" $ \path handle -> do
     BS.hPut handle dbParamTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Test CSV with yield chain formula (most common pattern in Agribalyse)
 yieldChainTestCSV :: BS.ByteString
@@ -396,7 +402,7 @@ parseYieldChainCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Bi
 parseYieldChainCSV = withSystemTempFile "yield-test.csv" $ \path handle -> do
     BS.hPut handle yieldChainTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | The shape Agribalyse writes a pesticide emission mix in: the amount is
 summed in place, and one term drops its integer part (@,067@).
@@ -439,7 +445,7 @@ parseSummedAmountCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID 
 parseSummedAmountCSV = withSystemTempFile "summed-amount-test.csv" $ \path handle -> do
     BS.hPut handle summedAmountTestCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- Helper: get all tech input amounts
 techInputAmounts :: Activity -> [Double]
@@ -1076,10 +1082,25 @@ spec = do
             generateUnitUUID "kg" `shouldNotBe` generateUnitUUID "MJ"
 
         it "generateFlowUUID is deterministic" $
-            generateFlowUUID "CO2" "air" "kg" `shouldBe` generateFlowUUID "CO2" "air" "kg"
+            generateFlowUUID "CO2" "air" `shouldBe` generateFlowUUID "CO2" "air"
 
         it "generateFlowUUID differs when compartment differs" $
-            generateFlowUUID "CO2" "air" "kg" `shouldNotBe` generateFlowUUID "CO2" "water" "kg"
+            generateFlowUUID "CO2" "air" `shouldNotBe` generateFlowUUID "CO2" "water"
+
+    describe "indexFlows" $ do
+        let kg = generateUnitUUID "kg"
+            mj = generateUnitUUID "mj"
+            flow name unitRef = TechnosphereFlow (generateFlowUUID name "") name unitRef M.empty Nothing Nothing
+            names = M.fromList [(kg, "kg"), (mj, "mj")]
+
+        it "folds two rows of one flow into a single entry when the unit agrees" $
+            M.size <$> indexFlows names (\f -> (tfId f, tfUnitId f, tfName f)) [flow "steel" kg, flow "steel" kg]
+                `shouldBe` Right 1
+
+        it "refuses two rows of one flow written in units no conversion relates" $
+            case indexFlows names (\f -> (tfId f, tfUnitId f, tfName f)) [flow "heat" mj, flow "heat" kg] of
+                Left err -> err `shouldSatisfy` \e -> "heat" `T.isInfixOf` e && "mj" `T.isInfixOf` e && "kg" `T.isInfixOf` e
+                Right db -> expectationFailure ("expected a refusal, got " ++ show (M.size db))
 
     -- -----------------------------------------------------------------------
     -- CF ↔ biosphere UUID alignment (regression: see PR #65)
@@ -1088,46 +1109,44 @@ spec = do
     -- ('Method.ParserSimaPro') both hash flow UUIDs via 'generateFlowUUID'
     -- composed with 'normalizeSimaProCompartment'. These tests pin the
     -- invariant that the two call sites land on the same UUID for the same
-    -- elementary flow — the bug they prevent silently routed every regional,
-    -- non-kg or '(unspecified)'-sub CF through the slower name cascade.
+    -- elementary flow — the bug they prevent silently routed every regional
+    -- or '(unspecified)'-sub CF through the slower name cascade.
     -- -----------------------------------------------------------------------
     describe "CF / biosphere flow UUID alignment" $ do
-        let cfSide name comp sub =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub)
-            bioSide name comp sub =
-                generateFlowUUID name (normalizeSimaProCompartment comp sub)
+        let cfSide name comp sub = generateFlowUUID name (normalizeSimaProCompartment comp sub)
+            bioSide name comp sub = generateFlowUUID name (normalizeSimaProCompartment comp sub)
 
-        it "regional water in m³: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
-            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
-                `shouldBe` bioSide "Water, FR" "resource" "" "m3"
-
-        it "non-kg energy resource: CF unit must come from the CF row, not 'kg'" $
-            cfSide "Energy, gross calorific value, in biomass" "Raw" "(unspecified)" "MJ"
-                `shouldBe` bioSide "Energy, gross calorific value, in biomass" "resource" "" "MJ"
+        it "regional water: CF 'Raw'/'(unspecified)' matches bio 'resource'/blank" $
+            cfSide "Water, FR" "Raw" "(unspecified)"
+                `shouldBe` bioSide "Water, FR" "resource" ""
 
         it "regional air emission: CF 'Air'/'(unspecified)' matches bio 'air'/blank" $
-            cfSide "Nitrogen dioxide, FR" "Air" "(unspecified)" "kg"
-                `shouldBe` bioSide "Nitrogen dioxide, FR" "air" "" "kg"
+            cfSide "Nitrogen dioxide, FR" "Air" "(unspecified)"
+                `shouldBe` bioSide "Nitrogen dioxide, FR" "air" ""
 
         it "subcompartment case is normalized on both sides" $
-            cfSide "NOx" "Air" "Low. Pop." "kg"
-                `shouldBe` bioSide "NOx" "air" "low. pop." "kg"
+            cfSide "NOx" "Air" "Low. Pop." `shouldBe` bioSide "NOx" "air" "low. pop."
 
         it "CF 'resources' header matches bio 'resource' literal" $
-            cfSide "Iron" "Resources" "in ground" "kg"
-                `shouldBe` bioSide "Iron" "resource" "in ground" "kg"
-
-        it "differs when units differ (kg vs m³ are distinct flows)" $
-            cfSide "Water" "Raw" "(unspecified)" "kg"
-                `shouldNotBe` cfSide "Water" "Raw" "(unspecified)" "m3"
+            cfSide "Iron" "Resources" "in ground" `shouldBe` bioSide "Iron" "resource" "in ground"
 
         it "differs when the regional suffix differs" $
-            cfSide "Water, FR" "Raw" "(unspecified)" "m3"
-                `shouldNotBe` cfSide "Water, DE" "Raw" "(unspecified)" "m3"
+            cfSide "Water, FR" "Raw" "(unspecified)"
+                `shouldNotBe` cfSide "Water, DE" "Raw" "(unspecified)"
 
-        it "preserves the unit signal in the hash (CF unit is not stripped)" $
-            generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "m3"
-                `shouldNotBe` generateFlowUUID "Water" (normalizeSimaProCompartment "Raw" "(unspecified)") "kg"
+    -- -----------------------------------------------------------------------
+    -- What the flow identifier is made of
+    -- -----------------------------------------------------------------------
+    describe "flow identity" $ do
+        it "is the same flow whatever unit the row states" $
+            generateFlowUUID "Water" "resource" `shouldBe` generateFlowUUID "Water" "resource"
+
+        it "is the same flow whatever case the producer wrote" $
+            generateFlowUUID "Blending, from must, 1 L" ""
+                `shouldBe` generateFlowUUID "blending, from must, 1 l" ""
+
+        it "still separates two names that differ by more than case" $
+            generateFlowUUID "Water, FR" "" `shouldNotBe` generateFlowUUID "Water, DE" ""
 
     -- -----------------------------------------------------------------------
     -- Uncovered CSV sections
@@ -1333,6 +1352,51 @@ spec = do
             techAmount (head refExs) `shouldBe` 1.0
             activityUnit steel `shouldBe` "kg"
 
+        it "converts an input row to the reference unit of its dimension" $ do
+            (activities, techFlows, _, _, _) <- parseMixedUnitsCSV
+            let act = head activities
+                input = head [ex | ex <- exchanges act, exchangeIsInput ex, case ex of TechnosphereExchange{} -> True; _ -> False]
+            techAmount input `shouldBe` 0.25
+            fmap tfUnitId (M.lookup (exchangeFlowId input) techFlows)
+                `shouldBe` Just (generateUnitUUID "kg")
+
+        it "converts a resource row to the reference unit of its dimension" $ do
+            (activities, _, bioFlows, _, _) <- parseMixedUnitsCSV
+            let act = head activities
+                resource = head [ex | ex <- exchanges act, case ex of BiosphereExchange{} -> True; _ -> False]
+            bioAmount resource `shouldBe` 3.6
+            fmap bfUnitId (M.lookup (exchangeFlowId resource) bioFlows)
+                `shouldBe` Just (generateUnitUUID "mj")
+
+    describe "what a process identifier is made of" $ do
+        let processIds = map (\a -> (generateActivityUUID a, getReferenceProductUUID a))
+            oneBlock spelling =
+                parseIdentifiedBlocksCSV
+                    [("AGRIBALU000000003101635", "Blending, from must {FR} U", [spelling <> ";l;1;100;not defined;material;"])]
+
+        it "does not move when the producer changes the case of a name" $ do
+            written <- oneBlock "French production mix, at plant, 1 L of must {FR} U"
+            rewritten <- oneBlock "french production mix, at plant, 1 l of must {FR} U"
+            processIds written `shouldBe` processIds rewritten
+
+        it "does not move when a reference unit is renamed in the table" $ do
+            -- The drift release 0.10.0 walked into: "cubic meter" became "m3"
+            -- in units.csv and twelve percent of Agribalyse changed identity
+            -- with no datum touched.
+            let block = [("AGRIBALU000000003101635", "Blending {FR} U", ["Must {FR} U;l;1;100;not defined;material;"])]
+            before <- parseIdentifiedBlocksWith (volumeUnitConfig "cubic meter") block
+            after <- parseIdentifiedBlocksWith (volumeUnitConfig "m3") block
+            processIds before `shouldBe` processIds after
+
+        it "falls back to the name when one identifier names two processes" $ do
+            activities <-
+                parseIdentifiedBlocksCSV
+                    [ ("DUPLICATE0001", "First process {FR} U", ["First product {FR} U;kg;1;100;not defined;material;"])
+                    , ("DUPLICATE0001", "Second process {FR} U", ["Second product {FR} U;kg;1;100;not defined;material;"])
+                    ]
+            map activityNativeId activities `shouldBe` [Nothing, Nothing]
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 2
+
     describe "SimaPro multi-product processes (coproducts)" $ do
         -- One Process block declares 5 coproducts with mass-allocation formulas.
         -- The 5 resulting Activity records must share one activityUUID (so
@@ -1405,11 +1469,10 @@ spec = do
             S.fromList (map activityName activities)
                 `shouldBe` S.singleton "Tuna, main product {FR} U"
 
-        it "groups the coproducts of one block, and only those" $ do
-            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so three
-            -- unrelated lorry blocks carry one name and hash to one activityUUID.
-            -- The products index must still keep them apart, because the block
-            -- identifier does.
+        it "keeps two blocks apart when one truncated name covers both" $ do
+            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so
+            -- unrelated lorry blocks carry one name. They are still two
+            -- processes, and the identifier each one publishes says so.
             let truncated = "market for transport, freight, lorry with refrigeration machine, 7.5-16 ton, die"
             activities <-
                 parseIdentifiedBlocksCSV
@@ -1421,8 +1484,7 @@ spec = do
                     [ Just (NativeProcessId "TraiEVEA000064241304182")
                     , Just (NativeProcessId "TraiEVEA000064241304183")
                     ]
-            -- The collision this fix deliberately keeps: one UUID, two blocks.
-            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
+            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 2
             map length (productGroups activities) `shouldBe` [1, 1]
 
         it "groups a block's coproducts together under its own identifier" $ do
@@ -1506,7 +1568,11 @@ parseSectionCSV =
 @Process name@ and @Products@ rows. Activities come back in file order.
 -}
 parseIdentifiedBlocksCSV :: [(BS.ByteString, BS.ByteString, [BS.ByteString])] -> IO [Activity]
-parseIdentifiedBlocksCSV blocks =
+parseIdentifiedBlocksCSV = parseIdentifiedBlocksWith defaultUnitConfig
+
+-- | 'parseIdentifiedBlocksCSV' under a chosen unit table.
+parseIdentifiedBlocksWith :: UnitConfig -> [(BS.ByteString, BS.ByteString, [BS.ByteString])] -> IO [Activity]
+parseIdentifiedBlocksWith unitCfg blocks =
     withSystemTempFile "identified-blocks-test.csv" $ \path handle -> do
         let header =
                 [ "{SimaPro 9.6.0.1}"
@@ -1535,7 +1601,7 @@ parseIdentifiedBlocksCSV blocks =
                     ++ ["", "End", ""]
         BS.hPut handle (BS.intercalate "\r\n" (header ++ concatMap block blocks))
         hClose handle
-        (activities, _, _, _, _) <- parseSimaProCSV defaultUnitConfig path
+        (activities, _, _, _, _) <- parseOrFail unitCfg path
         pure activities
 
 {- | The coproduct groups the products index builds, as their sizes, ordered by
@@ -1575,7 +1641,7 @@ parseProductsCSV procName productsRows =
                            ]
         BS.hPut handle content
         hClose handle
-        parseSimaProCSV defaultUnitConfig path
+        parseOrFail defaultUnitConfig path
 
 parseNamedCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseNamedCSV procName sectionLines =
@@ -1607,7 +1673,7 @@ parseNamedCSV procName sectionLines =
                            ]
         BS.hPut handle content
         hClose handle
-        parseSimaProCSV defaultUnitConfig path
+        parseOrFail defaultUnitConfig path
 
 -- | CSV with comma as separator
 commaCSV :: BS.ByteString
@@ -1639,20 +1705,50 @@ parseCommaCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosphe
 parseCommaCSV = withSystemTempFile "comma-test.csv" $ \path handle -> do
     BS.hPut handle commaCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
+
+{- | A volume table whose reference unit carries the spelling the caller
+chooses. Renaming it is exactly what release 0.10.0 did, and no identifier may
+follow it.
+-}
+volumeUnitConfig :: Text -> UnitConfig
+volumeUnitConfig reference =
+    mkUnitConfig
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        ( M.fromList
+            [ (reference, UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 1.0)
+            , ("l", UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 0.001)
+            ]
+        )
+        (M.fromList [(reference, reference), ("l", "l")])
+
+{- | Unit config knowing a non-canonical spelling in two dimensions: g (mass)
+and kWh (energy), so a row written in either has somewhere to be converted to.
+-}
+mixedUnitConfig :: UnitConfig
+mixedUnitConfig =
+    mkUnitConfig
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
+            , ("mj", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 1.0)
+            , ("kwh", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 3.6)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("g", "g"), ("mj", "mj"), ("kwh", "kWh")])
 
 -- | Unit config that knows about "ton" (1000 kg) in addition to kg.
 tonUnitConfig :: UnitConfig
 tonUnitConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("ton", "ton")]
-        }
+    mkUnitConfig
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("ton", "ton")])
 
 -- | A minimal SimaPro CSV declaring a reference product of "1 ton" (mass).
 tonRefCSV :: BS.ByteString
@@ -1684,7 +1780,47 @@ parseTonRefCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID Biosph
 parseTonRefCSV = withSystemTempFile "ton-ref.csv" $ \path handle -> do
     BS.hPut handle tonRefCSV
     hClose handle
-    parseSimaProCSV tonUnitConfig path
+    parseOrFail tonUnitConfig path
+
+{- | One block whose rows are written in units that are not the reference unit
+of their dimension: 250 g of feedstock and 1 kWh of energy taken from nature.
+-}
+mixedUnitsCSV :: BS.ByteString
+mixedUnitsCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Mixed units {FR} U"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Mixed units {FR} U;kg;1.0;100;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "Feedstock;g;250;Undefined;;;;;;"
+        , ""
+        , "Resources"
+        , "Energy, from nature;;kWh;1;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseMixedUnitsCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseMixedUnitsCSV = withSystemTempFile "mixed-units.csv" $ \path handle -> do
+    BS.hPut handle mixedUnitsCSV
+    hClose handle
+    parseOrFail mixedUnitConfig path
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
@@ -1744,7 +1880,7 @@ parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUI
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 {- | Single-product CSV with an empty Process name field. Mirrors mono-product
 SimaPro exports that leave the "Process name" line blank: the parser must
@@ -1782,4 +1918,10 @@ parseNoProcessNameCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID
 parseNoProcessNameCSV = withSystemTempFile "no-process-name.csv" $ \path handle -> do
     BS.hPut handle noProcessNameCSV
     hClose handle
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
+
+{- | Parse, failing the example when the parser refuses the file. The parser
+now returns 'Left' for a flow written in two units no conversion relates.
+-}
+parseOrFail :: UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+parseOrFail cfg path = either (fail . show) pure =<< parseSimaProCSV cfg path

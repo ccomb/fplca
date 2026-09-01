@@ -6,11 +6,14 @@ A score tells you whether a database computes; it says nothing about whether
 the dataset is well formed. These checks look for the structural defects a
 score can't reveal: processes without exactly one reference exchange,
 coproduct allocation that doesn't sum to 100%, entries duplicated outright,
+products two activities both declare,
 amounts that aren't finite, missing metadata, stored amounts that disagree
 with the formulas documenting them, distinct names that merge under
 SimaPro's 80-character truncation, exchanges without the pedigree scores
 their database otherwise carries, reference products nothing in the
-database consumes, geography no dataset declared (read off the name
+database consumes, inputs no reference product in the database supplies,
+inputs a dataset the source retired supplies,
+geography no dataset declared (read off the name
 or filled in by the loader instead), land transformation whose "to" and
 "from" areas don't balance within an activity, oxygen-demand or
 organic-carbon measures reported in a physically impossible order, CAS
@@ -56,6 +59,7 @@ import Types (
     Unit (..),
     WasteFlow (..),
     activityGroupKey,
+    activityIsObsolete,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
@@ -104,6 +108,7 @@ data QualityReport = QualityReport
     , qrReferenceProduct :: !QualityCheck
     , qrAllocationSums :: !QualityCheck
     , qrDuplicateActivities :: !QualityCheck
+    , qrDuplicateProducts :: !QualityCheck
     , qrSuspiciousAmounts :: !QualityCheck
     , qrMissingMetadata :: !QualityCheck
     , qrUndeclaredGeography :: !QualityCheck
@@ -111,6 +116,8 @@ data QualityReport = QualityReport
     , qrTruncatedNameCollisions :: !QualityCheck
     , qrMissingPedigree :: !QualityCheck
     , qrUnconsumedProducts :: !QualityCheck
+    , qrUnsuppliedInputs :: !QualityCheck
+    , qrObsoleteInputs :: !QualityCheck
     , qrLandTransformationBalance :: !QualityCheck
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
@@ -128,6 +135,7 @@ qualityChecks r =
     [ qrReferenceProduct r
     , qrAllocationSums r
     , qrDuplicateActivities r
+    , qrDuplicateProducts r
     , qrSuspiciousAmounts r
     , qrMissingMetadata r
     , qrUndeclaredGeography r
@@ -135,6 +143,8 @@ qualityChecks r =
     , qrTruncatedNameCollisions r
     , qrMissingPedigree r
     , qrUnconsumedProducts r
+    , qrUnsuppliedInputs r
+    , qrObsoleteInputs r
     , qrLandTransformationBalance r
     , qrOxygenDemandOrder r
     , qrInvalidCas r
@@ -229,6 +239,7 @@ qualityReport dbName db =
         , qrReferenceProduct = QualityCheck True (worstFirst referenceOffenders)
         , qrAllocationSums = QualityCheck allocationApplicable (worstFirst allocationOffenders)
         , qrDuplicateActivities = QualityCheck True (worstFirst duplicateOffenders)
+        , qrDuplicateProducts = QualityCheck True (worstFirst duplicateProductOffenders)
         , qrSuspiciousAmounts = QualityCheck True (worstFirst amountOffenders)
         , qrMissingMetadata = QualityCheck True (worstFirst metadataOffenders)
         , qrUndeclaredGeography = QualityCheck True (worstFirst geographyOffenders)
@@ -236,6 +247,8 @@ qualityReport dbName db =
         , qrTruncatedNameCollisions = QualityCheck True (worstFirst truncationOffenders)
         , qrMissingPedigree = QualityCheck pedigreeApplicable (worstFirst pedigreeOffenders)
         , qrUnconsumedProducts = QualityCheck True (worstFirst unconsumedOffenders)
+        , qrUnsuppliedInputs = QualityCheck True (worstFirst unsuppliedOffenders)
+        , qrObsoleteInputs = QualityCheck True (worstFirst obsoleteInputOffenders)
         , qrLandTransformationBalance = QualityCheck landBalanceApplicable (worstFirst landBalanceOffenders)
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
@@ -351,6 +364,50 @@ qualityReport dbName db =
             T.pack (show n) <> " identical entries (same name, location and reference product)"
         | ((name, location, productName), (Min pid, Sum n)) <- M.toList duplicateGroups
         , n > 1
+        ]
+
+    productProducers =
+        M.fromListWith
+            (<>)
+            [ (exchangeFlowId refEx, [(key, act)])
+            | (key, act) <- entries
+            , [refEx] <- [filter exchangeIsReference (exchanges act)]
+            ]
+
+    {- Two activities declaring one product at one location, which an input
+    naming that product has to choose between. The supplier index is keyed by
+    the product, so one of them answers and the others supply nothing. Which
+    one is settled by a rule of ours, on a question only the file can answer,
+    and a stale twin left in an export wins as easily as the current entry.
+    Reported per activity, each naming the others, so the maker can see both
+    ends of the collision.
+
+    The location belongs in the key because making one product in several
+    places is how a database is meant to be written: ecoinvent carries hundreds
+    of activities producing "electricity, high voltage", one per geography, and
+    an input names the one it means. Two of them at one location is what no
+    file states a difference between.
+    -}
+    coLocatedProducers =
+        M.fromListWith
+            (<>)
+            [ ((exchangeFlowId refEx, activityLocation act), [(key, act)])
+            | (key, act) <- entries
+            , [refEx] <- [filter exchangeIsReference (exchanges act)]
+            ]
+    otherProducerNames as = case S.toAscList (S.fromList (map activityName as)) of
+        names ->
+            T.intercalate ", " (map (\n -> "\"" <> n <> "\"") (take 3 names))
+                <> if length names > 3
+                    then " and " <> T.pack (show (length names - 3)) <> " more"
+                    else ""
+    duplicateProductOffenders =
+        [ offender WarningSev key act (Just (anyFlowName fid)) $
+            "this product is also the reference product of " <> otherProducerNames others <> " at the same location; an input naming it is answered by one of them"
+        | ((fid, _), group) <- M.toList coLocatedProducers
+        , (key, act) <- group
+        , let others = [a | (k, a) <- group, k /= key]
+        , not (null others)
         ]
 
     -- A non-finite amount poisons every downstream sum; a zero reference amount
@@ -522,6 +579,45 @@ qualityReport dbName db =
         , [refEx] <- [filter exchangeIsReference (exchanges act)]
         , exchangeFlowId refEx `S.notMember` usedFlowIds
         , let prodName = fromMaybe (UUID.toText (exchangeFlowId refEx)) (techOrWasteFlowName (exchangeFlowId refEx))
+        ]
+
+    {- The other direction: an input naming a product no reference product of
+    this database supplies. Expected of a foreground database, which draws its
+    background from another; a hole in one that is meant to stand alone. Either
+    way the engine says so rather than resolving the input to something else,
+    which is what a shortened or mistyped product name used to get.
+    -}
+    suppliedFlowIds =
+        S.fromList [exchangeFlowId ex | act <- acts, ex <- exchanges act, exchangeIsReference ex]
+    needsSupplier ex = case ex of
+        TechnosphereExchange{techRole = role} -> role `elem` [Input, ReferenceInput, Coproduct]
+        BiosphereExchange{} -> False
+        WasteExchange{} -> False
+    unsuppliedOffenders =
+        [ offender InfoSev key act (Just (anyFlowName fid)) "no reference product of this database supplies this input; it comes from a database this one depends on, or from nowhere"
+        | (key, act) <- entries
+        , ex <- exchanges act
+        , needsSupplier ex
+        , let fid = exchangeFlowId ex
+        , fid `S.notMember` suppliedFlowIds
+        ]
+
+    {- An input whose every producer is a dataset the source filed as obsolete.
+    Such a dataset still carries its exchanges and still computes, so the score
+    is a number; it is the superseded number, and its author expects it to be
+    replaced. The tool that writes these files raises the same warning when a
+    calculation reaches one. A product one obsolete block and one live block
+    both declare is not flagged: the live one supplies it.
+    -}
+    obsoleteProductIds =
+        M.keysSet (M.filter (all (activityIsObsolete . snd)) productProducers)
+    obsoleteInputOffenders =
+        [ offender WarningSev key act (Just (anyFlowName fid)) "this input is supplied only by a dataset its source filed as obsolete, which the source expects to be replaced"
+        | (key, act) <- entries
+        , ex <- exchanges act
+        , needsSupplier ex
+        , let fid = exchangeFlowId ex
+        , fid `S.member` obsoleteProductIds
         ]
 
     -- Land transformation is conserved: a parcel changed into one use was

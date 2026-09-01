@@ -277,7 +277,7 @@ elec =
 prodExch :: Exchange
 prodExch =
     TechnosphereExchange
-        { techFlowId = generateFlowUUID "electricity, high voltage" "" "kilowatt hour"
+        { techFlowId = generateFlowUUID "electricity, high voltage" ""
         , techAmount = 1
         , techUnitId = generateUnitUUID "kilowatt hour"
         , techRole = ReferenceProduct
@@ -291,7 +291,7 @@ prodExch =
 gasExch :: Exchange
 gasExch =
     TechnosphereExchange
-        { techFlowId = generateFlowUUID "natural gas, high pressure" "" "cubic meter"
+        { techFlowId = generateFlowUUID "natural gas, high pressure" ""
         , techAmount = 8.5
         , techUnitId = generateUnitUUID "cubic meter"
         , techRole = Input
@@ -317,7 +317,7 @@ co2Exch =
 elecFlow :: TechnosphereFlow
 elecFlow =
     TechnosphereFlow
-        (generateFlowUUID "electricity, high voltage" "" "kilowatt hour")
+        (generateFlowUUID "electricity, high voltage" "")
         "electricity, high voltage"
         (generateUnitUUID "kilowatt hour")
         M.empty
@@ -327,7 +327,7 @@ elecFlow =
 gasFlow :: TechnosphereFlow
 gasFlow =
     TechnosphereFlow
-        (generateFlowUUID "natural gas, high pressure" "" "cubic meter")
+        (generateFlowUUID "natural gas, high pressure" "")
         "natural gas, high pressure"
         (generateUnitUUID "cubic meter")
         M.empty
@@ -401,7 +401,7 @@ specialAct =
 specialProdFlow :: TechnosphereFlow
 specialProdFlow =
     TechnosphereFlow
-        (generateFlowUUID specialProductName "" "kilogram")
+        (generateFlowUUID specialProductName "")
         specialProductName
         (generateUnitUUID "kilogram")
         M.empty
@@ -411,7 +411,7 @@ specialProdFlow =
 specialInputFlow :: TechnosphereFlow
 specialInputFlow =
     TechnosphereFlow
-        (generateFlowUUID specialInputName "" "kilogram")
+        (generateFlowUUID specialInputName "")
         specialInputName
         (generateUnitUUID "kilogram")
         M.empty
@@ -421,7 +421,7 @@ specialInputFlow =
 specialBio :: BiosphereFlow
 specialBio =
     co2
-        { bfId = generateFlowUUID specialBioName "air" "kilogram"
+        { bfId = generateFlowUUID specialBioName "air"
         , bfName = specialBioName
         }
 
@@ -440,7 +440,7 @@ specialNormalized =
 solventFlow :: TechnosphereFlow
 solventFlow =
     TechnosphereFlow
-        (generateFlowUUID "spent solvent" "" "kilogram")
+        (generateFlowUUID "spent solvent" "")
         "spent solvent"
         (generateUnitUUID "kilogram")
         M.empty
@@ -511,7 +511,7 @@ chpHeatFlow = kgFlow "recovered heat"
 kgFlow :: Text -> TechnosphereFlow
 kgFlow n =
     TechnosphereFlow
-        (generateFlowUUID n "" "kilogram")
+        (generateFlowUUID n "")
         n
         (generateUnitUUID "kilogram")
         M.empty
@@ -599,7 +599,7 @@ gramProdFlow = flowInUnit "milled flour" "g"
 -- | A flow whose generated UUIDs key off the given unit string.
 flowInUnit :: Text -> Text -> TechnosphereFlow
 flowInUnit n u =
-    TechnosphereFlow (generateFlowUUID n "" u) n (generateUnitUUID u) M.empty Nothing Nothing
+    TechnosphereFlow (generateFlowUUID n "") n (generateUnitUUID u) M.empty Nothing Nothing
 
 {- | One activity whose reference product is stated in grams (1000 g). On import
 under 'gramConfig' the parser rewrites it to 1 kg, so it is not a fixed point of
@@ -662,7 +662,7 @@ wasteDb =
 scrapFlow :: WasteFlow
 scrapFlow =
     WasteFlow
-        { wfId = generateFlowUUID "metal scrap" "" "kilogram"
+        { wfId = generateFlowUUID "metal scrap" ""
         , wfName = "metal scrap"
         , wfUnitId = generateUnitUUID "kilogram"
         , wfSynonyms = M.empty
@@ -722,7 +722,7 @@ subnormalDb =
 co2 :: BiosphereFlow
 co2 =
     BiosphereFlow
-        { bfId = generateFlowUUID "Carbon dioxide, fossil" "air" "kilogram"
+        { bfId = generateFlowUUID "Carbon dioxide, fossil" "air"
         , bfName = "Carbon dioxide, fossil"
         , bfUnitId = generateUnitUUID "kilogram"
         , bfSynonyms = M.empty

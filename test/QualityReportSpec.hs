@@ -68,25 +68,34 @@ docFlow = u "0d"
 tocFlow = u "0e"
 mercuryFlow = u "0f"
 
-actA, actB, prodA, prodB :: UUID
+actA, actB, actC, prodA, prodB, prodC :: UUID
 actA = u "0a"
 actB = u "0b"
+actC = u "0c"
 prodA = u "1a"
 prodB = u "1b"
+prodC = u "1c"
 
 -- ---------------------------------------------------------------------------
 -- Fixture building blocks
 -- ---------------------------------------------------------------------------
 
+-- | The same activity, filed in the source's obsolete category.
+obsolete :: Activity -> Activity
+obsolete act = act{activityClassification = M.insert "Category" "Others\\Obsolete" (activityClassification act)}
+
 mkActivity :: Text -> [Exchange] -> Activity
-mkActivity name exs =
+mkActivity name = mkActivityAt name "FR"
+
+mkActivityAt :: Text -> Text -> [Exchange] -> Activity
+mkActivityAt name location exs =
     Activity
         { activityName = name
         , activityDescription = ["A described activity"]
         , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.singleton "ISIC" "1071"
-        , activityLocation = "FR"
+        , activityLocation = location
         , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
@@ -325,6 +334,49 @@ spec = do
             let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
             qcOffenders (qrDuplicateActivities (qualityReport "testdb" db)) `shouldBe` []
 
+    describe "duplicate products check" $ do
+        it "flags two activities declaring one reference product" $ do
+            -- The shape a stale export leaves behind: one block kept, one
+            -- retired, both still declaring the product, their names apart by
+            -- a typo so the duplicate-activities check cannot see them.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "pork, meat whitout bone" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "pork, meat without bone" [reference breadFlow])
+                        ]
+                check = qrDuplicateProducts (qualityReport "testdb" db)
+            severities check `shouldBe` [WarningSev, WarningSev]
+            details check
+                `shouldBe` [ "this product is also the reference product of \"pork, meat without bone\" at the same location; an input naming it is answered by one of them"
+                           , "this product is also the reference product of \"pork, meat whitout bone\" at the same location; an input naming it is answered by one of them"
+                           ]
+            processIds check `shouldBe` [pidOf actA prodA, pidOf actB prodB]
+            map qoProductName (qcOffenders check) `shouldBe` [Just "bread", Just "bread"]
+
+        it "passes a product only one activity declares" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bakery" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
+        it "skips entries whose reference is broken, leaving them to the reference check" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
+        it "passes one product made in two places" $ do
+            -- How a database is meant to be written: ecoinvent produces one
+            -- product in hundreds of geographies, and an input names the one
+            -- it means. Only two at one location have nothing to tell them
+            -- apart.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivityAt "bakery" "FR" [reference breadFlow])
+                        , ((actB, prodB), mkActivityAt "bakery" "DE" [reference breadFlow])
+                        ]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
     describe "suspicious amounts check" $ do
         it "flags a non-finite amount" $ do
             let check = qrSuspiciousAmounts (reportOf (mkActivity "bread" [reference breadFlow, input flourFlow (0 / 0)]))
@@ -508,6 +560,56 @@ spec = do
         it "skips entries whose reference is broken, leaving them to the reference check" $
             qcOffenders (qrUnconsumedProducts (reportOf (mkActivity "no reference" [input flourFlow 1.0])))
                 `shouldBe` []
+
+    describe "unsupplied inputs check" $ do
+        it "flags an input no reference product of the database supplies" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])]
+                check = qrUnsuppliedInputs (qualityReport "testdb" db)
+            severities check `shouldBe` [InfoSev]
+            processIds check `shouldBe` [pidOf actA prodA]
+
+        it "passes when the database produces what it consumes" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrUnsuppliedInputs (qualityReport "testdb" db)) `shouldBe` []
+
+        it "says nothing about a biosphere exchange, which has no supplier" $ do
+            let db = dbOf [((actA, prodA), mkActivity "bread" [reference breadFlow, bioExchange flourFlow 1.0])]
+            qcOffenders (qrUnsuppliedInputs (qualityReport "testdb" db)) `shouldBe` []
+
+    describe "obsolete inputs check" $ do
+        it "flags an input only a retired dataset supplies" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), obsolete (mkActivity "old flour mill" [reference flourFlow]))
+                        ]
+                check = qrObsoleteInputs (qualityReport "testdb" db)
+            severities check `shouldBe` [WarningSev]
+            processIds check `shouldBe` [pidOf actA prodA]
+            map qoProductName (qcOffenders check) `shouldBe` [Just "flour"]
+
+        it "says nothing when a live dataset also supplies the product" $ do
+            -- The retired block and the one that replaced it declare one
+            -- product; the live one is what the linker answers with.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), obsolete (mkActivity "old flour mill" [reference flourFlow]))
+                        , ((actC, prodC), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrObsoleteInputs (qualityReport "testdb" db)) `shouldBe` []
+
+        it "says nothing about a database whose datasets are all in service" $ do
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bread" [reference breadFlow, input flourFlow 1.0])
+                        , ((actB, prodB), mkActivity "flour mill" [reference flourFlow])
+                        ]
+            qcOffenders (qrObsoleteInputs (qualityReport "testdb" db)) `shouldBe` []
 
     describe "land transformation balance check" $ do
         it "flags an activity whose transformed-from and transformed-to areas diverge" $ do

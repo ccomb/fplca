@@ -1865,18 +1865,21 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
   where
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-        (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) <- SimaPro.parseSimaProCSV unitConfig csvFile
-        reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-        let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
-        linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
-        dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
-        case dbResult of
+        parsed <- SimaPro.parseSimaProCSV unitConfig csvFile
+        case parsed of
             Left err -> return $ Left err
-            Right db -> do
-                unless noCache $
-                    Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
-                Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                return $ Right (db, False)
+            Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) -> do
+                reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
+                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
+                linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
+                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
+                case dbResult of
+                    Left err -> return $ Left err
+                    Right db -> do
+                        unless noCache $
+                            Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
+                        Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
+                        return $ Right (db, False)
 
     loadStructured path = do
         loadResult <-

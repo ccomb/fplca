@@ -48,7 +48,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig, defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Fixture: a small SimaPro CSV exercising every section the writer emits
@@ -218,7 +218,7 @@ parseBytes :: BS.ByteString -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowD
 parseBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
     BS.hPut h bytes
     hClose h
-    parseSimaProCSV defaultUnitConfig path
+    parseOrFail defaultUnitConfig path
 
 -- | Wrap parser output in a 'SimpleDatabase' keyed by generated UUIDs.
 toSimple :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> SimpleDatabase
@@ -862,3 +862,9 @@ describedDb :: [Text] -> SimpleDatabase
 describedDb paragraphs =
     let db = guardDb Nothing Nothing [refProd]
      in db{sdbActivities = M.map (\a -> a{activityDescription = paragraphs}) (sdbActivities db)}
+
+{- | Parse, failing the example when the parser refuses the file. The parser
+now returns 'Left' for a flow written in two units no conversion relates.
+-}
+parseOrFail :: UnitConfig -> FilePath -> IO ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB)
+parseOrFail cfg path = either (fail . show) pure =<< parseSimaProCSV cfg path

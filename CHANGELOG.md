@@ -30,6 +30,90 @@
   next to a score are still computed region-blind, so they no longer add up to
   a regionalized total. Both were already the case for a database carrying its
   own regional factors.
+- What identifies a dataset read from a SimaPro CSV or a Brightway Excel
+  workbook is now what the file publishes, not what the engine calls things.
+  Two problems came from the old rule. The unit was part of a flow identifier,
+  so renaming a reference unit in the engine's own table moved about twelve
+  percent of Agribalyse process ids in release 0.10.0 without a single number
+  changing. And an activity was named after its process name, so two exports of
+  one Agribalyse that disagree on the case of a product name gave the same
+  dataset two identifiers on two servers. From now on an activity is named by
+  the "Process identifier" its block publishes, and a flow by its name folded in
+  case and its compartment. The identifiers of these two formats therefore move
+  once more, and `volca/examples/process_id_remap` converts a stored list.
+  EcoSpold 1 and 2 and ILCD are untouched: they carry identifiers of their own.
+- Every row of these two formats is recorded in the reference unit of its
+  dimension, where only the reference product was before. An input written in
+  grams is held in kilograms, one written in kWh in MJ, and displays and
+  exports show it in that unit. No score moves: the matrix already converted
+  what it summed. Two rows that would land on one flow in units no conversion
+  relates, an energy against a mass, are now refused by name rather than one of
+  them being dropped in silence.
+- The SimaPro writer emits the "Process identifier" line it always read.
+  Exporting a database and reading it back used to rename every process in it.
+- An input is no longer answered with a supplier the file did not name. When a
+  product name matched no reference product, the engine fell back to a prefix of
+  that name: the text before the first `//`, ` {`, ` [` or ` |`. What follows
+  those separators is the geography and the model variant, which is exactly what
+  tells two producers apart, so `Urea {RoW}| urea production` was answered with
+  whichever activity named `Urea …` the map happened to hold last. Measured on
+  ten SimaPro exports the rule earns nothing: on seven of them every input
+  already has an exact producer, and it fires on ten rows of one Agribalyse 4.0
+  export and one row of Ginko, eight of those eleven choosing among several
+  candidates. Between databases it is worse: of the 169 lines pastoeco resolves
+  in Agribalyse 3.2, 148 match by name and 21 by prefix, 17 of them ambiguously,
+  one choosing among 148 electricity markets. The rule is gone on both sides. An
+  input nobody supplies stays unlinked, and the cross-database linker gets its
+  turn on it.
+- Scores of a SimaPro database fall where an invented supplier used to be
+  counted. On the Agribalyse 4.0 export of 13 May 2026, ten inputs name
+  ecoinvent unit processes the export does not carry: four French fertiliser
+  mixes and one lorry. They were being answered with a market of another
+  geography, so every product fertilised in France carried a burden its file
+  never asked for. Over a sample of 250 activities half the category readings
+  move, and every one of them moves down, by 0.5% at the median and by up to
+  56%. The engine reports those ten as unlinked, where it used to report 169113
+  of 169113 resolved.
+- When several activities produce one product name, the file says which one to
+  use: a retired block is filed under an obsolete category, and the block still
+  in service supplies. On the Agribalyse 4.0 export of 13 May 2026 that settles
+  all ten of its duplicated products, which are the ten coproducts of a pork
+  slaughterhouse block shipped twice, once under `Autres\Obsolete`. Until now
+  the retired copy won, because "whitout" sorts before "without". The category
+  is a convention of the tool that writes these files, which shows retired
+  processes under an `Obsolete` subcategory and warns whenever a calculation
+  reaches one: 1036 of Agribalyse 4.0's 22822 product rows carry it, and 2551
+  of ecoinvent 3.11's 28594. Two blocks the file gives no way to tell apart are
+  still ordered by activity name then by location, never by identifier: a
+  change in how identity is minted must not move a supply chain.
+- Scores of a SimaPro database move where a retired block was supplying.
+  Measured on Agribalyse 4.0 over 1062 activities, 771 of them in the pork
+  chain and 291 drawn at random, 11453 of 26550 category readings move, on 800
+  activities: 9739 rise and 1714 fall, by 1.1% at the median and 1.5% at the
+  ninth decile. The largest is black pudding, at 2.8x on several categories: it
+  is mostly pork blood, and blood is one of the ten coproducts the two blocks
+  allocate differently.
+- The quality report says when two activities declare one product, since only
+  one of them can supply it. The duplicate-activities check cannot see these,
+  because it groups on the activity name and the two spell theirs differently.
+  On the Agribalyse 4.0 export of 13 May 2026 it finds twenty, and they are one
+  case: the pork slaughterhouse block shipped twice, once current and once
+  retired under `Autres\Obsolete`, their process names a typo apart ("whitout"
+  against "without"), declaring the same ten products.
+- The quality report says when an input's only producer is a dataset the source
+  retired. Such a dataset still carries its exchanges and still computes, so
+  the score is a number; it is the superseded number, and its author expects it
+  to be replaced. This is the warning the tool that writes these files raises
+  when a calculation reaches one. On the Agribalyse 4.0 export of 13 May 2026
+  it names 874 inputs. A product a retired block and a live block both declare
+  is not named: the live one supplies it.
+- The quality report gains the other half of a pair it only had one side of: an
+  input naming a product no reference product of this database supplies, beside
+  the reference product nothing consumes. Expected of a foreground database,
+  which draws its background from another; a hole in one meant to stand alone.
+  On the Agribalyse 4.0 export of 13 May 2026 it names the nine that were being
+  filled with a supplier nobody asked for.
+- Every database cache is rebuilt on first load.
 
 ## [0.11.0] - 2026-08-28
 
