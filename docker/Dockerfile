@@ -227,6 +227,10 @@ RUN cat > /app/volca.toml <<'EOF'
 # The reference tables (flow synonyms, compartment mapping, units, energy
 # densities) and the geographies are built into the engine and active; a
 # configuration names one only to replace it with a file or to switch it off.
+# The chemical synonyms are not built in: this top-level key names the file
+# the image ships, and must stay above the first [section] header.
+chem-synonyms = "data/chem_synonyms.csv"
+
 [server]
 port = 8080
 host = "0.0.0.0"
