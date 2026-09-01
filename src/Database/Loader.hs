@@ -266,6 +266,12 @@ History of manual bumps:
      identity of Database, never the types inside it, so an old cache would
      pass the check and be decoded reading 16-byte UUIDs as 4-byte row
      numbers, or one row number as a list of them.
+- 18: a dataset read from SimaPro or Brightway Excel is identified by the
+     identifier its file publishes, a flow by its name folded in case and its
+     compartment with no unit, and every row is recorded in the reference unit
+     of its dimension. Process ids, flow ids and amounts all move, and none of
+     it changes a type, so an old cache would pass the fingerprint and answer
+     with identifiers no request would name again.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
