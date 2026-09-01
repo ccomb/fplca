@@ -495,7 +495,6 @@ coverageReportToAPI mLimit r =
 strategyLabel :: MatchStrategy -> Text
 strategyLabel ByCAS = "cas"
 strategyLabel BySynonym = "synonym"
-strategyLabel ByFuzzy = "fuzzy"
 strategyLabel ByProxy = "proxy"
 strategyLabel ByName = "name"
 strategyLabel ByUUID = "uuid"

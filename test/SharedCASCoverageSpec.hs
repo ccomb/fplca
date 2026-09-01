@@ -149,6 +149,7 @@ mapCtx =
         , mcBioFlowsByCAS = M.fromList [(waterCAS, allFlows)]
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcCompartmentMap = M.empty
         , mcSynGroupFlows = M.empty
         }
 
@@ -229,6 +230,7 @@ carbonSynonyms =
         , mcBioFlowsByCAS = M.fromList [(methaneCAS, [methaneNonFossil, methaneFossil])]
         , mcSynonymDB = buildFromPairs [("Methane, biogenic", "Methane, non-fossil")]
         , mcActivities = M.empty
+        , mcCompartmentMap = M.empty
         , mcSynGroupFlows = M.empty
         }
 
@@ -342,6 +344,7 @@ fallbackCtx =
         , mcBioFlowsByCAS = M.empty
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcCompartmentMap = M.empty
         , mcSynGroupFlows = M.empty
         }
 
@@ -387,6 +390,7 @@ acrCtx =
         , mcBioFlowsByCAS = M.fromList [(acrCAS, [acrFlow])]
         , mcSynonymDB = emptySynonymDB
         , mcActivities = M.empty
+        , mcCompartmentMap = M.empty
         , mcSynGroupFlows = M.empty
         }
 

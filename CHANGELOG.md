@@ -30,6 +30,24 @@
   next to a score are still computed region-blind, so they no longer add up to
   a regionalized total. Both were already the case for a database carrying its
   own regional factors.
+- A compartment a method row states is now a condition on the flow it
+  characterizes, not a preference. When no flow of the row's name sits in the
+  medium it names, the name matcher says so and the cascade tries the next one,
+  where it used to answer with the first flow of that name whatever its medium
+  and stop there. A subcompartment is met exactly rather than by containment,
+  so a row written for "low. pop." is no longer the exact match of a flow at
+  "low. pop., long-term"; such a flow still takes the row's medium-level value,
+  as it does at scoring time. Measured on Agribalyse 3.2 against Environmental
+  Footprint 3.1, over 137125 flow readings in 25 categories, four readings move
+  and all four are gains: "Fluorochloridone" now picks up its factor through
+  CAS, which the method spells "Flurochloridone", where the name matcher used
+  to answer with a flow in the wrong compartment and leave it uncharacterized.
+- A supply chain names the row that supplies an input, or names none. When
+  several rows produce one product flow, the display path used to elect the one
+  whose unit was dimensionally compatible with the input. That rule was written
+  when the unit was part of a flow identifier and two spellings of one product
+  were two flows; every row is now recorded in the reference unit of its
+  dimension, so the rivals share a unit and the rule elects nobody anyway.
 - What identifies a dataset read from a SimaPro CSV or a Brightway Excel
   workbook is now what the file publishes, not what the engine calls things.
   Two problems came from the old rule. The unit was part of a flow identifier,
@@ -114,6 +132,13 @@
   On the Agribalyse 4.0 export of 13 May 2026 it names the nine that were being
   filled with a supplier nobody asked for.
 - Every database cache is rebuilt on first load.
+
+### Removed
+- The fuzzy match strategy, which nothing produced. No matcher ever returned
+  it, so its counter was always zero and its label never appeared; what it did
+  do was swallow an unknown strategy name, which read back as "fuzzy" instead
+  of being refused. The `byFuzzy` line disappears from the CLI's method mapping
+  report and its JSON. The HTTP API never carried it.
 
 ## [0.11.0] - 2026-08-28
 

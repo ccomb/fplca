@@ -717,7 +717,7 @@ data CharacterizationEntry = CharacterizationEntry
     , cheFlowUnit :: Text -- DB flow default unit (e.g. "m3", "kg")
     , cheCategory :: Text -- Flow category
     , cheCompartment :: Maybe Text -- Sub-compartment
-    , cheMatchStrategy :: Text -- "uuid", "cas", "name", "synonym", "fuzzy"
+    , cheMatchStrategy :: Text -- 'Method.Mapping.strategyToText' of the rung that matched
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped CharacterizationEntry)
@@ -995,7 +995,7 @@ data ComputedQualityReportAPI = ComputedQualityReportAPI
 -- | One database flow a method scores only through a name bridge.
 data BridgedFlowAPI = BridgedFlowAPI
     { cvfFlowName :: Text
-    , cvfStrategy :: Text -- how the match was reached: "synonym" | "cas" | "fuzzy" | "proxy"
+    , cvfStrategy :: Text -- how the match was reached: 'Method.Mapping.strategyToText'
     }
     deriving (Eq, Show, Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped BridgedFlowAPI)

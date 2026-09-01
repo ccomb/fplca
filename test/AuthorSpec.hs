@@ -537,7 +537,7 @@ insertedWasteOutput db r = do
     pid <- note "the authored activity has no process id" (uncurry (findProcessId db') (riKey r))
     act <- note "the inserted activity is not in the database" (getActivity db' pid)
     treatment <- note "the treatment has no process id" (findProcessId db' treatActId usedOilId)
-    case [ewu | ewu <- pfaExchanges (convertActivityForAPI defaultUnitConfig db' pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
+    case [ewu | ewu <- pfaExchanges (convertActivityForAPI db' pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
         [ewu] -> Right (ewu, processIdToText db' treatment)
         other -> Left ("expected one waste output, got " <> T.pack (show (length other)))
   where

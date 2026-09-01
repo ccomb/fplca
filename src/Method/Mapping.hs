@@ -95,11 +95,11 @@ module Method.Mapping (
 
     -- * Matching strategies
     MatchStrategy (..),
-    strategyFromText,
     strategyToText,
     findFlowByUUID,
     findFlowByName,
     findFlowByNameComp,
+    SynonymSearch (..),
     findFlowBySynonym,
     findFlowBySynonymComp,
     findFlowBySynonymMemo,
@@ -158,8 +158,6 @@ data MatchStrategy
       ByName
     | -- | Via synonym group
       BySynonym
-    | -- | Fuzzy string matching
-      ByFuzzy
     | {- | Via a typed @ProxyFor@ edge: a CF borrowed from another flow, scaled
       by the edge's conversion factor. An approximation, ranked below every
       direct match so an explicit CF always wins.
@@ -184,8 +182,6 @@ data MappingStats = MappingStats
     -- ^ Matched by name
     , msBySynonym :: !Int
     -- ^ Matched by synonym
-    , msByFuzzy :: !Int
-    -- ^ Matched by fuzzy
     , msByProxy :: !Int
     -- ^ Matched via a @ProxyFor@ edge
     , msUnmatched :: !Int
@@ -201,12 +197,11 @@ instance Semigroup MappingStats where
             (msByCAS a + msByCAS b)
             (msByName a + msByName b)
             (msBySynonym a + msBySynonym b)
-            (msByFuzzy a + msByFuzzy b)
             (msByProxy a + msByProxy b)
             (msUnmatched a + msUnmatched b)
 
 instance Monoid MappingStats where
-    mempty = MappingStats 0 0 0 0 0 0 0 0
+    mempty = MappingStats 0 0 0 0 0 0 0
 
 -- | Everything the CF matcher cascade needs, precomputed once per method.
 data MapContext = MapContext
@@ -215,6 +210,11 @@ data MapContext = MapContext
     , mcBioFlowsByCAS :: !(M.Map Text [BiosphereFlow])
     , mcSynonymDB :: !SynonymDB
     , mcActivities :: !(M.Map Text [Activity])
+    , mcCompartmentMap :: !CompartmentMap
+    {- ^ The table both sides of a compartment comparison go through, so the
+    cascade reads a compartment the way the scoring tables do. Without it a row
+    written "Emissions to air" would not meet a flow filed under "air".
+    -}
     , mcSynGroupFlows :: !(M.Map (FlowDirection, Int) [BiosphereFlow])
     {- ^ Memoized @(direction, synonym-group id)@ → candidate flows, precomputed
     once per method by 'mapMethodFlows'. The synonym matcher resolves a CF whose
@@ -229,23 +229,24 @@ data MapContext = MapContext
 {- | Build a MapContext over the flows a database's characterization has to
 reach, which is its dependencies' as much as its own — see 'FlowClosure'.
 -}
-mapContextFor :: FlowClosure -> SynonymDB -> MapContext
-mapContextFor closure synDB =
+mapContextFor :: FlowClosure -> SynonymDB -> CompartmentMap -> MapContext
+mapContextFor closure synDB cmap =
     MapContext
         { mcBioFlowsByUUID = fcByUUID closure
         , mcBioFlowsByName = fcByName closure
         , mcBioFlowsByCAS = fcByCAS closure
         , mcSynonymDB = synDB
         , mcActivities = M.empty
+        , mcCompartmentMap = cmap
         , mcSynGroupFlows = M.empty
         }
 
 {- | Build a MapContext from one Database alone. For callers holding no manager
 and therefore no dependencies to close over — the CLI, and the tests.
 -}
-buildMapContext :: Database -> MapContext
-buildMapContext db =
-    mapContextFor (ownFlowClosure db) (fromMaybe emptySynonymDB (dbSynonymDB db))
+buildMapContext :: CompartmentMap -> Database -> MapContext
+buildMapContext cmap db =
+    mapContextFor (ownFlowClosure db) (fromMaybe emptySynonymDB (dbSynonymDB db)) cmap
 
 {- | Map every method CF to a database biosphere flow via the built-in matcher
 cascade ('resolveCF'). Each CF resolves independently (no cross-CF state), so
@@ -295,15 +296,16 @@ absent from that index is skipped, so resolution falls through to the next.
 resolveCF :: MapContext -> MethodCF -> Maybe (BiosphereFlow, MatchStrategy)
 resolveCF ctx cf =
     canon ByUUID (findFlowByUUID (mcBioFlowsByUUID ctx) (mcfFlowRef cf))
-        <|> canon ByName (findFlowByNameComp (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf))
+        <|> canon ByName (findFlowByNameComp cmap (mcBioFlowsByName ctx) (mcfFlowName cf) (mcfCompartment cf))
         <|> canon BySynonym (findFlowBySynonymMemo ctx cf)
-        <|> canon ByCAS (mcfCAS cf >>= \cas -> findFlowByCAS (mcBioFlowsByCAS ctx) cas (mcfCompartment cf))
+        <|> canon ByCAS (mcfCAS cf >>= \cas -> findFlowByCAS cmap (mcBioFlowsByCAS ctx) cas (mcfCompartment cf))
   where
+    cmap = mcCompartmentMap ctx
     canon strat found = found >>= \flow -> (,strat) <$> M.lookup (bfId flow) (mcBioFlowsByUUID ctx)
 
 -- | Convenience wrapper: map method CFs using the built-in cascade + DB.
-mapMethodToFlows :: Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
-mapMethodToFlows db = mapMethodFlows (buildMapContext db)
+mapMethodToFlows :: CompartmentMap -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+mapMethodToFlows cmap db = mapMethodFlows (buildMapContext cmap db)
 
 {- | A CF whose substance is a wildcard pattern rather than a literal flow
 name. A trailing @*@ makes the text before it a case-insensitive prefix
@@ -362,12 +364,38 @@ selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits 
         Nothing -> True
         Just (Compartment med sub _) ->
             maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
-    -- An empty sub means the row constrains only the medium; a stated sub
-    -- must match the flow's, or the row would silently widen to the whole
-    -- medium. Qualifiers are ignored here as 'buildMethodTables' ignores them.
-    subFits sub c =
-        T.null sub || T.toCaseFold sub == maybe "" T.toCaseFold (VT.compartmentSub c)
-    mediumEq a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+    subFits sub c = subcompartmentFits sub (fromMaybe "" (VT.compartmentSub c))
+    mediumEq = sameMedium
+
+{- | Two spellings of one medium. Folded in case and put through
+'normalizeMedium', so a method writing "Natural resource" meets a flow filed
+under "resource".
+-}
+sameMedium :: Text -> Text -> Bool
+sameMedium a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+
+{- | Does a flow's medium satisfy the one a method row states? The row's medium
+may be the broader spelling of the flow's, as "air" is of "urban air", which is
+the row widening to cover a narrower filing and not the other way round. An
+empty statement constrains nothing.
+-}
+mediumFits :: Text -> Text -> Bool
+mediumFits stated actual =
+    T.null stated || sameMedium stated actual || norm stated `T.isInfixOf` norm actual
+  where
+    norm = normalizeMedium . T.toCaseFold
+
+{- | Does a flow's subcompartment satisfy the one a method row states? A
+statement that names no particular subcompartment constrains only the medium,
+judged by 'isUnspecifiedSub' so this reads "unspecified" the way every other
+caller does; a stated one must be the flow's, folded in case and nothing more.
+Containment would make a row written for "low. pop." the exact match of a flow
+at "low. pop., long-term", a distinction every method that draws it draws on
+purpose. Qualifiers are ignored, as 'buildMethodTables' ignores them.
+-}
+subcompartmentFits :: Text -> Text -> Bool
+subcompartmentFits stated actual =
+    isUnspecifiedSub (T.toCaseFold stated) || T.toCaseFold stated == T.toCaseFold actual
 
 {- | Is that flow taken back by any of these exclusion rows? The predicates are
 built once for the row set, then run over as many flows as the caller has.
@@ -462,26 +490,14 @@ exclusionWarning flows cf
   where
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
--- | Wire name for a match strategy, the inverse of 'strategyFromText'.
+-- | Wire name for a match strategy.
 strategyToText :: MatchStrategy -> Text
 strategyToText ByUUID = "uuid"
 strategyToText ByCAS = "cas"
 strategyToText ByName = "name"
 strategyToText BySynonym = "synonym"
-strategyToText ByFuzzy = "fuzzy"
 strategyToText ByProxy = "proxy"
 strategyToText NoMatch = "none"
-
--- | Convert strategy text back to MatchStrategy
-strategyFromText :: Text -> MatchStrategy
-strategyFromText t = case T.toLower t of
-    "uuid" -> ByUUID
-    "cas" -> ByCAS
-    "name" -> ByName
-    "synonym" -> BySynonym
-    "fuzzy" -> ByFuzzy
-    "proxy" -> ByProxy
-    _ -> ByFuzzy -- Unknown strategies map to fuzzy
 
 -- ──────────────────────────────────────────────
 -- Low-level matching functions (used by built-in MapperHandles)
@@ -496,32 +512,42 @@ way in, as 'findFlowByNameComp' does for names: the index is keyed canonically,
 and a method that states a padded CAS must still meet the flow that states it
 unpadded.
 -}
-findFlowByCAS :: M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
-findFlowByCAS flowsByCAS cas mComp =
-    nonEmptyCAS cas >>= (`M.lookup` flowsByCAS) >>= \flows -> pickByCompartment flows mComp
+findFlowByCAS :: CompartmentMap -> M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
+findFlowByCAS cmap flowsByCAS cas mComp =
+    nonEmptyCAS cas >>= (`M.lookup` flowsByCAS) >>= \flows -> pickByCompartment cmap flows mComp
 
 -- | Find flow by normalized name match (compartment-aware)
-findFlowByName :: M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
-findFlowByName flowsByName name = findFlowByNameComp flowsByName name Nothing
+findFlowByName :: CompartmentMap -> M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
+findFlowByName cmap flowsByName name = findFlowByNameComp cmap flowsByName name Nothing
 
 -- | Find flow by normalized name with compartment preference
-findFlowByNameComp :: M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
-findFlowByNameComp flowsByName name mComp =
-    M.lookup (normalizeName name) flowsByName >>= \flows -> pickByCompartment flows mComp
+findFlowByNameComp :: CompartmentMap -> M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
+findFlowByNameComp cmap flowsByName name mComp =
+    M.lookup (normalizeName name) flowsByName >>= \flows -> pickByCompartment cmap flows mComp
+
+{- | What a synonym search reads: the group table it expands a name in, the
+flows it can land on, and the compartment table it judges a landing with.
+-}
+data SynonymSearch = SynonymSearch
+    { ssSynonyms :: !SynonymDB
+    , ssFlowsByName :: !(M.Map Text [BiosphereFlow])
+    , ssCompartments :: !CompartmentMap
+    }
 
 -- | Find flow via synonym group (compartment-aware)
-findFlowBySynonym :: SynonymDB -> M.Map Text [BiosphereFlow] -> Text -> Maybe BiosphereFlow
-findFlowBySynonym synDB flowsByName name = findFlowBySynonymComp synDB flowsByName name Nothing
+findFlowBySynonym :: SynonymSearch -> Text -> Maybe BiosphereFlow
+findFlowBySynonym search name = findFlowBySynonymComp search name Nothing
 
 -- | Find flow via synonym group with compartment preference
-findFlowBySynonymComp :: SynonymDB -> M.Map Text [BiosphereFlow] -> Text -> Maybe Compartment -> Maybe BiosphereFlow
-findFlowBySynonymComp synDB flowsByName name mComp =
+findFlowBySynonymComp :: SynonymSearch -> Text -> Maybe Compartment -> Maybe BiosphereFlow
+findFlowBySynonymComp (SynonymSearch synDB flowsByName cmap) name mComp =
     case lookupSynonymGroup synDB name of
         Nothing -> Nothing
         Just gid ->
             getSynonyms synDB gid >>= \synonyms ->
-                pickByCompartment (concatMap (lookupFlows flowsByName) synonyms) mComp
+                pickByCompartment cmap (concatMap (lookupFlows flowsByName) synonyms) mComp
   where
+    lookupFlows :: M.Map Text [BiosphereFlow] -> Text -> [BiosphereFlow]
     lookupFlows fbn syn = M.findWithDefault [] (normalizeName syn) fbn
 
 {- | The synonym view a CF resolves against: input-only bridges apply to INPUT
@@ -547,8 +573,8 @@ findFlowBySynonymMemo ctx cf =
     case lookupSynonymGroup dirDB name of
         Nothing -> Nothing
         Just gid -> case M.lookup (dir, gid) (mcSynGroupFlows ctx) of
-            Just flows -> pickByCompartment flows mComp
-            Nothing -> findFlowBySynonymComp dirDB (mcBioFlowsByName ctx) name mComp
+            Just flows -> pickByCompartment (mcCompartmentMap ctx) flows mComp
+            Nothing -> findFlowBySynonymComp (SynonymSearch dirDB (mcBioFlowsByName ctx) (mcCompartmentMap ctx)) name mComp
   where
     dir = mcfDirection cf
     dirDB = viewFor dir (mcSynonymDB ctx)
@@ -580,32 +606,42 @@ buildSynGroupFlows ctx cfs =
                 , Just gid <- [lookupSynonymGroup (viewFor (mcfDirection cf) synDB) (mcfFlowName cf)]
                 ]
 
-{- | Pick the best flow match based on compartment preference. The flow's own
-compartment now lives in 'bfCompartment' as a structured 'Types.Compartment'
-(medium + optional sub); we compare against the method-side 3-field
-'Method.Types.Compartment' here.
+{- | The flow a method row's compartment names, among the flows sharing its
+name: the one whose subcompartment the row states, else the one filed under no
+particular subcompartment, else any in the row's medium.
+
+Both sides go through 'normalizeCompartment' first, which is what lets a row
+written "Emissions to air" meet a flow filed under "air"; the scoring tables
+read the same table, so the cascade and the tables agree on what a compartment
+is. Without it the row's medium, now a condition, would veto a spelling only
+the table relates.
+
+A compartment a row states is a condition, not a preference. When no candidate
+is in that medium this answers Nothing, so 'resolveCF' moves on to the next
+matcher and the mapping counts say what they mean. It used to return the first
+candidate whatever its medium, which reported a name match on a flow the row
+does not describe, and stopped the cascade before CAS could try.
+
+The catch-all rung is what keeps the remaining choice from being arbitrary: a
+row stating "low. pop." against candidates at "low. pop., long-term" and at no
+subcompartment takes the second, the one that claims nothing, rather than
+whichever the index listed first.
 -}
-pickByCompartment :: [BiosphereFlow] -> Maybe Compartment -> Maybe BiosphereFlow
-pickByCompartment [] _ = Nothing
-pickByCompartment (f : _) Nothing = Just f
-pickByCompartment (f : fs) (Just comp) = Just $
-    case find (exactCompMatch comp) (f : fs) of
-        Just m -> m
-        Nothing -> fromMaybe f (find (mediumMatch comp) (f : fs))
+pickByCompartment :: CompartmentMap -> [BiosphereFlow] -> Maybe Compartment -> Maybe BiosphereFlow
+pickByCompartment _ [] _ = Nothing
+pickByCompartment _ (f : _) Nothing = Just f
+pickByCompartment cmap flows (Just stated) =
+    find exactMatch flows <|> find catchAllSub flows <|> find inMedium flows
   where
-    exactCompMatch (Compartment med sub _) fl =
-        let cat = T.toLower (VT.bfCompartmentName fl)
-            subcomp = maybe "" T.toLower (VT.bfCompartmentSub fl)
-         in matchMedium med cat && (T.null sub || sub == subcomp || sub `T.isInfixOf` subcomp)
-
-    mediumMatch (Compartment med _ _) fl =
-        matchMedium med (T.toLower (VT.bfCompartmentName fl))
-
-    matchMedium med cat
-        | T.null med = True
-        | med == cat = True
-        | med `T.isInfixOf` cat = True
-        | otherwise = False
+    Compartment statedMed statedSub _ = normalizeCompartment cmap stated
+    flowSub :: BiosphereFlow -> Text
+    flowSub = unSub . snd . flowMediumSub cmap
+    inMedium :: BiosphereFlow -> Bool
+    inMedium fl = let (Medium m, _) = flowMediumSub cmap fl in mediumFits statedMed m
+    exactMatch :: BiosphereFlow -> Bool
+    exactMatch fl = inMedium fl && subcompartmentFits statedSub (flowSub fl)
+    catchAllSub :: BiosphereFlow -> Bool
+    catchAllSub fl = inMedium fl && isUnspecifiedSub (flowSub fl)
 
 {- | Per-strategy counts of mapping results in one pass.
 Each 'MatchStrategy' must be named below — adding a new variant is a
@@ -620,7 +656,6 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByCAS) = one{msByCAS = 1}
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
-    tally (Just ByFuzzy) = one{msByFuzzy = 1}
     tally (Just ByProxy) = one{msByProxy = 1}
     -- 'NoMatch' is not produced by the current matchers; this row exists only
     -- to keep the match exhaustive. Counts as unmatched if ever introduced.
@@ -1020,18 +1055,21 @@ the loader surfaces these so the loss is distinguishable from a genuinely
 uncharacterized flow, per the no-silent-misbehaviour rule.
 -}
 directionExcludedCFs ::
+    CompartmentMap ->
     SynonymDB ->
     M.Map Text [BiosphereFlow] ->
     [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] ->
     [MethodCF]
-directionExcludedCFs synDB flowsByName mappings =
+directionExcludedCFs cmap synDB flowsByName mappings =
     [ cf
     | (cf, Nothing) <- mappings
     , isJust (matchIn synDB cf)
     , isNothing (matchIn (viewFor (mcfDirection cf) synDB) cf)
     ]
   where
-    matchIn db cf = findFlowBySynonymComp db flowsByName (mcfFlowName cf) (mcfCompartment cf)
+    matchIn :: SynonymDB -> MethodCF -> Maybe BiosphereFlow
+    matchIn db cf =
+        findFlowBySynonymComp (SynonymSearch db flowsByName cmap) (mcfFlowName cf) (mcfCompartment cf)
 
 {- | Project a region-tagged resource (withdrawal) flow onto its region's located
 CF, in the GLOBAL name tables. An ILCD method whose CFs carry a consumer location
@@ -1226,7 +1264,6 @@ strategyPriority ByUUID = 0
 strategyPriority ByName = 1
 strategyPriority BySynonym = 2
 strategyPriority ByCAS = 3
-strategyPriority ByFuzzy = 4
 strategyPriority ByProxy = 4
 strategyPriority NoMatch = 4
 

@@ -664,7 +664,8 @@ mapMethodToFlowsCached manager dbName collection db method = do
         Just cached -> return cached
         Nothing -> do
             closure <- getFlowClosure manager dbName db
-            let ctx = mapContextFor closure (fromMaybe emptySynonymDB (dbSynonymDB db))
+            cmap <- getMergedCompartmentMap manager
+            let ctx = mapContextFor closure (fromMaybe emptySynonymDB (dbSynonymDB db)) cmap
             result <- mapMethodFlows ctx method
             atomically $ modifyTVar' (dmMethodMappingCache manager) (M.insert key result)
             return result
@@ -727,8 +728,9 @@ buildMethodTablesFor manager dbName collection db method = do
     -- metadata). Warn so the loss is distinguishable from a genuinely
     -- uncharacterized flow.
     closure <- getFlowClosure manager dbName db
+    cmap <- getMergedCompartmentMap manager
     let dirExcluded =
-            directionExcludedCFs (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
+            directionExcludedCFs cmap (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
     unless (null dirExcluded) $
         reportProgress Warning $
             "[LCIA "
@@ -738,7 +740,6 @@ buildMethodTablesFor manager dbName collection db method = do
                 <> " CF(s) match a synonym bridge only outside their flow direction "
                 <> "(direction metadata may be missing from the method). Samples: "
                 <> show (take 3 (map mcfFlowName dirExcluded))
-    cmap <- getMergedCompartmentMap manager
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager

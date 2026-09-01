@@ -1087,8 +1087,7 @@ ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlo
 
 Answers only when exactly one row produces the flow. A product made in several
 geographies is produced by several rows, and naming one of them would answer a
-question the caller never asked; 'Service.findProcessIdByProductFlowWithFallback'
-applies the same rule to its name-and-unit rung.
+question the caller never asked.
 -}
 findProcessIdByProductFlow :: Database -> UUID -> Maybe ProcessId
 findProcessIdByProductFlow db flowUUID =

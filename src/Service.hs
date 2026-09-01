@@ -41,7 +41,7 @@ import SharedSolver (SharedSolver, getFactorization, solveWithSharedSolver)
 import qualified SharedSolver
 import Tree (childTarget)
 import Types
-import UnitConversion (UnitConfig, convertUnit, unitsCompatible)
+import UnitConversion (UnitConfig, convertUnit)
 
 {- | Fields shared by every activity-oriented endpoint (search, supply chain,
 consumers). Split out from the endpoint-specific filters so each filter
@@ -202,10 +202,10 @@ validateProcessIdInMatrixIndex db processId =
                         <> ". This activity may exist in the database but is not indexed for inventory calculations."
 
 -- | Rich activity info (returns same format as API)
-getActivityInfo :: UnitConfig -> Database -> Text -> Either ServiceError Value
-getActivityInfo unitCfg db queryText = do
+getActivityInfo :: Database -> Text -> Either ServiceError Value
+getActivityInfo db queryText = do
     (processId, activity) <- resolveActivityAndProcessId db queryText
-    let activityForAPI = convertActivityForAPI unitCfg db processId activity
+    let activityForAPI = convertActivityForAPI db processId activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
         -- Use ProcessId (which encodes both activityUUID and productUUID) for links
@@ -340,43 +340,6 @@ findProcessIdForActivity db activity =
 
         matchingIndex = V.findIndex matchesActivity (dbActivities db)
      in fmap fromIntegral matchingIndex
-
-{- | Find supplier ProcessId by product flow UUID with fallback to name+unit matching.
-Primary: UUID lookup in ProductIndex
-Fallback: When UUID fails (e.g., SimaPro tkm vs kgkm), find by name with unit compatibility check
--}
-findProcessIdByProductFlowWithFallback :: UnitConfig -> Database -> UUID -> Maybe ProcessId
-findProcessIdByProductFlowWithFallback unitCfg db flowUUID =
-    case findProcessIdByProductFlow db flowUUID of
-        Just pid -> Just pid
-        Nothing ->
-            -- Fallback: look up the flow to get its name and unit
-            case M.lookup flowUUID (dbTechFlows db) of
-                Just inputFlow ->
-                    let inputName = T.toLower (tfName inputFlow)
-                        inputUnit = getUnitNameForTechFlow (dbUnits db) inputFlow
-                        -- Get candidates by normalized name
-                        candidates = searchProductsByName db inputName
-                        -- Filter to only dimensionally compatible units
-                        compatible = filter (isUnitCompatible inputUnit) candidates
-                     in case compatible of
-                            [singleMatch] -> Just singleMatch -- Exactly one match
-                            _ -> Nothing -- Zero or multiple matches
-                Nothing -> Nothing
-  where
-    isUnitCompatible :: Text -> ProcessId -> Bool
-    isUnitCompatible inputUnit pid =
-        case getActivity db pid of
-            Just act ->
-                let prodUnit = getRefProductUnit db act
-                 in unitsCompatible unitCfg inputUnit prodUnit
-            Nothing -> False
-
-    getRefProductUnit :: Database -> Activity -> Text
-    getRefProductUnit db' act =
-        case [ex | ex <- exchanges act, exchangeIsReference ex] of
-            (ex : _) -> getUnitNameForExchange (dbUnits db') ex
-            [] -> ""
 
 {- | Node id of a tree node, in ProcessId format. Every node but one names the
 row it was built from; a declared link no row satisfies has none to name, so it
@@ -1068,8 +1031,8 @@ calculateActivityStats activity =
 {- | Convert Activity to ActivityForAPI with unit names
 Note: This function requires the ProcessId to get the activity UUID
 -}
-convertActivityForAPI :: UnitConfig -> Database -> ProcessId -> Activity -> ActivityForAPI
-convertActivityForAPI unitCfg db processId activity =
+convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
+convertActivityForAPI db processId activity =
     let allProducts = case processIdToRef db processId of
             Just ref -> getAllProductsForActivity db (activityGroupKey (prActivity ref) activity)
             Nothing -> []
@@ -1088,7 +1051,7 @@ convertActivityForAPI unitCfg db processId activity =
             , pfaProductAmount = if T.null refProdName then Nothing else Just refProdAmount
             , pfaProductUnit = if T.null refProdName then Nothing else Just refProdUnit
             , pfaAllProducts = allProducts
-            , pfaExchanges = map (toExchangeWithUnit unitCfg db linkMap) (exchanges activity)
+            , pfaExchanges = map (toExchangeWithUnit db linkMap) (exchanges activity)
             , pfaNativeType = activityNativeType activity
             }
 
@@ -1117,10 +1080,14 @@ crossDBLinkToTarget link =
 targetOf :: Database -> ProcessId -> Maybe TargetRef
 targetOf db pid = activityToTarget db pid <$> getActivity db pid
 
--- | SimaPro path: resolve a target by product flow UUID.
-resolveByProductFlow :: UnitConfig -> Database -> UUID -> Maybe TargetRef
-resolveByProductFlow cfg db fId =
-    findProcessIdByProductFlowWithFallback cfg db fId >>= targetOf db
+{- | SimaPro path: resolve a target by product flow UUID. The index answers a
+flow one row produces; a flow several rows produce names none of them, and the
+caller says so rather than electing one. It used to elect the one whose unit
+was dimensionally compatible with the input, a rule written when the unit was
+part of a flow identifier and two spellings of one product were two flows.
+-}
+resolveByProductFlow :: Database -> UUID -> Maybe TargetRef
+resolveByProductFlow db fId = findProcessIdByProductFlow db fId >>= targetOf db
 
 -- | Cross-database link resolution (orphan waste outputs, missing tech links).
 resolveByCrossDBLink :: M.Map UUID CrossDBLink -> UUID -> Maybe TargetRef
@@ -1152,16 +1119,15 @@ activity UUID, because a link it cannot route is a treatment this database does
 not hold and reporting a row for it would hide that.
 -}
 resolveTarget ::
-    UnitConfig ->
     Database ->
     M.Map UUID CrossDBLink ->
     Exchange ->
     Maybe TargetRef
-resolveTarget cfg db links = \case
+resolveTarget db links = \case
     ex@TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
         | lid /= UUID.nil -> resolveByLinkedProducer db ex
-        | otherwise -> resolveByProductFlow cfg db fid <|> resolveByCrossDBLink links fid
+        | otherwise -> resolveByProductFlow db fid <|> resolveByCrossDBLink links fid
     BiosphereExchange{} -> Nothing
     ex@WasteExchange{waIsInput = True, waActivityLinkId = lid}
         | lid /= UUID.nil -> resolveByLinkedProducer db ex
@@ -1220,17 +1186,16 @@ buildCrossDBLinkMap db pid = case prActivity <$> processIdToRef db pid of
     Nothing -> M.empty
 
 toExchangeWithUnit ::
-    UnitConfig ->
     Database ->
     M.Map UUID CrossDBLink ->
     Exchange ->
     ExchangeWithUnit
-toExchangeWithUnit cfg db links exchange =
+toExchangeWithUnit db links exchange =
     -- Surface the raw UUID when the flow does not resolve — a clear failure
     -- the consumer can debug, not a silent "unknown".
     let unresolvedName = "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
         (flowName, compartment) = fromMaybe (unresolvedName, Nothing) (resolveFlow db exchange)
-        target = resolveTarget cfg db links exchange
+        target = resolveTarget db links exchange
      in ExchangeWithUnit
             { ewuExchange = exchange
             , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange
