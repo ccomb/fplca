@@ -46,16 +46,19 @@ Haskell FFI bindings to MUMPS, maintained inside this repository
 
 ## Haskell direct dependencies
 
-The following table covers the libraries declared in `volca.cabal`'s
-`build-depends`. Transitive dependencies are not listed individually; their
+The following table covers the libraries the shipped binary links: the direct
+`build-depends` of `volca.cabal`'s `library` and `executable` stanzas. Test and
+benchmark dependencies are out of scope, and so are transitive ones, whose
 licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
-`cabal-plan license-report` run.
+`cabal-plan license-report` run. `scripts/check-licenses-table.sh` fails the
+build when this table and `volca.cabal` disagree.
 
 | Package | License | Source |
 |---|---|---|
 | aeson | BSD-3-Clause | <https://hackage.haskell.org/package/aeson> |
 | aeson-pretty | BSD-3-Clause | <https://hackage.haskell.org/package/aeson-pretty> |
 | async | BSD-3-Clause | <https://hackage.haskell.org/package/async> |
+| attoparsec | BSD-3-Clause | <https://hackage.haskell.org/package/attoparsec> |
 | base | BSD-3-Clause (with GHC exceptions) | bundled with GHC |
 | base64-bytestring | BSD-3-Clause | <https://hackage.haskell.org/package/base64-bytestring> |
 | bytestring | BSD-3-Clause | bundled with GHC |
@@ -63,9 +66,11 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | containers | BSD-3-Clause | bundled with GHC |
 | deepseq | BSD-3-Clause | bundled with GHC |
 | directory | BSD-3-Clause | bundled with GHC |
+| exceptions | BSD-3-Clause | bundled with GHC |
 | filepath | BSD-3-Clause | bundled with GHC |
 | haskeline | BSD-3-Clause | <https://hackage.haskell.org/package/haskeline> |
 | http-client | MIT | <https://hackage.haskell.org/package/http-client> |
+| http-media | MIT | <https://hackage.haskell.org/package/http-media> |
 | http-types | BSD-3-Clause | <https://hackage.haskell.org/package/http-types> |
 | insert-ordered-containers | BSD-3-Clause | <https://hackage.haskell.org/package/insert-ordered-containers> |
 | lens | BSD-2-Clause | <https://hackage.haskell.org/package/lens> |
@@ -82,7 +87,6 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | servant-server | BSD-3-Clause | <https://hackage.haskell.org/package/servant-server> |
 | stm | BSD-3-Clause | bundled with GHC |
 | store | MIT | <https://hackage.haskell.org/package/store> |
-| temporary | BSD-3-Clause | <https://hackage.haskell.org/package/temporary> |
 | text | BSD-2-Clause | bundled with GHC |
 | time | BSD-3-Clause | bundled with GHC |
 | toml-reader | BSD-3-Clause | <https://hackage.haskell.org/package/toml-reader> |
@@ -92,8 +96,10 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | vector | BSD-3-Clause | <https://hackage.haskell.org/package/vector> |
 | wai | MIT | <https://hackage.haskell.org/package/wai> |
 | wai-app-static | MIT | <https://hackage.haskell.org/package/wai-app-static> |
+| wai-extra | MIT | <https://hackage.haskell.org/package/wai-extra> |
 | warp | MIT | <https://hackage.haskell.org/package/warp> |
 | xeno | BSD-3-Clause | <https://hackage.haskell.org/package/xeno> |
+| zip-archive | BSD-3-Clause | <https://hackage.haskell.org/package/zip-archive> |
 | zstd | BSD-3-Clause | <https://hackage.haskell.org/package/zstd> |
 
 ## Regenerating this list
@@ -104,3 +110,7 @@ file (`grep ^license:`). The list above was last reconciled by reading those
 conf files for every entry of `volca:lib:volca`'s `depends` set in
 `dist-newstyle/cache/plan.json`. Re-run that reconciliation at release time
 and update any drifted entries.
+
+`scripts/check-licenses-table.sh` only compares the names, which is what
+changes when a dependency comes or goes. A package that relicenses keeps its
+name, so the reconciliation above is still the only thing that catches it.
