@@ -139,6 +139,19 @@ spec = do
                 comp = Compartment "air" "" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Nothing
 
+        it "does not read a medium that merely contains the stated one as that medium" $ do
+            -- "air" is a substring of "emissions to air", which is another
+            -- vocabulary, not a widening. The scoring tables key on the exact
+            -- normalized medium, so a match here promised a factor scoring
+            -- never served (volca#346). A compartment rule is what bridges it.
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "emissions to air" Nothing
+                byName = M.singleton "ammonia" [flow]
+                comp = Compartment "air" "" ""
+                rule = M.singleton ("emissions to air", "", "") (Compartment "air" "" "")
+            fmap bfId (findFlowByNameComp M.empty byName "ammonia" (Just comp)) `shouldBe` Nothing
+            fmap bfId (findFlowByNameComp rule byName "ammonia" (Just comp)) `shouldBe` Just fid
+
         it "does not read a long-term subcompartment as the immediate one" $ do
             -- "low. pop." is contained in "low. pop., long-term"; a delayed
             -- emission is not the immediate one, so the row takes the flow at
@@ -694,14 +707,20 @@ spec = do
                 comp = Compartment "" "" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Just fid
 
-        it "medium isInfixOf category matches (air in urban air)" $ do
+        it "does not read a medium the stated one is only part of as the stated one (air in urban air)" $ do
+            -- A flow filed under the medium "urban air" is not in the row's
+            -- medium "air": the tables would index the row under "air" and
+            -- never serve that flow. A compartment rule is what says the two
+            -- spellings are one medium.
             fid1 <- nextRandom
             fid2 <- nextRandom
             let fUrbanAir = mkFlow fid1 "nox" "urban air" Nothing
                 fWater = mkFlow fid2 "nox" "water" Nothing
                 byName = M.singleton "nox" [fWater, fUrbanAir]
                 comp = Compartment "air" "urban" ""
-            fmap bfId (findFlowByNameComp M.empty byName "nox" (Just comp)) `shouldBe` Just fid1
+                rule = M.singleton ("urban air", "", "") (Compartment "air" "urban" "")
+            fmap bfId (findFlowByNameComp M.empty byName "nox" (Just comp)) `shouldBe` Nothing
+            fmap bfId (findFlowByNameComp rule byName "nox" (Just comp)) `shouldBe` Just fid1
 
     describe "fillBroadcastVector + computeLCIAScoreFromTables (Phase 1)" $ do
         let mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}

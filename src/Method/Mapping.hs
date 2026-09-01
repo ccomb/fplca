@@ -374,16 +374,16 @@ under "resource".
 sameMedium :: Text -> Text -> Bool
 sameMedium a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
 
-{- | Does a flow's medium satisfy the one a method row states? The row's medium
-may be the broader spelling of the flow's, as "air" is of "urban air", which is
-the row widening to cover a narrower filing and not the other way round. An
-empty statement constrains nothing.
+{- | Does a flow's medium satisfy the one a method row states? Equal after
+normalization, as the scoring tables key it: 'buildMethodTables' indexes a
+factor under the row's normalized medium and 'flowMediumSub' files a flow
+under its own, so a match judged any looser here promises a factor the read
+side never serves. "air" against "emissions to air" is a vocabulary gap that
+only a compartment rule bridges, not a widening. An empty statement
+constrains nothing.
 -}
 mediumFits :: Text -> Text -> Bool
-mediumFits stated actual =
-    T.null stated || sameMedium stated actual || norm stated `T.isInfixOf` norm actual
-  where
-    norm = normalizeMedium . T.toCaseFold
+mediumFits stated actual = T.null stated || sameMedium stated actual
 
 {- | Does a flow's subcompartment satisfy the one a method row states? A
 statement that names no particular subcompartment constrains only the medium,
