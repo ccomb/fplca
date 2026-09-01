@@ -107,9 +107,11 @@ build when this table and `volca.cabal` disagree.
 After `cabal build all`, the canonical license for every direct dep is in the
 matching `~/.cabal/store/ghc-<ver>/package.db/<name>-<version>-<hash>.conf`
 file (`grep ^license:`). The list above was last reconciled by reading those
-conf files for every entry of `volca:lib:volca`'s `depends` set in
-`dist-newstyle/cache/plan.json`. Re-run that reconciliation at release time
-and update any drifted entries.
+conf files for every entry of the `depends` sets of `volca:lib:volca` and
+`volca:exe:volca` in `dist-newstyle/cache/plan.json`. Those two components are
+the scope of the table, so reading the library alone would skip the packages
+only the executable links, `warp`, `wai-app-static` and `wai-extra`. Re-run
+that reconciliation at release time and update any drifted entries.
 
 `scripts/check-licenses-table.sh` only compares the names, which is what
 changes when a dependency comes or goes. A package that relicenses keeps its

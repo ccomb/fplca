@@ -18,8 +18,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 awk '
-    # A stanza header sits at column 0. Only the shipped ones count.
-    /^[a-z-]+( |$)/ { ship = ($0 == "library" || $0 ~ /^executable /); deps = 0 }
+    # A stanza header sits at column 0. Only the shipped ones count, and a
+    # library carries a name once there is more than one of them.
+    /^[a-z-]+( |$)/ { ship = ($0 ~ /^library( |$)/ || $0 ~ /^executable /); deps = 0 }
     /^[ \t]*--/     { next }
     {
         line = $0
