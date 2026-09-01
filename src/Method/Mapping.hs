@@ -180,9 +180,7 @@ data MappingStats = MappingStats
     , msByName :: !Int
     -- ^ Matched by name
     , msBySynonym :: !Int
-    {- ^ Matched by synonym
-    ^ Matched by fuzzy
-    -}
+    -- ^ Matched by synonym
     , msByProxy :: !Int
     -- ^ Matched via a @ProxyFor@ edge
     , msUnmatched :: !Int
