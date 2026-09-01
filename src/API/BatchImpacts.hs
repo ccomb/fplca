@@ -23,6 +23,7 @@ module API.BatchImpacts (
 import API.Routes (activityLCIABatchH, batchImpactsH, collectionNotLoadedPrefix, computedQualityReportH, databaseNotLoadedPrefix)
 import API.Types (BatchImpactsRequest (..), BatchImpactsResponse, ComputedQualityReportAPI, LCIABatchResult, SubstitutionRequest)
 import App.Env (AppEnv (..), AppM, runApp)
+import qualified Builtin
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as M
@@ -133,7 +134,7 @@ runBare dbm action = do
                 , aePassword = Nothing
                 , aeHostingConfig = Nothing
                 , aeClassificationPresets = []
-                , aeDataVersion = Nothing
+                , aeDataVersion = Builtin.builtinDataVersion
                 }
     res <- Servant.runHandler (runApp env action)
     case res of

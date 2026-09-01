@@ -56,6 +56,7 @@ import API.Types (
     RelinkRequest (..),
  )
 import App.Env (AppEnv (..), runApp)
+import qualified Builtin
 import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly, readOnlyRefusal, readOnlyRefusalFor)
 import Database.Manager (initDatabaseManager)
 import Servant (ServerError (..), runHandler)
@@ -87,7 +88,7 @@ envWith hc = do
             , aePassword = Nothing
             , aeHostingConfig = hc
             , aeClassificationPresets = []
-            , aeDataVersion = Nothing
+            , aeDataVersion = Builtin.builtinDataVersion
             }
 
 -- | The HTTP status a handler failed with, or 'Nothing' when it succeeded.

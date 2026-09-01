@@ -140,7 +140,7 @@ import API.Types (
     toExchangeEdits,
  )
 import App.Env (AppEnv (..), AppM)
-import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), hostingReadOnly, messageOr, readOnlyRefusalFor)
+import Config (DatabaseConfig (..), HostingConfig (..), MethodConfig (..), ReadOnly (..), RefDataConfig (..), RefDataSource (..), hostingReadOnly, messageOr, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
@@ -195,6 +195,7 @@ import Database.Manager (
     loadDatabase,
     loadFlowSynonyms,
     loadUnitDefs,
+    readRefDataSource,
     relinkDatabase,
     relinkDatabaseWithMapping,
     removeCompartmentMappings,
@@ -1281,7 +1282,7 @@ uploadRefData kind mName mDesc src =
         let rd =
                 RefDataConfig
                     { rdName = name
-                    , rdPath = csvPath
+                    , rdSource = FromFile csvPath
                     , rdActive = False
                     , rdIsUploaded = True
                     , rdIsAuto = False
@@ -1311,12 +1312,10 @@ downloadRefDataHandler kind name = do
     case M.lookup name available of
         Nothing -> throwError $ err404{errBody = "Not found"}
         Just rd -> do
-            let csvPath = rdPath rd
-            exists <- liftIO $ System.Directory.doesFileExist csvPath
-            if not exists
-                then throwError $ err404{errBody = "CSV file not found"}
-                else do
-                    content <- liftIO $ BSL.readFile csvPath
+            bytes <- liftIO $ readRefDataSource (rdSource rd)
+            case bytes of
+                Left _ -> throwError $ err404{errBody = "CSV file not found"}
+                Right content -> do
                     let disposition = "attachment; filename=\"" <> name <> ".csv\""
                     return $ addHeader disposition (BinaryContent content)
 

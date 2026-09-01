@@ -25,12 +25,13 @@ import Text.Read (readMaybe)
 
 -- VoLCA imports
 import API.Auth (authMiddleware)
+import qualified Builtin
 import CLI.Client (executeRemoteCommand, resolveRemoteConfig)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
 import CLI.Repl (runRepl)
 import CLI.Types
-import Config (Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readDataVersion, readOnlyRefusalFor)
+import Config (Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
@@ -265,7 +266,6 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
     let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
     (lastRequestRef, idleActiveRef) <- setupIdleTimeout serverOpts
-    dataVersion <- readDataVersion config
     let env =
             AppEnv
                 { aeDbManager = dbManager
@@ -273,7 +273,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
                 , aePassword = password
                 , aeHostingConfig = cfgHosting config
                 , aeClassificationPresets = cfgClassificationPresets config
-                , aeDataVersion = dataVersion
+                , aeDataVersion = Builtin.builtinDataVersion
                 }
     baseApp <-
         createServerApp

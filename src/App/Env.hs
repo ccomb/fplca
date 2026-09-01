@@ -10,6 +10,7 @@ module App.Env (
     runApp,
 ) where
 
+import qualified Builtin
 import qualified Config
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 import Control.Monad.Except (MonadError)
@@ -25,7 +26,7 @@ data AppEnv = AppEnv
     , aePassword :: !(Maybe String)
     , aeHostingConfig :: !(Maybe Config.HostingConfig)
     , aeClassificationPresets :: ![Config.ClassificationPreset]
-    , aeDataVersion :: !(Maybe Config.DataVersion)
+    , aeDataVersion :: !Builtin.DataVersion
     }
 
 newtype AppM a = AppM {unAppM :: ReaderT AppEnv Handler a}
