@@ -16,8 +16,10 @@ spec = describe "initDatabaseManager with the built-in defaults" $
         units <- readTVarIO (dmLoadedUnitDefs manager)
         syns <- readTVarIO (dmLoadedFlowSyns manager)
         eds <- readTVarIO (dmLoadedEnergyDensities manager)
-        M.keys comps `shouldBe` ["Default compartment mapping"]
-        M.keys units `shouldBe` ["Default units"]
-        M.keys syns `shouldBe` ["Default flow synonyms"]
-        M.keys eds `shouldBe` ["Default energy densities"]
+        -- Membership, not the exact key set: startup also picks up whatever
+        -- sits under uploads/<kind>/ in the working directory.
+        comps `shouldSatisfy` M.member "Default compartment mapping"
+        units `shouldSatisfy` M.member "Default units"
+        syns `shouldSatisfy` M.member "Default flow synonyms"
+        eds `shouldSatisfy` M.member "Default energy densities"
         M.size (dmGeographies manager) `shouldSatisfy` (> 500)
