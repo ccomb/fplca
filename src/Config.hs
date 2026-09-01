@@ -48,10 +48,12 @@ module Config (
     redirectIntoDataDir,
     applyDataDir,
 
-    -- * The shipped data bundle
-    DataVersion (..),
-    dataBundleDir,
-    readDataVersion,
+    -- * The tables the engine carries
+    RefDataSource (..),
+    refDataDecoder,
+    withBuiltins,
+    builtinEntry,
+    describeSource,
 
     -- * Config-relative path resolution
     resolveConfigPaths,
@@ -63,8 +65,9 @@ module Config (
     resolveLoadOrder,
 ) where
 
+import Builtin (BuiltinTable (..), builtinName)
 import Control.Monad (forM_, unless, when)
-import Data.List (find, isPrefixOf)
+import Data.List (isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
@@ -317,12 +320,19 @@ data ScoringSetConfig = ScoringSetConfig
     }
     deriving (Show, Eq, Generic)
 
-{- | Reusable config for reference data (flow synonyms, compartment mappings, units).
-All three resource types share this shape.
+{- | Where a reference table's bytes come from. A built-in table has no path:
+it is in the binary, and a configuration names it only to replace it or to
+switch it off.
+-}
+data RefDataSource = FromFile FilePath | BuiltIn BuiltinTable
+    deriving (Show, Eq, Generic)
+
+{- | Reusable config for reference data (flow synonyms, compartment mappings,
+units, energy densities). All four resource types share this shape.
 -}
 data RefDataConfig = RefDataConfig
     { rdName :: !Text
-    , rdPath :: !FilePath
+    , rdSource :: !RefDataSource
     , rdActive :: !Bool
     , rdIsUploaded :: !Bool
     , rdIsAuto :: !Bool -- True for auto-extracted synonym sets
@@ -382,22 +392,64 @@ clientHost host
     | otherwise = host
 
 -- | Default config (empty databases)
+
+{- | What an engine runs on with no configuration at all: the tables it
+carries, and nothing else. The geographies are among them: 'cfgGeographies'
+at 'Nothing' means the built-in hierarchy, a path replaces it.
+-}
 defaultConfig :: Config
 defaultConfig =
-    Config
-        { cfgServer = defaultServerConfig
-        , cfgDatabases = []
-        , cfgMethods = []
-        , cfgFlowSynonyms = []
-        , cfgCompartmentMappings = []
-        , cfgUnits = []
-        , cfgEnergyDensities = []
-        , cfgHosting = Nothing
-        , cfgGeographies = Nothing
-        , cfgChemSynonyms = Nothing
-        , cfgSubstanceEdges = Nothing
-        , cfgClassificationPresets = []
+    withBuiltins
+        Config
+            { cfgServer = defaultServerConfig
+            , cfgDatabases = []
+            , cfgMethods = []
+            , cfgFlowSynonyms = []
+            , cfgCompartmentMappings = []
+            , cfgUnits = []
+            , cfgEnergyDensities = []
+            , cfgHosting = Nothing
+            , cfgGeographies = Nothing
+            , cfgChemSynonyms = Nothing
+            , cfgSubstanceEdges = Nothing
+            , cfgClassificationPresets = []
+            }
+
+{- | Every built-in table a configuration does not name itself. Naming one is
+how a file replaces it (same name, a path) or switches it off (same name, no
+path, @active = false@); a table the file never mentions is on. Explicit
+beats implicit.
+-}
+withBuiltins :: Config -> Config
+withBuiltins cfg =
+    cfg
+        { cfgFlowSynonyms = withTable BuiltinFlowSynonyms (cfgFlowSynonyms cfg)
+        , cfgCompartmentMappings = withTable BuiltinCompartments (cfgCompartmentMappings cfg)
+        , cfgUnits = withTable BuiltinUnits (cfgUnits cfg)
+        , cfgEnergyDensities = withTable BuiltinEnergyDensities (cfgEnergyDensities cfg)
         }
+  where
+    withTable :: BuiltinTable -> [RefDataConfig] -> [RefDataConfig]
+    withTable t entries
+        | any ((== builtinName t) . rdName) entries = entries
+        | otherwise = builtinEntry t : entries
+
+-- | A built-in table as the registry lists it: on, and not the operator's to delete.
+builtinEntry :: BuiltinTable -> RefDataConfig
+builtinEntry t =
+    RefDataConfig
+        { rdName = builtinName t
+        , rdSource = BuiltIn t
+        , rdActive = True
+        , rdIsUploaded = False
+        , rdIsAuto = False
+        , rdDescription = Just "Built into this engine"
+        }
+
+-- | Where a table comes from, for a log line.
+describeSource :: RefDataSource -> String
+describeSource (FromFile path) = path
+describeSource (BuiltIn _) = "built-in"
 
 -- TOML Decoders
 
@@ -406,10 +458,10 @@ instance DecodeTOML Config where
         cfgServer <- fromMaybe defaultServerConfig <$> getFieldOptWith tomlDecoder "server"
         cfgDatabases <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "databases"
         cfgMethods <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "methods"
-        cfgFlowSynonyms <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "flow-synonyms"
-        cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "compartment-mappings"
-        cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "units"
-        cfgEnergyDensities <- fromMaybe [] <$> getFieldOptWith (getArrayOf tomlDecoder) "energy-densities"
+        cfgFlowSynonyms <- fromMaybe [] <$> getFieldOptWith (getArrayOf (refDataDecoder BuiltinFlowSynonyms)) "flow-synonyms"
+        cfgCompartmentMappings <- fromMaybe [] <$> getFieldOptWith (getArrayOf (refDataDecoder BuiltinCompartments)) "compartment-mappings"
+        cfgUnits <- fromMaybe [] <$> getFieldOptWith (getArrayOf (refDataDecoder BuiltinUnits)) "units"
+        cfgEnergyDensities <- fromMaybe [] <$> getFieldOptWith (getArrayOf (refDataDecoder BuiltinEnergyDensities)) "energy-densities"
         cfgHosting <- getFieldOptWith tomlDecoder "hosting"
         cfgGeographies <- getFieldOpt "geographies"
         cfgChemSynonyms <- getFieldOpt "chem-synonyms"
@@ -505,15 +557,32 @@ instance DecodeTOML ScoringSetConfig where
                     <> T.unpack (T.intercalate ", " (S.toList orphanLabels))
         pure ScoringSetConfig{..}
 
-instance DecodeTOML RefDataConfig where
-    tomlDecoder = do
-        rdPath <- getField "path"
-        rdName <- fromMaybe (T.pack (takeFileName rdPath)) <$> getFieldOpt "name"
-        rdActive <- fromMaybe True <$> getFieldOpt "active"
-        let rdIsUploaded = False -- TOML entries are not uploaded
-        let rdIsAuto = False
-        rdDescription <- getFieldOpt "description"
-        pure RefDataConfig{..}
+{- | One array of tables, knowing which built-in it may name: an entry with a
+path is a file, named after it unless told otherwise; an entry with no path
+names the built-in of this very array, which is how a file switches it off
+(@active = false@) without pointing at anything.
+-}
+refDataDecoder :: BuiltinTable -> Decoder RefDataConfig
+refDataDecoder builtin = do
+    mPath <- getFieldOpt "path"
+    mName <- getFieldOpt "name"
+    rdActive <- fromMaybe True <$> getFieldOpt "active"
+    rdDescription <- getFieldOpt "description"
+    (rdName, rdSource) <- case (mPath, mName) of
+        (Just path, _) -> pure (fromMaybe (T.pack (takeFileName path)) mName, FromFile path)
+        (Nothing, Just name)
+            | name == builtinName builtin -> pure (name, BuiltIn builtin)
+            | otherwise ->
+                fail $
+                    "an entry without a path names the built-in table, \""
+                        <> T.unpack (builtinName builtin)
+                        <> "\"; got \""
+                        <> T.unpack name
+                        <> "\""
+        (Nothing, Nothing) -> fail "an entry needs a path, or the name of the built-in table to switch it off"
+    let rdIsUploaded = False -- TOML entries are not uploaded
+        rdIsAuto = False
+    pure RefDataConfig{..}
 
 instance DecodeTOML HostingConfig where
     tomlDecoder = do
@@ -746,7 +815,7 @@ loadConfigOrDefault :: Maybe FilePath -> IO (Either Text Config)
 loadConfigOrDefault mPath = do
     raw <- maybe (pure (Right defaultConfig)) loadConfigFile mPath
     mDataDir <- lookupEnv "VOLCA_DATA_DIR"
-    pure $ raw >>= validateConfig . resolveConfigPaths mPath . applyDataDir mDataDir
+    pure $ raw >>= validateConfig . resolveConfigPaths mPath . applyDataDir mDataDir . withBuiltins
 
 {- | Redirect a "data/<rest>" path to "$VOLCA_DATA_DIR/<rest>".
 Returns the input unchanged when the env var is unset, or when the path
@@ -803,7 +872,10 @@ overPaths f cfg =
   where
     reference = f ReferenceDataPath
     content = f UserContentPath
-    refData r = r{rdPath = reference (rdPath r)}
+    refData r = r{rdSource = onFile (rdSource r)}
+    onFile :: RefDataSource -> RefDataSource
+    onFile (FromFile p) = FromFile (reference p)
+    onFile b@(BuiltIn _) = b
 
 {- | Apply redirectIntoDataDir to every reference-data path on the Config.
 Database and method paths are the operator's own and are left untouched,
@@ -814,34 +886,6 @@ applyDataDir :: Maybe FilePath -> Config -> Config
 applyDataDir mDataDir = overPaths $ \kind path -> case kind of
     ReferenceDataPath -> redirectIntoDataDir mDataDir path
     UserContentPath -> path
-
--- | The version of the reference-data bundle, as its @VERSION@ file states it.
-newtype DataVersion = DataVersion {unDataVersion :: Text}
-    deriving (Show, Eq)
-
-{- | Where the shipped data bundle sits: the directory of the flow registry,
-the first @flow-synonyms@ entry that is not an upload. The installers key a
-bundle on @data/<version>/flows.csv@, and this is the same file seen from the
-engine. Nothing when no registry is configured, which is an engine running
-without a bundle.
--}
-dataBundleDir :: Config -> Maybe FilePath
-dataBundleDir = fmap (takeDirectory . rdPath) . find (not . rdIsUploaded) . cfgFlowSynonyms
-
-{- | The bundle's version, from the @VERSION@ file in 'dataBundleDir'. Nothing
-when there is no bundle or the directory carries no such file: an engine
-reading a registry of its operator's own has no bundle version to report, and
-saying so is the honest answer.
--}
-readDataVersion :: Config -> IO (Maybe DataVersion)
-readDataVersion cfg = case dataBundleDir cfg of
-    Nothing -> pure Nothing
-    Just dir -> do
-        let file = dir </> "VERSION"
-        present <- doesFileExist file
-        if present
-            then Just . DataVersion . T.strip <$> TIO.readFile file
-            else pure Nothing
 
 {- | Resolve every relative path a config carries against the directory the
 config file sits in, so one file describes the same setup from any working
