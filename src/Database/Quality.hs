@@ -60,10 +60,12 @@ import Types (
     WasteFlow (..),
     activityGroupKey,
     activityIsObsolete,
+    exchangeActivityLinkId,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
     exchangePedigree,
+    exchangeProcessLinkId,
     exchangeUnitId,
     processRefText,
  )
@@ -366,9 +368,25 @@ qualityReport dbName db =
         , n > 1
         ]
 
-    {- Two activities declaring one product. The supplier index is keyed by the
-    product, so an input naming it is answered by one of them and the others
-    supply nothing. Which one answers is settled by a rule of ours, on a
+    {- An input the file leaves the loader to place: it names a product and no
+    supplier. EcoSpold 2 names the supplying activity on the exchange itself,
+    so a product several activities declare is answered without any rule of
+    ours; SimaPro, Brightway and EcoSpold 1 let the product name speak alone,
+    and that is when a second declarer can take the answer.
+    -}
+    contestedProductIds =
+        S.fromList
+            [ exchangeFlowId ex
+            | (_, act) <- entries
+            , ex <- exchanges act
+            , needsSupplier ex
+            , isNothing (exchangeActivityLinkId ex)
+            , isNothing (exchangeProcessLinkId ex)
+            ]
+
+    {- Two activities declaring one product an input has to choose between. The
+    supplier index is keyed by the product, so an input naming it is answered
+    by one of them and the others supply nothing. Which one answers is settled by a rule of ours, on a
     question only the file can answer, and a stale twin left in an export wins
     as easily as the current entry. Reported per activity, each naming the
     others, so the maker can see both ends of the collision.
@@ -390,6 +408,7 @@ qualityReport dbName db =
         [ offender WarningSev key act (Just (anyFlowName fid)) $
             "this product is also the reference product of " <> otherProducerNames others <> "; an input naming it is answered by one of them"
         | (fid, group) <- M.toList productProducers
+        , fid `S.member` contestedProductIds
         , (key, act) <- group
         , let others = [a | (k, a) <- group, k /= key]
         , not (null others)

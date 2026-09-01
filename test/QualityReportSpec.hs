@@ -129,6 +129,10 @@ input fid amount = techExchange fid amount Input
 referenceInput :: UUID -> Exchange
 referenceInput fid = techExchange fid 1.0 ReferenceInput
 
+-- | An input that names its supplier, the way EcoSpold 2 writes one.
+linkedInput :: UUID -> UUID -> Exchange
+linkedInput supplier fid = (input fid 1.0){techActivityLinkId = supplier}
+
 -- | The same technosphere line with pedigree scores attached.
 pedigreed :: Exchange -> Exchange
 pedigreed ex = ex{techPedigree = mkPedigree 3 3 2 1 2}
@@ -340,6 +344,7 @@ spec = do
                     dbOf
                         [ ((actA, prodA), mkActivity "pork, meat whitout bone" [reference breadFlow])
                         , ((actB, prodB), mkActivity "pork, meat without bone" [reference breadFlow])
+                        , ((actC, prodC), mkActivity "sausage" [reference flourFlow, input breadFlow 1.0])
                         ]
                 check = qrDuplicateProducts (qualityReport "testdb" db)
             severities check `shouldBe` [WarningSev, WarningSev]
@@ -360,6 +365,18 @@ spec = do
 
         it "skips entries whose reference is broken, leaving them to the reference check" $ do
             let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
+            qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
+
+        it "passes a duplicated product every input names its supplier for" $ do
+            -- EcoSpold 2 shape: one product, many producers, and each input
+            -- says which one it means. Nothing has to be guessed, so nothing
+            -- is wrong.
+            let db =
+                    dbOf
+                        [ ((actA, prodA), mkActivity "bakery FR" [reference breadFlow])
+                        , ((actB, prodB), mkActivity "bakery DE" [reference breadFlow])
+                        , ((actC, prodC), mkActivity "sausage" [reference flourFlow, linkedInput actA breadFlow])
+                        ]
             qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
 
     describe "suspicious amounts check" $ do
