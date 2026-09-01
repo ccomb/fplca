@@ -23,10 +23,11 @@ common warnings
   --
   -- -Wunused-packages keeps the dependency list honest: every package here is
   -- fetched and built by the whole CI matrix, so one that nothing imports is
-  -- paid for five times per pull request. -Wredundant-constraints is the free
-  -- companion. Not -Wincomplete-record-selectors yet: it is right, and what it
-  -- currently finds needs the writer to stop applying a constructor's
-  -- selectors to a value typed as the whole sum, which is its own change.
+  -- paid for on every row of it, every pull request. -Wredundant-constraints
+  -- is the free companion. Not -Wincomplete-record-selectors yet: it is right,
+  -- and what it currently finds needs the writer to stop applying a
+  -- constructor's selectors to a value typed as the whole sum, which is its
+  -- own change.
   ghc-options:         -Wall -Wredundant-constraints -Wunused-packages
 
 common rtsdefaults
