@@ -1982,7 +1982,7 @@ getMethodMapping dbName methodIdText = do
                     , ufaDirection = case mcfDirection cf of
                         MT.Input -> "Input"
                         MT.Output -> "Output"
-                    , ufaCompartment = MT.compartmentText <$> mcfCompartment cf
+                    , ufaCompartment = compartmentPath <$> mcfCompartment cf
                     }
                 | (cf, Nothing) <- mappings
                 ]

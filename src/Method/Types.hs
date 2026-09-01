@@ -14,7 +14,6 @@ module Method.Types (
     MethodCF (..),
     FlowDirection (..),
     Compartment (..),
-    compartmentText,
     Location (..),
     Medium (..),
     Subcompartment (..),
@@ -84,12 +83,6 @@ qualifier: "long-term" or ""
 -}
 data Compartment = Compartment !Text !Text !Text
     deriving (Eq, Show, Generic, NFData, Store, ToJSON, FromJSON)
-
--- | The compartment as a person reads it in a method file: @medium@ or @medium/sub@.
-compartmentText :: Compartment -> Text
-compartmentText (Compartment med sub _)
-    | T.null sub = med
-    | otherwise = med <> T.singleton '/' <> sub
 
 {- | A normalized compartment medium (the output of 'normalizeMedium' applied to
 a 'normalizeCompartment'-ed medium, e.g. @"air"@, @"water"@, @"resource"@). A

@@ -15,7 +15,7 @@ import Data.Maybe (isJust)
 import Method.ChemSynonyms (emptyChemSynonyms, parseChemSynonymsCSV)
 import Method.Mapping
 import Method.ParserCSV (parseMethodCSVBytes)
-import Method.Types (Compartment (..), EnergyDensity (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV, compartmentText)
+import Method.Types (Compartment (..), EnergyDensity (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
 import Types (BiosphereFlow (..), Unit (..))
 import qualified Types as VT
@@ -721,12 +721,6 @@ spec = do
                 rule = M.singleton ("urban air", "", "") (Compartment "air" "urban" "")
             fmap bfId (findFlowByNameComp M.empty byName "nox" (Just comp)) `shouldBe` Nothing
             fmap bfId (findFlowByNameComp rule byName "nox" (Just comp)) `shouldBe` Just fid1
-
-    describe "compartmentText" $ do
-        it "writes the medium alone when there is no subcompartment" $
-            compartmentText (Compartment "air" "" "") `shouldBe` "air"
-        it "writes medium/sub otherwise" $
-            compartmentText (Compartment "air" "low. pop." "") `shouldBe` "air/low. pop."
 
     describe "compartmentGapWarning" $ do
         it "names both vocabularies when a factor's name is filed under another medium" $ do

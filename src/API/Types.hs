@@ -650,7 +650,7 @@ data UnmappedFlowAPI = UnmappedFlowAPI
     { ufaFlowRef :: UUID -- Flow UUID in method
     , ufaFlowName :: Text -- Flow name in method
     , ufaDirection :: Text -- "Input" or "Output"
-    , ufaCompartment :: Maybe Text -- The compartment the method states, as written ("air", "air/low. pop."); Nothing when the row states none
+    , ufaCompartment :: Maybe Text -- The compartment the method states, rendered as the factors route renders it ("air", "water/groundwater/long-term"); Nothing when the row states none
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped UnmappedFlowAPI)
