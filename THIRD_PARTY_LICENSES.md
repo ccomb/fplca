@@ -60,13 +60,10 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | base64-bytestring | BSD-3-Clause | <https://hackage.haskell.org/package/base64-bytestring> |
 | bytestring | BSD-3-Clause | bundled with GHC |
 | cassava | BSD-3-Clause | <https://hackage.haskell.org/package/cassava> |
-| conduit | MIT | <https://hackage.haskell.org/package/conduit> |
 | containers | BSD-3-Clause | bundled with GHC |
 | deepseq | BSD-3-Clause | bundled with GHC |
 | directory | BSD-3-Clause | bundled with GHC |
-| filelock | CC0-1.0 | <https://hackage.haskell.org/package/filelock> |
 | filepath | BSD-3-Clause | bundled with GHC |
-| hashable | BSD-3-Clause | <https://hackage.haskell.org/package/hashable> |
 | haskeline | BSD-3-Clause | <https://hackage.haskell.org/package/haskeline> |
 | http-client | MIT | <https://hackage.haskell.org/package/http-client> |
 | http-types | BSD-3-Clause | <https://hackage.haskell.org/package/http-types> |
@@ -77,17 +74,14 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | network-uri | BSD-3-Clause | <https://hackage.haskell.org/package/network-uri> |
 | openapi3 | BSD-3-Clause | <https://hackage.haskell.org/package/openapi3> |
 | optparse-applicative | BSD-3-Clause | <https://hackage.haskell.org/package/optparse-applicative> |
-| parallel | BSD-3-Clause | bundled with GHC |
 | process | BSD-3-Clause | bundled with GHC |
 | random | BSD-3-Clause | bundled with GHC |
 | scientific | BSD-3-Clause | <https://hackage.haskell.org/package/scientific> |
 | servant | BSD-3-Clause | <https://hackage.haskell.org/package/servant> |
-| servant-multipart | BSD-3-Clause | <https://hackage.haskell.org/package/servant-multipart> |
 | servant-openapi3 | BSD-3-Clause | <https://hackage.haskell.org/package/servant-openapi3> |
 | servant-server | BSD-3-Clause | <https://hackage.haskell.org/package/servant-server> |
 | stm | BSD-3-Clause | bundled with GHC |
 | store | MIT | <https://hackage.haskell.org/package/store> |
-| streaming-commons | MIT | <https://hackage.haskell.org/package/streaming-commons> |
 | temporary | BSD-3-Clause | <https://hackage.haskell.org/package/temporary> |
 | text | BSD-2-Clause | bundled with GHC |
 | time | BSD-3-Clause | bundled with GHC |
@@ -98,10 +92,8 @@ licenses are uniformly BSD-style or MIT and can be re-derived from a fresh
 | vector | BSD-3-Clause | <https://hackage.haskell.org/package/vector> |
 | wai | MIT | <https://hackage.haskell.org/package/wai> |
 | wai-app-static | MIT | <https://hackage.haskell.org/package/wai-app-static> |
-| wai-cors | MIT | <https://hackage.haskell.org/package/wai-cors> |
 | warp | MIT | <https://hackage.haskell.org/package/warp> |
 | xeno | BSD-3-Clause | <https://hackage.haskell.org/package/xeno> |
-| xml-types | MIT | <https://hackage.haskell.org/package/xml-types> |
 | zstd | BSD-3-Clause | <https://hackage.haskell.org/package/zstd> |
 
 ## Regenerating this list
