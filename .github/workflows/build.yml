@@ -48,3 +48,14 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - run: scripts/check-data-version.sh
+
+  # THIRD_PARTY_LICENSES.md is the license inventory /api/v1/licenses points
+  # readers at, and it is written by hand, so a dependency added or removed
+  # leaves it wrong with nothing failing. Same shape as the check above:
+  # no build needed, the PR shows the mismatch at once.
+  licenses-table:
+    name: THIRD_PARTY_LICENSES.md follows volca.cabal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check-licenses-table.sh
