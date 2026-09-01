@@ -13,6 +13,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Database.Loader
+import SimaPro.Parser (foldedNameCollisions)
 import TestHelpers (loadSampleDatabase)
 import Types
 import UnitConversion (defaultUnitConfig)
@@ -186,6 +187,25 @@ spec = do
             tfName (mergeTechFlows a b) `shouldBe` "flow-a"
 
     -- -----------------------------------------------------------------------
+    describe "foldedNameCollisions" $ do
+        it "names two spellings a case fold brings together" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    ]
+            foldedNameCollisions acts `shouldBe` [["Steel, low-alloyed", "steel, low-alloyed"]]
+
+        it "says nothing about one spelling written twice at two locations" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "Steel, low-alloyed" "FR" [refExchange flowUUID1]
+                    ]
+            foldedNameCollisions acts `shouldBe` []
+
+        it "leaves blocks their file identifies alone" $ do
+            let published name = (minimalActivity name "GLO" [refExchange flowUUID1]){activityNativeId = Just (NativeProcessId name)}
+            foldedNameCollisions [published "Steel, low-alloyed", published "steel, low-alloyed"] `shouldBe` []
+
     -- generateActivityUUIDFromActivity
     -- -----------------------------------------------------------------------
     describe "generateActivityUUIDFromActivity" $ do
