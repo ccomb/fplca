@@ -17,7 +17,6 @@ module SimaPro.Parser (
     emptyProcessBlock,
     fallbackAmounts,
     dropAmbiguousNativeIds,
-    foldedNameCollisions,
     generateActivityUUID,
     generateFlowUUID,
     generateUnitUUID,
@@ -793,24 +792,6 @@ dropAmbiguousNativeIds activities =
     forget act = case activityNativeId act of
         Just (NativeProcessId nativeId) | nativeId `S.member` ambiguous -> act{activityNativeId = Nothing}
         _ -> act
-
-{- | The blocks a case fold brings together.
-
-A block with no published identifier is named by its name folded in case and
-its location, which is what makes two exports of one database agree. Inside a
-single file two blocks whose names differ only in case are a naming mistake
-instead, and they now share a key: the last read wins it and the other's
-inventory is gone. Each group is returned so the caller can say so.
--}
-foldedNameCollisions :: [Activity] -> [[Text]]
-foldedNameCollisions activities =
-    filter ((> 1) . length) . map S.toAscList . M.elems $
-        M.fromListWith
-            S.union
-            [ ((T.toCaseFold (activityName act), activityLocation act), S.singleton (activityName act))
-            | act <- activities
-            , isNothing (activityNativeId act)
-            ]
 
 {- | Generate deterministic flow UUID from name and compartment.
 
@@ -1657,11 +1638,6 @@ parseSimaProCSV unitCfg path = do
             printf
                 "process identifier '%s' names more than one process; those blocks are identified by name and location instead"
                 (T.unpack nativeId)
-    forM_ (foldedNameCollisions activities) $ \spellings ->
-        reportProgress Warning $
-            printf
-                "%s are one activity: they differ only in case and no process identifier tells them apart"
-                (T.unpack (T.intercalate ", " (map (\n -> "'" <> n <> "'") spellings)))
     let
         allTechFlows = concatMap (\(_, tf, _, _, _) -> tf) converted
         allBioFlows = concatMap (\(_, _, bf, _, _) -> bf) converted
