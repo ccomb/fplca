@@ -734,6 +734,17 @@ spec = do
             let cf = mkCFComp "ammonia" "air" "" 0.747
             compartmentGapWarning M.empty M.empty [(cf, Nothing)] `shouldBe` Nothing
 
+        it "stays silent when the database speaks the stated medium, only not for that substance" $ do
+            -- Nitrite in water and not in air is the database's inventory,
+            -- not its vocabulary: nothing to declare.
+            fid1 <- nextRandom
+            fid2 <- nextRandom
+            let nitrite = mkFlow fid1 "nitrite" "water" Nothing
+                co2 = mkFlow fid2 "co2" "air" Nothing
+                byName = M.fromList [("nitrite", [nitrite]), ("co2", [co2])]
+                cf = mkCFComp "nitrite" "air" "" 1.0
+            compartmentGapWarning M.empty byName [(cf, Nothing)] `shouldBe` Nothing
+
         it "stays silent for a factor that resolved" $ do
             fid <- nextRandom
             let flow = mkFlow fid "ammonia" "air" Nothing

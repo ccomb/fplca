@@ -493,10 +493,14 @@ exclusionWarning flows cf
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
 
 {- | The factors the cascade left unmatched although a flow of their name is
-in the database, filed under a medium the row does not state. That is a
-vocabulary gap ("air" against "emissions to air"), which a compartment
-mapping bridges and nothing else will: said once per method, with both
-vocabularies, so the operator knows what to declare.
+in the database, stated in a medium no flow of the database is filed under.
+That is a vocabulary gap ("air" against "emissions to air"), which a
+compartment mapping bridges and nothing else will: said once per method,
+with both vocabularies, so the operator knows what to declare.
+
+Judged on the whole database, not on the flows of that name: a substance the
+database has in water and not in air leaves a factor stated in air unmatched
+too, and that is the database's inventory, not its vocabulary.
 -}
 compartmentGapWarning :: CompartmentMap -> M.Map Text [BiosphereFlow] -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> Maybe Text
 compartmentGapWarning cmap flowsByName mappings
@@ -510,15 +514,19 @@ compartmentGapWarning cmap flowsByName mappings
                 <> quoted (S.unions (map snd gaps))
                 <> "). Declare a [[compartment-mappings]] table bridging them."
   where
+    mediumOf :: BiosphereFlow -> Text
+    mediumOf fl = let (Medium m, _) = flowMediumSub cmap fl in m
+    databaseMedia :: S.Set Text
+    databaseMedia = S.fromList (map mediumOf (concat (M.elems flowsByName)))
     gaps :: [(Text, S.Set Text)]
     gaps =
         [ (stated, seen)
         | (cf, Nothing) <- mappings
         , Just (Medium stated, _) <- [cfMediumSub cmap cf]
+        , stated `S.notMember` databaseMedia
         , Just flows <- [M.lookup (normalizeName (mcfFlowName cf)) flowsByName]
-        , let seen = S.fromList [m | fl <- flows, let (Medium m, _) = flowMediumSub cmap fl]
+        , let seen = S.fromList (map mediumOf flows)
         , not (S.null seen)
-        , stated `S.notMember` seen
         ]
     quoted :: S.Set Text -> Text
     quoted = T.intercalate ", " . map (\t -> "\"" <> t <> "\"") . S.toList
