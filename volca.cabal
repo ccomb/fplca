@@ -20,7 +20,15 @@ common warnings
   -- to 1 for faster compiles). A hardcoded -O2 here would win over that
   -- per-package setting (ghc-options beat the project optimization flag), so
   -- it lives in the project file, not here.
-  ghc-options:         -Wall
+  --
+  -- -Wunused-packages keeps the dependency list honest: every package here is
+  -- fetched and built by the whole CI matrix, so one that nothing imports is
+  -- paid for on every row of it, every pull request. -Wredundant-constraints
+  -- is the free companion. Not -Wincomplete-record-selectors yet: it is right,
+  -- and what it currently finds needs the writer to stop applying a
+  -- constructor's selectors to a value typed as the whole sum, which is its
+  -- own change.
+  ghc-options:         -Wall -Wredundant-constraints -Wunused-packages
 
 common rtsdefaults
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
@@ -128,42 +136,31 @@ library
                      , exceptions
                      , bytestring
                      , deepseq
-                     , parallel
                      , stm
                      , async
-                     , conduit
-                     , xml-types
                      , servant-server
                      , servant
-                     , servant-multipart
                      , servant-openapi3
                      , openapi3
                      , insert-ordered-containers
                      , lens
-                     , warp
                      , aeson
                      , aeson-pretty
                      , scientific
                      , attoparsec
                      , wai
-                     , wai-cors
-                     , wai-app-static
                      , store
                      , zstd
                      , time
-                     , hashable
                      , uuid
                      , http-types
                      , http-media
                      , network-uri
-                     , streaming-commons
                      , vector
                      , random
                      , mumps-hs
                      , base64-bytestring
                      , toml-reader
-                     , filelock
-                     , temporary
                      , process
                      , cassava
                      , http-client
@@ -197,7 +194,6 @@ executable volca
                      , wai
                      , wai-extra >=3.1.1
                      , wai-app-static
-                     , servant
                      , servant-server
                      , http-types
                      , http-client
@@ -358,7 +354,6 @@ test-suite lca-tests
                      , bytestring
                      , zip-archive
                      , temporary
-                     , time
                      , aeson
                      , stm
                      , toml-reader
@@ -369,11 +364,9 @@ test-suite lca-tests
                      , filepath
                      , directory
                      , async
-                     , warp
                      , wai
                      , servant-server
                      , servant
-                     , network-uri
                      , base64-bytestring
                      , optparse-applicative
                      , QuickCheck
