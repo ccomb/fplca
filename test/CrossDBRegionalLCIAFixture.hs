@@ -77,7 +77,7 @@ kgUnit = Unit{unitId = mkUUID 9, unitName = "kg", unitSymbol = "kg", unitComment
 kgUnitConfig :: UnitConfig
 kgUnitConfig =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         (M.fromList [("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)])
         (M.fromList [("kg", "kg")])
 

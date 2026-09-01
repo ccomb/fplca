@@ -63,7 +63,7 @@ unitNamed n = Unit{unitId = nil, unitName = n, unitSymbol = n, unitComment = ""}
 gKgUnitConfig :: UnitConfig
 gKgUnitConfig =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         ( M.fromList
             [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
             , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
@@ -78,7 +78,7 @@ branch's hard-fail to 0.
 gOnlyUnitConfig :: UnitConfig
 gOnlyUnitConfig =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         (M.fromList [("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)])
         (M.fromList [("g", "g")])
 
@@ -452,7 +452,7 @@ spec = do
             m3Def = UnitDef [0, 3, 0, 0, 0, 0, 0, 0] 1.0
             cfg =
                 mkUnitConfig
-                    ([])
+                    []
                     (M.fromList [("kg", kgDef), ("m3", m3Def)])
                     (M.fromList [("kg", "kg"), ("m3", "m3")])
             cfPerKg = (mkCFComp "Gas, natural/kg" "natural resource" "" 43.1){mcfUnit = "kg"}
@@ -781,7 +781,7 @@ spec = do
         -- exactly the silent undercount this scan exists to surface.
         let cfg =
                 mkUnitConfig
-                    ([])
+                    []
                     ( M.fromList
                         [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
                         , ("m3", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
