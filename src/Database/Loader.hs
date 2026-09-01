@@ -81,6 +81,9 @@ module Database.Loader (
     getReferenceProductUUID,
     indexActivities,
     UnlinkedSummary (..),
+    LocationOverride (..),
+    ecoSpold1LinkContext,
+    fixAllActivities,
     buildSupplierIndex,
     buildSupplierIndexByName,
     fixExchangeLinkByName,
@@ -386,7 +389,22 @@ data UnlinkedExchange = UnlinkedExchange
     }
     deriving (Eq, Ord, Show)
 
-{- | Summary of unlinked exchanges grouped by consumer activity.
+{- | An EcoSpold1 input whose dataset number and declared location name two
+different datasets of the product. The number is what the file links, so it
+wins; this is the trace that the file contradicted itself.
+-}
+data LocationOverride = LocationOverride
+    { loConsumer :: !T.Text
+    , loConsumerLocation :: !T.Text
+    , loFlowName :: !T.Text
+    , loDeclared :: !T.Text -- the location the exchange declares
+    , loLinked :: !T.Text -- the location of the dataset its number names
+    , loDatasetNumber :: !Int
+    }
+    deriving (Eq, Ord, Show)
+
+{- | Summary of unlinked exchanges grouped by consumer activity, and of the
+linked ones worth a word.
 'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
 'Sum Int' would force every reader to unwrap.
 -}
@@ -395,15 +413,16 @@ data UnlinkedSummary = UnlinkedSummary
     , usTotalLinks :: !Int
     , usFoundLinks :: !Int
     , usMissingLinks :: !Int
+    , usLocationOverrides :: ![LocationOverride]
     }
     deriving (Show)
 
 instance Semigroup UnlinkedSummary where
-    UnlinkedSummary a1 t1 f1 m1 <> UnlinkedSummary a2 t2 f2 m2 =
-        UnlinkedSummary (M.unionWith (++) a1 a2) (t1 + t2) (f1 + f2) (m1 + m2)
+    UnlinkedSummary a1 t1 f1 m1 o1 <> UnlinkedSummary a2 t2 f2 m2 o2 =
+        UnlinkedSummary (M.unionWith (++) a1 a2) (t1 + t2) (f1 + f2) (m1 + m2) (o1 ++ o2)
 
 instance Monoid UnlinkedSummary where
-    mempty = UnlinkedSummary M.empty 0 0 0
+    mempty = UnlinkedSummary M.empty 0 0 0 []
 
 -- | Report grouped summary of unlinked exchanges
 reportUnlinkedSummary :: UnlinkedSummary -> IO ()
@@ -505,35 +524,24 @@ buildSupplierIndexByNameWithLocation activities techFlowDb =
         ]
 
 {- | Fix EcoSpold1 activity links by resolving supplier references.
-Matches input exchanges to suppliers by (flowName, location).
+An input's dataset number names its supplier first, checked against the
+product name; (flowName, location) is the fallback when the number resolves
+to nothing, and the name alone when it covers a single dataset. A number that
+contradicts the declared location is reported, not overruled.
 Unlinked exchanges stay unlinked so that cross-DB linking can resolve them.
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 -}
 fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> IO SimpleDatabase
 fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
-    -- Build supplier index
-    let supplierIndex = buildSupplierIndex (sdbActivities db) (sdbTechFlows db)
-    -- Build name-only index with location for exchanges missing location attribute
-    let nameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbTechFlows db)
+    let ctx = ecoSpold1LinkContext locationAliases dsIndex supplierLinks db
+        (fixedActivities, summary) = fixAllActivities ctx (sdbActivities db)
     reportProgress Info $
         printf
             "Built supplier index with %d entries for activity linking (%d location aliases, %d name-only entries, %d dataset-number entries)"
-            (M.size supplierIndex)
+            (M.size (elcSupplierIndex ctx))
             (M.size locationAliases)
-            (M.size nameIndex)
+            (M.size (elcNameIndex ctx))
             (M.size dsIndex)
-
-    -- Count and report statistics
-    let ctx =
-            ExchangeLinkContext
-                { elcLocationAliases = locationAliases
-                , elcSupplierIndex = supplierIndex
-                , elcNameIndex = nameIndex
-                , elcDatasetIndex = dsIndex
-                , elcSupplierLinks = supplierLinks
-                , elcFlowDB = sdbTechFlows db
-                }
-        (fixedActivities, summary) = fixAllActivities ctx (sdbActivities db)
 
     reportProgress Info $
         printf
@@ -545,11 +553,39 @@ fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
 
     -- Report grouped summary of unlinked exchanges
     reportUnlinkedSummary summary
+    reportLocationOverrides (usLocationOverrides summary)
 
     return $ db{sdbActivities = fixedActivities}
 
+{- | One line per input whose dataset number and declared location named two
+different datasets, sorted so one consumer's lines sit together.
+-}
+reportLocationOverrides :: [LocationOverride] -> IO ()
+reportLocationOverrides [] = pure ()
+reportLocationOverrides overrides = do
+    reportProgress Warning $
+        printf
+            "Dataset number overrides the declared location on %d inputs (the number is the supplier the file links; the location is a label)"
+            (length overrides)
+    forM_ shown $ \o ->
+        reportProgress Warning $
+            printf
+                "  - %s [%s]: %s declares %s, dataset %d is %s"
+                (T.unpack (loConsumer o))
+                (T.unpack (loConsumerLocation o))
+                (T.unpack (loFlowName o))
+                (T.unpack (loDeclared o))
+                (loDatasetNumber o)
+                (T.unpack (loLinked o))
+    when (length overrides > length shown) $
+        reportProgress Warning $
+            printf "  ... and %d more" (length overrides - length shown)
+  where
+    shown :: [LocationOverride]
+    shown = take 20 (sort overrides)
+
 {- | Bundle of lookup tables threaded through EcoSpold1 activity-link resolution.
-Previously these six fields were passed as positional parameters through
+Previously these fields were passed as positional parameters through
 'fixAllActivities' -> 'fixActivityExchanges' -> 'fixExchangeLink', each call
 re-forwarding the same values. The record collapses the cascade to a single
 argument and makes the dependencies explicit.
@@ -561,7 +597,22 @@ data ExchangeLinkContext = ExchangeLinkContext
     , elcDatasetIndex :: !DatasetNumberIndex
     , elcSupplierLinks :: !(M.Map UUID.UUID Int)
     , elcFlowDB :: !TechFlowDB
+    , elcActivities :: !ActivityMap
     }
+
+-- | The lookup tables 'fixAllActivities' links an EcoSpold1 database with.
+ecoSpold1LinkContext :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> ExchangeLinkContext
+ecoSpold1LinkContext locationAliases dsIndex supplierLinks db =
+    ExchangeLinkContext
+        { elcLocationAliases = locationAliases
+        , elcSupplierIndex = buildSupplierIndex (sdbActivities db) (sdbTechFlows db)
+        , -- Name-only index, with location, for exchanges missing the location attribute
+          elcNameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbTechFlows db)
+        , elcDatasetIndex = dsIndex
+        , elcSupplierLinks = supplierLinks
+        , elcFlowDB = sdbTechFlows db
+        , elcActivities = sdbActivities db
+        }
 
 -- | Fix all activities and return statistics with unlinked summary
 fixAllActivities :: ExchangeLinkContext -> ActivityMap -> (ActivityMap, UnlinkedSummary)
@@ -575,7 +626,7 @@ fixAllActivities ctx activities =
 -- | Fix activity exchanges and return (fixed activity, UnlinkedSummary)
 fixActivityExchanges :: ExchangeLinkContext -> Activity -> (Activity, UnlinkedSummary)
 fixActivityExchanges ctx act =
-    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink ctx (activityName act)) (exchanges act)
+    let (fixedExchanges, summaries) = unzip $ map (fixExchangeLink ctx act) (exchanges act)
         combinedSummary = mconcat summaries
      in (act{exchanges = fixedExchanges}, combinedSummary)
 
@@ -584,41 +635,63 @@ fixActivityExchanges ctx act =
 Unlinked exchanges stay unlinked for cross-DB resolution.
 Returns (fixed exchange, UnlinkedSummary)
 -}
-fixExchangeLink :: ExchangeLinkContext -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLink ExchangeLinkContext{..} consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+fixExchangeLink :: ExchangeLinkContext -> Activity -> Exchange -> (Exchange, UnlinkedSummary)
+fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
     | role == Input || role == ReferenceInput =
-        let linked actUUID prodUUID = (ex{techFlowId = prodUUID, techActivityLinkId = actUUID}, UnlinkedSummary M.empty 1 1 0)
+        let linked overrides actUUID prodUUID = (ex{techFlowId = prodUUID, techActivityLinkId = actUUID}, UnlinkedSummary M.empty 1 1 0 overrides)
             unlinked flow lookupLoc =
                 let ue = UnlinkedExchange (tfName flow) lookupLoc
-                 in (ex, UnlinkedSummary (M.singleton consumerName [ue]) 1 0 1)
+                 in (ex, UnlinkedSummary (M.singleton (activityName consumer) [ue]) 1 0 1 [])
          in case M.lookup fid elcFlowDB of
                 Just flow ->
                     -- Tier 1: dataset-number lookup with name validation
-                    case M.lookup fid elcSupplierLinks >>= \dsNum -> M.lookup dsNum elcDatasetIndex of
-                        Just (actUUID, prodUUID)
+                    case M.lookup fid elcSupplierLinks >>= \dsNum -> (,) dsNum <$> M.lookup dsNum elcDatasetIndex of
+                        Just (dsNum, (actUUID, prodUUID))
                             | Just supplierFlow <- M.lookup prodUUID elcFlowDB
                             , normalizeText (tfName supplierFlow) == normalizeText (tfName flow) ->
-                                linked actUUID prodUUID
+                                linked (locationOverride flow dsNum (actUUID, prodUUID)) actUUID prodUUID
                         _ ->
                             -- Tier 2: name + location lookup
-                            let normalizedLoc = fromMaybe loc (M.lookup loc elcLocationAliases)
-                                soleSupplier = M.lookup (normalizeText (tfName flow)) elcNameIndex >>= sole
+                            let soleSupplier = M.lookup (normalizeText (tfName flow)) elcNameIndex >>= sole
                                 lookupLoc
-                                    | T.null normalizedLoc = maybe normalizedLoc (\(_, _, actLoc) -> actLoc) soleSupplier
-                                    | otherwise = normalizedLoc
+                                    | T.null declaredLoc = maybe declaredLoc (\(_, _, actLoc) -> actLoc) soleSupplier
+                                    | otherwise = declaredLoc
                                 key = (normalizeText (tfName flow), lookupLoc)
                              in case M.lookup key elcSupplierIndex of
-                                    Just (actUUID, prodUUID) -> linked actUUID prodUUID
+                                    Just (actUUID, prodUUID) -> linked [] actUUID prodUUID
                                     Nothing ->
                                         -- Tier 3: the name alone, and only when it
                                         -- covers a single dataset. A name shared by
                                         -- several geographies names none of them.
                                         case soleSupplier of
-                                            Just (actUUID, prodUUID, _) -> linked actUUID prodUUID
+                                            Just (actUUID, prodUUID, _) -> linked [] actUUID prodUUID
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
-                    (ex, UnlinkedSummary M.empty 1 0 1)
+                    (ex, UnlinkedSummary M.empty 1 0 1 [])
     | otherwise = (ex, mempty)
+  where
+    declaredLoc :: T.Text
+    declaredLoc = fromMaybe loc (M.lookup loc elcLocationAliases)
+
+    -- The number named a dataset. When the declared location names another
+    -- dataset of the same product, the number still wins: it is what the file
+    -- links, and the results a database publishes follow it. The override is
+    -- recorded so a reader can see the file contradict itself.
+    locationOverride :: TechnosphereFlow -> Int -> (UUID.UUID, UUID.UUID) -> [LocationOverride]
+    locationOverride flow dsNum supplierKey =
+        [ LocationOverride
+            { loConsumer = activityName consumer
+            , loConsumerLocation = activityLocation consumer
+            , loFlowName = tfName flow
+            , loDeclared = loc
+            , loLinked = activityLocation supplier
+            , loDatasetNumber = dsNum
+            }
+        | not (T.null declaredLoc)
+        , Just supplier <- [M.lookup supplierKey elcActivities]
+        , activityLocation supplier /= declaredLoc
+        , M.member (normalizeText (tfName flow), declaredLoc) elcSupplierIndex
+        ]
 fixExchangeLink _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- A WasteExchange in input direction (consumed by treatment) would benefit
 -- from the same supplier-lookup logic as a technosphere Input, but at this
@@ -798,14 +871,14 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
                         | otherwise = Nothing
                  in case M.lookup key idx >>= accept of
                         Just (actUUID, prodUUID) ->
-                            (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0)
+                            (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0 [])
                         Nothing ->
                             let unlinked = UnlinkedExchange (tfName flow) loc
                                 unlinkedMap = M.singleton consumerName [unlinked]
-                             in (ex, UnlinkedSummary unlinkedMap 1 0 1)
+                             in (ex, UnlinkedSummary unlinkedMap 1 0 1 [])
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
-                (ex, UnlinkedSummary M.empty 1 0 1)
+                (ex, UnlinkedSummary M.empty 1 0 1 [])
     | otherwise = (ex, mempty) -- Reference products: nothing to relink
 fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.

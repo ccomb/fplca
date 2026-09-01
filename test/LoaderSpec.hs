@@ -309,21 +309,21 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "UnlinkedSummary Monoid" $ do
         it "sums all counters via (<>)" $ do
-            let s1 = UnlinkedSummary M.empty 10 8 2
-                s2 = UnlinkedSummary M.empty 5 3 2
+            let s1 = UnlinkedSummary M.empty 10 8 2 []
+                s2 = UnlinkedSummary M.empty 5 3 2 []
                 m = s1 <> s2
             usTotalLinks m `shouldBe` 15
             usFoundLinks m `shouldBe` 11
             usMissingLinks m `shouldBe` 4
 
         it "unions activity maps via (<>)" $ do
-            let s1 = UnlinkedSummary (M.singleton "actA" []) 1 0 1
-                s2 = UnlinkedSummary (M.singleton "actB" []) 1 0 1
+            let s1 = UnlinkedSummary (M.singleton "actA" []) 1 0 1 []
+                s2 = UnlinkedSummary (M.singleton "actB" []) 1 0 1 []
                 m = s1 <> s2
             M.size (usActivities m) `shouldBe` 2
 
         it "mempty is the identity" $ do
-            let s = UnlinkedSummary M.empty 3 2 1
+            let s = UnlinkedSummary M.empty 3 2 1 []
                 m = s <> mempty
             usTotalLinks m `shouldBe` 3
             usFoundLinks m `shouldBe` 2
@@ -536,12 +536,13 @@ spec = do
                 , minimalActivity "bread production" "CH" [refExchange breadUUID, inputExchange flowUUID1 ""]
                 )
             flowNames = [(flowUUID1, "Wheat"), (flowUUID2, "Wheat"), (breadUUID, "Bread")]
-            -- The supplier the consumer's unlocated wheat input ends up naming.
-            wheatLink sdb =
+            -- The suppliers the consumer's inputs end up naming.
+            inputLinksIn acts =
                 [ link
-                | Just act <- [M.lookup (consumerUUID, breadUUID) (sdbActivities sdb)]
+                | Just act <- [M.lookup (consumerUUID, breadUUID) acts]
                 , TechnosphereExchange{techRole = Input, techActivityLinkId = link} <- exchanges act
                 ]
+            wheatLink = inputLinksIn . sdbActivities
 
         it "leaves an unlocated input unlinked when the product name covers several geographies" $ do
             fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, wheatDE, bread] flowNames)
@@ -550,6 +551,40 @@ spec = do
         it "links an unlocated input when the product name covers one dataset" $ do
             fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
             wheatLink fixed `shouldBe` [actUUID1]
+
+        -- BAFU 2026 v1 has power plants whose gas input carries the number of
+        -- their own country's gas supply and the label RER (volca#347). The number
+        -- is what the file links, and the official results follow it.
+        let gasBG = ((actUUID1, flowUUID1), minimalActivity "gas supply" "BG" [refExchange flowUUID1])
+            gasRER = ((actUUID2, flowUUID2), minimalActivity "gas supply" "RER" [refExchange flowUUID2])
+            plantDeclaring loc =
+                ( (consumerUUID, breadUUID)
+                , minimalActivity "power plant" "BG" [refExchange breadUUID, inputExchange flowUUID1 loc]
+                )
+            gasNames = [(flowUUID1, "Natural gas"), (flowUUID2, "Natural gas"), (breadUUID, "Heat")]
+            linkPlantDeclaring loc =
+                let db = simpleDBOf [gasBG, gasRER, plantDeclaring loc] gasNames
+                    ctx = ecoSpold1LinkContext M.empty (M.singleton 300474 (actUUID1, flowUUID1)) (M.singleton flowUUID1 300474) db
+                 in fixAllActivities ctx (sdbActivities db)
+
+        it "follows the dataset number over the declared location, and records the override" $ do
+            let (acts, summary) = linkPlantDeclaring "RER"
+            inputLinksIn acts `shouldBe` [actUUID1]
+            usLocationOverrides summary
+                `shouldBe` [ LocationOverride
+                                { loConsumer = "power plant"
+                                , loConsumerLocation = "BG"
+                                , loFlowName = "Natural gas"
+                                , loDeclared = "RER"
+                                , loLinked = "BG"
+                                , loDatasetNumber = 300474
+                                }
+                           ]
+
+        it "records no override when the declared location names no dataset" $ do
+            let (acts, summary) = linkPlantDeclaring "ENTSO"
+            inputLinksIn acts `shouldBe` [actUUID1]
+            usLocationOverrides summary `shouldBe` []
 
     -- -----------------------------------------------------------------------
     -- countTotalTechInputs / countUnlinkedExchanges / collectUnlinkedProductNames
