@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Loading an EcoSpold 1 database now reports, as a warning, each input whose
+  dataset number and declared location name two different datasets of the
+  same product. The number is what the file links and it still wins, as it
+  did before; the report names the location declared, the location the number
+  resolved to and the number itself, so the contradiction is visible without
+  an external diff. BAFU 2026 v1 has eleven, most of them power plants whose
+  gas input carries the number of their own country's supply under an `RER`
+  label, and the published BAFU results follow the number.
+
 ### Fixed
 - A database whose inventory comes from a database it depends on is now
   characterized with the same factors as that database itself. The cascade
