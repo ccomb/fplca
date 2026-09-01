@@ -289,6 +289,8 @@ validateOne ctx a =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 productFlow =
                     TechnosphereFlow
@@ -339,8 +341,6 @@ buildActivity a unitLabel exchangeList =
         , exchanges = exchangeList
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -619,6 +619,8 @@ resolveOne ctx ex = case ex of
                 , techLocation = ""
                 , techComment = comment
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
     AuthoredWasteOutput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->

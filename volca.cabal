@@ -52,6 +52,7 @@ library
                      , SharedSolver
                      , Database
                      , Database.Manager
+                     , Database.Allocation
                      , Database.Author
                      , Database.Rebuild
                      , Database.Journal
@@ -105,7 +106,6 @@ library
                      , CLI.Render
                      , CLI.Repl
                      , EcoSpold.Common
-                     , EcoSpold.Cutoff
                      , EcoSpold.Parser2
                      , EcoSpold.Writer2
                      , EcoSpold.Parser1
@@ -291,6 +291,7 @@ test-suite lca-tests
                      , ReadOnlySpec
                      , ProgressSpec
                      , RegistryLintSpec
+                     , AllocationSpec
                      , EcoSpold1Spec
                      , EcoSpold1WriterSpec
                      , EcoSpold2Spec

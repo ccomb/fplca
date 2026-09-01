@@ -66,6 +66,7 @@ qualityReportCsv r =
         , ("oxygen_demand_order", qraOxygenDemandOrder r)
         , ("invalid_cas", qraInvalidCas r)
         , ("allocation_out_of_range", qraAllocationOutOfRange r)
+        , ("unallocated", qraUnallocated r)
         , ("unmeasurable_amounts", qraUnmeasurableAmounts r)
         ]
 

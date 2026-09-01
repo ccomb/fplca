@@ -41,6 +41,9 @@ The mapping mirrors 'EcoSpold.Parser1.buildExchange' exactly:
 
   * 'ReferenceProduct' / 'ReferenceInput' → @\<outputGroup\>0\</outputGroup\>@
   * 'Coproduct'                          → @\<outputGroup\>1\</outputGroup\>@
+  * 'AvoidedProduct'                     → @\<inputGroup\>5\</inputGroup\>@,
+    amount negated (a substitution re-parses to a negative input, the same
+    matrix entry)
   * technosphere 'Input'                 → @\<inputGroup\>5\</inputGroup\>@
     (parser treats any non-empty inputGroup as a tech input)
   * biosphere 'Resource'                 → @\<inputGroup\>4\</inputGroup\>@
@@ -516,11 +519,19 @@ exchangeAttrs res datasetNum ex =
         <> " unit="
         <> attr (unitNameFor (rUnits res) (exchangeUnitId ex))
         <> " meanValue="
-        <> attr (formatAmount (exchangeAmount ex))
+        <> attr (formatAmount (writtenAmount ex))
         <> maybe "" (\c -> " CASNumber=" <> attr c) cas
         <> maybe "" (\c -> " generalComment=" <> attr c) (exchangeComment ex)
   where
     FlowFields name category subCategory cas = flowFields res ex
+
+-- | The amount as the file states it: a substitution is a negative input.
+writtenAmount :: Exchange -> Double
+writtenAmount ex = case ex of
+    TechnosphereExchange{techRole = AvoidedProduct, techAmount = amount} -> negate amount
+    TechnosphereExchange{techAmount = amount} -> amount
+    BiosphereExchange{} -> exchangeAmount ex
+    WasteExchange{} -> exchangeAmount ex
 
 -- | The @\<inputGroup\>@ / @\<outputGroup\>@ element for an exchange.
 groupElement :: Exchange -> Text
@@ -529,6 +540,7 @@ groupElement ex = case ex of
         ReferenceProduct -> wrapOut "0"
         ReferenceInput -> wrapOut "0"
         Coproduct -> wrapOut "1"
+        AvoidedProduct -> wrapIn "5"
         Input -> wrapIn "5"
     BiosphereExchange{bioDirection = dir} -> case dir of
         Resource -> wrapIn "4"

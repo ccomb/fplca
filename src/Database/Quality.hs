@@ -37,17 +37,19 @@ import Control.Applicative ((<|>))
 import Data.Char (digitToInt, isAlphaNum, isDigit)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.Semigroup (First (..), Min (..), Sum (..))
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
+import Database.Allocation (asAllocated, describeRefusal)
 import Numeric (showFFloat, showGFloat)
 
 import Types (
     Activity (..),
     BiosphereFlow (..),
+    DeclaredShare (..),
     Exchange (..),
     FormulaCheck (..),
     LocationSource (..),
@@ -58,6 +60,7 @@ import Types (
     TechnosphereFlow (..),
     Unit (..),
     WasteFlow (..),
+    activityDeclaredShares,
     activityGroupKey,
     activityIsObsolete,
     exchangeAmount,
@@ -122,6 +125,7 @@ data QualityReport = QualityReport
     , qrOxygenDemandOrder :: !QualityCheck
     , qrInvalidCas :: !QualityCheck
     , qrAllocationOutOfRange :: !QualityCheck
+    , qrUnallocated :: !QualityCheck
     , qrUnmeasurableAmounts :: !QualityCheck
     }
     deriving (Show, Eq)
@@ -149,6 +153,7 @@ qualityChecks r =
     , qrOxygenDemandOrder r
     , qrInvalidCas r
     , qrAllocationOutOfRange r
+    , qrUnallocated r
     , qrUnmeasurableAmounts r
     ]
 
@@ -253,6 +258,7 @@ qualityReport dbName db =
         , qrOxygenDemandOrder = QualityCheck oxygenApplicable (worstFirst oxygenOffenders)
         , qrInvalidCas = QualityCheck casApplicable (worstFirst casOffenders)
         , qrAllocationOutOfRange = QualityCheck allocationApplicable (worstFirst allocationRangeOffenders)
+        , qrUnallocated = QualityCheck True (worstFirst unallocatedOffenders)
         , qrUnmeasurableAmounts = QualityCheck True (worstFirst unmeasurableOffenders)
         }
   where
@@ -292,7 +298,7 @@ qualityReport dbName db =
     -- UUID alone: two SimaPro blocks whose names collide after the format's
     -- 80-character truncation would then merge, and their percentages sum to
     -- ~200%. That is the same over-grouping 'Database.MatrixBuild' accepts.
-    allocationApplicable = any (isJust . activityAllocationPercent) acts
+    allocationApplicable = any (any isJust . activityDeclaredShares) acts
     allocationGroups =
         M.fromListWith
             (<>)
@@ -314,7 +320,7 @@ qualityReport dbName db =
                 [ offender WarningSev repKey representative Nothing $
                     T.pack (show missing)
                         <> " of "
-                        <> T.pack (show (length group'))
+                        <> T.pack (show (length outputs))
                         <> " coproduct(s) carry no allocation percentage"
                 ]
             -- NaN needs its own test: any comparison against it is False, so
@@ -324,13 +330,14 @@ qualityReport dbName db =
                     "allocation sums to "
                         <> formatPercent total
                         <> "% across "
-                        <> T.pack (show (length group'))
+                        <> T.pack (show (length outputs))
                         <> " coproduct(s)"
                 ]
             | otherwise -> []
       where
-        carried = mapMaybe (activityAllocationPercent . snd) group'
-        missing = length group' - length carried
+        outputs = map (fmap dsPercent) (concatMap (activityDeclaredShares . snd) group')
+        carried = catMaybes outputs
+        missing = length outputs - length carried
         total = sum carried
 
     -- A single allocation factor outside 0–100% is wrong on its own terms: a
@@ -342,8 +349,17 @@ qualityReport dbName db =
         [ offender WarningSev key act Nothing $
             "allocation percentage is " <> formatPercent pct <> "%, outside the 0-100% range"
         | (key, act) <- entries
-        , Just pct <- [activityAllocationPercent act]
+        , Just pct <- map (fmap dsPercent) (activityDeclaredShares act)
         , pct < 0 || pct > 100
+        ]
+
+    -- What the matrix refuses to hold, and why: the verdict of the allocation
+    -- gate, the same one that refuses to score the entry. It loads and can be
+    -- read; its column is empty. The detail says what would repair it.
+    unallocatedOffenders =
+        [ offender DangerSev key act Nothing (describeRefusal refusal)
+        | (key, act) <- entries
+        , Left refusal <- [asAllocated act]
         ]
 
     -- Same name, same place, same product, twice: one of them is stale. Entries
@@ -565,7 +581,7 @@ qualityReport dbName db =
     -- A product is in use when some data line takes it in: an ordinary
     -- technosphere input, or a waste line on either side — a producer's
     -- waste output is exactly what exercises a treatment's reference input.
-    -- Coproduct lines are production (or avoided production), not use, and
+    -- Product lines are production and an avoided product is a substitution, not use;
     -- reference lines define their own entry. Cross-database consumers are
     -- out of sight here, hence "within this database" in the finding.
     consumesFlow ex = case ex of
@@ -590,7 +606,7 @@ qualityReport dbName db =
     suppliedFlowIds =
         S.fromList [exchangeFlowId ex | act <- acts, ex <- exchanges act, exchangeIsReference ex]
     needsSupplier ex = case ex of
-        TechnosphereExchange{techRole = role} -> role `elem` [Input, ReferenceInput, Coproduct]
+        TechnosphereExchange{techRole = role} -> role `elem` [Input, ReferenceInput, AvoidedProduct]
         BiosphereExchange{} -> False
         WasteExchange{} -> False
     unsuppliedOffenders =

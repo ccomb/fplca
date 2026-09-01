@@ -573,6 +573,10 @@ data BatchImpactsResponse = BatchImpactsResponse
     { birResults :: [BatchImpactsEntry]
     , birNotFound :: [Text]
     , birInvalid :: [Text]
+    , birUnscorable :: [Text]
+    {- ^ Ids that resolve but name an activity the allocation gate refused; the
+    quality report's @unallocated@ check says why for each
+    -}
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped BatchImpactsResponse)
@@ -971,6 +975,7 @@ data QualityReportAPI = QualityReportAPI
     , qraOxygenDemandOrder :: QualityCheckAPI
     , qraInvalidCas :: QualityCheckAPI
     , qraAllocationOutOfRange :: QualityCheckAPI
+    , qraUnallocated :: QualityCheckAPI
     , qraUnmeasurableAmounts :: QualityCheckAPI
     }
     deriving (Generic)

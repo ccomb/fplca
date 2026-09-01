@@ -21,12 +21,14 @@ import Control.Concurrent (getNumCapabilities)
 import Control.Concurrent.Async (mapConcurrently)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
+import Database.Allocation (AllocationKey (..), allocate)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import Text.Printf (printf)
@@ -539,12 +541,18 @@ buildActivityMap ::
     ActivityMap
 buildActivityMap flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB procs =
     M.fromList
-        [ ((iprUUID p, refFlowUUID), activity)
+        [ ((iprUUID p, productKey p activity), activity)
         | p <- procs
-        , let refEx = findRefExchange p
-        , let refFlowUUID = maybe (iprUUID p) ierFlowRef refEx
-        , let activity = buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p
+        , activity <- NE.toList (allocate Declared unitDB (buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p))
         ]
+  where
+    -- The process is keyed on its reference product; a dataset the gate will
+    -- refuse for having none keeps the flow its file points at, or its own id.
+    productKey :: ILCDProcessRaw -> Activity -> UUID
+    productKey p activity =
+        Data.Maybe.fromMaybe
+            (maybe (iprUUID p) ierFlowRef (findRefExchange p))
+            (Data.Maybe.listToMaybe [exchangeFlowId ex | ex <- exchanges activity, exchangeIsReference ex])
 
 findRefExchange :: ILCDProcessRaw -> Maybe ILCDExchangeRaw
 findRefExchange p =
@@ -566,8 +574,6 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
         , exchanges = map (mkExchange (iprRefFlowIdx p)) (iprExchanges p)
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType =
             if T.null (iprProcessType p)
                 then Nothing
@@ -638,6 +644,8 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
 
 --------------------------------------------------------------------------------

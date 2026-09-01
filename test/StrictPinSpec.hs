@@ -237,6 +237,8 @@ supplierDB offset products =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                   act =
                     Activity
@@ -251,8 +253,6 @@ supplierDB offset products =
                         , exchanges = [refOut]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing
@@ -289,6 +289,8 @@ consumerDB offset products =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                   unlinkedInput =
                     TechnosphereExchange
@@ -301,6 +303,8 @@ consumerDB offset products =
                         , techLocation = "GLO"
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                   act =
                     Activity
@@ -315,8 +319,6 @@ consumerDB offset products =
                         , exchanges = [refOut, unlinkedInput]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing

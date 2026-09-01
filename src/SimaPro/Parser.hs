@@ -1001,23 +1001,16 @@ processBlockToActivity ::
     UnitConversion.UnitConfig ->
     GlobalParams ->
     ProcessBlock ->
-    [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])]
+    Maybe (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
 processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
-    map makeActivity productsInFileOrder
+    case productsInFileOrder of
+        [] -> Nothing
+        reference : coproducts -> Just (block reference coproducts)
   where
     -- pbProducts is accumulated by prepending; restore file order so the
     -- first row is the reference (main) product of the block.
     productsInFileOrder = reverse pbProducts
 
-    -- Shared fallback identity when the "Process name" field is empty: every
-    -- coproduct inherits the reference product's name and location, so a
-    -- multi-product block still collapses onto one activityUUID (which is
-    -- derived from name + location) instead of splitting into N activities.
-    referenceName = case productsInFileOrder of
-        (p : _) -> prName p
-        [] -> ""
-    referenceReading = extractLocation referenceName
-    fallbackName = maybe referenceName locatedName referenceReading
     (env, exprMap) = blockParamEnv gp pb
 
     processReading = extractLocation pbName
@@ -1041,11 +1034,15 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
             T.strip pbName
         | otherwise = T.strip (maybe pbName locatedName processReading)
 
+    referenceReading = case productsInFileOrder of
+        (p : _) -> extractLocation (prName p)
+        [] -> Nothing
+
     -- Convert each section's rows to (exchange, flow, unit) triples in one pass.
     -- 'Final waste flows' route to WasteExchange so the cross-DB linker doesn't
     -- tally them as missing suppliers (they're end-of-life markers, not demands).
     (avoidedExs, avoidedFlows, avoidedUnits) =
-        unzip3 (productToExchange unitCfg env False <$> pbAvoidedProducts)
+        unzip3 (productToExchange unitCfg env AvoidedProduct <$> pbAvoidedProducts)
     (techMaybeExs, techFlows, techUnits) =
         unzip3 (techRowToExchange unitCfg env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
     (bioExs, bioFlows, bioUnits) =
@@ -1057,7 +1054,9 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     (wasteExs, wasteFlows, wasteUnits) =
         unzip3 (wasteRowToExchange unitCfg env <$> pbFinalWaste)
 
-    -- Exchanges/flows/units shared by every coproduct (scaled per product below).
+    -- Exchanges/flows/units the block's products share. They are written once,
+    -- unscaled: "Database.Allocation" splits the block into one process per
+    -- product and scales them by each product's declared share.
     -- Tech rows with a zero amount yield no exchange but still contribute a flow.
     sharedExchanges = avoidedExs ++ catMaybes techMaybeExs ++ bioExs ++ wasteExs
     sharedTechFlows = avoidedFlows ++ techFlows
@@ -1066,40 +1065,32 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     sharedUnitNames =
         S.toList . S.fromList $ unitName <$> (avoidedUnits ++ techUnits ++ bioUnits ++ wasteUnits)
 
-    -- Loop-invariant activity fields (independent of the coproduct).
     descriptionLines = maybeToList (nonEmptyText pbComment)
     nativeType = SimaProProcessType <$> nonEmptyText pbType
 
-    -- Block identity. The coproducts below share it, so they group together even
-    -- though the activity UUID (a hash of name and location) is not unique: a
-    -- SimaPro "Process name" is truncated to 80 characters and reused verbatim
+    -- Block identity. The products' processes share it, so they group together
+    -- even though the activity UUID (a hash of name and location) is not unique:
+    -- a SimaPro "Process name" is truncated to 80 characters and reused verbatim
     -- across unrelated blocks.
     nativeId = NativeProcessId <$> nonEmptyText pbIdentifier
 
-    makeActivity :: ProductRow -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
-    makeActivity prod =
-        let (productExchange, productFlow, productUnit) = productToExchange unitCfg env True prod
-            effUnitName = unitName productUnit
-            allocPercent = resolveAmount env (prAllocRaw prod) (prAllocation prod)
-            allocFraction = allocPercent / 100.0
-            productReading = extractLocation (prName prod)
-            cleanProductName = maybe (prName prod) locatedName productReading
+    block :: ProductRow -> [ProductRow] -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
+    block reference coproducts =
+        let (referenceExchange, referenceFlow, referenceUnit) = productToExchange unitCfg env ReferenceProduct reference
+            (coproductExs, coproductFlows, coproductUnits) = unzip3 (productToExchange unitCfg env Coproduct <$> coproducts)
             -- Activity name = Process name when present, otherwise the reference
-            -- product's name (with its location) — never the coproduct's own,
-            -- so all coproducts of a name-less block share one activityUUID.
-            -- A blank reference name (malformed row) must not blank the whole
-            -- block: degrade per-product, as before the shared fallback.
+            -- product's name (with its location). Never a coproduct's own: the
+            -- block is one activity, and every process split from it keeps
+            -- its name, so they share one activityUUID.
             -- The readings that may name the place are the ones behind the name
-            -- we settled on. The reference product's reading comes last: a
-            -- coproduct whose own name states nothing inherits the reference's
-            -- location rather than a guess read off the process name, keeping
-            -- every coproduct of the block on one location.
+            -- we settled on; the reference product's comes last, so a tie goes
+            -- to the Process name, which is what named the block.
+            fallbackName = maybe (prName reference) locatedName referenceReading
             (effectiveActivityName, readings)
-                | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, productReading, referenceReading])
-                | not (T.null fallbackName) = (fallbackName, [referenceReading])
-                | otherwise = (cleanProductName, [productReading])
+                | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, referenceReading])
+                | otherwise = (fallbackName, [referenceReading])
             -- Best-founded reading wins; sortOn is stable, so a tie goes to the
-            -- Process name, which is what named the block.
+            -- Process name.
             readLocation =
                 foldMap locatedLocation
                     . listToMaybe
@@ -1110,28 +1101,28 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
                 | isJust statedLocation = LocationDeclared
                 | T.null effectiveLoc = LocationUnspecified
                 | otherwise = LocationInferredFromName
-            allocFormula = mfilter (not . isNumericFormula) (nonEmptyText (prAllocRaw prod))
             activity =
                 Activity
                     { activityName = effectiveActivityName
                     , activityDescription = descriptionLines
                     , activityDocumentation = [] -- SimaPro states its provenance too; not read yet
                     , activitySynonyms = M.empty
-                    , activityClassification =
+                    , -- The reference row's category names the block; each product
+                      -- row's own travels on its exchange ('techClassification')
+                      -- and takes over on the process split for that product.
+                      activityClassification =
                         M.fromList $
                             filter
                                 (not . T.null . snd)
                                 [ ("Category type", pbCategoryType)
-                                , ("Category", prCategory prod)
+                                , ("Category", prCategory reference)
                                 ]
                     , activityLocation = effectiveLoc
                     , activityLocationSource = effectiveLocSource
-                    , activityUnit = effUnitName
-                    , exchanges = productExchange : map (scaleExchange allocFraction) sharedExchanges
+                    , activityUnit = unitName referenceUnit
+                    , exchanges = referenceExchange : coproductExs ++ sharedExchanges
                     , activityParams = env
                     , activityParamExprs = exprMap
-                    , activityAllocationPercent = Just allocPercent
-                    , activityAllocationFormula = allocFormula
                     , activityNativeType = nativeType
                     , activityNativeId = nativeId
                     , activityFormulaCheck = Nothing
@@ -1139,18 +1130,12 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
             allUnits =
                 map
                     (\name -> Unit (generateUnitUUID name) name name "")
-                    (S.toList . S.fromList $ effUnitName : sharedUnitNames)
-         in (activity, productFlow : sharedTechFlows, sharedBioFlows, sharedWasteFlows, allUnits)
+                    (S.toList . S.fromList $ map unitName (referenceUnit : coproductUnits) ++ sharedUnitNames)
+         in (activity, referenceFlow : coproductFlows ++ sharedTechFlows, sharedBioFlows, sharedWasteFlows, allUnits)
 
 -- | True when the raw allocation cell is a plain decimal literal (no formula).
 isNumericFormula :: Text -> Bool
 isNumericFormula = isJust . readAmount
-
--- | Scale an exchange amount by a factor (for allocation)
-scaleExchange :: Double -> Exchange -> Exchange
-scaleExchange factor ex@TechnosphereExchange{} = ex{techAmount = techAmount ex * factor}
-scaleExchange factor ex@BiosphereExchange{} = ex{bioAmount = bioAmount ex * factor}
-scaleExchange factor ex@WasteExchange{} = ex{waAmount = waAmount ex * factor}
 
 {- | The reference unit of a row's dimension, and the row's amount in it.
 
@@ -1164,7 +1149,9 @@ canonicalRow :: UnitConversion.UnitConfig -> Text -> Double -> (Text, Double)
 canonicalRow unitCfg unit amount =
     fromMaybe (unit, amount) (UnitConversion.normalizeToCanonical unitCfg unit amount)
 
-{- | Convert product row to exchange, flow, and unit in one pass.
+{- | Convert a product row to exchange, flow, and unit in one pass, under the
+role its section gives it: @Products@ rows are the reference and its
+coproducts, @Avoided products@ rows are substitutions.
 
 The declared amount is converted to the reference unit of its dimension by
 'canonicalRow', reference product and coproduct alike. For the reference that
@@ -1173,8 +1160,8 @@ a reference declared as "1 ton" would otherwise produce impacts 1000x too
 large. For a coproduct it is what lets the row carry the same identifier as
 the input that consumes it elsewhere.
 -}
-productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
-productToExchange unitCfg env isRef ProductRow{..} =
+productToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> TechRole -> ProductRow -> (Exchange, TechnosphereFlow, Unit)
+productToExchange unitCfg env role ProductRow{..} =
     let reading = extractLocation prName
         cleanName = maybe prName locatedName reading
         prodRowLoc = foldMap locatedLocation reading
@@ -1188,7 +1175,7 @@ productToExchange unitCfg env isRef ProductRow{..} =
                 { techFlowId = flowUUID
                 , techAmount = amount
                 , techUnitId = unitUUID
-                , techRole = if isRef then ReferenceProduct else Coproduct
+                , techRole = role
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
                 , -- Preserve the location encoded on the Products row (e.g.
@@ -1200,6 +1187,21 @@ productToExchange unitCfg env isRef ProductRow{..} =
                   techLocation = prodRowLoc
                 , techComment = cleanedComment
                 , techPedigree = pedigree
+                , techShare = share
+                , techClassification = M.fromList [("Category", prCategory) | not (T.null prCategory)]
+                }
+        -- A product row states its share of the block; an avoided product row
+        -- has the same columns but names a substitution, not a share of anything.
+        share = case role of
+            ReferenceProduct -> Just declared
+            Coproduct -> Just declared
+            AvoidedProduct -> Nothing
+            ReferenceInput -> Nothing
+            Input -> Nothing
+        declared =
+            DeclaredShare
+                { dsPercent = resolveAmount env prAllocRaw prAllocation
+                , dsFormula = mfilter (not . isNumericFormula) (nonEmptyText prAllocRaw)
                 }
         flow =
             TechnosphereFlow
@@ -1286,6 +1288,8 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
                             , techLocation = location
                             , techComment = cleanedComment
                             , techPedigree = pedigree
+                            , techShare = Nothing
+                            , techClassification = M.empty
                             }
         flow =
             TechnosphereFlow
@@ -1619,8 +1623,9 @@ parseSimaProCSV unitCfg path = do
         globalParams = foldMap wrParams results
         substanceCAS = concatMap wrSubstanceCAS results
 
-    -- Convert all blocks to activities (one activity per product) - PARALLEL
-    converted <- concat <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
+    -- Convert all blocks to activities (one per block; a block without a
+    -- product row is no activity) - PARALLEL
+    converted <- catMaybes <$> mapConcurrently (evaluate . force . processBlockToActivity unitCfg globalParams) allBlocks
 
     -- Surface every amount the conversion replaced with its lenient fallback:
     -- a number that silently shrinks is worse than a warned one.

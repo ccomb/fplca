@@ -145,6 +145,8 @@ spec = do
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 bioExchange =
                     BiosphereExchange
@@ -169,8 +171,6 @@ spec = do
                         , exchanges = [refExchange, bioExchange]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing
@@ -220,6 +220,8 @@ spec = do
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 zeroBio =
                     BiosphereExchange
@@ -244,8 +246,6 @@ spec = do
                         , exchanges = [refExchange, zeroBio]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing
@@ -290,6 +290,8 @@ spec = do
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 tCO2 =
                     BiosphereExchange
@@ -314,8 +316,6 @@ spec = do
                         , exchanges = [tRef, tCO2]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing
@@ -331,6 +331,8 @@ spec = do
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 pWaste =
                     WasteExchange
@@ -357,8 +359,6 @@ spec = do
                         , exchanges = [pRef, pWaste]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing

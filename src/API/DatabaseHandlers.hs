@@ -411,6 +411,7 @@ qualityReportToAPI mLimit r =
         , qraOxygenDemandOrder = checkToAPI mLimit (Quality.qrOxygenDemandOrder r)
         , qraInvalidCas = checkToAPI mLimit (Quality.qrInvalidCas r)
         , qraAllocationOutOfRange = checkToAPI mLimit (Quality.qrAllocationOutOfRange r)
+        , qraUnallocated = checkToAPI mLimit (Quality.qrUnallocated r)
         , qraUnmeasurableAmounts = checkToAPI mLimit (Quality.qrUnmeasurableAmounts r)
         }
 

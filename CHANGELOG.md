@@ -56,6 +56,38 @@
   into it; the version route reports the built-in data version when the flow
   registry is the built-in one, and the bundle's own otherwise, as before.
   Reported by @mklarmann (#348).
+- An activity the engine cannot allocate is now refused a score, and says so,
+  where it used to be scored on its reference product alone with the other
+  products' shares silently dropped. The refusal is visible in three places
+  with one wording: a warning when the database loads, the new `unallocated`
+  check of the quality report, and the answer to any request that would score
+  it (HTTP 422; the tools return the same text). The activity itself still
+  loads and reads as before. What triggers it: a product output the source
+  declares no share for, which happens on an unlinked (multi-output)
+  EcoSpold 2 dataset, a multi-output ILCD or Brightway process, or an
+  authored activity with a coproduct; and an activity without exactly one
+  reference exchange, which the EcoSpold parsers used to drop at parse time.
+  None of the databases shipped as examples trigger it. Nothing changes in
+  any score: a SimaPro block's products are split into one process per
+  product exactly as before, each product's declared share applied as
+  written, whether or not the block's shares sum to 100.
+- A SimaPro "Avoided products" row now carries its own role, `AvoidedProduct`,
+  instead of being reported as a `Coproduct`. It is a substitution, a credit
+  on the producer of the product it displaces, and its matrix entry is what
+  it always was. The EcoSpold writers write it as the negative input ecoinvent
+  itself uses for a substitution, the Brightway writer as a `substitution`
+  row, and the Brightway reader now reads such a row instead of skipping it.
+  A client that decodes the exchange role as an enumeration has to learn the
+  new value; this is wire revision 14.
+- A product row's declared share now travels on the exchange that carries the
+  product (`share`, with the percentage and the raw formula), and so does the
+  category the row was filed under (`classification`). A process split from
+  a SimaPro block keeps the share of its own product row, which is what the
+  `allocationPercent` and `allocationFormula` of an activity summary now
+  read; they report the same numbers as before. A process whose product row
+  had a category of its own keeps it, where it used to inherit the block's:
+  measured on Agribalyse 3.2, 31 blocks file a coproduct under another
+  category than their reference product, and the split processes now say so.
 - A database whose regional factors all come from a database it depends on is
   now scored on the regionalized path, like the database it mirrors. Two
   consequences, both of them that path's existing behaviour reaching a new set

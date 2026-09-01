@@ -354,7 +354,7 @@ orderedExchanges db exs = concatMap (sortOn sortKey) groups
   where
     groups = [refs, coproducts, techInputs, bios, wastes]
     refs = filter exchangeIsReference exs
-    coproducts = filter isCoproduct exs
+    coproducts = filter (\ex -> isCoproduct ex || isAvoidedProduct ex) exs
     techInputs = filter isTechInput exs
     bios = filter isBio exs
     wastes = filter isWaste exs
@@ -373,6 +373,13 @@ so matching it here too would emit the exchange twice — double-counting its
 coefficient when the workbook is re-imported and duplicate (i,j) entries are
 summed. Each role thus lands in exactly one group.
 -}
+isAvoidedProduct :: Exchange -> Bool
+isAvoidedProduct = \case
+    TechnosphereExchange{techRole = AvoidedProduct} -> True
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+    WasteExchange{} -> False
+
 isTechInput :: Exchange -> Bool
 isTechInput = \case
     TechnosphereExchange{techRole = Input} -> True
@@ -464,6 +471,7 @@ techTypeLabel :: TechRole -> Text
 techTypeLabel = \case
     ReferenceProduct -> "production"
     Coproduct -> "production"
+    AvoidedProduct -> "substitution"
     ReferenceInput -> "technosphere"
     Input -> "technosphere"
 

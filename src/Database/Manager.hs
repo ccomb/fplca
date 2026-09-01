@@ -214,7 +214,6 @@ import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, normalizeCAS, parseSubstanceEdges)
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
-    Activity (..),
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
@@ -241,8 +240,6 @@ import Types (
     deduplicateFallbacks,
     deduplicateUnresolved,
     enrichBioFlowCAS,
-    exchangeFlowId,
-    exchangeIsReference,
     flowClosure,
     initializeRuntimeFields,
     toSimpleDatabase,
@@ -267,7 +264,6 @@ import qualified Method.Parser.OlcaSchema as OlcaSchema
 import Method.ParserCSV (parseMethodCSVBytes, stripBOM)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import qualified Method.Patch
-import qualified SimaPro.Parser as SimaPro
 import SynonymDB.Extract (extractFromEcoSpold2, extractFromILCDFlows, synonymPairsToCSV)
 
 -- | A fully loaded database with solver ready for queries
@@ -1789,20 +1785,6 @@ narrowToDataFile fmt path = case dataFileExtension fmt of
                                     <> " other(s)"
                             pure (Right f)
 
-{- | Build activity map from list of activities
-Creates (activityUUID, productUUID) -> Activity mapping
--}
-buildActivityMap :: [Activity] -> M.Map (UUID, UUID) Activity
-buildActivityMap activities =
-    M.fromList
-        [ ((activityUUID, productUUID), activity)
-        | activity <- activities
-        , let activityUUID = SimaPro.generateActivityUUID activity
-        , let refExchanges = filter exchangeIsReference (exchanges activity)
-        , refExchange <- take 1 refExchanges -- Take first reference product
-        , let productUUID = exchangeFlowId refExchange
-        ]
-
 {- | Load raw database from a configured source path, with cross-database linking.
 
 The cache lives next to @sourcePath@ (see 'Loader.generateMatrixCacheFilename').
@@ -1879,14 +1861,12 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
   where
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-        parsed <- SimaPro.parseSimaProCSV unitConfig csvFile
-        case parsed of
+        loaded <- Loader.loadSimaProCSV unitConfig csvFile
+        case loaded of
             Left err -> return $ Left err
-            Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB) -> do
-                reportProgress Info $ "Building database from " <> show (length activities) <> " activities"
-                let simpleDb = SimpleDatabase (buildActivityMap activities) techFlowDB bioFlowDB wasteFlowDB unitDB
-                linkedDb <- Loader.fixSimaProActivityLinks unitConfig simpleDb
-                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) techFlowDB bioFlowDB (sdbWasteFlows linkedDb) unitDB
+            Right linkedDb -> do
+                reportProgress Info $ "Building database from " <> show (M.size (sdbActivities linkedDb)) <> " activities"
+                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) (sdbTechFlows linkedDb) (sdbBioFlows linkedDb) (sdbWasteFlows linkedDb) (sdbUnits linkedDb)
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do

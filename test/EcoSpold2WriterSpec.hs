@@ -112,14 +112,12 @@ fixtureSimple =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-            , TechnosphereExchange prodB 2.0 unitMJ Input actB Nothing "" (Just "energy input") Nothing
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            , TechnosphereExchange prodB 2.0 unitMJ Input actB Nothing "" (Just "energy input") Nothing Nothing M.empty
             , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
             Nothing
             Nothing
@@ -133,13 +131,11 @@ fixtureSimple =
             "GLO"
             LocationDeclared
             "MJ"
-            [ TechnosphereExchange prodB 1.0 unitMJ ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodB 1.0 unitMJ ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , BiosphereExchange land 0.1 unitM2a Resource "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             (Just (EcoSpoldActivityType 2 "Market activity" (Just 1) (Just "Hard link")))
             Nothing
             Nothing
@@ -173,14 +169,12 @@ fixtureDupBio =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
             , BiosphereExchange co2 0.3 unitKg Emission "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
             Nothing
             Nothing
@@ -209,13 +203,11 @@ fixtureWithExchange ex =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , ex
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
             Nothing
             Nothing
@@ -248,13 +240,11 @@ fixtureWithBioSynonyms =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , BiosphereExchange co2 0.5 unitKg Emission "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -296,15 +286,13 @@ fixtureWasteCoproduct =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-            , TechnosphereExchange coprodU 0.4 unitKg Coproduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodA 1.0 unitKg ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            , TechnosphereExchange coprodU 0.4 unitKg Coproduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , WasteExchange wasteInU 0.2 unitKg True UUID.nil Nothing "" Nothing Nothing
             , WasteExchange wasteOutU 0.3 unitKg False UUID.nil Nothing "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             (Just (EcoSpoldActivityType 1 "Ordinary transforming activity" Nothing Nothing))
             Nothing
             Nothing
@@ -436,7 +424,7 @@ spec = describe "EcoSpold2 writer round-trip" $ do
 
         it "rejects a reference input (no EcoSpold2 encoding)" $
             checkEcoSpold2Exportable
-                (fixtureWithExchange (TechnosphereExchange co2 2.0 unitKg ReferenceInput UUID.nil Nothing "" Nothing Nothing))
+                (fixtureWithExchange (TechnosphereExchange co2 2.0 unitKg ReferenceInput UUID.nil Nothing "" Nothing Nothing Nothing M.empty))
                 `shouldSatisfy` isLeft
 
         it "rejects an exchange whose unit is absent from the registry" $

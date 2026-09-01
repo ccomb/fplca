@@ -21,6 +21,7 @@ import Data.Int (Int32)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
+import Data.Maybe (listToMaybe)
 import qualified Data.Set as S
 import Data.Store (Size (..), Store (..))
 import Data.Text (Text)
@@ -112,18 +113,38 @@ data BioDirection = Resource | Emission
     deriving (Eq, Show, Generic, NFData, Store)
     deriving anyclass (ToSchema)
 
-{- | Role of a technosphere exchange within its host activity. Names the four
-valid combinations of (input?, reference?). `ReferenceInput` is the
-treatment-process case where the activity is defined by the waste flow it
-consumes (see `activityNormFactor`).
+{- | Role of a technosphere exchange within its host activity. `ReferenceInput`
+is the treatment-process case where the activity is defined by the waste flow
+it consumes (see `activityNormFactor`).
+
+A 'Coproduct' is a product output the source left unallocated. No activity
+still carrying one reaches the matrix: "Database.Allocation" either splits the
+activity into one process per product, or refuses it and says why. An
+'AvoidedProduct' is a substitution, the product this activity displaces; it
+is a credit on that product's producer and behaves as a negative input.
 -}
 data TechRole
     = ReferenceProduct -- main output of a production process
-    | Coproduct -- secondary output (by-product, avoided product)
+    | Coproduct -- a product output the source did not allocate
+    | AvoidedProduct -- substitution: a product this activity displaces
     | ReferenceInput -- main input of a treatment process
     | Input -- ordinary technosphere input
     deriving (Eq, Show, Generic, NFData, Store)
     deriving anyclass (ToSchema)
+
+{- | What a source declares about one product output of a multi-output
+activity: its share of the inventory in percent, as written, and the raw
+expression when that share was a formula rather than a number (the SimaPro
+allocation column). 'Database.Allocation.allocate' splits on it, the SimaPro
+writer writes it back, and it stays on the reference exchange of a split
+process as the record of what the source said.
+-}
+data DeclaredShare = DeclaredShare
+    { dsPercent :: !Double
+    , dsFormula :: !(Maybe Text)
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeclaredShare)
 
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
@@ -235,12 +256,14 @@ data Exchange
         { techFlowId :: !UUID -- Flow being exchanged
         , techAmount :: !Double -- Quantity exchanged
         , techUnitId :: !UUID -- Unit of measurement
-        , techRole :: !TechRole -- Role within the activity (Input | Coproduct | ReferenceProduct | ReferenceInput)
+        , techRole :: !TechRole -- Role within the activity
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
+        , techShare :: !(Maybe DeclaredShare) -- The share a product output was declared with; Nothing on inputs and where the source states none
+        , techClassification :: !(M.Map Text Text) -- What the source says of this product row (SimaPro "Category"); carried onto the process split for it
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
@@ -290,6 +313,7 @@ exchangeIsInput TechnosphereExchange{techRole = role} = case role of
     ReferenceInput -> True
     ReferenceProduct -> False
     Coproduct -> False
+    AvoidedProduct -> False
 exchangeIsInput BiosphereExchange{bioDirection = dir} = case dir of
     Resource -> True
     Emission -> False
@@ -301,8 +325,44 @@ exchangeIsReference TechnosphereExchange{techRole = role} = case role of
     ReferenceInput -> True
     Input -> False
     Coproduct -> False
+    AvoidedProduct -> False
 exchangeIsReference BiosphereExchange{} = False
 exchangeIsReference WasteExchange{} = False
+
+-- | A product the activity makes: its reference, or a coproduct not yet allocated.
+exchangeIsProductOutput :: Exchange -> Bool
+exchangeIsProductOutput TechnosphereExchange{techRole = role} = case role of
+    ReferenceProduct -> True
+    Coproduct -> True
+    AvoidedProduct -> False
+    ReferenceInput -> False
+    Input -> False
+exchangeIsProductOutput BiosphereExchange{} = False
+exchangeIsProductOutput WasteExchange{} = False
+
+-- | What the source states of a technosphere row beyond its amount (SimaPro "Category"); empty on the other axes.
+exchangeClassification :: Exchange -> M.Map Text Text
+exchangeClassification TechnosphereExchange{techClassification = cls} = cls
+exchangeClassification BiosphereExchange{} = M.empty
+exchangeClassification WasteExchange{} = M.empty
+
+-- | The share a technosphere exchange was declared with; nothing on the other axes.
+exchangeDeclaredShare :: Exchange -> Maybe DeclaredShare
+exchangeDeclaredShare TechnosphereExchange{techShare = share} = share
+exchangeDeclaredShare BiosphereExchange{} = Nothing
+exchangeDeclaredShare WasteExchange{} = Nothing
+
+{- | The share each product output was declared with, in source order;
+'Nothing' where the source states none. One entry on a process split from
+a block, as many as the block had products on one the gate refused.
+-}
+activityDeclaredShares :: Activity -> [Maybe DeclaredShare]
+activityDeclaredShares act = [exchangeDeclaredShare ex | ex <- exchanges act, exchangeIsProductOutput ex]
+
+-- | The share the reference product was declared with, when the source stated one.
+activityReferenceShare :: Activity -> Maybe DeclaredShare
+activityReferenceShare act =
+    listToMaybe [share | ex <- exchanges act, exchangeIsReference ex, Just share <- [exchangeDeclaredShare ex]]
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID
@@ -556,8 +616,6 @@ data Activity = Activity
     , exchanges :: ![Exchange] -- List of exchanges
     , activityParams :: !(M.Map Text Double) -- Resolved dataset parameter values (SimaPro parameters, EcoSpold2 <parameter> variables)
     , activityParamExprs :: !(M.Map Text Text) -- Raw parameter expressions/formulas keyed like activityParams (for inspection and re-evaluation)
-    , activityAllocationPercent :: !(Maybe Double) -- SimaPro multi-product allocation fraction (%, 0..100); Nothing for non-allocated bases
-    , activityAllocationFormula :: !(Maybe Text) -- Raw SimaPro allocation formula (e.g. "Qp*DMp/(Qp*DMp+Qw*DMw)*100"); Nothing if purely numeric
     , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
     , activityNativeId :: !(Maybe NativeProcessId) -- Source dataset block this activity was read from; groups the coproducts of one block. Nothing when the source format lacks the field
     , activityFormulaCheck :: !(Maybe FormulaCheck) -- Outcome of the mathematicalRelation consistency check; Nothing when the dataset has no formulas or the format has none

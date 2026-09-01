@@ -80,10 +80,10 @@ spec = do
             map enChildrenCount (rootNodes db) `shouldBe` [1]
 
     describe "the activities that use a flow" $
-        it "lists every coproduct row that carries it" $ do
+        it "lists the row that produces it and the row that consumes it" $ do
             db <- twoCoproductFixture
             map prsProcessId (Service.getActivitiesUsingFlow db milkId)
-                `shouldBe` [pidText milkId, pidText creamId, consumerPid]
+                `shouldBe` [pidText milkId, consumerPid]
 
 -- ---------------------------------------------------------------------------
 -- Reading one exchange back
@@ -192,8 +192,8 @@ buildFixture consumer rows flows = do
 supplierRows :: M.Map (UUID, UUID) Activity
 supplierRows =
     M.fromList
-        [ ((supplierActId, milkId), supplierActivity)
-        , ((supplierActId, creamId), supplierActivity)
+        [ ((supplierActId, milkId), supplierProcess milkId 1.0)
+        , ((supplierActId, creamId), supplierProcess creamId 0.3)
         ]
 
 supplierFlows :: M.Map UUID TechnosphereFlow
@@ -203,14 +203,14 @@ supplierFlows =
         , (creamId, techFlow creamId "cream")
         ]
 
--- | The supplier: one activity, two produced coproducts.
-supplierActivity :: Activity
-supplierActivity =
+{- | The supplier: one activity written as one process per coproduct, each
+with its own product as the reference, the way the loader splits a block.
+-}
+supplierProcess :: UUID -> Double -> Activity
+supplierProcess productId amount =
     bareActivity
         "milk production"
-        [ techExchange milkId 1.0 ReferenceProduct supplierActId
-        , techExchange creamId 0.3 Coproduct supplierActId
-        ]
+        [techExchange productId amount ReferenceProduct supplierActId]
 
 consumerActivity :: [Exchange] -> [Exchange] -> Activity
 consumerActivity inputs outputs =
@@ -255,6 +255,8 @@ techExchange flowId amount role link =
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 bareActivity :: Text -> [Exchange] -> Activity
@@ -271,8 +273,6 @@ bareActivity name exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing

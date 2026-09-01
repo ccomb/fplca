@@ -31,6 +31,7 @@ module Database.Loader (
     -- * Main Loading Functions
     loadDatabase,
     loadDatabaseWithLocationAliases,
+    loadSimaProCSV,
     loadDatabaseWithCrossDBLinking,
     findFilesByExtRecursive,
 
@@ -123,6 +124,7 @@ import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
+import Database.Allocation (AllocationKey (..), allocate, allocateAll)
 import Database.CrossLinking (
     AliasMap,
     CrossDBLinkResult (..),
@@ -276,6 +278,10 @@ History of manual bumps:
      of its dimension. Process ids, flow ids and amounts all move, and none of
      it changes a type, so an old cache would pass the fingerprint and answer
      with identifiers no request would name again.
+- 19: an avoided product has its own role, a product row carries its declared
+     share and its category, and every activity passes the allocation gate
+     before the matrix. The cached exchanges of an allocated database say
+     less than the loader now reads, so they are read again.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -283,7 +289,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 18
+     in hi `xor` lo `xor` 19
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -746,6 +752,19 @@ loadDatabaseWithLocationAliases unitConfig locationAliases path = do
                         else loadEcoSpoldDirectory locationAliases path
                 else return $ Left $ T.pack $ "Path does not exist: " ++ path
 
+-- | Everything one EcoSpold dataset parses to, before it is keyed.
+type ParsedDataset = (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int)
+
+{- | Allocate a parsed dataset before it is keyed: one entry per process
+'allocate' splits it into, each carrying the file's flows and units, so the
+entry is then keyed on its own reference product.
+-}
+allocateParsed :: ParsedDataset -> [ParsedDataset]
+allocateParsed (act, techs, bios, wastes, units, dsNum, links) =
+    [ (act', techs, bios, wastes, units, dsNum, links)
+    | act' <- NE.toList (allocate Declared (M.fromList [(unitId u, u) | u <- units]) act)
+    ]
+
 -- | Load SimaPro CSV file
 loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSimaProCSV unitConfig csvPath = do
@@ -758,7 +777,7 @@ loadSimaProCSV unitConfig csvPath = do
                 else do
                     -- Build ActivityMap with generated ProcessIds
                     -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-                    let (procMap, collisions) = indexActivities activities
+                    let (procMap, collisions) = indexActivities (allocateAll Declared unitDB activities)
                     forM_ collisions $ reportProgress Warning . T.unpack
 
                     -- Build initial database
@@ -783,7 +802,7 @@ loadBrightwayExcel unitConfig xlsxPath = do
         Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
             | null activities -> return $ Left "No activities found in Brightway Excel file."
             | otherwise -> do
-                let (procMap, collisions) = indexActivities activities
+                let (procMap, collisions) = indexActivities (allocateAll Declared unitDB activities)
                     simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
                 forM_ collisions $ reportProgress Warning . T.unpack
                 Right <$> fixSimaProActivityLinks unitConfig simpleDb
@@ -859,7 +878,7 @@ on it. Returns (fixed exchange, UnlinkedSummary).
 -}
 fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
-    | role == Input || role == ReferenceInput || role == Coproduct =
+    | role == Input || role == ReferenceInput || role == AvoidedProduct =
         case M.lookup fid techFlowDb of
             Just flow ->
                 let key = normalizeText (tfName flow)
@@ -1006,7 +1025,7 @@ loadEcoSpoldDirectory locationAliases dir = do
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
-        let (okFiles, okResults) = unzip oks
+        let (okFiles, okResults) = unzip [(f, r') | (f, r) <- oks, r' <- allocateParsed r]
         let procs = [a | (a, _, _, _, _, _, _) <- okResults]
             techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
             bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
@@ -1081,8 +1100,9 @@ Several datasets share one file name, so none of them can claim it.
 loadSingleEcoSpold1File :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadSingleEcoSpold1File locationAliases filepath = do
     reportProgress Info "Parsing multi-dataset EcoSpold1 file..."
-    results <- streamParseAllDatasetsFromFile1 filepath
-    reportProgress Info $ "Parsed " ++ show (length results) ++ " datasets from file"
+    parsed <- streamParseAllDatasetsFromFile1 filepath
+    reportProgress Info $ "Parsed " ++ show (length parsed) ++ " datasets from file"
+    let results = concatMap allocateParsed parsed
 
     -- Build activity map from all parsed activities
     let fileUUID = case results of

@@ -29,6 +29,7 @@ import Types (
     Activity (..),
     BioDirection (..),
     BiosphereFlow (..),
+    DeclaredShare (..),
     Exchange (..),
     FormulaCheck (..),
     LocationSource (..),
@@ -101,8 +102,6 @@ mkActivityAt name location exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -120,6 +119,8 @@ techExchange fid amount role =
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 reference :: UUID -> Exchange
@@ -226,9 +227,8 @@ casDbWith cas =
 -- | An activity carrying an allocation percentage and a source block identity.
 allocated :: Text -> Maybe Double -> Maybe Text -> Activity
 allocated name percent nativeId =
-    (mkActivity name [reference breadFlow])
-        { activityAllocationPercent = percent
-        , activityNativeId = NativeProcessId <$> nativeId
+    (mkActivity name [(reference breadFlow){techShare = (`DeclaredShare` Nothing) <$> percent}])
+        { activityNativeId = NativeProcessId <$> nativeId
         }
 
 spec :: Spec
@@ -251,6 +251,18 @@ spec = do
         it "passes a treatment activity defined by its reference input" $
             qcOffenders (qrReferenceProduct (reportOf (mkActivity "waste treatment" [referenceInput wasteFlow])))
                 `shouldBe` []
+
+    describe "unallocated check" $ do
+        it "names an activity still carrying a coproduct, with what would repair it" $ do
+            let check = qrUnallocated (reportOf (mkActivity "mill" [reference flourFlow, techExchange breadFlow 0.2 Coproduct]))
+            details check `shouldBe` ["2 product outputs, 2 without a declared share: state a share on every product row, or load the dataset already allocated"]
+            severities check `shouldBe` [DangerSev]
+
+        it "passes a process split from a block, whatever share it was given" $
+            qcOffenders (qrUnallocated (reportOf (allocated "block" (Just 0) (Just "b1")))) `shouldBe` []
+
+        it "passes an activity that displaces a product" $
+            qcOffenders (qrUnallocated (reportOf (mkActivity "bakery" [reference breadFlow, techExchange flourFlow 0.5 AvoidedProduct]))) `shouldBe` []
 
     describe "allocation sums check" $ do
         it "passes coproducts of one block summing to 100%" $ do

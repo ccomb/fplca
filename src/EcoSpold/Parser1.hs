@@ -32,7 +32,6 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import EcoSpold.Common (bsToDouble, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
-import EcoSpold.Cutoff (applyCutoffStrategy)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
 import qualified Xeno.SAX as X
@@ -623,6 +622,8 @@ buildExchange activityLoc edata
             , techLocation = exchangeLocation
             , techComment = nonEmptyText (exComment edata)
             , techPedigree = Nothing
+            , techShare = Nothing
+            , techClassification = M.empty
             }
 
 {- | One bibliographic line for a @\<source\>@. ecoinvent files put the
@@ -690,8 +691,6 @@ buildResult st =
                 , exchanges = reverse (psExchanges st)
                 , activityParams = M.empty
                 , activityParamExprs = M.empty
-                , activityAllocationPercent = Nothing
-                , activityAllocationFormula = Nothing
                 , activityNativeType = Nothing
                 , activityNativeId = Nothing
                 , activityFormulaCheck = Nothing
@@ -705,7 +704,11 @@ buildResult st =
             , psDatasetNumber st
             , psSupplierLinks st
             )
-     in pack <$> applyCutoffStrategy activity
+     in -- A file that yields no exchange at all is not a dataset: a stray or
+        -- truncated XML the SAX fold walked through without complaint.
+        if null (exchanges activity)
+            then Left "not an EcoSpold1 dataset: no exchange found"
+            else Right (pack activity)
 
 -- | Run the shared SAX fold, surfacing any Xeno error as a String.
 foldEcoSpold1 :: BS.ByteString -> Either String ParseState

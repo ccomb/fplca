@@ -387,8 +387,6 @@ mkActivityAt loc =
         , exchanges = []
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -406,6 +404,8 @@ mkRefExchangeAt loc =
         , techLocation = loc
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
   where
     flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"

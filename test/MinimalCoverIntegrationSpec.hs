@@ -132,6 +132,8 @@ supplierDB offset =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
         act =
             Activity
@@ -146,8 +148,6 @@ supplierDB offset =
                 , exchanges = [refExchange]
                 , activityParams = M.empty
                 , activityParamExprs = M.empty
-                , activityAllocationPercent = Nothing
-                , activityAllocationFormula = Nothing
                 , activityNativeType = Nothing
                 , activityNativeId = Nothing
                 , activityFormulaCheck = Nothing
@@ -200,6 +200,8 @@ consumerDB offset n =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 unlinkedInput =
                     TechnosphereExchange
@@ -212,6 +214,8 @@ consumerDB offset n =
                         , techLocation = "GLO"
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                 act =
                     Activity
@@ -226,8 +230,6 @@ consumerDB offset n =
                         , exchanges = [refOut, unlinkedInput]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing
