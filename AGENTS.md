@@ -79,11 +79,24 @@ A Python client lives in `pyvolca/` (own `pyproject.toml`); the MUMPS binding in
 - Builds are `-Wall`-clean — introduce no new warnings (incomplete patterns, unused binds). This is what backs the exhaustive-match rule above.
 
 ### Code style
-- Prefer short point-free style over explicit case pattern matching.
-- Don't overload functions or write diagonal code (deeply nested, staircase-shaped logic). Extract, share and reuse relevant abstractions.
-- **Pure domain, effectful edges**.
-- Avoid long function signatures. They are a smell — split the function or gather arguments in a product type.
+Every point below is checkable on the function in front of you, whether you are
+writing it or reading someone else's.
+
+**The signature**
+- Avoid long function signatures. More than four positional parameters: gather them in a product type. Two neighbours of the same type: a caller can swap them and the compiler will not notice, so newtype one of them.
+- A tuple of three or more, or any tuple that crosses a signature, becomes a record with named fields. `(Text, Maybe Text, Maybe Text, Double)` says nothing at the call site.
+- A `Bool` argument reads as `f True` where it is called, which says nothing. Two constructors named after what they mean.
+- `IO a` for something that can fail becomes `IO (Either Text a)`, propagated. Never a fallback value standing in for a failure, per Code safety.
 - Each type should have a sensible domain or technical meaning.
+
+**The body**
+- **Pure domain, effectful edges.** Concretely: ask which lines of an IO function would still make sense with no `IO` in sight, then hoist exactly those into a named, signed function. It is the biggest single win on most functions, and it usually leaves the effectful remainder flat enough to read in one pass.
+- One `let` in a `do` block is fine. Three or more means the function is doing several things: a `let` is a computation with a name and no type, so move it to a `where` with a signature, or out to the top level.
+- Don't overload functions or write diagonal code (deeply nested, staircase-shaped logic). Past four levels of indentation: guards rather than nested `if`, `maybe`/`either`/`fromMaybe` rather than a `case` on `Maybe`/`Either`, `when`/`unless` rather than `if ... then ... else pure ()`, an early exit through `Either` rather than an `else do` that swallows the rest.
+- A `case` inside a `case`: match the pair, or name the intermediate type the two cases are really about.
+- Every `where` helper carries its type signature. It is one line, and it is the documentation.
+- Prefer short point-free style over explicit case pattern matching, when it shortens the read and not when it encrypts it. `fromMaybe []` yes, a four-stage composition through `flip` no.
+- Comments carry *why*. A comment restating what the line does is noise.
 - **A name a caller types is short, expressive, and explains itself where it is used.** Judge it by the line that calls it, not the line that defines it. Name the axis that actually separates a family of siblings: `BioExchange.from_id` and `BioExchange.from_name` say which of the two ways the flow is designated, where `existing` and `named` each answered a different question. Leave the verb out when nothing is being done - a constructor builds a value, it does not add one. This holds for every name someone outside this repo types: pyvolca's classes, methods and constructors, and the operations, fields and parameters in `API.Resources` that REST and MCP derive from.
 - Use advanced Haskell patterns when they improve expressivity and reduce line count.
 
