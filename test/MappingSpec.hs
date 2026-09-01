@@ -722,6 +722,24 @@ spec = do
             fmap bfId (findFlowByNameComp M.empty byName "nox" (Just comp)) `shouldBe` Nothing
             fmap bfId (findFlowByNameComp rule byName "nox" (Just comp)) `shouldBe` Just fid1
 
+    describe "compartmentGapWarning" $ do
+        it "names both vocabularies when a factor's name is filed under another medium" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "emissions to air" Nothing
+                cf = mkCFComp "ammonia" "air" "" 0.747
+            compartmentGapWarning M.empty (M.singleton "ammonia" [flow]) [(cf, Nothing)]
+                `shouldBe` Just "1 factor(s) name a flow this database files under another compartment (method: \"air\"; database: \"emissions to air\"). Declare a [[compartment-mappings]] table bridging them."
+
+        it "stays silent when the name is simply absent" $ do
+            let cf = mkCFComp "ammonia" "air" "" 0.747
+            compartmentGapWarning M.empty M.empty [(cf, Nothing)] `shouldBe` Nothing
+
+        it "stays silent for a factor that resolved" $ do
+            fid <- nextRandom
+            let flow = mkFlow fid "ammonia" "air" Nothing
+                cf = mkCFComp "ammonia" "air" "" 0.747
+            compartmentGapWarning M.empty (M.singleton "ammonia" [flow]) [(cf, Just (flow, ByName))] `shouldBe` Nothing
+
     describe "fillBroadcastVector + computeLCIAScoreFromTables (Phase 1)" $ do
         let mkUnit uid name = Unit{unitId = uid, unitName = name, unitSymbol = name, unitComment = ""}
 

@@ -22,6 +22,7 @@ module Method.Mapping (
     expandPatternCF,
     dropExcludedMappings,
     exclusionWarning,
+    compartmentGapWarning,
     buildMapContext,
     mapContextFor,
 
@@ -123,7 +124,7 @@ import Data.List (find, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -278,6 +279,7 @@ mapMethodFlows ctx0 method = do
             then mapM resolve cfs
             else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
     mapM_ (warn . pure) (mapMaybe (exclusionWarning (mcBioFlowsByUUID ctx0)) exclusionCFs)
+    warn (maybeToList (compartmentGapWarning (mcCompartmentMap ctx0) (mcBioFlowsByName ctx0) concrete))
     expanded <- fmap concat . mapM (materialize exclusionCFs) $ patternCFs
     pure (concrete ++ expanded)
   where
@@ -489,6 +491,37 @@ exclusionWarning flows cf
     | otherwise = Nothing
   where
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
+
+{- | The factors the cascade left unmatched although a flow of their name is
+in the database, filed under a medium the row does not state. That is a
+vocabulary gap ("air" against "emissions to air"), which a compartment
+mapping bridges and nothing else will: said once per method, with both
+vocabularies, so the operator knows what to declare.
+-}
+compartmentGapWarning :: CompartmentMap -> M.Map Text [BiosphereFlow] -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> Maybe Text
+compartmentGapWarning cmap flowsByName mappings
+    | null gaps = Nothing
+    | otherwise =
+        Just $
+            T.pack (show (length gaps))
+                <> " factor(s) name a flow this database files under another compartment (method: "
+                <> quoted (S.fromList (map fst gaps))
+                <> "; database: "
+                <> quoted (S.unions (map snd gaps))
+                <> "). Declare a [[compartment-mappings]] table bridging them."
+  where
+    gaps :: [(Text, S.Set Text)]
+    gaps =
+        [ (stated, seen)
+        | (cf, Nothing) <- mappings
+        , Just (Medium stated, _) <- [cfMediumSub cmap cf]
+        , Just flows <- [M.lookup (normalizeName (mcfFlowName cf)) flowsByName]
+        , let seen = S.fromList [m | fl <- flows, let (Medium m, _) = flowMediumSub cmap fl]
+        , not (S.null seen)
+        , stated `S.notMember` seen
+        ]
+    quoted :: S.Set Text -> Text
+    quoted = T.intercalate ", " . map (\t -> "\"" <> t <> "\"") . S.toList
 
 -- | Wire name for a match strategy.
 strategyToText :: MatchStrategy -> Text
