@@ -38,7 +38,7 @@ import Method.Types (CFFamily (..), Compartment (..), EnergyDensity (..), Energy
 import SynonymDB (normalizeName)
 import Types (BiosphereFlow (..), Unit (..), UnitDB)
 import qualified Types as VT
-import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
 mkUUID :: Integer -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
@@ -54,15 +54,14 @@ than an unknown unit.
 -}
 massEnergyConfig :: UnitConfig
 massEnergyConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "energy"]
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0] 1.0)
-                , ("mj", UnitDef [0, 1] 1.0)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("mj", "MJ")]
-        }
+    mkUnitConfig
+        (["mass", "energy"])
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0] 1.0)
+            , ("mj", UnitDef [0, 1] 1.0)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("mj", "MJ")])
 
 cfLine :: Text -> Text -> Text -> Double -> MethodCF
 cfLine name sub unit val =
@@ -401,8 +400,7 @@ spec = do
   where
     -- kg and m3 known but dimensionally apart, so the pair is a mismatch.
     volumeMassConfig =
-        UnitConfig
-            { ucDimensionOrder = ["mass", "volume"]
-            , ucUnits = M.fromList [("kg", UnitDef [1, 0] 1.0), ("m3", UnitDef [0, 1] 1.0)]
-            , ucOriginalKeys = M.fromList [("kg", "kg"), ("m3", "m3")]
-            }
+        mkUnitConfig
+            (["mass", "volume"])
+            (M.fromList [("kg", UnitDef [1, 0] 1.0), ("m3", UnitDef [0, 1] 1.0)])
+            (M.fromList [("kg", "kg"), ("m3", "m3")])

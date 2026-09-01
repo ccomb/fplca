@@ -62,7 +62,7 @@ import Types (
     exchangePedigree,
     tfName,
  )
-import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, isKnownUnit, mkUnitConfig)
 
 -- | Test CSV content with a quoted product name containing the delimiter (;)
 testCSV :: BS.ByteString
@@ -1713,45 +1713,42 @@ follow it.
 -}
 volumeUnitConfig :: Text -> UnitConfig
 volumeUnitConfig reference =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits =
-            M.fromList
-                [ (reference, UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 1.0)
-                , ("l", UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 0.001)
-                ]
-        , ucOriginalKeys = M.fromList [(reference, reference), ("l", "l")]
-        }
+    mkUnitConfig
+        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ( M.fromList
+            [ (reference, UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 1.0)
+            , ("l", UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 0.001)
+            ]
+        )
+        (M.fromList [(reference, reference), ("l", "l")])
 
 {- | Unit config knowing a non-canonical spelling in two dimensions: g (mass)
 and kWh (energy), so a row written in either has somewhere to be converted to.
 -}
 mixedUnitConfig :: UnitConfig
 mixedUnitConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
-                , ("mj", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 1.0)
-                , ("kwh", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 3.6)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("g", "g"), ("mj", "mj"), ("kwh", "kWh")]
-        }
+    mkUnitConfig
+        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
+            , ("mj", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 1.0)
+            , ("kwh", UnitDef [0, 0, 0, 1, 0, 0, 0, 0] 3.6)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("g", "g"), ("mj", "mj"), ("kwh", "kWh")])
 
 -- | Unit config that knows about "ton" (1000 kg) in addition to kg.
 tonUnitConfig :: UnitConfig
 tonUnitConfig =
-    UnitConfig
-        { ucDimensionOrder = ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("ton", "ton")]
-        }
+    mkUnitConfig
+        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("ton", "ton")])
 
 -- | A minimal SimaPro CSV declaring a reference product of "1 ton" (mass).
 tonRefCSV :: BS.ByteString

@@ -13,7 +13,8 @@ module UnitConversion (
     -- * Types
     Dimension,
     UnitDef (..),
-    UnitConfig (..),
+    UnitConfig (ucDimensionOrder, ucUnits, ucOriginalKeys, ucCanonical),
+    mkUnitConfig,
 
     -- * Loading
     defaultUnitConfig,
@@ -48,7 +49,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString.Lazy as BL
 import Data.Csv (HasHeader (..), decode)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.List (elemIndex, sortOn)
+import Data.List (elemIndex)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
@@ -77,6 +78,7 @@ data UnitConfig = UnitConfig
     { ucDimensionOrder :: ![Text] -- ["mass", "length", "time", ...]
     , ucUnits :: !(M.Map Text UnitDef) -- normalized (lowercase, trimmed) keys
     , ucOriginalKeys :: !(M.Map Text Text) -- normalized -> original (for error messages)
+    , ucCanonical :: !(M.Map Text Text) -- normalized -> reference unit of its dimension
     }
     deriving (Show, Generic)
 
@@ -136,17 +138,7 @@ Returns 'Nothing' if the input unit is unknown or its dimension defines no
 reference unit.
 -}
 canonicalUnitFor :: UnitConfig -> Text -> Maybe Text
-canonicalUnitFor cfg unitText = do
-    UnitDef dim _ <- lookupUnitDef cfg unitText
-    case sortOn
-        (\k -> (T.length k, k))
-        [ normKey
-        | (normKey, UnitDef d f) <- M.toList (ucUnits cfg)
-        , d == dim
-        , f == 1.0
-        ] of
-        (normKey : _) -> Just $ M.findWithDefault normKey normKey (ucOriginalKeys cfg)
-        [] -> Nothing
+canonicalUnitFor cfg = flip M.lookup (ucCanonical cfg) . normalizeUnit
 
 {- | Convert an amount to the canonical base unit of its dimension.
 Returns '(canonicalUnitName, convertedAmount)'. 'Nothing' if the input unit is
@@ -213,12 +205,7 @@ buildFromCSV csvData =
     buildFromRows dimOrder rows = do
         pairs <- mapM (parseRow dimOrder) rows
         let units = M.fromList pairs
-        Right
-            UnitConfig
-                { ucDimensionOrder = dimOrder
-                , ucUnits = units
-                , ucOriginalKeys = M.mapWithKey const units
-                }
+        Right (mkUnitConfig dimOrder units (M.mapWithKey const units))
 
     parseRow dimOrder (name, dimExpr, factor) = do
         dim <- parseDimension dimOrder dimExpr
@@ -230,11 +217,10 @@ buildFromCSV csvData =
 mergeUnitConfigs :: [UnitConfig] -> UnitConfig
 mergeUnitConfigs [] = defaultUnitConfig
 mergeUnitConfigs cfgs@(first : _) =
-    UnitConfig
-        { ucDimensionOrder = ucDimensionOrder first
-        , ucUnits = M.unions (reverse $ map ucUnits cfgs)
-        , ucOriginalKeys = M.unions (reverse $ map ucOriginalKeys cfgs)
-        }
+    mkUnitConfig
+        (ucDimensionOrder first)
+        (M.unions (reverse $ map ucUnits cfgs))
+        (M.unions (reverse $ map ucOriginalKeys cfgs))
 
 -- | Number of unit definitions.
 unitCount :: UnitConfig -> Int
@@ -243,17 +229,41 @@ unitCount = M.size . ucUnits
 -- | Minimal bootstrap unit config (kg, m, s, item) for when no CSV is loaded.
 defaultUnitConfig :: UnitConfig
 defaultUnitConfig =
+    mkUnitConfig
+        defaultDimensionOrder
+        ( M.fromList
+            [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("m", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
+            , ("s", UnitDef [0, 0, 1, 0, 0, 0, 0, 0] 1.0)
+            , ("item", UnitDef [0, 0, 0, 0, 0, 0, 1, 0] 1.0)
+            ]
+        )
+        (M.fromList [("kg", "kg"), ("m", "m"), ("s", "s"), ("item", "item")])
+
+{- | Assemble a config, indexing the reference unit of every dimension once.
+
+'canonicalUnitFor' is asked once per row of every file read, and answering it
+by scanning the table is the whole table walked per row. The answer depends
+only on the table, so it is computed here.
+-}
+mkUnitConfig :: [Text] -> M.Map Text UnitDef -> M.Map Text Text -> UnitConfig
+mkUnitConfig dimOrder units originalKeys =
     UnitConfig
-        { ucDimensionOrder = defaultDimensionOrder
-        , ucUnits =
-            M.fromList
-                [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("m", UnitDef [0, 1, 0, 0, 0, 0, 0, 0] 1.0)
-                , ("s", UnitDef [0, 0, 1, 0, 0, 0, 0, 0] 1.0)
-                , ("item", UnitDef [0, 0, 0, 0, 0, 0, 1, 0] 1.0)
-                ]
-        , ucOriginalKeys = M.fromList [("kg", "kg"), ("m", "m"), ("s", "s"), ("item", "item")]
+        { ucDimensionOrder = dimOrder
+        , ucUnits = units
+        , ucOriginalKeys = originalKeys
+        , ucCanonical = M.mapMaybe (\(UnitDef dim _) -> snd <$> M.lookup dim references) units
         }
+  where
+    references =
+        M.fromListWith
+            shorter
+            [ (udDimension def, (normKey, M.findWithDefault normKey normKey originalKeys))
+            | (normKey, def) <- M.toList units
+            , udFactor def == 1.0
+            ]
+    shorter a b = if sortKey a <= sortKey b then a else b
+    sortKey (normKey, _) = (T.length normKey, normKey)
 
 -- | Tracker for unknown units encountered during parsing.
 data UnknownUnitTracker = UnknownUnitTracker

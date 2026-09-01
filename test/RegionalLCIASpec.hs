@@ -35,7 +35,7 @@ import Types (
     emptyProductIndex,
  )
 import qualified Types as VT
-import UnitConversion (UnitConfig (..), UnitDef (..))
+import UnitConversion (UnitConfig (..), UnitDef (..), mkUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Fixture
@@ -59,12 +59,10 @@ kgUnit = Unit{unitId = mkUUID 9, unitName = "kg", unitSymbol = "kg", unitComment
 
 kgUnitConfig :: UnitConfig
 kgUnitConfig =
-    UnitConfig
-        { ucDimensionOrder =
-            ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
-        , ucUnits = M.fromList [("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)]
-        , ucOriginalKeys = M.fromList [("kg", "kg")]
-        }
+    mkUnitConfig
+        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        (M.fromList [("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)])
+        (M.fromList [("kg", "kg")])
 
 testFlow :: BiosphereFlow
 testFlow =
