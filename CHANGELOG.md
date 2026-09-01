@@ -22,7 +22,8 @@
   "emissions to air"). Such a method used to report 82% coverage and score
   every activity at zero; it now reports those factors unmapped, and the log
   says which two vocabularies never met and that a `[[compartment-mappings]]`
-  table bridges them.
+  table bridges them. Reported by @mklarmann (#346), whose independent
+  Brightway comparison showed the engine was right and the report was not.
 - A database whose inventory comes from a database it depends on is now
   characterized with the same factors as that database itself. The cascade
   that ties a method's factors to a database's flows was built over the root
