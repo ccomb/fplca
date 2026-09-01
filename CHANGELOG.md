@@ -30,8 +30,6 @@
   next to a score are still computed region-blind, so they no longer add up to
   a regionalized total. Both were already the case for a database carrying its
   own regional factors.
-
-### Changed
 - What identifies a dataset read from a SimaPro CSV or a Brightway Excel
   workbook is now what the file publishes, not what the engine calls things.
   Two problems came from the old rule. The unit was part of a flow identifier,
