@@ -223,7 +223,6 @@ scoreCross rootLink depName depRole depRefAmount = do
                     res <- computeInventoryMatrixWithDepsCached defaultUnitConfig depLookup rootDB "root" rootSolver pid
                     let reported =
                             toExchangeWithUnit
-                                defaultUnitConfig
                                 rootDB
                                 (buildCrossDBLinkMap rootDB pid)
                                 (wasteEx False rootLink 3.0)

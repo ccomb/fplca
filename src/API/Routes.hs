@@ -1422,10 +1422,8 @@ postAuth loginReq = do
 
 getActivityInfo :: Text -> Text -> AppM ActivityInfo
 getActivityInfo dbName processId = do
-    dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
-    unitCfg <- liftIO $ getMergedUnitConfig dbManager
-    result <- either throwServiceError pure (Service.getActivityInfo unitCfg db processId)
+    result <- either throwServiceError pure (Service.getActivityInfo db processId)
     case fromJSON result of
         Success activityInfo -> return activityInfo
         Error err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack err}

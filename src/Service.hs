@@ -41,7 +41,7 @@ import SharedSolver (SharedSolver, getFactorization, solveWithSharedSolver)
 import qualified SharedSolver
 import Tree (childTarget)
 import Types
-import UnitConversion (UnitConfig, convertUnit, unitsCompatible)
+import UnitConversion (UnitConfig, convertUnit)
 
 {- | Fields shared by every activity-oriented endpoint (search, supply chain,
 consumers). Split out from the endpoint-specific filters so each filter
@@ -202,10 +202,10 @@ validateProcessIdInMatrixIndex db processId =
                         <> ". This activity may exist in the database but is not indexed for inventory calculations."
 
 -- | Rich activity info (returns same format as API)
-getActivityInfo :: UnitConfig -> Database -> Text -> Either ServiceError Value
-getActivityInfo unitCfg db queryText = do
+getActivityInfo :: Database -> Text -> Either ServiceError Value
+getActivityInfo db queryText = do
     (processId, activity) <- resolveActivityAndProcessId db queryText
-    let activityForAPI = convertActivityForAPI unitCfg db processId activity
+    let activityForAPI = convertActivityForAPI db processId activity
         metadata = calculateActivityMetadata db activity
         stats = calculateActivityStats activity
         -- Use ProcessId (which encodes both activityUUID and productUUID) for links
@@ -1031,8 +1031,8 @@ calculateActivityStats activity =
 {- | Convert Activity to ActivityForAPI with unit names
 Note: This function requires the ProcessId to get the activity UUID
 -}
-convertActivityForAPI :: UnitConfig -> Database -> ProcessId -> Activity -> ActivityForAPI
-convertActivityForAPI unitCfg db processId activity =
+convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
+convertActivityForAPI db processId activity =
     let allProducts = case processIdToRef db processId of
             Just ref -> getAllProductsForActivity db (activityGroupKey (prActivity ref) activity)
             Nothing -> []
@@ -1051,7 +1051,7 @@ convertActivityForAPI unitCfg db processId activity =
             , pfaProductAmount = if T.null refProdName then Nothing else Just refProdAmount
             , pfaProductUnit = if T.null refProdName then Nothing else Just refProdUnit
             , pfaAllProducts = allProducts
-            , pfaExchanges = map (toExchangeWithUnit unitCfg db linkMap) (exchanges activity)
+            , pfaExchanges = map (toExchangeWithUnit db linkMap) (exchanges activity)
             , pfaNativeType = activityNativeType activity
             }
 
@@ -1119,12 +1119,11 @@ activity UUID, because a link it cannot route is a treatment this database does
 not hold and reporting a row for it would hide that.
 -}
 resolveTarget ::
-    UnitConfig ->
     Database ->
     M.Map UUID CrossDBLink ->
     Exchange ->
     Maybe TargetRef
-resolveTarget cfg db links = \case
+resolveTarget db links = \case
     ex@TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
         | lid /= UUID.nil -> resolveByLinkedProducer db ex
@@ -1187,17 +1186,16 @@ buildCrossDBLinkMap db pid = case prActivity <$> processIdToRef db pid of
     Nothing -> M.empty
 
 toExchangeWithUnit ::
-    UnitConfig ->
     Database ->
     M.Map UUID CrossDBLink ->
     Exchange ->
     ExchangeWithUnit
-toExchangeWithUnit cfg db links exchange =
+toExchangeWithUnit db links exchange =
     -- Surface the raw UUID when the flow does not resolve — a clear failure
     -- the consumer can debug, not a silent "unknown".
     let unresolvedName = "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
         (flowName, compartment) = fromMaybe (unresolvedName, Nothing) (resolveFlow db exchange)
-        target = resolveTarget cfg db links exchange
+        target = resolveTarget db links exchange
      in ExchangeWithUnit
             { ewuExchange = exchange
             , ewuUnitName = getUnitNameForExchange (dbUnits db) exchange

@@ -48,7 +48,6 @@ import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import Types (Database)
 import qualified Types
-import UnitConversion (defaultUnitConfig)
 
 -- | Default output format for different command types
 defaultFormat :: Command -> OutputFormat
@@ -229,7 +228,7 @@ executeDbCommand fmt _globalOpts database = \case
 -- | Execute activity info command
 executeActivityCommand :: OutputFormat -> Database -> T.Text -> IO ()
 executeActivityCommand fmt database uuid =
-    case Service.getActivityInfo defaultUnitConfig database uuid of
+    case Service.getActivityInfo database uuid of
         Left err -> reportServiceError err
         Right result -> outputResult fmt result
 

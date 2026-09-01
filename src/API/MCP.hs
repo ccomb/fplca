@@ -59,7 +59,6 @@ import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
 import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, processIdToText, qualifyRef, unresolvedCount)
-import UnitConversion (defaultUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- JSON-RPC 2.0 types
@@ -793,7 +792,7 @@ callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetActivity rid args (db, _) = runTool rid $ do
     pid <- except (requireText "process_id" args)
     _ <- except validatedExchangeType
-    val <- liftShow (Service.getActivityInfo defaultUnitConfig db pid)
+    val <- liftShow (Service.getActivityInfo db pid)
     pure $ case fromJSON val of
         -- 'val' was built from an 'ActivityInfo' upstream, so a decode
         -- failure is genuinely defensive — pass it through unchanged,

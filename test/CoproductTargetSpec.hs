@@ -93,7 +93,7 @@ spec = do
 targetPidOfInput :: Database -> Maybe Text
 targetPidOfInput db = do
     (pid, act) <- consumerRow db
-    case [ewu | ewu <- pfaExchanges (Service.convertActivityForAPI defaultUnitConfig db pid act), exchangeIsInput (ewuExchange ewu)] of
+    case [ewu | ewu <- pfaExchanges (Service.convertActivityForAPI db pid act), exchangeIsInput (ewuExchange ewu)] of
         [ewu] -> ewuTargetProcessId ewu
         _ -> Nothing
 
@@ -110,7 +110,7 @@ wasteLineOf :: Database -> (Maybe Text, Maybe WasteRole)
 wasteLineOf db = case consumerRow db of
     Nothing -> (Just "no consumer row", Nothing)
     Just (pid, act) ->
-        case [ewu | ewu <- pfaExchanges (Service.convertActivityForAPI defaultUnitConfig db pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
+        case [ewu | ewu <- pfaExchanges (Service.convertActivityForAPI db pid act), WasteExchange{waIsInput = False} <- [ewuExchange ewu]] of
             [ewu] -> (ewuTargetProcessId ewu, ewuWasteRole ewu)
             _ -> (Just "no waste output", Nothing)
 
