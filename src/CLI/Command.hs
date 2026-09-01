@@ -743,7 +743,8 @@ executeFlowMappingCommand fmt database manager opts = do
                     reportError $ "Method not found: " ++ T.unpack (mappingMethodId opts)
                     exitFailure
                 (method : _) -> do
-                    mappings <- mapMethodToFlows database method
+                    cmap <- DM.getMergedCompartmentMap manager
+                    mappings <- mapMethodToFlows cmap database method
                     let stats = computeMappingStats mappings
                         totalMatched = msTotal stats - msUnmatched stats
                         coverage =
