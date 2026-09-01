@@ -3,9 +3,10 @@
 ## [Unreleased]
 
 ### Added
-- Loading an EcoSpold 1 database now reports, as a warning, each input whose
-  dataset number and declared location name two different datasets of the
-  same product. The number is what the file links and it still wins, as it
+- Reading an EcoSpold 1 database from its files now reports, as a warning,
+  each input whose dataset number and declared location name two different
+  datasets of the same product. A database served from its cache is not
+  re-read, so the report appears once, when the cache is built. The number is what the file links and it still wins, as it
   did before; the report names the location declared, the location the number
   resolved to and the number itself, so the contradiction is visible without
   an external diff. BAFU 2026 v1 has eleven, most of them power plants whose

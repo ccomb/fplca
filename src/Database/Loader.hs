@@ -524,7 +524,10 @@ buildSupplierIndexByNameWithLocation activities techFlowDb =
         ]
 
 {- | Fix EcoSpold1 activity links by resolving supplier references.
-Matches input exchanges to suppliers by (flowName, location).
+An input's dataset number names its supplier first, checked against the
+product name; (flowName, location) is the fallback when the number resolves
+to nothing, and the name alone when it covers a single dataset. A number that
+contradicts the declared location is reported, not overruled.
 Unlinked exchanges stay unlinked so that cross-DB linking can resolve them.
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 -}
@@ -582,7 +585,7 @@ reportLocationOverrides overrides = do
     shown = take 20 (sort overrides)
 
 {- | Bundle of lookup tables threaded through EcoSpold1 activity-link resolution.
-Previously these six fields were passed as positional parameters through
+Previously these fields were passed as positional parameters through
 'fixAllActivities' -> 'fixActivityExchanges' -> 'fixExchangeLink', each call
 re-forwarding the same values. The record collapses the cascade to a single
 argument and makes the dependencies explicit.

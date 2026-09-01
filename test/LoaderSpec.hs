@@ -552,7 +552,7 @@ spec = do
             fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
             wheatLink fixed `shouldBe` [actUUID1]
 
-        -- BAFU 2026 v1 has nine power plants whose gas input carries the number of
+        -- BAFU 2026 v1 has power plants whose gas input carries the number of
         -- their own country's gas supply and the label RER (volca#347). The number
         -- is what the file links, and the official results follow it.
         let gasBG = ((actUUID1, flowUUID1), minimalActivity "gas supply" "BG" [refExchange flowUUID1])
