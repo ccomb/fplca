@@ -210,54 +210,26 @@ COPY --from=haskell-builder /build/output/volca /usr/local/bin/volca
 
 WORKDIR /app
 
-# Bundle reference data at /data/ BEFORE declaring it a volume so the files
-# become the volume's default content for fresh named volumes (Docker
-# auto-populates empty named volumes with whatever the image holds at the
-# volume path). Standalone `docker run volca` reads these directly; bind
-# mounts hide them and the caller is expected to provide their own data.
-# The default config below names each of these files, so a bind mount that
-# lacks one logs a load failure at startup; the server keeps running.
-#
-# Config paths like `path = "data/flows.csv"` resolve to /data/flows.csv via
-# Config.redirectIntoDataDir (strip leading `data/`, prepend VOLCA_DATA_DIR).
+# /data/ is the engine's writing root (uploads, editable copies, journals)
+# and the home of the shipped method below. The reference tables themselves
+# are built into the binary, so a bind mount over /data/ hides nothing the
+# engine needs. The copy happens BEFORE the volume declaration so a fresh
+# named volume starts with the method (Docker populates an empty named
+# volume with whatever the image holds at the volume path). A configuration
+# that names a `data/...` file of its own still resolves it here, through
+# VOLCA_DATA_DIR (Config.redirectIntoDataDir).
 COPY data/ /data/
 
 ENV VOLCA_DATA_DIR=/data
 VOLUME /data
 
 RUN cat > /app/volca.toml <<'EOF'
-# Top-level keys must stay above the first [section] header: below one they
-# parse as members of that section, which startup reports by name.
-geographies = "data/geographies.csv"
-chem-synonyms = "data/chem_synonyms.csv"
-
+# The reference tables (flow synonyms, compartment mapping, units, energy
+# densities) and the geographies are built into the engine and active; a
+# configuration names one only to replace it with a file or to switch it off.
 [server]
 port = 8080
 host = "0.0.0.0"
-
-[[flow-synonyms]]
-name = "Default flow synonyms"
-path = "data/flows.csv"
-active = true
-
-[[compartment-mappings]]
-name = "Default compartment mapping"
-path = "data/compartments.csv"
-active = true
-
-[[units]]
-name = "Default units"
-path = "data/units.csv"
-active = true
-
-# Activates the density bridge, so characterization factors counted per MJ
-# or per m3 can meet flows measured by mass or volume. Without it the match
-# is cross-dimensional and the energy and water categories silently report
-# zero contributions.
-[[energy-densities]]
-name = "Default energy densities"
-path = "data/energy_density.csv"
-active = true
 
 # Method paths are user content that VOLCA_DATA_DIR does not rewrite, so the
 # shipped method needs the absolute path; a relative one would resolve under
