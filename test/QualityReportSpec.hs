@@ -85,14 +85,17 @@ obsolete :: Activity -> Activity
 obsolete act = act{activityClassification = M.insert "Category" "Others\\Obsolete" (activityClassification act)}
 
 mkActivity :: Text -> [Exchange] -> Activity
-mkActivity name exs =
+mkActivity name = mkActivityAt name "FR"
+
+mkActivityAt :: Text -> Text -> [Exchange] -> Activity
+mkActivityAt name location exs =
     Activity
         { activityName = name
         , activityDescription = ["A described activity"]
         , activityDocumentation = []
         , activitySynonyms = M.empty
         , activityClassification = M.singleton "ISIC" "1071"
-        , activityLocation = "FR"
+        , activityLocation = location
         , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
         , exchanges = exs
@@ -128,10 +131,6 @@ input fid amount = techExchange fid amount Input
 -- | A treatment activity is defined by the waste it consumes, not by an output.
 referenceInput :: UUID -> Exchange
 referenceInput fid = techExchange fid 1.0 ReferenceInput
-
--- | An input that names its supplier, the way EcoSpold 2 writes one.
-linkedInput :: UUID -> UUID -> Exchange
-linkedInput supplier fid = (input fid 1.0){techActivityLinkId = supplier}
 
 -- | The same technosphere line with pedigree scores attached.
 pedigreed :: Exchange -> Exchange
@@ -344,13 +343,12 @@ spec = do
                     dbOf
                         [ ((actA, prodA), mkActivity "pork, meat whitout bone" [reference breadFlow])
                         , ((actB, prodB), mkActivity "pork, meat without bone" [reference breadFlow])
-                        , ((actC, prodC), mkActivity "sausage" [reference flourFlow, input breadFlow 1.0])
                         ]
                 check = qrDuplicateProducts (qualityReport "testdb" db)
             severities check `shouldBe` [WarningSev, WarningSev]
             details check
-                `shouldBe` [ "this product is also the reference product of \"pork, meat without bone\"; an input naming it is answered by one of them"
-                           , "this product is also the reference product of \"pork, meat whitout bone\"; an input naming it is answered by one of them"
+                `shouldBe` [ "this product is also the reference product of \"pork, meat without bone\" at the same location; an input naming it is answered by one of them"
+                           , "this product is also the reference product of \"pork, meat whitout bone\" at the same location; an input naming it is answered by one of them"
                            ]
             processIds check `shouldBe` [pidOf actA prodA, pidOf actB prodB]
             map qoProductName (qcOffenders check) `shouldBe` [Just "bread", Just "bread"]
@@ -367,15 +365,15 @@ spec = do
             let db = dbOf [((actA, prodA), mkActivity "bread" []), ((actB, prodB), mkActivity "bread" [])]
             qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
 
-        it "passes a duplicated product every input names its supplier for" $ do
-            -- EcoSpold 2 shape: one product, many producers, and each input
-            -- says which one it means. Nothing has to be guessed, so nothing
-            -- is wrong.
+        it "passes one product made in two places" $ do
+            -- How a database is meant to be written: ecoinvent produces one
+            -- product in hundreds of geographies, and an input names the one
+            -- it means. Only two at one location have nothing to tell them
+            -- apart.
             let db =
                     dbOf
-                        [ ((actA, prodA), mkActivity "bakery FR" [reference breadFlow])
-                        , ((actB, prodB), mkActivity "bakery DE" [reference breadFlow])
-                        , ((actC, prodC), mkActivity "sausage" [reference flourFlow, linkedInput actA breadFlow])
+                        [ ((actA, prodA), mkActivityAt "bakery" "FR" [reference breadFlow])
+                        , ((actB, prodB), mkActivityAt "bakery" "DE" [reference breadFlow])
                         ]
             qcOffenders (qrDuplicateProducts (qualityReport "testdb" db)) `shouldBe` []
 

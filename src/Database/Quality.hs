@@ -60,12 +60,10 @@ import Types (
     WasteFlow (..),
     activityGroupKey,
     activityIsObsolete,
-    exchangeActivityLinkId,
     exchangeAmount,
     exchangeFlowId,
     exchangeIsReference,
     exchangePedigree,
-    exchangeProcessLinkId,
     exchangeUnitId,
     processRefText,
  )
@@ -368,33 +366,32 @@ qualityReport dbName db =
         , n > 1
         ]
 
-    {- An input the file leaves the loader to place: it names a product and no
-    supplier. EcoSpold 2 names the supplying activity on the exchange itself,
-    so a product several activities declare is answered without any rule of
-    ours; SimaPro, Brightway and EcoSpold 1 let the product name speak alone,
-    and that is when a second declarer can take the answer.
-    -}
-    contestedProductIds =
-        S.fromList
-            [ exchangeFlowId ex
-            | (_, act) <- entries
-            , ex <- exchanges act
-            , needsSupplier ex
-            , isNothing (exchangeActivityLinkId ex)
-            , isNothing (exchangeProcessLinkId ex)
-            ]
-
-    {- Two activities declaring one product an input has to choose between. The
-    supplier index is keyed by the product, so an input naming it is answered
-    by one of them and the others supply nothing. Which one answers is settled by a rule of ours, on a
-    question only the file can answer, and a stale twin left in an export wins
-    as easily as the current entry. Reported per activity, each naming the
-    others, so the maker can see both ends of the collision.
-    -}
     productProducers =
         M.fromListWith
             (<>)
             [ (exchangeFlowId refEx, [(key, act)])
+            | (key, act) <- entries
+            , [refEx] <- [filter exchangeIsReference (exchanges act)]
+            ]
+
+    {- Two activities declaring one product at one location, which an input
+    naming that product has to choose between. The supplier index is keyed by
+    the product, so one of them answers and the others supply nothing. Which
+    one is settled by a rule of ours, on a question only the file can answer,
+    and a stale twin left in an export wins as easily as the current entry.
+    Reported per activity, each naming the others, so the maker can see both
+    ends of the collision.
+
+    The location belongs in the key because making one product in several
+    places is how a database is meant to be written: ecoinvent carries hundreds
+    of activities producing "electricity, high voltage", one per geography, and
+    an input names the one it means. Two of them at one location is what no
+    file states a difference between.
+    -}
+    coLocatedProducers =
+        M.fromListWith
+            (<>)
+            [ ((exchangeFlowId refEx, activityLocation act), [(key, act)])
             | (key, act) <- entries
             , [refEx] <- [filter exchangeIsReference (exchanges act)]
             ]
@@ -406,9 +403,8 @@ qualityReport dbName db =
                     else ""
     duplicateProductOffenders =
         [ offender WarningSev key act (Just (anyFlowName fid)) $
-            "this product is also the reference product of " <> otherProducerNames others <> "; an input naming it is answered by one of them"
-        | (fid, group) <- M.toList productProducers
-        , fid `S.member` contestedProductIds
+            "this product is also the reference product of " <> otherProducerNames others <> " at the same location; an input naming it is answered by one of them"
+        | ((fid, _), group) <- M.toList coLocatedProducers
         , (key, act) <- group
         , let others = [a | (k, a) <- group, k /= key]
         , not (null others)
