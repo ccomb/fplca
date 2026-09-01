@@ -12,8 +12,17 @@
   an external diff. BAFU 2026 v1 has eleven, most of them power plants whose
   gas input carries the number of their own country's supply under an `RER`
   label, and the published BAFU results follow the number.
+- Each unmapped factor of the method mapping report now carries the
+  compartment the method states (`compartment`), so a consumer can see a
+  vocabulary gap without reading the log. Wire revision 13.
 
 ### Fixed
+- The method mapping report no longer counts as matched a factor whose only
+  name hit is filed under another compartment vocabulary ("air" against
+  "emissions to air"). Such a method used to report 82% coverage and score
+  every activity at zero; it now reports those factors unmapped, and the log
+  says which two vocabularies never met and that a `[[compartment-mappings]]`
+  table bridges them.
 - A database whose inventory comes from a database it depends on is now
   characterized with the same factors as that database itself. The cascade
   that ties a method's factors to a database's flows was built over the root

@@ -1880,6 +1880,9 @@ class UnmappedFlow(FromJson):
     flow_ref: str
     flow_name: str
     direction: str
+    #: The compartment the method states, as written ("air", "air/low. pop.");
+    #: None when the row states none, or when the engine predates wire revision 13.
+    compartment: str | None = None
 
 
 @dataclass
