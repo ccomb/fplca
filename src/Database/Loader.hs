@@ -79,6 +79,7 @@ module Database.Loader (
     generateActivityUUIDFromActivity,
     datasetUUIDFromPath,
     getReferenceProductUUID,
+    indexActivities,
     UnlinkedSummary (..),
     buildSupplierIndex,
     buildSupplierIndexByName,
@@ -105,7 +106,7 @@ import qualified Data.Map as M
 -- per dataset) is real, and the lazy API would stack one unforced merge per
 -- occurrence, holding every superseded record until something forced the chain.
 import qualified Data.Map.Strict as MS
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Proxy (Proxy (..))
 import qualified Data.Set as S
@@ -321,6 +322,38 @@ getReferenceProductUUID act =
     case filter exchangeIsReference (exchanges act) of
         (ref : _) -> exchangeFlowId ref
         [] -> UUID.nil -- No reference product found
+
+{- | Key the activities of a name-linked file by @(activityUUID, productUUID)@,
+naming every key two blocks claimed.
+
+A block with no published identifier is named by its name folded in case and
+its location, so two blocks whose names differ only in case claim one key, and
+a map keeps one activity: the last read, as 'M.fromList' always did. Keeping it
+in silence is what is not acceptable, since the other block's inventory goes
+with it, so each contested key is described for the caller to report.
+-}
+indexActivities :: [Activity] -> (ActivityMap, [T.Text])
+indexActivities activities =
+    (M.map NE.head grouped, mapMaybe contested (M.elems grouped))
+  where
+    grouped :: M.Map (UUID.UUID, UUID.UUID) (NE.NonEmpty Activity)
+    grouped =
+        M.fromListWith
+            (<>)
+            [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), pure act)
+            | act <- activities
+            ]
+    contested :: NE.NonEmpty Activity -> Maybe T.Text
+    contested group = describe (NE.head group) . NE.toList <$> snd (NE.uncons group)
+    describe :: Activity -> [Activity] -> T.Text
+    describe kept dropped =
+        "'"
+            <> activityName kept
+            <> "' and "
+            <> T.intercalate ", " ["'" <> activityName act <> "'" | act <- dropped]
+            <> " are one activity at '"
+            <> activityLocation kept
+            <> "': they differ only in case, no process identifier tells them apart, and only the last read keeps its inventory"
 
 -- | Type alias for supplier lookup index (with location)
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
@@ -652,11 +685,8 @@ loadSimaProCSV unitConfig csvPath = do
                 else do
                     -- Build ActivityMap with generated ProcessIds
                     -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-                    let procMap =
-                            M.fromList
-                                [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
-                                | act <- activities
-                                ]
+                    let (procMap, collisions) = indexActivities activities
+                    forM_ collisions $ reportProgress Warning . T.unpack
 
                     -- Build initial database
                     let simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
@@ -680,12 +710,9 @@ loadBrightwayExcel unitConfig xlsxPath = do
         Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
             | null activities -> return $ Left "No activities found in Brightway Excel file."
             | otherwise -> do
-                let procMap =
-                        M.fromList
-                            [ ((SimaPro.generateActivityUUID act, getReferenceProductUUID act), act)
-                            | act <- activities
-                            ]
+                let (procMap, collisions) = indexActivities activities
                     simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
+                forM_ collisions $ reportProgress Warning . T.unpack
                 Right <$> fixSimaProActivityLinks unitConfig simpleDb
 
 {- | Fix SimaPro activity links by resolving supplier references

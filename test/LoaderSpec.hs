@@ -5,6 +5,7 @@ module LoaderSpec (spec) where
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import System.Directory (createDirectoryIfMissing)
@@ -13,7 +14,6 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Database.Loader
-import SimaPro.Parser (foldedNameCollisions)
 import TestHelpers (loadSampleDatabase)
 import Types
 import UnitConversion (defaultUnitConfig)
@@ -187,25 +187,44 @@ spec = do
             tfName (mergeTechFlows a b) `shouldBe` "flow-a"
 
     -- -----------------------------------------------------------------------
-    describe "foldedNameCollisions" $ do
-        it "names two spellings a case fold brings together" $ do
+    describe "indexActivities" $ do
+        it "names the two spellings a case fold brings together, and keeps the last read" $ do
             let acts =
                     [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
                     , minimalActivity "steel, low-alloyed" "GLO" [refExchange flowUUID1]
                     ]
-            foldedNameCollisions acts `shouldBe` [["Steel, low-alloyed", "steel, low-alloyed"]]
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 1
+            map activityName (M.elems procMap) `shouldBe` ["steel, low-alloyed"]
+            length collisions `shouldBe` 1
+            head collisions `shouldSatisfy` \msg ->
+                all (`T.isInfixOf` msg) ["'Steel, low-alloyed'", "'steel, low-alloyed'", "GLO"]
 
         it "says nothing about one spelling written twice at two locations" $ do
             let acts =
                     [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
                     , minimalActivity "Steel, low-alloyed" "FR" [refExchange flowUUID1]
                     ]
-            foldedNameCollisions acts `shouldBe` []
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
+
+        it "says nothing when the two blocks state two products" $ do
+            let acts =
+                    [ minimalActivity "Steel, low-alloyed" "GLO" [refExchange flowUUID1]
+                    , minimalActivity "steel, low-alloyed" "GLO" [refExchange flowUUID2]
+                    ]
+                (procMap, collisions) = indexActivities acts
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
 
         it "leaves blocks their file identifies alone" $ do
             let published name = (minimalActivity name "GLO" [refExchange flowUUID1]){activityNativeId = Just (NativeProcessId name)}
-            foldedNameCollisions [published "Steel, low-alloyed", published "steel, low-alloyed"] `shouldBe` []
+                (procMap, collisions) = indexActivities [published "Steel, low-alloyed", published "steel, low-alloyed"]
+            M.size procMap `shouldBe` 2
+            collisions `shouldBe` []
 
+    -- -----------------------------------------------------------------------
     -- generateActivityUUIDFromActivity
     -- -----------------------------------------------------------------------
     describe "generateActivityUUIDFromActivity" $ do

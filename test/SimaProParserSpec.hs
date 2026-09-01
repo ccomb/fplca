@@ -1714,7 +1714,7 @@ follow it.
 volumeUnitConfig :: Text -> UnitConfig
 volumeUnitConfig reference =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         ( M.fromList
             [ (reference, UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 1.0)
             , ("l", UnitDef [0, 0, 0, 0, 0, 1, 0, 0] 0.001)
@@ -1728,7 +1728,7 @@ and kWh (energy), so a row written in either has somewhere to be converted to.
 mixedUnitConfig :: UnitConfig
 mixedUnitConfig =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         ( M.fromList
             [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
             , ("g", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001)
@@ -1742,7 +1742,7 @@ mixedUnitConfig =
 tonUnitConfig :: UnitConfig
 tonUnitConfig =
     mkUnitConfig
-        (["mass", "length", "time", "energy", "area", "volume", "count", "currency"])
+        ["mass", "length", "time", "energy", "area", "volume", "count", "currency"]
         ( M.fromList
             [ ("kg", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1.0)
             , ("ton", UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 1000.0)

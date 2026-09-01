@@ -55,7 +55,7 @@ than an unknown unit.
 massEnergyConfig :: UnitConfig
 massEnergyConfig =
     mkUnitConfig
-        (["mass", "energy"])
+        ["mass", "energy"]
         ( M.fromList
             [ ("kg", UnitDef [1, 0] 1.0)
             , ("mj", UnitDef [0, 1] 1.0)
@@ -401,6 +401,6 @@ spec = do
     -- kg and m3 known but dimensionally apart, so the pair is a mismatch.
     volumeMassConfig =
         mkUnitConfig
-            (["mass", "volume"])
+            ["mass", "volume"]
             (M.fromList [("kg", UnitDef [1, 0] 1.0), ("m3", UnitDef [0, 1] 1.0)])
             (M.fromList [("kg", "kg"), ("m3", "m3")])
