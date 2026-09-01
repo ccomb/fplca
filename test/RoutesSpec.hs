@@ -20,6 +20,8 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isSpace)
 import Data.List (dropWhileEnd)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Network.HTTP.Client (
     Manager,
     Response,
@@ -248,14 +250,15 @@ routeSpecs = do
                     _ -> False
                 _ -> False
 
-        it "GET /api/v1/version says which data bundle it reads, null when it reads none" $ \b -> do
-            -- The test config names no flow registry, so there is no bundle to
-            -- report: the key must still be there, carrying null, so a client
-            -- that read wire 11 can tell "no bundle" from "an engine too old
-            -- to say".
+        it "GET /api/v1/version says which data bundle it reads: the built-in one when none is named" $ \b -> do
+            -- The test config names no flow registry, so the engine reads the
+            -- one it carries and says its number. The key is always there: a
+            -- client that read wire 11 tells "no bundle" (null, a registry
+            -- with no VERSION beside it) from "an engine too old to say".
+            expected <- T.strip <$> TIO.readFile "data/VERSION"
             resp <- doGet b "/api/v1/version"
             decode (responseBody resp) `shouldSatisfy` \case
-                Just (Object km) -> KM.lookup "dataVersion" km == Just Null
+                Just (Object km) -> KM.lookup "dataVersion" km == Just (String expected)
                 _ -> False
 
         it "GET /api/v1/openapi.json returns an OpenAPI 3 document with 'paths'" $ \b -> do

@@ -45,7 +45,6 @@ import API.Types (
     TechInputAPI (..),
  )
 import App.Env (AppEnv (..), runApp)
-import qualified Builtin
 import Config (DatabaseConfig (..), defaultConfig)
 import Control.Exception (bracket_)
 import Database (buildDatabaseWithMatrices)
@@ -379,7 +378,7 @@ withDb mkConfig act =
                     , aePassword = Nothing
                     , aeHostingConfig = Nothing
                     , aeClassificationPresets = []
-                    , aeDataVersion = Builtin.builtinDataVersion
+                    , aeDataVersion = Nothing
                     }
   where
     triplesOf db = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples db)]

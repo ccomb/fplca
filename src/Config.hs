@@ -48,12 +48,15 @@ module Config (
     redirectIntoDataDir,
     applyDataDir,
 
-    -- * The tables the engine carries
+    -- * The tables the engine carries, and the data it reads
     RefDataSource (..),
     refDataDecoder,
     withBuiltins,
     builtinEntry,
     describeSource,
+    DataVersion (..),
+    dataBundleDir,
+    readDataVersion,
 
     -- * Config-relative path resolution
     resolveConfigPaths,
@@ -65,9 +68,9 @@ module Config (
     resolveLoadOrder,
 ) where
 
-import Builtin (BuiltinTable (..), builtinName)
+import Builtin (BuiltinTable (..), DataVersion (..), builtinDataVersion, builtinName)
 import Control.Monad (forM_, unless, when)
-import Data.List (isPrefixOf)
+import Data.List (find, isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
@@ -415,10 +418,12 @@ defaultConfig =
             , cfgClassificationPresets = []
             }
 
-{- | Every built-in table a configuration does not name itself. Naming one is
-how a file replaces it (same name, a path) or switches it off (same name, no
-path, @active = false@); a table the file never mentions is on. Explicit
-beats implicit.
+{- | The built-in table of every kind a configuration says nothing about. A
+kind it lists is exactly what it lists: its own files, the built-in named to
+keep it beside them or, named with @active = false@, to switch it off. The
+tables of one kind are merged in name order, so adding the built-in to a
+list the operator wrote would let it win over their file on every key they
+share, silently; a kind they mention is theirs alone.
 -}
 withBuiltins :: Config -> Config
 withBuiltins cfg =
@@ -430,9 +435,8 @@ withBuiltins cfg =
         }
   where
     withTable :: BuiltinTable -> [RefDataConfig] -> [RefDataConfig]
-    withTable t entries
-        | any ((== builtinName t) . rdName) entries = entries
-        | otherwise = builtinEntry t : entries
+    withTable t [] = [builtinEntry t]
+    withTable _ entries = entries
 
 -- | A built-in table as the registry lists it: on, and not the operator's to delete.
 builtinEntry :: BuiltinTable -> RefDataConfig
@@ -450,6 +454,35 @@ builtinEntry t =
 describeSource :: RefDataSource -> String
 describeSource (FromFile path) = path
 describeSource (BuiltIn _) = "built-in"
+
+{- | Where the data bundle the engine reads sits: the directory of the flow
+registry, the first @flow-synonyms@ entry that is not an upload, when that
+registry is a file. The installers key a bundle on @data/<version>/flows.csv@,
+and this is the same file seen from the engine. Nothing when the registry is
+the built-in one, which is no bundle on disk.
+-}
+dataBundleDir :: Config -> Maybe FilePath
+dataBundleDir cfg = case rdSource <$> find (not . rdIsUploaded) (cfgFlowSynonyms cfg) of
+    Just (FromFile path) -> Just (takeDirectory path)
+    Just (BuiltIn _) -> Nothing
+    Nothing -> Nothing
+
+{- | The version of the reference data the engine reads: the built-in one when
+the flow registry is built in, else the @VERSION@ file beside the registry's
+file. Nothing when that file is missing: an engine reading a registry of its
+operator's own has no bundle version to report, and saying so is the honest
+answer. Two engines answering different numbers under one name is what this
+is for, so it follows what is read, not what was compiled.
+-}
+readDataVersion :: Config -> IO (Maybe DataVersion)
+readDataVersion cfg = case dataBundleDir cfg of
+    Nothing -> pure (Just builtinDataVersion)
+    Just dir -> do
+        let file = dir </> "VERSION"
+        present <- doesFileExist file
+        if present
+            then Just . DataVersion . T.strip <$> TIO.readFile file
+            else pure Nothing
 
 -- TOML Decoders
 
@@ -559,8 +592,9 @@ instance DecodeTOML ScoringSetConfig where
 
 {- | One array of tables, knowing which built-in it may name: an entry with a
 path is a file, named after it unless told otherwise; an entry with no path
-names the built-in of this very array, which is how a file switches it off
-(@active = false@) without pointing at anything.
+names the built-in of this very array, which is how a file keeps it beside
+its own tables, or switches it off with @active = false@, without pointing
+at anything.
 -}
 refDataDecoder :: BuiltinTable -> Decoder RefDataConfig
 refDataDecoder builtin = do
@@ -579,7 +613,7 @@ refDataDecoder builtin = do
                         <> "\"; got \""
                         <> T.unpack name
                         <> "\""
-        (Nothing, Nothing) -> fail "an entry needs a path, or the name of the built-in table to switch it off"
+        (Nothing, Nothing) -> fail "an entry needs a path, or the name of the built-in table (to keep it, or to switch it off with active = false)"
     let rdIsUploaded = False -- TOML entries are not uploaded
         rdIsAuto = False
     pure RefDataConfig{..}

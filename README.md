@@ -174,10 +174,12 @@ path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 #   scale = 0.6
 
 # Reference data: the flow synonyms, compartment mapping, units and energy
-# densities (and the geographies) are built into the engine and active. Name
-# a table with a path to replace it with your own file, or with no path to
-# switch it off. Its name is the built-in's: "Default flow synonyms",
-# "Default compartment mapping", "Default units", "Default energy densities".
+# densities (and the geographies) are built into the engine. A kind this file
+# says nothing about runs on the built-in table; a kind it lists is exactly
+# what it lists. Name the built-in ("Default flow synonyms", "Default
+# compartment mapping", "Default units", "Default energy densities") with a
+# path to replace it with your own file, with no path to keep it beside your
+# own, or with no path and `active = false` to switch it off.
 [[flow-synonyms]]
 name = "Default flow synonyms"
 path = "my-flows.csv"          # CSV: name1,name2[,direction[,cas[,note]]]

@@ -2,7 +2,7 @@
 
 module ConfigSpec (spec) where
 
-import Builtin (BuiltinTable (..), builtinName, builtinTables)
+import Builtin (BuiltinTable (..), DataVersion (..), builtinDataVersion, builtinName, builtinTables)
 import Config (
     CFPatchOp (..),
     ClassificationEntry (..),
@@ -22,12 +22,14 @@ import Config (
     builtinEntry,
     clientHost,
     configKeys,
+    dataBundleDir,
     defaultConfig,
     documentKeyPaths,
     expandClassificationPreset,
     keyPaths,
     listenOn,
     loadConfigOrDefault,
+    readDataVersion,
     redirectIntoDataDir,
     refDataDecoder,
     resolveConfigPaths,
@@ -351,6 +353,32 @@ spec = do
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected a decode error for an empty selector"
 
+    let registry path uploaded = RefDataConfig{rdName = "flows", rdSource = FromFile path, rdActive = True, rdIsUploaded = uploaded, rdIsAuto = False, rdDescription = Nothing}
+        reading path = defaultConfig{cfgFlowSynonyms = [registry path False]}
+
+    describe "dataBundleDir" $ do
+        it "is the directory of the flow registry the engine reads" $
+            dataBundleDir (reading "/opt/volca-data/3/flows.csv") `shouldBe` Just "/opt/volca-data/3"
+
+        it "skips an uploaded registry, which lives with the uploads, not the bundle" $
+            dataBundleDir defaultConfig{cfgFlowSynonyms = [registry "uploads/mine.csv" True, registry "data/flows.csv" False]}
+                `shouldBe` Just "data"
+
+        it "is Nothing when the registry is the built-in one: no bundle on disk" $
+            dataBundleDir defaultConfig `shouldBe` Nothing
+
+    describe "readDataVersion" $ do
+        it "reads the VERSION file beside the registry the engine reads" $ do
+            expected <- T.strip <$> TIO.readFile "data/VERSION"
+            v <- readDataVersion (reading "data/flows.csv")
+            v `shouldBe` Just (DataVersion expected)
+
+        it "is the built-in version when the registry is built in" $
+            readDataVersion defaultConfig `shouldReturn` Just builtinDataVersion
+
+        it "is Nothing when the registry's directory carries no VERSION" $
+            readDataVersion (reading "test/flows.csv") `shouldReturn` Nothing
+
     describe "refDataDecoder" $ do
         let decodeUnits = TOML.decodeWith (getFieldWith (getArrayOf (refDataDecoder BuiltinUnits)) "units")
 
@@ -368,12 +396,24 @@ spec = do
                 Right _ -> expectationFailure "expected a decode error naming the built-in table"
 
     describe "withBuiltins" $ do
-        it "lists every built-in table a configuration does not name" $
+        it "lists the built-in table of a kind the configuration says nothing about" $
             map rdSource (cfgUnits (withBuiltins defaultConfig{cfgUnits = []})) `shouldBe` [BuiltIn BuiltinUnits]
 
         it "lets a file of the same name stand in for the built-in" $ do
             let mine = (builtinEntry BuiltinUnits){rdSource = FromFile "mine.csv"}
             cfgUnits (withBuiltins defaultConfig{cfgUnits = [mine]}) `shouldBe` [mine]
+
+        -- Tables of one kind are merged in name order, "Default ..." first,
+        -- so adding the built-in beside an operator's own file would let it
+        -- win on every key they share, without a word. Their list is theirs.
+        it "leaves a kind the configuration lists alone, whatever the names" $ do
+            let mine = mkRef "mine.csv"
+            cfgUnits (withBuiltins defaultConfig{cfgUnits = [mine]}) `shouldBe` [mine]
+
+        it "keeps the built-in beside the operator's own when named" $ do
+            let mine = mkRef "mine.csv"
+                both = [mine, builtinEntry BuiltinUnits]
+            cfgUnits (withBuiltins defaultConfig{cfgUnits = both}) `shouldBe` both
 
         it "keeps a switched-off built-in listed, off" $ do
             let off = (builtinEntry BuiltinUnits){rdActive = False}

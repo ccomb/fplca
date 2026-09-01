@@ -15,7 +15,6 @@ module ExportHandlerSpec (spec) where
 import API.DatabaseHandlers (exportDatabaseHandler)
 import API.Types (BinaryContent, ExportRequest (..))
 import App.Env (AppEnv (..), runApp)
-import qualified Builtin
 import Config (defaultConfig)
 import Data.Text (Text)
 import Database.Manager (initDatabaseManager)
@@ -36,7 +35,7 @@ runExport dbName fmt = do
                 , aePassword = Nothing
                 , aeHostingConfig = Nothing
                 , aeClassificationPresets = []
-                , aeDataVersion = Builtin.builtinDataVersion
+                , aeDataVersion = Nothing
                 }
     runHandler (runApp env (exportDatabaseHandler dbName (ExportRequest fmt)))
 
