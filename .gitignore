@@ -21,6 +21,7 @@ node_modules/
 
 # Generated source
 src/Version.hs
+src/Builtin/Literals.hs
 
 # Local configuration
 cabal.project.local
