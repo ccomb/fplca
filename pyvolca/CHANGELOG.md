@@ -18,6 +18,41 @@ git cliff --unreleased --tag pyvolca-v0.X.Y   # render as a released section
 
 Then paste the rendered block at the top of this file and tighten wording.
 
+## [0.11.0] - 2026-09-02
+
+The minor is for two additions a strict reader cannot ignore: the exchange
+role gains a value, and a batch result gains a field.
+
+### Added
+
+- `TechRole.AVOIDED_PRODUCT`: a substitution, the product the activity
+  displaces, credited to that product's producer. Code that matches the four
+  previous roles exhaustively has a fifth case to answer.
+- `BatchScores.unscorable`, the process ids that resolve but name an activity
+  the engine refuses to score; the `unallocated` check of its quality report
+  says why, which this build reads through `Client.call`. An older engine
+  sends none and the field reads empty.
+- `UnmappedFlow.compartment`, the compartment the method row states, so a
+  vocabulary gap is visible without reading the engine log. It is None when
+  the row states none, and when the engine predates wire revision 13.
+
+### Changed
+
+- This build knows wire revision 14, so it no longer warns that an engine
+  running v0.12.0 speaks a format newer than it understands. Revision 13 adds
+  the compartment an unmapped factor of the mapping report carries; revision
+  14 adds the `AvoidedProduct` exchange role, the `unallocated` quality check,
+  and the declared share and classification a technosphere exchange now
+  carries on the wire, which this build passes through rather than decoding
+  into fields of its own. The oldest revision this client accepts is still 2,
+  and it still runs against any engine from v0.9.1 on.
+- `COPRODUCT` now describes a product output the source left unallocated, and
+  an activity still carrying one is refused a score. The value did not move;
+  what it means did.
+- The match strategy a mapping or a characterization factor reports lists
+  `proxy` where it listed `fuzzy`. No matcher ever returned `fuzzy`, and the
+  engine has removed it.
+
 ## [0.10.1] - 2026-08-28
 
 ### Changed
