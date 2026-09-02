@@ -2,12 +2,12 @@
 
 module ConfigSpec (spec) where
 
+import Builtin (BuiltinTable (..), DataVersion (..), builtinDataVersion, builtinName, builtinTables)
 import Config (
     CFPatchOp (..),
     ClassificationEntry (..),
     ClassificationPreset (..),
     Config (..),
-    DataVersion (..),
     DatabaseConfig (..),
     HostingConfig (..),
     Listen (..),
@@ -15,9 +15,11 @@ import Config (
     MethodPatch (..),
     MethodPatchMatch (..),
     RefDataConfig (..),
+    RefDataSource (..),
     ScoringSetConfig (..),
     ServerConfig (..),
     applyDataDir,
+    builtinEntry,
     clientHost,
     configKeys,
     dataBundleDir,
@@ -29,17 +31,21 @@ import Config (
     loadConfigOrDefault,
     readDataVersion,
     redirectIntoDataDir,
+    refDataDecoder,
     resolveConfigPaths,
     unknownKeys,
     validateConfig,
+    withBuiltins,
  )
 import Data.Either (isRight)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.FilePath (normalise)
+import TOML (getArrayOf, getFieldWith)
 import qualified TOML
 import Test.Hspec
 
@@ -56,7 +62,7 @@ mkRef :: FilePath -> RefDataConfig
 mkRef p =
     RefDataConfig
         { rdName = "test"
-        , rdPath = p
+        , rdSource = FromFile p
         , rdActive = True
         , rdIsUploaded = False
         , rdIsAuto = False
@@ -347,28 +353,75 @@ spec = do
                 Left _ -> pure ()
                 Right _ -> expectationFailure "expected a decode error for an empty selector"
 
-    let registry path uploaded = RefDataConfig{rdName = "flows", rdPath = path, rdActive = True, rdIsUploaded = uploaded, rdIsAuto = False, rdDescription = Nothing}
+    let registry path uploaded = RefDataConfig{rdName = "flows", rdSource = FromFile path, rdActive = True, rdIsUploaded = uploaded, rdIsAuto = False, rdDescription = Nothing}
         reading path = defaultConfig{cfgFlowSynonyms = [registry path False]}
 
     describe "dataBundleDir" $ do
-        it "is the directory of the shipped flow registry" $
+        it "is the directory of the flow registry the engine reads" $
             dataBundleDir (reading "/opt/volca-data/3/flows.csv") `shouldBe` Just "/opt/volca-data/3"
 
         it "skips an uploaded registry, which lives with the uploads, not the bundle" $
             dataBundleDir defaultConfig{cfgFlowSynonyms = [registry "uploads/mine.csv" True, registry "data/flows.csv" False]}
                 `shouldBe` Just "data"
 
-        it "is Nothing without a registry: an engine running with no bundle" $
+        it "is Nothing when the registry is the built-in one: no bundle on disk" $
             dataBundleDir defaultConfig `shouldBe` Nothing
 
     describe "readDataVersion" $ do
-        it "reads the VERSION file of the in-tree bundle" $ do
+        it "reads the VERSION file beside the registry the engine reads" $ do
             expected <- T.strip <$> TIO.readFile "data/VERSION"
             v <- readDataVersion (reading "data/flows.csv")
             v `shouldBe` Just (DataVersion expected)
 
+        it "is the built-in version when the registry is built in" $
+            readDataVersion defaultConfig `shouldReturn` Just builtinDataVersion
+
         it "is Nothing when the registry's directory carries no VERSION" $
             readDataVersion (reading "test/flows.csv") `shouldReturn` Nothing
+
+    describe "refDataDecoder" $ do
+        let decodeUnits = TOML.decodeWith (getFieldWith (getArrayOf (refDataDecoder BuiltinUnits)) "units")
+
+        it "reads a path as a file, named after it by default" $
+            fmap (map (\r -> (rdName r, rdSource r))) (decodeUnits "[[units]]\npath = \"mine.csv\"\n")
+                `shouldBe` Right [("mine.csv", FromFile "mine.csv")]
+
+        it "reads a name without a path as the built-in table, which is how a file switches it off" $
+            fmap (map (\r -> (rdSource r, rdActive r))) (decodeUnits "[[units]]\nname = \"Default units\"\nactive = false\n")
+                `shouldBe` Right [(BuiltIn BuiltinUnits, False)]
+
+        it "refuses a pathless entry that is not the built-in of its own table" $
+            case decodeUnits "[[units]]\nname = \"Default flow synonyms\"\n" of
+                Left err -> show err `shouldContain` "Default units"
+                Right _ -> expectationFailure "expected a decode error naming the built-in table"
+
+    describe "withBuiltins" $ do
+        it "lists the built-in table of a kind the configuration says nothing about" $
+            map rdSource (cfgUnits (withBuiltins defaultConfig{cfgUnits = []})) `shouldBe` [BuiltIn BuiltinUnits]
+
+        it "lets a file of the same name stand in for the built-in" $ do
+            let mine = (builtinEntry BuiltinUnits){rdSource = FromFile "mine.csv"}
+            cfgUnits (withBuiltins defaultConfig{cfgUnits = [mine]}) `shouldBe` [mine]
+
+        -- Tables of one kind are merged in name order, "Default ..." first,
+        -- so adding the built-in beside an operator's own file would let it
+        -- win on every key they share, without a word. Their list is theirs.
+        it "leaves a kind the configuration lists alone, whatever the names" $ do
+            let mine = mkRef "mine.csv"
+            cfgUnits (withBuiltins defaultConfig{cfgUnits = [mine]}) `shouldBe` [mine]
+
+        it "keeps the built-in beside the operator's own when named" $ do
+            let mine = mkRef "mine.csv"
+                both = [mine, builtinEntry BuiltinUnits]
+            cfgUnits (withBuiltins defaultConfig{cfgUnits = both}) `shouldBe` both
+
+        it "keeps a switched-off built-in listed, off" $ do
+            let off = (builtinEntry BuiltinUnits){rdActive = False}
+            map rdActive (cfgUnits (withBuiltins defaultConfig{cfgUnits = [off]})) `shouldBe` [False]
+
+        it "is what the defaults are" $
+            map (fmap rdName . listToMaybe) [cfgFlowSynonyms defaultConfig, cfgCompartmentMappings defaultConfig, cfgUnits defaultConfig, cfgEnergyDensities defaultConfig]
+                `shouldBe` map (Just . builtinName) builtinTables
 
     describe "redirectIntoDataDir" $ do
         it "leaves paths unchanged when VOLCA_DATA_DIR is unset" $
@@ -407,10 +460,10 @@ spec = do
             cfgGeographies resolved `shouldBe` Just "/d/geographies.csv"
             cfgChemSynonyms resolved `shouldBe` Just "/d/chem.csv"
             cfgSubstanceEdges resolved `shouldBe` Just "/d/edges.csv"
-            map rdPath (cfgFlowSynonyms resolved) `shouldBe` ["/d/flows.csv"]
-            map rdPath (cfgCompartmentMappings resolved) `shouldBe` ["/d/compartments.csv"]
-            map rdPath (cfgUnits resolved) `shouldBe` ["/d/units.csv"]
-            map rdPath (cfgEnergyDensities resolved) `shouldBe` ["/d/energy.csv"]
+            map rdSource (cfgFlowSynonyms resolved) `shouldBe` [FromFile "/d/flows.csv"]
+            map rdSource (cfgCompartmentMappings resolved) `shouldBe` [FromFile "/d/compartments.csv"]
+            map rdSource (cfgUnits resolved) `shouldBe` [FromFile "/d/units.csv"]
+            map rdSource (cfgEnergyDensities resolved) `shouldBe` [FromFile "/d/energy.csv"]
 
         -- Both rewrites walk one enumeration of the path-bearing fields, so
         -- what keeps them apart is the kind each field is tagged with. The
@@ -425,6 +478,9 @@ spec = do
 
         it "is a no-op when the env var is unset" $
             applyDataDir Nothing cfg `shouldBe` cfg
+
+        it "leaves a built-in table alone: it has no path to redirect" $
+            map rdSource (cfgUnits (applyDataDir (Just "/d") defaultConfig)) `shouldBe` [BuiltIn BuiltinUnits]
 
     describe "resolveConfigPaths" $ do
         let withParsed = withParsedPaths "agb.CSV" "ef.zip"
@@ -450,10 +506,10 @@ spec = do
                 -- resolver emits backslashes.
                 map dcPath (cfgDatabases resolved) `shouldBe` [normalise "/etc/volca/agb.CSV"]
                 map mcPath (cfgMethods resolved) `shouldBe` [normalise "/etc/volca/ef.zip"]
-                map rdPath (cfgFlowSynonyms resolved) `shouldBe` [normalise "/etc/volca/flows.csv"]
-                map rdPath (cfgCompartmentMappings resolved) `shouldBe` [normalise "/etc/volca/compartments.csv"]
-                map rdPath (cfgUnits resolved) `shouldBe` [normalise "/etc/volca/units.csv"]
-                map rdPath (cfgEnergyDensities resolved) `shouldBe` [normalise "/etc/volca/energy.csv"]
+                map rdSource (cfgFlowSynonyms resolved) `shouldBe` [FromFile (normalise "/etc/volca/flows.csv")]
+                map rdSource (cfgCompartmentMappings resolved) `shouldBe` [FromFile (normalise "/etc/volca/compartments.csv")]
+                map rdSource (cfgUnits resolved) `shouldBe` [FromFile (normalise "/etc/volca/units.csv")]
+                map rdSource (cfgEnergyDensities resolved) `shouldBe` [FromFile (normalise "/etc/volca/energy.csv")]
                 cfgGeographies resolved `shouldBe` Just (normalise "/etc/volca/geographies.csv")
                 cfgChemSynonyms resolved `shouldBe` Just (normalise "/etc/volca/chem.csv")
                 cfgSubstanceEdges resolved `shouldBe` Just (normalise "/etc/volca/edges.csv")
@@ -474,8 +530,8 @@ spec = do
             -- resolving after it must not prefix that a second time.
             let cfg = defaultConfig{cfgFlowSynonyms = [mkRef "data/flows.csv"]}
                 bundled = applyDataDir (Just "/opt/volca/data") cfg
-            map rdPath (cfgFlowSynonyms (resolveConfigPaths (Just "/etc/volca/volca.toml") bundled))
-                `shouldBe` [normalise "/opt/volca/data/flows.csv"]
+            map rdSource (cfgFlowSynonyms (resolveConfigPaths (Just "/etc/volca/volca.toml") bundled))
+                `shouldBe` [FromFile (normalise "/opt/volca/data/flows.csv")]
 
     describe "loadConfigOrDefault" $ do
         it "yields the validated defaults when no path is given" $ do

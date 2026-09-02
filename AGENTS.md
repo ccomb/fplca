@@ -28,7 +28,7 @@ See `README.md` for the full feature spec.
 ## Commands
 
 ```bash
-./gen-version.sh        # Generate src/Version.hs (git metadata) — REQUIRED before a native build
+./gen-version.sh        # Generate src/Version.hs and src/Builtin/Literals.hs (git metadata, built-in reference data) — REQUIRED before a native build
 ./build.sh              # Build the engine
 ./build.sh --test       # Build + run the test suite
 ./build.sh --coverage   # Build + tests + HTML coverage report

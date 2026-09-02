@@ -31,6 +31,7 @@ module Database.Manager (
 
     -- * Initialization
     initDatabaseManager,
+    readRefDataSource,
     withReservedName,
 
     -- * Operations
@@ -148,6 +149,7 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileE
 import System.FilePath (takeDirectory, takeExtension, takeFileName, (</>))
 import System.Mem (performGC)
 
+import Builtin (builtinContent, builtinGeographies)
 import Config
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -1080,15 +1082,26 @@ initDatabaseManager config noCache = do
     loadedEnergyDensitiesVar <- newTVarIO M.empty
 
     geographies <- case cfgGeographies config of
-        Nothing -> return M.empty
+        -- No file named: the hierarchy the binary carries. It cannot fail
+        -- to parse unless the build did (BuiltinSpec compares it with its
+        -- file), so a failure here is reported as the defect it is.
+        Nothing -> case parseGeographies "the built-in geographies" (BL.toStrict builtinGeographies) of
+            Right geos -> do
+                reportProgress Info $ "Loaded " <> show (M.size geos) <> " built-in geographies"
+                pure geos
+            Left err -> do
+                reportError $ "Could not read " <> T.unpack err <> ": this binary was built wrong, running with no hierarchy"
+                pure M.empty
         Just path -> do
             result <- parseGeographiesCSV path
             case result of
-                Right geos -> pure geos
+                Right geos -> do
+                    reportProgress Info $ "Loaded " <> show (M.size geos) <> " geographies from " <> path
+                    pure geos
                 -- Falling back to the built-in hierarchy silently would change
                 -- every regionalized score without anyone asking for it.
                 Left err -> do
-                    reportProgress Warning $ "Could not load geographies from " <> T.unpack err <> " — using built-in hierarchy"
+                    reportProgress Warning $ "Could not load geographies from " <> T.unpack err <> " (running with no hierarchy)"
                     pure M.empty
 
     methodMappingCacheVar <- newTVarIO M.empty
@@ -1173,7 +1186,7 @@ initDatabaseManager config noCache = do
         "Loading reference data: "
             ++ show (length allUnitDefs)
             ++ " unit config(s), paths: "
-            ++ unwords (map rdPath allUnitDefs)
+            ++ unwords (map (describeSource . rdSource) allUnitDefs)
     autoLoadFlowSynonyms loadedFlowSynsVar allFlowSyns
     autoLoadRefData compMapOps loadedCompMapsVar allCompMaps
     autoLoadRefData unitDefOps loadedUnitDefsVar allUnitDefs
@@ -3900,7 +3913,7 @@ loadRefDataG ops manager name = do
             if M.member name loaded
                 then return $ Right ()
                 else do
-                    result <- loadRefDataCSV (rdPath rd)
+                    result <- readRefDataSource (rdSource rd)
                     case result of
                         Left err -> return $ Left err
                         Right csvData -> case rdoParse ops csvData of
@@ -3957,7 +3970,11 @@ removeRefDataG ops manager name = do
 autoLoadFlowSynonyms :: TVar (Map Text SynonymDB) -> [RefDataConfig] -> IO ()
 autoLoadFlowSynonyms loadedVar configs =
     forM_ (filter rdActive configs) $ \rd -> do
-        result <- loadFromCSVFileWithCache (rdPath rd)
+        -- The binary cache pays for a registry of 161K pairs; the built-in
+        -- table holds a thousand and parses in milliseconds.
+        result <- case rdSource rd of
+            FromFile path -> loadFromCSVFileWithCache path
+            BuiltIn t -> pure (buildFromCSV (builtinContent t))
         case result of
             Right synDB -> do
                 atomically $ modifyTVar' loadedVar (M.insert (rdName rd) synDB)
@@ -3974,7 +3991,7 @@ autoLoadFlowSynonyms loadedVar configs =
 autoLoadRefData :: RefDataOps a -> TVar (Map Text a) -> [RefDataConfig] -> IO ()
 autoLoadRefData ops loadedVar configs =
     forM_ (filter rdActive configs) $ \rd -> do
-        result <- loadRefDataCSV (rdPath rd)
+        result <- readRefDataSource (rdSource rd)
         case result of
             Right csvData -> case rdoParse ops csvData of
                 Right val -> do
@@ -4064,29 +4081,26 @@ parseGeographiesCSV path = do
     exists <- doesFileExist path
     if not exists
         then do
-            reportProgress Info $ "Geographies file not found: " <> path <> " (using built-in hierarchy)"
+            reportProgress Warning $ "Geographies file not found: " <> path <> " (running with no hierarchy)"
             return (Right M.empty)
-        else do
-            -- Decode the bytes as UTF-8 ourselves: the file carries non-ASCII
-            -- display names, and a locale-driven read would give mojibake or
-            -- a crash on a non-UTF-8 system.
-            bytes <- BS.readFile path
-            case TE.decodeUtf8' bytes of
-                Left decodeErr -> return $ Left $ T.pack path <> ": not valid UTF-8 (" <> T.pack (show decodeErr) <> ")"
-                Right content -> do
-                    let body = T.unlines (filter meaningful (T.lines content))
-                    case Csv.decode Csv.NoHeader (BL.fromStrict (TE.encodeUtf8 body)) of
-                        Left err -> return $ Left $ T.pack path <> ": " <> T.pack err
-                        Right rows -> do
-                            let parsed = map entry (V.toList rows)
-                                dups = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(fst p, 1) | p <- parsed]))
-                            if null dups
-                                then do
-                                    reportProgress Info $ "Loaded " <> show (length parsed) <> " geographies from " <> path
-                                    return $ Right $ M.fromList parsed
-                                else -- A duplicated code would silently shadow the earlier
-                                -- row in the map; refuse the file instead.
-                                    return $ Left $ T.pack path <> ": duplicate codes: " <> T.intercalate ", " dups
+        else parseGeographies (T.pack path) <$> BS.readFile path
+
+{- | The hierarchy a geographies table describes. The label names the source in
+messages: a path, or the built-in table. Decodes the bytes as UTF-8 itself:
+the table carries non-ASCII display names, and a locale-driven read would
+give mojibake or a crash on a non-UTF-8 system.
+-}
+parseGeographies :: Text -> BS.ByteString -> Either Text (Map Text (Text, [Text]))
+parseGeographies label bytes = do
+    content <- first (\decodeErr -> label <> ": not valid UTF-8 (" <> T.pack (show decodeErr) <> ")") (TE.decodeUtf8' bytes)
+    rows <- first (\err -> label <> ": " <> T.pack err) (Csv.decode Csv.NoHeader (BL.fromStrict (TE.encodeUtf8 (T.unlines (filter meaningful (T.lines content))))))
+    let parsed = map entry (V.toList rows)
+        dups = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(fst p, 1) | p <- parsed]))
+    -- A duplicated code would silently shadow the earlier row in the map;
+    -- refuse the table instead.
+    if null dups
+        then Right (M.fromList parsed)
+        else Left (label <> ": duplicate codes: " <> T.intercalate ", " dups)
   where
     meaningful line =
         let stripped = T.strip line
@@ -4112,6 +4126,11 @@ loadRefDataCSV path = do
         then return $ Left $ "File not found: " <> T.pack path
         else Right <$> BL.readFile path
 
+-- | The bytes of a reference table, wherever it comes from.
+readRefDataSource :: RefDataSource -> IO (Either Text BL.ByteString)
+readRefDataSource (BuiltIn t) = pure (Right (builtinContent t))
+readRefDataSource (FromFile path) = loadRefDataCSV path
+
 {- | Discover uploaded reference data from a directory.
 Each subdirectory should contain a data.csv and optional meta.toml.
 -}
@@ -4135,7 +4154,7 @@ discoverUploadedRefData baseDir = do
                             Just
                                 RefDataConfig
                                     { rdName = name
-                                    , rdPath = csvPath
+                                    , rdSource = FromFile csvPath
                                     , rdActive = not isAuto -- Auto-extracted synonyms inactive by default (noisy); curated data/flows.csv preferred
                                     , rdIsUploaded = True
                                     , rdIsAuto = isAuto
@@ -4211,7 +4230,7 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             let rd =
                     RefDataConfig
                         { rdName = slug
-                        , rdPath = path
+                        , rdSource = FromFile path
                         , rdActive = False -- auto-extracted synonyms inactive by default (noisy, use curated data/flows.csv)
                         , rdIsUploaded = True
                         , rdIsAuto = True

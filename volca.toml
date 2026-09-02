@@ -12,9 +12,10 @@
 # section until the next header. Startup warns about every key nothing reads,
 # naming its path, which is how such a mistake is found.
 #
-# Geographies are required for regionalized LCIA cascade lookups. The other two
-# widen how flows are recognised across databases and methods; both optional.
-geographies = "data/geographies.csv"
+# The geographies drive regionalized LCIA cascade lookups; the engine carries a
+# hierarchy, and this key replaces it with a file. The other two widen how
+# flows are recognised across databases and methods; both optional.
+# geographies = "data/geographies.csv"
 # chem-synonyms = "data/chem_synonyms.csv"      # PubChem snapshot, shipped here
 # Typed correspondences between substances. No file ships for this one: the
 # format is your own to write, eight columns, see src/SubstanceRegistry.hs.
@@ -132,27 +133,23 @@ path = "data/methods/plain-indicators.csv"
 active = true
 description = "Raw physical quantities counted through the supply chain (CF=1.0)"
 
-# ── Reference data (shipped with VoLCA) ──────────────────────────────
-
-[[flow-synonyms]]
-name = "Default flow synonyms"
-path = "data/flows.csv"
-active = true
-
-[[compartment-mappings]]
-name = "Default compartment mapping"
-path = "data/compartments.csv"
-active = true
-
-[[units]]
-name = "Default units"
-path = "data/units.csv"
-active = true
-
-[[energy-densities]]
-name = "Default energy densities"
-path = "data/energy_density.csv"
-active = true
+# ── Reference data ───────────────────────────────────────────────────
+#
+# Four tables are built into the engine: "Default flow synonyms", "Default
+# compartment mapping", "Default units", "Default energy densities"; the
+# geographies too (the `geographies` key above replaces them with a file). A
+# kind this file says nothing about runs on the built-in table; a kind it
+# lists is exactly what it lists. Name the built-in with a path to replace it
+# with your own file, with no path to keep it beside your own, or with no
+# path and `active = false` to switch it off:
+#
+#   [[units]]
+#   name = "Default units"
+#   path = "my-units.csv"
+#
+#   [[compartment-mappings]]
+#   name = "Default compartment mapping"
+#   active = false
 
 # ── Classification Presets ───────────────────────────────────────────
 #

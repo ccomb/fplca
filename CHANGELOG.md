@@ -33,6 +33,19 @@
   factors, which is where a flow with no regional factor belongs.
 
 ### Changed
+- The four reference tables (flow synonyms, compartment mapping, units,
+  energy densities) and the geographies are built into the engine. A kind a
+  configuration says nothing about runs on the built-in table; a kind it
+  lists is exactly what it lists, so a configuration written before this
+  keeps its tables and its results. It names the built-in with a path to
+  replace it with a file, with no path to keep it beside its own, or with no
+  path and `active = false` to switch it off. An engine run with no
+  configuration at all now characterizes an EcoSpold 1 database correctly
+  instead of scoring it at zero. The data bundle a release ships is unchanged
+  and still honoured through `VOLCA_DATA_DIR` for configurations that point
+  into it; the version route reports the built-in data version when the flow
+  registry is the built-in one, and the bundle's own otherwise, as before.
+  Reported by @mklarmann (#348).
 - A database whose regional factors all come from a database it depends on is
   now scored on the regionalized path, like the database it mirrors. Two
   consequences, both of them that path's existing behaviour reaching a new set

@@ -124,6 +124,8 @@ library
                      , Search.BM25.Types
                      , Search.Fuzzy
                      , Version
+                     , Builtin
+                     , Builtin.Literals
   build-depends:       base >=4.14 && <5
                      , optparse-applicative
                      , text
@@ -274,6 +276,8 @@ test-suite lca-tests
                      , LoaderSpec
                      , SetupInfoSpec
                      , MappingSpec
+                     , BuiltinSpec
+                     , ManagerBuiltinSpec
                      , MethodSetTablesSpec
                      , MethodCollectionCacheSpec
                      , DependencyFlowClosureSpec

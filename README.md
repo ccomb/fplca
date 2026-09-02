@@ -173,25 +173,20 @@ path = "DBs/EF-v3.1.zip"      # ILCD method package (ZIP or directory)
 #   # other selectors: flow-name (exact), cas, subcompartment-contains
 #   scale = 0.6
 
+# Reference data: the flow synonyms, compartment mapping, units and energy
+# densities (and the geographies) are built into the engine. A kind this file
+# says nothing about runs on the built-in table; a kind it lists is exactly
+# what it lists. Name the built-in ("Default flow synonyms", "Default
+# compartment mapping", "Default units", "Default energy densities") with a
+# path to replace it with your own file, with no path to keep it beside your
+# own, or with no path and `active = false` to switch it off.
 [[flow-synonyms]]
 name = "Default flow synonyms"
-path = "data/flows.csv"        # CSV: name1,name2[,direction[,cas[,note]]]
-active = true
+path = "my-flows.csv"          # CSV: name1,name2[,direction[,cas[,note]]]
 
 [[compartment-mappings]]
 name = "Default compartment mapping"
-path = "data/compartments.csv"
-active = true
-
-[[units]]
-name = "Default units"
-path = "data/units.csv"
-active = true
-
-[[energy-densities]]
-name = "Default energy densities"
-path = "data/energy_density.csv"
-active = true
+active = false
 
 [[classification-presets]]     # named filter bundles for classifications
 name = "agriculture"
