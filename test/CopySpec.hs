@@ -270,6 +270,8 @@ supplierDB offset products =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                   act =
                     Activity
@@ -284,8 +286,6 @@ supplierDB offset products =
                         , exchanges = [refOut]
                         , activityParams = M.empty
                         , activityParamExprs = M.empty
-                        , activityAllocationPercent = Nothing
-                        , activityAllocationFormula = Nothing
                         , activityNativeType = Nothing
                         , activityNativeId = Nothing
                         , activityFormulaCheck = Nothing

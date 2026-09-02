@@ -30,6 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
+import Database.Allocation (asAllocated, describeRefusal)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
@@ -132,6 +133,11 @@ data ServiceError
       AmbiguousActivity Text
     | ActivityNotFound Text
     | FlowNotFound Text
+    | {- | The activity is there and can be read, but the allocation gate
+      refused it a matrix column, so it has no score. The text says why and
+      what would repair it.
+      -}
+      NotScorable Text
     | MatrixError Text -- Generic error from matrix computations
     deriving (Show)
 
@@ -157,8 +163,22 @@ resolveActivityByProcessId db queryText =
         Right (_processId, activity) -> Right activity
         Left err -> Left err
 
-{- | Resolve activity and get both ProcessId and Activity
-This is the preferred function when you need the ProcessId (e.g., for matrix operations)
+{- | Resolve an activity that is about to be scored. One the allocation gate
+refused resolves for inspection, never for a score: the refusal names what is
+missing, and 'Database.MatrixBuild' left its column empty on the same verdict.
+-}
+resolveScorable :: Database -> Text -> Either ServiceError (ProcessId, Activity)
+resolveScorable db queryText = do
+    (pid, act) <- resolveActivityAndProcessId db queryText
+    case asAllocated act of
+        Right _ -> Right (pid, act)
+        Left refusal ->
+            Left . NotScorable $
+                "Activity \"" <> activityName act <> "\" (" <> queryText <> ") cannot be scored: " <> describeRefusal refusal
+
+{- | Resolve activity and get both ProcessId and Activity, for reading.
+Anything that scores goes through 'resolveScorable', which adds the
+allocation gate; a matrix operation reached from here bypasses it.
 -}
 resolveActivityAndProcessId :: Database -> Text -> Either ServiceError (ProcessId, Activity)
 resolveActivityAndProcessId db queryText =
@@ -268,8 +288,8 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                         , prsProductName = prodName
                         , prsProductAmount = prodAmount
                         , prsProductUnit = prodUnit
-                        , prsAllocationPercent = activityAllocationPercent rootActivity
-                        , prsAllocationFormula = activityAllocationFormula rootActivity
+                        , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
+                        , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                         , prsNativeType = activityNativeType rootActivity
                         }
                 , imTotalFlows = length flowDetails
@@ -299,7 +319,7 @@ isResourceExtraction flow =
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> IO (Either ServiceError Value)
 getActivityInventory db processIdText =
-    case resolveActivityAndProcessId db processIdText >>= \(pid, act) -> validateProcessIdInMatrixIndex db pid >> Right (pid, act) of
+    case resolveScorable db processIdText >>= \(pid, act) -> validateProcessIdInMatrixIndex db pid >> Right (pid, act) of
         Left err -> return $ Left err
         Right (processId, activity) -> do
             -- Matrix computation (will not fail if validation passed)
@@ -1245,8 +1265,8 @@ mkActivitySummary db processId activity =
             , prsProductName = prodName
             , prsProductAmount = prodAmount
             , prsProductUnit = prodUnit
-            , prsAllocationPercent = activityAllocationPercent activity
-            , prsAllocationFormula = activityAllocationFormula activity
+            , prsAllocationPercent = dsPercent <$> activityReferenceShare activity
+            , prsAllocationFormula = dsFormula =<< activityReferenceShare activity
             , prsNativeType = activityNativeType activity
             }
 
@@ -1430,7 +1450,7 @@ getSupplyChain ::
     Bool ->
     IO (Either ServiceError SupplyChainResponse)
 getSupplyChain unitCfg depLookup db dbName sharedSolver processIdText af includeEdges =
-    case resolveActivityAndProcessId db processIdText of
+    case resolveScorable db processIdText of
         Left err -> return $ Left err
         Right (processId, _rootActivity) ->
             case validateProcessIdInMatrixIndex db processId of
@@ -1457,7 +1477,7 @@ and local_step_ratio (upstream ÷ downstream scaling factors).
 -}
 getPathTo :: Database -> SharedSolver -> Text -> Text -> IO (Either ServiceError Value)
 getPathTo db solver pidText target = do
-    case resolveActivityAndProcessId db pidText of
+    case resolveScorable db pidText of
         Left err -> return $ Left err
         Right (rootPid, rootAct) ->
             case validateProcessIdInMatrixIndex db rootPid of
@@ -1718,8 +1738,8 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
                         (getReferenceProductName (dbTechFlows db) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
-                , prsAllocationPercent = activityAllocationPercent rootActivity
-                , prsAllocationFormula = activityAllocationFormula rootActivity
+                , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
+                , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                 , prsNativeType = activityNativeType rootActivity
                 }
      in SupplyChainResponse
@@ -1780,8 +1800,8 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                         (getReferenceProductName (dbTechFlows rootDb) rootActivity)
                 , prsProductAmount = rootRefAmount
                 , prsProductUnit = activityUnit rootActivity
-                , prsAllocationPercent = activityAllocationPercent rootActivity
-                , prsAllocationFormula = activityAllocationFormula rootActivity
+                , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
+                , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                 , prsNativeType = activityNativeType rootActivity
                 }
     eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf includeEdges 1 S.empty
@@ -2064,11 +2084,12 @@ resolveRootOnly db t
     | "::" `T.isInfixOf` t =
         Left ("cross-DB perturbation not supported in V1: " <> t)
     | otherwise =
-        case resolveActivityAndProcessId db t of
+        case resolveScorable db t of
             Right (pid, _) -> Right pid
             Left (InvalidProcessId msg) -> Left msg
             Left (AmbiguousActivity msg) -> Left msg
             Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
+            Left (NotScorable msg) -> Left msg
             Left e -> Left (T.pack (show e))
 
 -- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
@@ -2508,7 +2529,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     step mFact (xs, links) sub = case subScope sub of
         OneEdge cRef -> do
             let (_, cPidText) = parseSubRef rootDb cRef
-            (cPid, _) <- hoistEither $ resolveActivityAndProcessId thisDb cPidText
+            (cPid, _) <- hoistEither $ resolveScorable thisDb cPidText
             (fromEp, toEp) <- resolveFromTo sub
             upd <- hoistEither $ planUpdate sub cPid fromEp toEp
             (xs', extra) <- ExceptT $ applyRankOne mFact xs upd
@@ -2636,7 +2657,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     resolveEndpoint :: Text -> Text -> IO (Either ServiceError Endpoint)
     resolveEndpoint refDb pidText
         | refDb == thisDbName =
-            pure $ case resolveActivityAndProcessId thisDb pidText of
+            pure $ case resolveScorable thisDb pidText of
                 Left e -> Left e
                 Right (p, _) ->
                     Right $ Here p (dbProcessIdTable thisDb V.! fromIntegral p)
@@ -2647,7 +2668,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                     Left $
                         MatrixError $
                             "substitution references unloaded database: " <> refDb
-                Just (depDb, _) -> case resolveActivityAndProcessId depDb pidText of
+                Just (depDb, _) -> case resolveScorable depDb pidText of
                     Left _ ->
                         Left $
                             MatrixError $
@@ -2857,7 +2878,7 @@ database, not an empty field.
 -}
 exportMatrixDebugData :: Database -> Text -> DebugMatricesOptions -> IO (Either ServiceError Value)
 exportMatrixDebugData database processIdText opts = do
-    case resolveActivityAndProcessId database processIdText >>= withRef of
+    case resolveScorable database processIdText >>= withRef of
         Left err -> return $ Left err
         Right (processId, targetActivity, ref) -> do
             matrixData <- MatrixExport.extractMatrixDebugInfo database processId (debugFlowFilter opts)

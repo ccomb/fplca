@@ -441,13 +441,16 @@ class BatchScores:
 
     ``results`` carries one :class:`ScoredActivity` per process the engine
     computed; ``not_found`` and ``invalid`` list the process ids it could not
-    resolve. A non-empty ``not_found``/``invalid`` is a partial result to
-    inspect, not a failure.
+    resolve, and ``unscorable`` those that resolve but name an activity the
+    engine refuses to score (its quality report's ``unallocated`` check says
+    why; wire revision 14, empty from an older engine). A non-empty list is a
+    partial result to inspect, not a failure.
     """
 
     results: list[ScoredActivity]
     not_found: list[str]
     invalid: list[str]
+    unscorable: list[str]
 
     @classmethod
     def from_json(cls, d: dict) -> "BatchScores":
@@ -462,6 +465,7 @@ class BatchScores:
             ],
             not_found=d["notFound"],
             invalid=d["invalid"],
+            unscorable=d.get("unscorable", []),
         )
 
 
@@ -827,13 +831,18 @@ class TechRole(_StrEnum):
     """Role a technosphere exchange plays within its host activity.
 
     ``REFERENCE_PRODUCT``: the activity's reference output product.
-    ``COPRODUCT``: a secondary output (in allocated activities).
+    ``COPRODUCT``: a product output the source left unallocated; an activity
+    still carrying one is refused a score (see the ``unallocated`` check of
+    the quality report).
+    ``AVOIDED_PRODUCT``: a substitution, the product the activity displaces;
+    a credit on that product's producer (wire revision 14).
     ``REFERENCE_INPUT``: the reference input (in waste-treatment activities).
     ``INPUT``: any other technosphere input.
     """
 
     REFERENCE_PRODUCT = "ReferenceProduct"
     COPRODUCT = "Coproduct"
+    AVOIDED_PRODUCT = "AvoidedProduct"
     REFERENCE_INPUT = "ReferenceInput"
     INPUT = "Input"
 

@@ -65,6 +65,7 @@ everyCheck =
         , qraOxygenDemandOrder = finding "oxygen demand order"
         , qraInvalidCas = finding "invalid cas"
         , qraAllocationOutOfRange = finding "allocation out of range"
+        , qraUnallocated = finding "unallocated"
         , qraUnmeasurableAmounts = finding "unmeasurable amounts"
         }
 
@@ -91,6 +92,7 @@ oneFinding detail =
         , qraOxygenDemandOrder = quiet
         , qraInvalidCas = quiet
         , qraAllocationOutOfRange = quiet
+        , qraUnallocated = quiet
         , qraUnmeasurableAmounts = quiet
         }
 
@@ -157,6 +159,7 @@ spec = describe "Quality report CSV" $ do
                        , "oxygen_demand_order"
                        , "invalid_cas"
                        , "allocation_out_of_range"
+                       , "unallocated"
                        , "unmeasurable_amounts"
                        ]
 

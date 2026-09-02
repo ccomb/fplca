@@ -64,8 +64,6 @@ minimalActivity name exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -83,6 +81,8 @@ refExchange fid =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 -- | A technosphere input for @prodId@ linked to producer activity @actId@.
@@ -98,6 +98,8 @@ linkedInput actId prodId =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 {- | A loaded database has no UI picker; only its name/path matter to the setup

@@ -68,8 +68,6 @@ emptyActivity =
         , exchanges = []
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -87,6 +85,8 @@ techEx flow amt role link =
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 co2Emission :: Double -> Exchange

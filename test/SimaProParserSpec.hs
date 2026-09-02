@@ -8,8 +8,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Loader (getReferenceProductUUID)
-import Database.MatrixBuild (InterningTables (..), buildInterningTables)
+import Database.Loader (getReferenceProductUUID, loadSimaProCSV)
 import Expr (evaluate, isExpression, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
@@ -42,11 +41,12 @@ import Types (
     Activity (..),
     BioFlowDB,
     BiosphereFlow (..),
+    DeclaredShare (..),
     Exchange (..),
     LocationSource (..),
     NativeActivityType (..),
-    NativeProcessId (..),
     Pedigree (..),
+    SimpleDatabase (..),
     TechFlowDB,
     TechRole (..),
     TechnosphereFlow (..),
@@ -55,9 +55,12 @@ import Types (
     UnitDB,
     WasteFlow,
     WasteFlowDB,
+    activityDeclaredShares,
+    activityReferenceShare,
     exchangeComment,
     exchangeFlowId,
     exchangeIsInput,
+    exchangeIsProductOutput,
     exchangeIsReference,
     exchangePedigree,
     tfName,
@@ -313,6 +316,13 @@ paramTestCSV =
         , ""
         , "End"
         ]
+
+-- | The parameterised block through the loader, its shares applied.
+loadParamCSV :: IO SimpleDatabase
+loadParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
+    BS.hPut handle paramTestCSV
+    hClose handle
+    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
 
 parseParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
@@ -701,12 +711,20 @@ spec = do
             length wasteExchanges `shouldSatisfy` (>= 1)
 
     describe "SimaPro parameterized amounts" $ do
-        it "resolves simple variable references (Qm=20.53 for cow milk, scaled by allocation)" $ do
+        it "resolves simple variable references (Qm=20.53 for cow milk), unscaled" $ do
             (activities, _, _, _, _) <- parseParamCSV
             let butter = head activities
-                -- allocButter = (1*0.82/(1*0.82+20.53*0.118))*100 ≈ 25.285
-                -- Cow milk amount = 20.53 * allocButter/100 ≈ 5.19
+                -- The parser leaves the shared amount as declared; the loader
+                -- scales it by the product's share (see below).
                 milkAmounts = techInputAmounts butter
+            length milkAmounts `shouldBe` 1
+            head milkAmounts `shouldSatisfy` (\x -> abs (x - 20.53) < 0.01)
+
+        it "the loader scales the milk input by the declared share (allocButter ≈ 25.285 %)" $ do
+            db <- loadParamCSV
+            -- allocButter = (1*0.82/(1*0.82+20.53*0.118))*100 ≈ 25.285
+            -- Cow milk amount = 20.53 * allocButter/100 ≈ 5.19
+            let milkAmounts = concatMap techInputAmounts (M.elems (sdbActivities db))
             length milkAmounts `shouldBe` 1
             head milkAmounts `shouldSatisfy` (\x -> abs (x - 5.19) < 0.01)
 
@@ -748,10 +766,9 @@ spec = do
             -- Cow milk should NOT be dropped (was the original bug)
             length techInputs `shouldBe` 1
 
-        it "scales biosphere exchanges by allocation fraction" $ do
-            (activities, _, _, _, _) <- parseParamCSV
-            let butter = head activities
-                bioExchanges = [e | e@BiosphereExchange{} <- exchanges butter]
+        it "the loader scales biosphere exchanges by the declared share" $ do
+            db <- loadParamCSV
+            let bioExchanges = [e | a <- M.elems (sdbActivities db), e@BiosphereExchange{} <- exchanges a]
             length bioExchanges `shouldBe` 1
             -- CO2 = 0.5 * allocButter/100 ≈ 0.5 * 0.25285 ≈ 0.1264
             bioAmount (head bioExchanges) `shouldSatisfy` (\x -> abs (x - 0.1264) < 0.01)
@@ -1256,10 +1273,10 @@ spec = do
                     [ "Bresaola, processed in FR | Chilled | Already packed - PP/PE | at consumer {FR} U;kg;1;60;not defined;material;"
                     , "Beef trimmings, at plant;kg;1;40;not defined;material;"
                     ]
-            map activityLocation activities `shouldBe` ["FR", "FR"]
-            case map generateActivityUUID activities of
-                [refUUID, coproductUUID] -> coproductUUID `shouldBe` refUUID
-                other -> length other `shouldBe` 2
+            -- One activity for the block, on the reference product's tag; the
+            -- loader splits it into two processes that both keep it.
+            map activityLocation activities `shouldBe` ["FR"]
+            length (concatMap activityDeclaredShares activities) `shouldBe` 2
 
         it "keeps a region whose own name contains a slash" $ do
             (activities, _, _, _, _) <-
@@ -1399,123 +1416,84 @@ spec = do
 
     describe "SimaPro multi-product processes (coproducts)" $ do
         -- One Process block declares 5 coproducts with mass-allocation formulas.
-        -- The 5 resulting Activity records must share one activityUUID (so
-        -- dbActivityProductsIndex can group them) and each must carry its own
-        -- allocation percentage.
-        it "shares one activityUUID across all 5 coproducts" $ do
+        -- The parser keeps the block whole: one activity, five product rows,
+        -- each carrying the share its row declares. Splitting it into one
+        -- process per product is the loader's job ('Database.Allocation').
+        it "reads the block as one activity with five product rows" $ do
             (activities, _, _, _, _) <- parseMultiCoproductCSV
-            length activities `shouldBe` 5
-            let uuids = S.fromList (map generateActivityUUID activities)
-            S.size uuids `shouldBe` 1
+            length activities `shouldBe` 1
+            let roles = [techRole e | a <- activities, e@TechnosphereExchange{} <- exchanges a, exchangeIsProductOutput e]
+            roles `shouldBe` [ReferenceProduct, Coproduct, Coproduct, Coproduct, Coproduct]
 
-        it "uses the Process name as activityName for every coproduct" $ do
+        it "stores each product row's declared share on its exchange, in file order" $ do
             (activities, _, _, _, _) <- parseMultiCoproductCSV
-            let names = S.fromList (map activityName activities)
-            S.size names `shouldBe` 1
-            S.member "Multi-coproduct refinery" names `shouldBe` True
-
-        it "stores allocation percentage on each coproduct Activity" $ do
-            (activities, _, _, _, _) <- parseMultiCoproductCSV
-            -- Order-agnostic: the 5 allocation percentages must match the
-            -- declared shares (50/20/15/10/5) as a multiset.
-            let percents = [p | a <- activities, Just p <- [activityAllocationPercent a]]
+            let percents = [dsPercent s | a <- activities, Just s <- activityDeclaredShares a]
                 expected = [50.0, 20.0, 15.0, 10.0, 5.0]
-                matchOne e = any (\p -> abs (p - e) < 0.01) percents
             length percents `shouldBe` 5
-            all matchOne expected `shouldBe` True
-            abs (sum percents - 100.0) `shouldSatisfy` (< 0.01)
+            and (zipWith (\p e -> abs (p - e) < 0.01) percents expected) `shouldBe` True
 
         it "preserves the raw allocation formula when non-numeric" $ do
             -- paramTestCSV (butter) uses an expression "allocButter" for allocation
             (activities, _, _, _, _) <- parseParamCSV
-            let butter = head activities
-            activityAllocationFormula butter `shouldBe` Just "allocButter"
+            case activities of
+                butter : _ -> (dsFormula =<< activityReferenceShare butter) `shouldBe` Just "allocButter"
+                [] -> expectationFailure "expected the butter activity"
 
         it "leaves allocation formula populated for formula-based allocations" $ do
             (activities, _, _, _, _) <- parseMultiCoproductCSV
             -- Multi-coproduct allocations are of the form 'Sx /(...)*100',
             -- so the formula field should be populated for each coproduct.
-            let formulas = [activityAllocationFormula a | a <- activities]
+            let formulas = [dsFormula s | a <- activities, Just s <- activityDeclaredShares a]
             notElem Nothing formulas `shouldBe` True
 
-        it "scales shared exchanges by the per-coproduct allocation fraction" $ do
+        it "leaves the shared exchanges unscaled: the loader scales them per product" $ do
             (activities, _, _, _, _) <- parseMultiCoproductCSV
-            -- A shared 1 kg upstream input is allocated across the 5 coproducts:
-            -- Alpha 0.5 kg, Beta 0.2 kg, Gamma 0.15 kg, Delta 0.1 kg, Epsilon
-            -- 0.05 kg. The sum across all coproduct columns restores 1 kg.
-            let perActivity =
-                    [ techAmount e
-                    | a <- activities
-                    , e@TechnosphereExchange{} <- exchanges a
-                    , exchangeIsInput e
-                    , not (exchangeIsReference e)
-                    ]
-            length perActivity `shouldBe` 5
-            let total = sum perActivity
-            abs (total - 1.0) `shouldSatisfy` (< 0.001)
+            [techAmount e | a <- activities, e@TechnosphereExchange{} <- exchanges a, exchangeIsInput e] `shouldBe` [1.0]
 
-        it "shares one activityUUID across coproducts when Process name is empty" $ do
+        it "keeps the two products of a block with an empty Process name on one activity" $ do
             -- Agribalyse 4.0 fishing blocks (e.g. yellowfin tuna) declare two
-            -- coproducts but leave "Process name" blank; both must land on the
-            -- reference product's activity, not split into two activities.
+            -- coproducts but leave "Process name" blank; the block is one
+            -- activity, named after its reference product.
             (activities, _, _, _, _) <-
                 parseProductsCSV
                     ""
                     [ "Tuna, main product {FR} U;kg;1;91;not defined;material;"
                     , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
                     ]
-            length activities `shouldBe` 2
-            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 1
-            S.fromList (map activityName activities)
-                `shouldBe` S.singleton "Tuna, main product {FR} U"
+            map activityName activities `shouldBe` ["Tuna, main product {FR} U"]
+            length (concatMap activityDeclaredShares activities) `shouldBe` 2
 
-        it "keeps two blocks apart when one truncated name covers both" $ do
-            -- Agribalyse 4.0 truncates "Process name" to 80 characters, so
-            -- unrelated lorry blocks carry one name. They are still two
-            -- processes, and the identifier each one publishes says so.
-            let truncated = "market for transport, freight, lorry with refrigeration machine, 7.5-16 ton, die"
-            activities <-
-                parseIdentifiedBlocksCSV
-                    [ ("TraiEVEA000064241304182", truncated, ["Lorry, EURO5, R134a, freezing {GLO} U;tkm;1;100;not defined;transport;"])
-                    , ("TraiEVEA000064241304183", truncated, ["Lorry, EURO6, R134a, cooling {GLO} U;tkm;1;100;not defined;transport;"])
-                    ]
-            S.fromList (map activityNativeId activities)
-                `shouldBe` S.fromList
-                    [ Just (NativeProcessId "TraiEVEA000064241304182")
-                    , Just (NativeProcessId "TraiEVEA000064241304183")
-                    ]
-            S.size (S.fromList (map generateActivityUUID activities)) `shouldBe` 2
-            map length (productGroups activities) `shouldBe` [1, 1]
-
-        it "groups a block's coproducts together under its own identifier" $ do
-            -- The yellowfin tuna block: two coproducts, one "Process identifier",
-            -- one group — the grouping #171 established, now carried by the
-            -- identifier rather than by the shared name.
-            activities <-
-                parseIdentifiedBlocksCSV
-                    [
-                        ( "AGRIBALU000009084602653"
-                        , ""
-                        ,
-                            [ "Tuna, main product {FR} U;kg;1;91;not defined;material;"
-                            , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
-                            ]
-                        )
-                    ]
-            map length (productGroups activities) `shouldBe` [2]
-
-        it "does not blank the whole block when the reference product name is empty" $ do
-            -- Malformed export: name-less block whose first Products row has an
-            -- empty name cell. The blank must stay confined to that row; other
-            -- coproducts keep their own name instead of inheriting "".
+        it "names a block with no Process name and a blank reference row after its first named product" $ do
+            -- Otherwise every such block at one location is named "" and
+            -- shares one activityUUID with the others.
             (activities, _, _, _, _) <-
                 parseProductsCSV
                     ""
                     [ ";kg;1;91;not defined;material;"
                     , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
                     ]
-            S.fromList (map activityName activities)
-                `shouldBe` S.fromList ["", "Tuna by-products {FR} U"]
+            map activityName activities `shouldBe` ["Tuna by-products {FR} U"]
+
+    describe "the loader splits a multi-product block" $ do
+        it "gives one process per product, all sharing the block's activityUUID and name" $ do
+            db <- loadMultiCoproductCSV
+            let acts = M.elems (sdbActivities db)
+            length acts `shouldBe` 5
+            S.size (S.fromList (map generateActivityUUID acts)) `shouldBe` 1
+            S.fromList (map activityName acts) `shouldBe` S.singleton "Multi-coproduct refinery"
+            length (filter exchangeIsReference (concatMap exchanges acts)) `shouldBe` 5
+
+        it "scales the shared input by each product's share, so the five columns restore 1 kg" $ do
+            db <- loadMultiCoproductCSV
+            let perProcess = [techAmount e | a <- M.elems (sdbActivities db), e@TechnosphereExchange{} <- exchanges a, exchangeIsInput e]
+            length perProcess `shouldBe` 5
+            abs (sum perProcess - 1.0) `shouldSatisfy` (< 0.001)
+
+        it "keeps each product's declared share on its process" $ do
+            db <- loadMultiCoproductCSV
+            let percents = [dsPercent s | a <- M.elems (sdbActivities db), Just s <- [activityReferenceShare a]]
+            length percents `shouldBe` 5
+            abs (sum percents - 100.0) `shouldSatisfy` (< 0.01)
 
     describe "SimaPro Process name fallback" $ do
         it "falls back to product name when Process name field is empty" $ do
@@ -1526,7 +1504,7 @@ spec = do
             -- that omit the field).
             activityName (head activities) `shouldBe` "Bare product"
             -- A single-product Process still carries Just 100.0 allocation.
-            activityAllocationPercent (head activities) `shouldBe` Just 100.0
+            (dsPercent <$> activityReferenceShare (head activities)) `shouldBe` Just 100.0
 
     -- A negative amount on a Materials/fuels row encodes a SimaPro substitution
     -- (avoided burden): the activity co-produces a fraction of that input
@@ -1603,14 +1581,6 @@ parseIdentifiedBlocksWith unitCfg blocks =
         hClose handle
         (activities, _, _, _, _) <- parseOrFail unitCfg path
         pure activities
-
-{- | The coproduct groups the products index builds, as their sizes, ordered by
-group key. One entry per source block.
--}
-productGroups :: [Activity] -> [[Int]]
-productGroups activities =
-    map (map fromIntegral) . M.elems . itActivityProductsIndex . buildInterningTables $
-        M.fromList [((generateActivityUUID a, getReferenceProductUUID a), a) | a <- activities]
 
 -- | Build a minimal process CSV with a custom Process name and Products rows.
 parseProductsCSV :: BS.ByteString -> [BS.ByteString] -> IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
@@ -1875,6 +1845,13 @@ multiCoproductCSV =
         , ""
         , "End"
         ]
+
+-- | The same block through the loader: parsed, then split into one process per product.
+loadMultiCoproductCSV :: IO SimpleDatabase
+loadMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
+    BS.hPut handle multiCoproductCSV
+    hClose handle
+    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
 
 parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do

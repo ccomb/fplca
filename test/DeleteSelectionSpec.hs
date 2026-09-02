@@ -460,6 +460,8 @@ refOut actUUID prodUUID =
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 -- | An input exchange linking to a supplier's @(supplierActUUID, supplierProdUUID)@.
@@ -475,6 +477,8 @@ inputFrom supplierActUUID supplierProdUUID =
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 {- | A waste output linking to a treatment activity's
@@ -509,8 +513,6 @@ mkActivity name loc classif exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing

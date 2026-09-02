@@ -86,8 +86,8 @@ runActivityLCIABatch dbm dbName pid coll mSub ltMode =
 
 {- | Score N activities against every method in a collection in one
 multi-RHS MUMPS solve plus parallel characterization. Unresolved process
-IDs land in 'birNotFound' / 'birInvalid' of the response, not in
-'BatchError'.
+IDs land in 'birNotFound' / 'birInvalid' / 'birUnscorable' of the response,
+not in 'BatchError'.
 -}
 runBatchImpacts ::
     DatabaseManager ->

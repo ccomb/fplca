@@ -46,12 +46,12 @@ activityWithRefExchange fid =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             ]
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -69,8 +69,6 @@ activityWithInputExchange fid =
         , activityLocation = "GLO"
         , activityLocationSource = LocationDeclared
         , activityUnit = "kg"
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , exchanges =
             [ TechnosphereExchange
                 { techFlowId = fid
@@ -82,6 +80,8 @@ activityWithInputExchange fid =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             ]
         , activityParams = M.empty

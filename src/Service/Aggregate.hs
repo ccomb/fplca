@@ -49,7 +49,7 @@ import Service (
     getActivityExchangeDetails,
     getReferenceProductAmount,
     getReferenceProductName,
-    resolveActivityAndProcessId,
+    resolveScorable,
  )
 import SharedSolver (DepSolverLookup, SharedSolver, computeInventoryMatrixWithDepsCached, solveWithSharedSolver)
 import qualified SharedSolver
@@ -175,7 +175,7 @@ aggregate ::
     AggregateParams ->
     IO (Either ServiceError Aggregation)
 aggregate unitConfig flowDB unitDB db dbName solver depLookup pidText params =
-    case resolveActivityAndProcessId db pidText of
+    case resolveScorable db pidText of
         Left err -> return (Left err)
         Right (processId, activity) ->
             case apScope params of

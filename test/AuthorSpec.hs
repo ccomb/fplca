@@ -45,6 +45,7 @@ import Types (
     BiosphereFlow (..),
     Compartment (..),
     Database (..),
+    DeclaredShare (..),
     Exchange (..),
     LocationSource (..),
     Pedigree (..),
@@ -55,6 +56,7 @@ import Types (
     Unit (..),
     WasteFlow (..),
     WasteRole (..),
+    activityReferenceShare,
     exchangeAmount,
     findProcessId,
     getActivity,
@@ -589,7 +591,7 @@ type ActivityFacts =
     ( (Text, Text, [Text], Text)
     , (M.Map Text Text, M.Map Text (S.Set Text))
     , (M.Map Text Double, M.Map Text Text)
-    , (Maybe Double, Maybe Text)
+    , Maybe DeclaredShare
     )
 
 activityFacts :: Activity -> ActivityFacts
@@ -597,7 +599,7 @@ activityFacts act =
     ( (activityName act, activityLocation act, activityDescription act, activityUnit act)
     , (activityClassification act, activitySynonyms act)
     , (activityParams act, activityParamExprs act)
-    , (activityAllocationPercent act, activityAllocationFormula act)
+    , activityReferenceShare act
     )
 
 importedActId, importedProdId, coproductId :: UUID
@@ -647,6 +649,8 @@ importedActivity =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , TechnosphereExchange
                 { techFlowId = coproductId
@@ -658,6 +662,8 @@ importedActivity =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , TechnosphereExchange
                 { techFlowId = supplierProdId
@@ -669,6 +675,8 @@ importedActivity =
                 , techLocation = "FR"
                 , techComment = Just "milk in"
                 , techPedigree = Just milkPedigree
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id
@@ -713,8 +721,6 @@ importedActivity =
             ]
         , activityParams = M.singleton "yield" 0.85
         , activityParamExprs = M.singleton "yield" "0.9 * 0.94"
-        , activityAllocationPercent = Just 70
-        , activityAllocationFormula = Just "mass"
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -899,6 +905,8 @@ treatmentWithHeat =
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
+                        , techShare = Nothing
+                        , techClassification = M.empty
                         }
                    ]
         }
@@ -928,12 +936,12 @@ treatmentActivity =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             ]
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -961,6 +969,8 @@ supplierActivityAt actId prodId =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id
@@ -974,8 +984,6 @@ supplierActivityAt actId prodId =
             ]
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing

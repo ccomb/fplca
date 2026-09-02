@@ -35,6 +35,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Data.Word (Word32)
 import Database (buildDatabaseWithMatrices)
+import Database.Loader (loadSimaProCSV)
 import Matrix (computeInventoryMatrix)
 import SimaPro.Parser (parseSimaProCSV)
 import SimaPro.Writer (
@@ -219,6 +220,13 @@ parseBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
     BS.hPut h bytes
     hClose h
     parseOrFail defaultUnitConfig path
+
+-- | The re-import as the engine does it: parsed, then split by the loader.
+loadBytes :: BS.ByteString -> IO SimpleDatabase
+loadBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
+    BS.hPut h bytes
+    hClose h
+    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
 
 -- | Wrap parser output in a 'SimpleDatabase' keyed by generated UUIDs.
 toSimple :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> SimpleDatabase
@@ -436,11 +444,11 @@ spec = describe "SimaPro.Writer round-trip" $ do
         let acts0 = activitiesOf original
             acts1 = activitiesOf reparsed
             roles = [techRole e | a <- acts1, e@TechnosphereExchange{} <- exchanges a]
-        -- A coproduct written to "Products" would re-parse into a second
-        -- reference-product activity; routing it to "Avoided products" keeps the
-        -- activity count stable and preserves the Coproduct role.
+        -- An avoided product written to "Products" would re-parse as a coproduct
+        -- of the block; routing it to "Avoided products" keeps the activity
+        -- count stable and preserves the AvoidedProduct role.
         length acts1 `shouldBe` length acts0
-        (Coproduct `elem` roles) `shouldBe` True
+        (AvoidedProduct `elem` roles) `shouldBe` True
 
     it "(regression) omits the Type line for an activity with no native type" $ do
         original <- parseBytes noTypeCSV
@@ -456,12 +464,12 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- stores its 20 kg input as 10 kg; the writer must emit 20 kg again so the
         -- re-import lands back on 10 kg, not 5 kg (the double-allocation bug).
         bytes <- serBytes allocationDb
-        (acts, _, _, _, _) <- parseBytes bytes
-        case acts of
+        db <- loadBytes bytes
+        case M.elems (sdbActivities db) of
             [a] -> do
                 [techAmount e | e@TechnosphereExchange{techRole = Input} <- exchanges a]
                     `shouldBe` [10.0]
-                activityAllocationPercent a `shouldBe` Just 50
+                (dsPercent <$> activityReferenceShare a) `shouldBe` Just 50
             other -> expectationFailure ("expected one activity, got " <> show (length other))
 
     it "(regression) serializes a 0%-allocated activity without a divide-by-zero" $ do
@@ -493,6 +501,12 @@ spec = describe "SimaPro.Writer round-trip" $ do
                 `shouldSatisfy` either (const True) (const False)
 
     describe "checkSimaProExportable (round-trip guards)" $ do
+        it "refuses an activity whose product rows carry no share: each row would claim the whole" $
+            case checkSimaProExportable (guardDb Nothing Nothing [refProd, refProd2{techRole = Coproduct}]) of
+                Left msg -> do
+                    msg `shouldSatisfy` T.isInfixOf "guard maker"
+                    msg `shouldSatisfy` T.isInfixOf "without a declared share"
+                Right () -> expectationFailure "an unallocated activity was accepted"
         it "accepts a pedigree-less exchange with an ordinary comment" $
             checkSimaProExportable (commentDb Nothing (Just "ordinary free text"))
                 `shouldBe` Right ()
@@ -616,13 +630,11 @@ emissionDb comp =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             , BiosphereExchange bioU 0.5 unitU Emission "" Nothing Nothing
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -665,13 +677,11 @@ allocationDb =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-            , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 50 Nothing)) M.empty
+            , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             ]
             M.empty
             M.empty
-            (Just 50)
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -709,13 +719,11 @@ zeroAllocationDb =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-            , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 0 Nothing)) M.empty
+            , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
             ]
             M.empty
             M.empty
-            (Just 0)
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -756,13 +764,11 @@ commentDb ped cmt =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-            , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped Nothing M.empty
             ]
             M.empty
             M.empty
-            Nothing
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -794,11 +800,9 @@ namedDb name =
             "GLO"
             LocationDeclared
             "kg"
-            [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
+            [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty]
             M.empty
             M.empty
-            Nothing
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -816,15 +820,15 @@ gUnit = testUUID 0x53
 
 -- | A valid reference product output for the catalog above.
 refProd :: Exchange
-refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
 
 -- | A second reference product (on the material flow) — an invalid second head.
 refProd2 :: Exchange
-refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
 
 -- | A plain material input (no reference product in the activity).
 matInput :: Exchange
-matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing
+matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
 
 -- | An emission carrying a non-finite (+Infinity) amount.
 bioInf :: Exchange
@@ -832,7 +836,7 @@ bioInf = BiosphereExchange gBio (1 / 0) gUnit Emission "" Nothing Nothing
 
 -- | A material input referencing a unit UUID absent from the unit registry.
 matMissingUnit :: Exchange
-matMissingUnit = TechnosphereExchange gMat 2.0 (testUUID 0xbad) Input UUID.nil Nothing "" Nothing Nothing
+matMissingUnit = TechnosphereExchange gMat 2.0 (testUUID 0xbad) Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
 
 {- | A one-activity database whose exchanges are supplied verbatim, against a
 fixed catalog (a reference product flow, a material flow, an emission flow, and
@@ -855,7 +859,13 @@ guardDb alloc ntype exs =
         }
   where
     act =
-        Activity "guard maker" [] [] M.empty M.empty "GLO" LocationDeclared "kg" exs M.empty M.empty alloc Nothing ntype Nothing Nothing
+        Activity "guard maker" [] [] M.empty M.empty "GLO" LocationDeclared "kg" (map withShare exs) M.empty M.empty ntype Nothing Nothing
+    -- The share a source declares lives on the reference exchange.
+    withShare ex = case ex of
+        TechnosphereExchange{techRole = ReferenceProduct} -> ex{techShare = (`DeclaredShare` Nothing) <$> alloc}
+        TechnosphereExchange{} -> ex
+        BiosphereExchange{} -> ex
+        WasteExchange{} -> ex
 
 -- | The baseline guard fixture, carrying the given description paragraphs.
 describedDb :: [Text] -> SimpleDatabase

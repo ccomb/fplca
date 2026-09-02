@@ -32,11 +32,13 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 13
-"""The newest wire revision this pyvolca understands (revision 13 adds the
-compartment an unmapped factor of the mapping report carries; revision 12
-added the node type a tree export reports where a link names a row no loaded
-database holds; revision 11 added the
+KNOWN_WIRE = 14
+"""The newest wire revision this pyvolca understands (revision 14 adds the
+``AvoidedProduct`` exchange role, the ``unallocated`` quality check and the
+``share`` and ``classification`` fields of a technosphere exchange; revision
+13 added the compartment an unmapped factor of the mapping report carries;
+revision 12 added the node type a tree export reports where a link names a
+row no loaded database holds; revision 11 added the
 data bundle's version on the version route; revision 10 added the role
 a waste line reports; revision 9 added the kind
 a flow search reports and filters on; revision 8 added the two

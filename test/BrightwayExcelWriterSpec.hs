@@ -267,8 +267,6 @@ elec =
         , exchanges = [prodExch, gasExch, co2Exch]
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -286,6 +284,8 @@ prodExch =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 gasExch :: Exchange
@@ -300,6 +300,8 @@ gasExch =
         , techLocation = "RoW"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 co2Exch :: Exchange
@@ -374,6 +376,8 @@ specialAct =
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , TechnosphereExchange
                 { techFlowId = tfId specialInputFlow
@@ -385,6 +389,8 @@ specialAct =
                 , techLocation = "RoW"
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , BiosphereExchange
                 { bioFlowId = bfId specialBio
@@ -463,6 +469,8 @@ refInputAct =
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             ]
         }
@@ -545,6 +553,8 @@ kgProduction flow role amount =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 coproductDb :: SimpleDatabase
@@ -630,6 +640,8 @@ gramRefDb =
                     , techLocation = "GLO"
                     , techComment = Nothing
                     , techPedigree = Nothing
+                    , techShare = Nothing
+                    , techClassification = M.empty
                     }
                 ]
             }

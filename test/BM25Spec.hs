@@ -35,8 +35,6 @@ mkActivity name loc xs =
         , exchanges = xs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -54,6 +52,8 @@ mkRefOutput fid =
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 mkFlow :: UUID -> Text -> TechnosphereFlow

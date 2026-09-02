@@ -52,8 +52,6 @@ minimalActivity name loc exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -75,6 +73,8 @@ refExchange fid =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 inputExchange :: UUID.UUID -> Text -> Exchange
@@ -89,6 +89,8 @@ inputExchange fid loc =
         , techLocation = loc
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 actUUID2, missingActUUID :: UUID.UUID
@@ -667,6 +669,8 @@ spec = do
                     , techLocation = ""
                     , techComment = Nothing
                     , techPedigree = Nothing
+                    , techShare = Nothing
+                    , techClassification = M.empty
                     }
         it "returns the reference output amount for a normal producer" $ do
             let act = minimalActivity "producer" "GLO" [withRole ReferenceProduct 3.0 prodUUID]

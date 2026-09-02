@@ -374,6 +374,9 @@ Inverse of the parser's role logic:
   * 'ReferenceProduct' → output, @\<outputGroup\>0\</outputGroup\>@
   * 'Coproduct'        → output, @\<outputGroup\>2\</outputGroup\>@ (any
     non-zero output group re-parses to 'Coproduct')
+  * 'AvoidedProduct'   → input, @\<inputGroup\>5\</inputGroup\>@, amount
+    negated: the negative linked input ecoinvent itself writes for a
+    substitution. It re-parses to a negative 'Input', the same matrix entry.
   * 'Input' / 'ReferenceInput' → input, @\<inputGroup\>5\</inputGroup\>@
 -}
 renderTechnosphere :: ResolveEnv -> Exchange -> [Text]
@@ -382,7 +385,7 @@ renderTechnosphere env ex =
         (reTechName env flowId)
         flowId
         (techUnitId ex)
-        (techAmount ex)
+        signedAmount
         (reUnitName env (techUnitId ex))
         (reTechSyns env flowId)
         groupLine
@@ -394,8 +397,15 @@ renderTechnosphere env ex =
     groupLine = case techRole ex of
         ReferenceProduct -> outputGroupLine "0"
         Coproduct -> outputGroupLine "2"
+        AvoidedProduct -> inputGroupLine "5"
         Input -> inputGroupLine "5"
         ReferenceInput -> inputGroupLine "5"
+    signedAmount = case techRole ex of
+        AvoidedProduct -> negate (techAmount ex)
+        ReferenceProduct -> techAmount ex
+        Coproduct -> techAmount ex
+        Input -> techAmount ex
+        ReferenceInput -> techAmount ex
 
 {- | Waste exchange → @intermediateExchange@ tagged with the
 @By-product classification = Waste@ classification (parser "Pattern B"). The

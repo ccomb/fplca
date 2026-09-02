@@ -204,8 +204,8 @@ soloDb name prodU extra techs bios wastes =
         , sdbUnits = units1
         }
   where
-    ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-    act = Activity name [] [] M.empty M.empty "GLO" LocationDeclared "kg" (ref : extra) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
+    ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+    act = Activity name [] [] M.empty M.empty "GLO" LocationDeclared "kg" (ref : extra) M.empty M.empty Nothing Nothing Nothing
 
 -- | Empty database: no activities, no flows.
 emptyDb :: SimpleDatabase
@@ -233,11 +233,11 @@ linkedDb link =
   where
     supU = supplierLink
     conU = read "33333333-0000-4000-8000-000000000001"
-    mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
-    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+    mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing
+    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
     supplier = mkAct "aaa supplier" supU []
     -- The consumer's input consumes the supplier's product and links to it.
-    consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing]
+    consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing Nothing M.empty]
 
 {- | A supplier written as two coproduct rows sharing one activity UUID, and a
 consumer whose input names the first of them. Canonical order gives the two
@@ -268,9 +268,9 @@ coproductDb =
     prodAU = read "44444444-0000-4000-8000-00000000000a"
     prodBU = read "44444444-0000-4000-8000-00000000000b"
     conU = read "33333333-0000-4000-8000-000000000001"
-    mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing Nothing Nothing
-    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
-    inputOnA = TechnosphereExchange prodAU 2.0 kgUnit Input supU Nothing "" Nothing Nothing
+    mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing
+    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+    inputOnA = TechnosphereExchange prodAU 2.0 kgUnit Input supU Nothing "" Nothing Nothing Nothing M.empty
 
 {- | The supplier's stored activity UUID — the first component of its
 'sdbActivities' key, and the value a solver-resolved input carries in
@@ -357,6 +357,7 @@ exchangeView sdb ex = case ex of
         ReferenceProduct -> "ref"
         ReferenceInput -> "ref"
         Coproduct -> "coproduct"
+        AvoidedProduct -> "avoided"
         Input -> "input"
     dirText d = case d of
         Resource -> "resource"
@@ -616,7 +617,7 @@ spec = do
             -- would re-parse it as a reference product (input → output flip).
             let prodU = read "77777777-0000-4000-8000-000000000001" :: UUID
                 refInU = read "77777777-0000-4000-8000-0000000000a0" :: UUID
-                refInEx = TechnosphereExchange refInU 1.0 kgUnit ReferenceInput UUID.nil Nothing "" Nothing Nothing
+                refInEx = TechnosphereExchange refInU 1.0 kgUnit ReferenceInput UUID.nil Nothing "" Nothing Nothing Nothing M.empty
                 techs = M.singleton refInU (TechnosphereFlow refInU "waste to treat" kgUnit M.empty Nothing Nothing)
                 sdb = soloDb "treatment process" prodU [refInEx] techs M.empty M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
@@ -667,7 +668,7 @@ spec = do
             -- does not round-trip: the joined text survives, but the parser reads
             -- it back as one element. This pins that documented behaviour.
             let prodU = read "cccc0000-0000-4000-8000-000000000001" :: UUID
-                ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+                ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
                 act =
                     Activity
                         "documented process"
@@ -681,8 +682,6 @@ spec = do
                         [ref]
                         M.empty
                         M.empty
-                        Nothing
-                        Nothing
                         Nothing
                         Nothing
                         Nothing

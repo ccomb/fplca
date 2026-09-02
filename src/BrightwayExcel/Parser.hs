@@ -350,8 +350,6 @@ rawToActivity cfg ra =
             , exchanges = exchanges'
             , activityParams = M.empty
             , activityParamExprs = M.empty
-            , activityAllocationPercent = Nothing
-            , activityAllocationFormula = Nothing
             , activityNativeType = Nothing
             , activityNativeId = Nothing
             , activityFormulaCheck = Nothing
@@ -392,6 +390,8 @@ productRowOut cfg meta isRef f =
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
+            , techShare = Nothing
+            , techClassification = M.empty
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
     unit = Unit unitUUID effUnit effUnit ""
@@ -400,20 +400,22 @@ productRowOut cfg meta isRef f =
 exchangeRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
 exchangeRowOut cfg actName f =
     case T.toLower <$> fieldText f "type" of
-        Just "technosphere" -> technosphereRowOut cfg actName f
+        Just "technosphere" -> technosphereRowOut cfg Input actName f
+        Just "substitution" -> technosphereRowOut cfg AvoidedProduct actName f
         Just "biosphere" -> biosphereRowOut cfg actName f
         Just other ->
             emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped exchange with unrecognized type '" <> other <> "'"]}
         Nothing ->
             emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped exchange row with no type"]}
 
-{- | A technosphere input keyed by the supplier's /reference product/ name (the
+{- | A technosphere row keyed by the supplier's /reference product/ name (the
 key 'Database.Loader.buildSupplierIndexByName' matches against), with the
-supplier location preserved for geography-aware cross-DB linking. Zero-amount
-rows are dropped (parity with the SimaPro importer).
+supplier location preserved for geography-aware cross-DB linking: an 'Input'
+for a @technosphere@ row, an 'AvoidedProduct' for a @substitution@ row.
+Zero-amount rows are dropped (parity with the SimaPro importer).
 -}
-technosphereRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
-technosphereRowOut cfg actName f
+technosphereRowOut :: UC.UnitConfig -> TechRole -> Text -> M.Map Text CellValue -> RowOut
+technosphereRowOut cfg role actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped technosphere row with no name"]}
     | amount == 0 = emptyRowOut
     | otherwise = RowOut (Just exch) [flow] [] [unit] []
@@ -427,12 +429,14 @@ technosphereRowOut cfg actName f
             { techFlowId = flowUUID
             , techAmount = amount
             , techUnitId = unitUUID
-            , techRole = Input
+            , techRole = role
             , techActivityLinkId = UUID.nil
             , techProcessLinkId = Nothing
             , techLocation = fromMaybe "" (fieldText f "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
+            , techShare = Nothing
+            , techClassification = M.empty
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
     unit = Unit unitUUID unitName' unitName' ""

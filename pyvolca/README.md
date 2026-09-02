@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.10.1** speaks wire formats **2 to 13** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.10.1** speaks wire formats **2 to 14** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1203,7 +1203,11 @@ Stop the server via shutdown endpoint, then terminate process.
 Role a technosphere exchange plays within its host activity.
 
 ``REFERENCE_PRODUCT``: the activity's reference output product.
-``COPRODUCT``: a secondary output (in allocated activities).
+``COPRODUCT``: a product output the source left unallocated; an activity
+still carrying one is refused a score (see the ``unallocated`` check of
+the quality report).
+``AVOIDED_PRODUCT``: a substitution, the product the activity displaces;
+a credit on that product's producer (wire revision 14).
 ``REFERENCE_INPUT``: the reference input (in waste-treatment activities).
 ``INPUT``: any other technosphere input.
 
@@ -1436,14 +1440,17 @@ Result of `Client.score_activities` scoring many processes at once.
 
 ``results`` carries one `ScoredActivity` per process the engine
 computed; ``not_found`` and ``invalid`` list the process ids it could not
-resolve. A non-empty ``not_found``/``invalid`` is a partial result to
-inspect, not a failure.
+resolve, and ``unscorable`` those that resolve but name an activity the
+engine refuses to score (its quality report's ``unallocated`` check says
+why; wire revision 14, empty from an older engine). A non-empty list is a
+partial result to inspect, not a failure.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `results` | `list[ScoredActivity]` | _required_ |
 | `not_found` | `list[str]` | _required_ |
 | `invalid` | `list[str]` | _required_ |
+| `unscorable` | `list[str]` | _required_ |
 
 ### `BioExchange`
 

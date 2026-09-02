@@ -257,7 +257,7 @@ spec = describe "ILCD.Writer round-trip" $ do
         let sdb =
                 oneActivityDb
                     (M.singleton fEmitU fEmission)
-                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
                     , BiosphereExchange fEmitU 3.3e-20 fUnitU Emission "" Nothing Nothing
                     ]
         db' <- roundTrip sdb
@@ -527,11 +527,9 @@ multiOutputDb =
             "GLO"
             LocationDeclared
             "kg"
-            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing]
+            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty]
             M.empty
             M.empty
-            Nothing
-            Nothing
             Nothing
             Nothing
             Nothing
@@ -603,15 +601,13 @@ oneActivityDb bios exs =
             , exchanges = exs
             , activityParams = M.empty
             , activityParamExprs = M.empty
-            , activityAllocationPercent = Nothing
-            , activityAllocationFormula = Nothing
             , activityNativeType = Nothing
             , activityNativeId = Nothing
             , activityFormulaCheck = Nothing
             }
 
 refProductEx :: Exchange
-refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing
+refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
 
 {- | The reference product sits at index 2, after an air emission with a
 subcompartment and a natural-resource input. One exchange carries a non-empty

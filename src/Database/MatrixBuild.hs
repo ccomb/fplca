@@ -29,6 +29,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Database.Allocation (AllocatedActivity, AllocationRefusal, allocatedActivity, asAllocated, describeRefusal)
 import Types
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
 
@@ -156,18 +157,35 @@ unitConversionError consumer fromU toU =
         <> " \8212 add these units to [[units]] CSV"
 
 {- | Flatten the activity set into a stream of @(normFactor, j, activity, ex)@
-tuples. Encapsulates the shared "for each activity j: get the activity,
-get its key, get its norm factor, fold its exchanges" boilerplate.
+tuples, over the activities the allocation gate accepts. An activity it
+refuses gets no triple at all: its column stays empty, so it produces itself
+and nothing else, and the warning says why. The same verdict refuses to score
+it ('Service.resolveScorable') and names it in the quality report.
 -}
-perActivity :: InterningTables -> [(Double, ProcessId, Activity, Exchange)]
-perActivity tables =
-    [ (normFactor, j, act, ex)
-    | j <- [0 .. itActivityCount tables - 1]
-    , let act = itActivities tables V.! fromIntegral j
-    , let key = itProcessIdTable tables V.! fromIntegral j
-    , let normFactor = activityNormFactor act key
-    , ex <- exchanges act
-    ]
+perActivity :: InterningTables -> ([String], [(Double, ProcessId, AllocatedActivity, Exchange)])
+perActivity tables = (concat warnings, concat rows)
+  where
+    (warnings, rows) = unzip [column j | j <- [0 .. itActivityCount tables - 1]]
+
+    column :: ProcessId -> ([String], [(Double, ProcessId, AllocatedActivity, Exchange)])
+    column j =
+        let act = itActivities tables V.! fromIntegral j
+            key = itProcessIdTable tables V.! fromIntegral j
+         in case asAllocated act of
+                Left refusal -> ([refusalWarning act key refusal], [])
+                Right allocated -> ([], [(activityNormFactor act key, j, allocated, ex) | ex <- exchanges act])
+
+    refusalWarning :: Activity -> (UUID, UUID) -> AllocationRefusal -> String
+    refusalWarning act (actUUID, prodUUID) refusal =
+        "Activity \""
+            ++ T.unpack (activityName act)
+            ++ "\" ("
+            ++ T.unpack (UUID.toText actUUID)
+            ++ "_"
+            ++ T.unpack (UUID.toText prodUUID)
+            ++ ") is not allocated: "
+            ++ T.unpack (describeRefusal refusal)
+            ++ ". It loads, but it will not be scored."
 
 {- | Technosphere sparse triplets + skipped-link warnings.
 
@@ -182,13 +200,14 @@ buildTechTriples ::
     V.Vector Text ->
     Either Text (VU.Vector SparseTriple, [String])
 buildTechTriples unitConfig unitDB tables supplierRefUnits =
-    fmap pack (traverse step (perActivity tables))
+    fmap pack (traverse step rows)
   where
+    (refusals, rows) = perActivity tables
     lkp = itProcessIdLookup tables
     actCount = itActivityCount tables
-    step (normFactor, j, act, ex) =
-        techTriple unitConfig unitDB lkp supplierRefUnits actCount normFactor j act ex
-    pack rs = let (ts, ws) = fold rs in (VU.fromList ts, ws)
+    step (normFactor, j, allocated, ex) =
+        techTriple unitConfig unitDB lkp supplierRefUnits actCount normFactor j (allocatedActivity allocated) ex
+    pack rs = let (ts, ws) = fold rs in (VU.fromList ts, refusals ++ ws)
 
 techTriple ::
     UnitConfig ->
@@ -245,7 +264,7 @@ biosphere exchange maps directly to its row via 'collectBioFlowOrder'.
 -}
 buildBioTriples :: V.Vector UUID -> InterningTables -> VU.Vector SparseTriple
 buildBioTriples bioOrder tables =
-    VU.fromList $ concatMap step (perActivity tables)
+    VU.fromList $ concatMap step (snd (perActivity tables))
   where
     bioIndex = M.fromList $ zip (V.toList bioOrder) [0 ..]
     step (normFactor, j, _act, ex)

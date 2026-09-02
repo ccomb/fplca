@@ -75,8 +75,6 @@ mkActivity name loc exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -94,6 +92,8 @@ refEx fid =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 -- | An input for @flowId@, linked to producer activity @linkId@ (nil = unlinked).
@@ -109,6 +109,8 @@ inputEx flowId linkId =
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 mkDB :: [((UUID.UUID, UUID.UUID), Activity)] -> [TechnosphereFlow] -> SimpleDatabase

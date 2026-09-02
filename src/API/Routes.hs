@@ -517,7 +517,7 @@ matrix index too — see Service.validateProcessIdInMatrixIndex.
 -}
 resolveOrThrow :: Database -> Text -> AppM (ProcessId, Activity)
 resolveOrThrow db processIdText = do
-    (pid, act) <- either throwServiceError pure (Service.resolveActivityAndProcessId db processIdText)
+    (pid, act) <- either throwServiceError pure (Service.resolveScorable db processIdText)
     either throwServiceError pure (Service.validateProcessIdInMatrixIndex db pid)
     pure (pid, act)
 
@@ -535,6 +535,9 @@ serviceErrorToServerError = \case
     Service.AmbiguousActivity msg -> err400{errBody = utf8Body msg}
     Service.ActivityNotFound _ -> err404{errBody = "Activity not found"}
     Service.FlowNotFound _ -> err404{errBody = "Flow not found"}
+    -- The activity exists and reads fine; it has no column to score. The
+    -- message says why, so the caller can repair the dataset or pick another.
+    Service.NotScorable msg -> err422{errBody = utf8Body msg}
     -- MatrixError covers singular Sherman-Morrison, missing technosphere links,
     -- and cross-DB unit-conversion failures — all client-submitted invariant
     -- breakages. Surface as 422 like the rest of the cross-DB pipeline.
@@ -929,11 +932,12 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
         Just mc -> pure mc
         Nothing -> throwError err404{errBody = collectionNotLoadedBody collectionName (M.keys loadedCollections)}
     let resolved =
-            [ (pidText, Service.resolveActivityAndProcessId db pidText)
+            [ (pidText, Service.resolveScorable db pidText)
             | pidText <- birProcessIds req
             ]
         valid = [(pidText, pidNum, act) | (pidText, Right (pidNum, act)) <- resolved]
         notFound = [pidText | (pidText, Left (Service.ActivityNotFound _)) <- resolved]
+        unscorable = [pidText | (pidText, Left (Service.NotScorable _)) <- resolved]
         -- An under-specified id is unusable as sent, like a malformed one, and
         -- belongs in a bucket rather than in neither.
         invalid =
@@ -945,6 +949,7 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
                 Service.InvalidUUID _ -> False
                 Service.ActivityNotFound _ -> False
                 Service.FlowNotFound _ -> False
+                Service.NotScorable _ -> False
                 Service.MatrixError _ -> False
             ]
         validPidNums = [pidNum | (_, pidNum, _) <- valid]
@@ -1001,6 +1006,7 @@ batchImpactsH dbName collectionName topFlowsParam ltMode req = do
             { birResults = entries
             , birNotFound = notFound
             , birInvalid = invalid
+            , birUnscorable = unscorable
             }
 
 {- | Computed quality checks over the whole catalogue: score every entry of a
@@ -1050,7 +1056,7 @@ computedQualityReportH dbName mCollection mLimit = do
     -- The ids come from the catalogue itself, so nothing should be
     -- unresolvable — but a dropped entry would silently shrink the report,
     -- so any is worth a warning in the log.
-    let unresolved = concatMap (\r -> birNotFound r <> birInvalid r) responses
+    let unresolved = concatMap (\r -> birNotFound r <> birInvalid r <> birUnscorable r) responses
     unless (null unresolved) $
         liftIO . reportProgress Warning $
             "Computed quality report on " <> T.unpack dbName <> ": " <> show (length unresolved) <> " catalogue entries could not be scored and are missing from the report"
@@ -1274,11 +1280,11 @@ withActivityAndMethod ::
 withActivityAndMethod dbName collectionName processIdText methodIdText k = do
     (db, sharedSolver) <- requireDatabaseByName dbName
     method <- loadMethodInCollection collectionName methodIdText
-    case Service.resolveActivityAndProcessId db processIdText of
+    case Service.resolveScorable db processIdText of
         Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
         Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
         Left (Service.AmbiguousActivity msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+        Left err -> throwError (serviceErrorToServerError err)
         Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
 
 -- ---------------------------------------------------------------------------
@@ -1295,7 +1301,11 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 13: the @compartment@ an unmapped factor of the mapping report
+(revision 14: the @AvoidedProduct@ role a technosphere exchange can report,
+which a client decoding the role enumeration has to know, the @unallocated@
+check of the quality report, and the @share@ and @classification@ fields a
+technosphere exchange carries;
+revision 13: the @compartment@ an unmapped factor of the mapping report
 carries; revision 12: the @MissingNode@ a tree export reports where a link names a
 row no loaded database holds, and the @missing:@ prefixed id such a node and
 its edge carry in place of a process id;
@@ -1314,7 +1324,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 13
+currentWireVersion = 14
 
 getVersion :: AppM Value
 getVersion = do

@@ -91,8 +91,6 @@ mkActivity name exs =
         , exchanges = exs
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing
@@ -124,6 +122,8 @@ techInput fid amount =
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
         }
 
 wasteInput :: UUID -> Double -> Exchange

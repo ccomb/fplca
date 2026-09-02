@@ -423,6 +423,8 @@ milkActivity name =
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id
@@ -436,8 +438,6 @@ milkActivity name =
             ]
         , activityParams = M.empty
         , activityParamExprs = M.empty
-        , activityAllocationPercent = Nothing
-        , activityAllocationFormula = Nothing
         , activityNativeType = Nothing
         , activityNativeId = Nothing
         , activityFormulaCheck = Nothing

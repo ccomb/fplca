@@ -1,7 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 module EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile) where
 
@@ -17,7 +16,6 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
-import EcoSpold.Cutoff (applyCutoffStrategy)
 import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
 import SubstanceRegistry (nonEmptyCAS)
@@ -759,6 +757,8 @@ parseWithXeno xmlContent processId = do
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing
+                                , techShare = Nothing
+                                , techClassification = M.empty
                                 }
                         techFlow = TechnosphereFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
                         wasteExchange =
@@ -967,8 +967,6 @@ parseWithXeno xmlContent processId = do
                     , exchanges = map fst pairs
                     , activityParams = psParams st
                     , activityParamExprs = psParamExprs st
-                    , activityAllocationPercent = Nothing
-                    , activityAllocationFormula = Nothing
                     , activityNativeType = nativeType
                     , activityNativeId = Nothing
                     , activityFormulaCheck = formulaCheck
@@ -977,7 +975,11 @@ parseWithXeno xmlContent processId = do
             bios = reverse (psBioFlows st)
             wastes = reverse (psWasteFlows st)
             units = reverse (psUnits st)
-         in (,techs,bios,wastes,units) <$> applyCutoffStrategy activity
+         in -- A file that yields no exchange at all is not a dataset: a stray or
+            -- truncated XML the SAX fold walked through without complaint.
+            if null (exchanges activity)
+                then Left "not an EcoSpold2 dataset: no exchange found"
+                else Right (activity, techs, bios, wastes, units)
 
 -- | Parse EcoSpold file using Xeno SAX parser
 streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))

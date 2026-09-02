@@ -90,7 +90,7 @@ mkEntry pid name fu setName total inds =
         }
 
 emptyBir :: BatchImpactsResponse
-emptyBir = BatchImpactsResponse{birResults = [], birNotFound = [], birInvalid = []}
+emptyBir = BatchImpactsResponse{birResults = [], birNotFound = [], birInvalid = [], birUnscorable = []}
 
 -- ---------------------------------------------------------------------------
 -- Spec
@@ -131,6 +131,7 @@ spec = do
                         ]
                     , birNotFound = []
                     , birInvalid = []
+                    , birUnscorable = []
                     }
             Object km = toColumnarBatch False (Just "https://x") "ei" "EF31" pefSet bir
 
@@ -192,6 +193,7 @@ spec = do
                         ]
                     , birNotFound = []
                     , birInvalid = []
+                    , birUnscorable = []
                     }
             Object km = toColumnarBatch False (Just "https://x") "agri" "EF31" pefSet bir
 
@@ -231,6 +233,7 @@ spec = do
                         ]
                     , birNotFound = []
                     , birInvalid = []
+                    , birUnscorable = []
                     }
             Object km = toColumnarBatch True (Just "https://x") "ei" "EF31" pefSet bir
 
@@ -265,6 +268,7 @@ spec = do
                         ]
                     , birNotFound = []
                     , birInvalid = []
+                    , birUnscorable = []
                     }
             Object km = toColumnarBatch False Nothing "ei" "EF31" pefSet bir
 

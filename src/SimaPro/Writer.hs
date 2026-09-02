@@ -84,10 +84,12 @@ import qualified Data.ByteString as BS
 import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Database.Allocation (AllocationRefusal (..), asAllocated, describeRefusal)
 import SimaPro.Parser (isMetadataKey, parsePedigreePrefix)
 import Types
 
@@ -164,6 +166,7 @@ checkSimaProExportable db =
         , checkMedia
         , checkAmounts
         , checkAllocation
+        , checkCoproducts
         , checkUnits
         , checkNewlines
         , checkComments
@@ -226,6 +229,20 @@ checkSimaProExportable db =
                         <> " is not finite — the writer divides the allocation-scaled"
                         <> " amounts back out, so a non-finite percentage would lose"
                         <> " them on re-import."
+    -- A block gives every product row a share, so an activity whose products
+    -- carry none cannot be written as one: each row would claim the whole
+    -- and re-import would give every product the full inventory.
+    checkCoproducts =
+        case coproductOffenders of
+            [] -> Right ()
+            ((name, refusal) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": "
+                        <> describeRefusal refusal
+                        <> ". A SimaPro block carries a share on every product row, so"
+                        <> " re-importing it would give each product the whole inventory."
     checkUnits =
         case unitOffenders of
             [] -> Right ()
@@ -263,6 +280,11 @@ checkSimaProExportable db =
     -- one Process block per activity with one Products row per reference; zero
     -- references → an empty Products section → the parser drops the block, and
     -- >1 → several Products rows → the parser splits it into one activity each.
+    coproductOffenders =
+        [ (activityName act, refusal)
+        | act <- M.elems (sdbActivities db)
+        , Left refusal@UnallocatedOutputs{} <- [asAllocated act]
+        ]
     referenceOffenders =
         [ (activityName act, n)
         | act <- M.elems (sdbActivities db)
@@ -288,7 +310,7 @@ checkSimaProExportable db =
     allocationOffenders =
         [ (activityName act, pct)
         | act <- M.elems (sdbActivities db)
-        , let pct = fromMaybe 100 (activityAllocationPercent act)
+        , pct <- map (maybe 100 dsPercent) (activityDeclaredShares act)
         , isNaN pct || isInfinite pct
         ]
     unitOffenders =
@@ -598,31 +620,43 @@ the technosphere outputs matching @keep@. Used for both the @Products@ section
 rendered identically but the parser routes them to different exchange roles, so
 they must be emitted under their own headers, never merged.
 -}
-productLines :: (Exchange -> Bool) -> Catalogs -> Maybe Double -> Text -> [Exchange] -> [Text]
-productLines keep cats allocPct category exchs =
-    let alloc = formatAmount (fromMaybe 100 allocPct)
+productLines :: (Exchange -> Bool) -> Catalogs -> Text -> [Exchange] -> [Text]
+productLines keep cats category exchs =
+    let
         -- Extract the row fields in the comprehension, where the exchange is
         -- known to be a TechnosphereExchange — so mkRow is total (no unreachable
-        -- blank-row arm). Sort by (name, unit, amount) for determinism.
+        -- blank-row arm). Sort by (name, unit, amount) for determinism. Each
+        -- row carries the share and the category its source row declared;
+        -- a row that declared none takes the whole and the activity's category.
         entries =
             [ ( tfName flow
               , unitNameOf (catUnits cats) (exchangeUnitId ex)
               , exchangeAmount ex
+              , maybe 100 dsPercent (exchangeDeclaredShare ex)
+              , M.findWithDefault category "Category" (exchangeClassification ex)
               , renderComment (exchangePedigree ex) (exchangeComment ex)
               )
             | ex@TechnosphereExchange{} <- exchs
             , keep ex
             , Just flow <- [M.lookup (exchangeFlowId ex) (catTech cats)]
             ]
-        mkRow (nm, unit, amt, comment) = row [nm, unit, formatAmount amt, alloc, "not defined", category, comment]
-     in map mkRow (sortOn id entries)
+        mkRow (nm, unit, amt, share, rowCategory, comment) =
+            row [nm, unit, formatAmount amt, formatAmount share, "not defined", rowCategory, comment]
+     in
+        map mkRow (sortOn id entries)
 
-{- | A coproduct technosphere output (SimaPro @Avoided products@ section, which
-the parser reads back as a 'Coproduct' role).
--}
+-- | A product output the gate left unsplit: written as a further @Products@ row of its block.
 isCoproduct :: Exchange -> Bool
 isCoproduct ex = case ex of
     TechnosphereExchange{techRole = Coproduct} -> True
+    TechnosphereExchange{} -> False
+    BiosphereExchange{} -> False
+    WasteExchange{} -> False
+
+-- | A substitution (SimaPro @Avoided products@ section), which the parser reads back as 'AvoidedProduct'.
+isAvoidedProduct :: Exchange -> Bool
+isAvoidedProduct ex = case ex of
+    TechnosphereExchange{techRole = AvoidedProduct} -> True
     TechnosphereExchange{} -> False
     BiosphereExchange{} -> False
     WasteExchange{} -> False
@@ -689,7 +723,7 @@ serializeActivity cats act@Activity{..} =
         -- amount to 0, so there is nothing to divide back out — emit the stored
         -- zeros as-is and the re-import scales 0 by 0 again. 'checkSimaProExportable'
         -- still rejects a non-finite allocation, so the division below is finite.
-        allocFraction = fromMaybe 100 activityAllocationPercent / 100
+        allocFraction = maybe 100 dsPercent (activityReferenceShare act) / 100
         unscale ex
             | exchangeIsReference ex = ex
             | allocFraction == 0 = ex
@@ -709,11 +743,14 @@ serializeActivity cats act@Activity{..} =
             [ ["Process", ""]
             , concatMap (uncurry meta) (activityMetaLines act)
             , -- Products section is always present (an activity has a reference).
-              -- Coproducts go to "Avoided products" so the parser reads them back
-              -- as coproducts, not as extra reference-product activities.
-              "Products" : productLines exchangeIsReference cats activityAllocationPercent category unscaledExchanges
+              -- The reference comes first, which is how the parser tells it; the
+              -- coproducts of a block the gate left unsplit follow, each with its
+              -- declared share. Avoided products go under their own header.
+              "Products"
+                : productLines exchangeIsReference cats category unscaledExchanges
+                ++ productLines isCoproduct cats category unscaledExchanges
             , [""]
-            , withBlank (avoidedHeader (productLines isCoproduct cats activityAllocationPercent category unscaledExchanges))
+            , withBlank (avoidedHeader (productLines isAvoidedProduct cats category unscaledExchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))
