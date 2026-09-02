@@ -1085,7 +1085,16 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
             -- The readings that may name the place are the ones behind the name
             -- we settled on; the reference product's comes last, so a tie goes
             -- to the Process name, which is what named the block.
-            fallbackName = maybe (prName reference) locatedName referenceReading
+            -- Neither a Process name nor a named reference row: the first
+            -- named product names the block, so a malformed export does not
+            -- blank it and collide with every other blank block at its place.
+            fallbackName =
+                fromMaybe "" . listToMaybe $
+                    [ maybe n locatedName (extractLocation n)
+                    | p <- reference : coproducts
+                    , let n = T.strip (prName p)
+                    , not (T.null n)
+                    ]
             (effectiveActivityName, readings)
                 | not (T.null processNameTrimmed) = (processNameTrimmed, [processReading, referenceReading])
                 | otherwise = (fallbackName, [referenceReading])

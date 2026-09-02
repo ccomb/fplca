@@ -1463,6 +1463,17 @@ spec = do
             map activityName activities `shouldBe` ["Tuna, main product {FR} U"]
             length (concatMap activityDeclaredShares activities) `shouldBe` 2
 
+        it "names a block with no Process name and a blank reference row after its first named product" $ do
+            -- Otherwise every such block at one location is named "" and
+            -- shares one activityUUID with the others.
+            (activities, _, _, _, _) <-
+                parseProductsCSV
+                    ""
+                    [ ";kg;1;91;not defined;material;"
+                    , "Tuna by-products {FR} U;kg;1;9;not defined;material;"
+                    ]
+            map activityName activities `shouldBe` ["Tuna by-products {FR} U"]
+
     describe "the loader splits a multi-product block" $ do
         it "gives one process per product, all sharing the block's activityUUID and name" $ do
             db <- loadMultiCoproductCSV
