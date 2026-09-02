@@ -14,7 +14,7 @@ import Data.Text (Text)
 
 import Database (buildDatabaseWithMatrices)
 import qualified Database.Loader as Loader
-import Types (Database, sdbActivities, sdbBioFlows, sdbTechFlows, sdbUnits, sdbWasteFlows)
+import Types (BuildInputs (..), Database, sdbActivities, sdbBioFlows, sdbTechFlows, sdbUnits, sdbWasteFlows)
 import qualified UnitConversion as UC
 
 {- | Parse a fixture path and build the indexed 'Database' with matrices.
@@ -32,7 +32,7 @@ loadFullDatabase path = do
         Right sdb -> do
             built <-
                 buildDatabaseWithMatrices
-                    UC.defaultUnitConfig
+                    (BuildInputs UC.defaultUnitConfig mempty)
                     (sdbActivities sdb)
                     (sdbTechFlows sdb)
                     (sdbBioFlows sdb)

@@ -43,6 +43,7 @@ import Method.Types (Method (..), MethodCF (..))
 import qualified Method.Types as MT
 import Types (
     BiosphereFlow (..),
+    BuildInputs (..),
     Compartment (..),
     Database (..),
     Indexes (..),
@@ -160,6 +161,7 @@ emptyDatabase =
         , dbFlowsByCAS = M.empty
         , dbProductSearchIndex = M.empty
         , dbBM25Index = Nothing
+        , dbBuiltWith = BuildInputs UC.defaultUnitConfig mempty
         }
 
 data SynFixture = SynFixture
@@ -334,7 +336,10 @@ registerReal = do
                             pure []
                         Right method -> do
                             putStrLn "[bench] lcia.real.score_method: mapping CFs to flows + filling broadcast..."
-                            mappings <- mapMethodToFlows db method
+                            -- No compartment map: a bench has no database manager to
+                            -- merge one from, and this is what the bench measured before
+                            -- the bridge became a parameter.
+                            mappings <- mapMethodToFlows M.empty db method
                             let unitDB = dbUnits db
                                 flowDB = dbBioFlows db
                                 tables0 = buildMethodTables (cfFamily (methodUnit method)) M.empty M.empty mappings
