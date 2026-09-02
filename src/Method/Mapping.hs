@@ -843,12 +843,14 @@ data MethodTables = MethodTables
     method's own zero" — this map is what keeps those three apart. Absent key
     = the cascade found no CF at all.
     -}
-    , mtFilledOver :: !BioFlowDB
-    {- ^ The flow table 'fillBroadcastVector' walked. A flow it holds that
-    'mtBroadcast' omits was judged by the cascade then and carries no factor,
-    so a scorer need not ask again; a flow it does not hold arrived after the
-    fill (a what-if substitution into a database loaded since) and still takes
-    the cascade. Empty until the fill.
+    , mtJudged :: !(S.Set UUID)
+    {- ^ The flows 'fillBroadcastVector' walked, the keys of the flow table it
+    was given. Each went through the cascade, so one this set holds that
+    'mtBroadcast' omits carries no factor and a scorer need not ask again; a
+    flow outside it arrived after the fill (a what-if substitution into a
+    database loaded since) and still takes the cascade. Only the keys are
+    kept: the records themselves would outlive their database's unload.
+    Empty until the fill.
     -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
@@ -1550,7 +1552,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtResolution = M.empty -- filled alongside 'mtBroadcast'
-        , mtFilledOver = M.empty -- filled alongside 'mtBroadcast'
+        , mtJudged = S.empty -- filled alongside 'mtBroadcast'
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
@@ -1845,7 +1847,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
     tables
         { mtBroadcast = M.map fst resolved
         , mtResolution = M.map snd resolved
-        , mtFilledOver = flowDB
+        , mtJudged = M.keysSet flowDB
         }
   where
     resolved = M.mapMaybeWithKey buildEntry flowDB
@@ -2967,7 +2969,7 @@ data BatchedTables = BatchedTables
     -}
     , btJudged :: !(Set.Set UUID)
     {- ^ Flows every method's fill walked and none characterizes: the
-    intersection of the 'mtFilledOver' tables, minus 'btUuidIndex'. Such a
+    intersection of the methods' 'mtJudged', minus 'btUuidIndex'. Such a
     flow contributes nothing, and the scoring loop knows it in one lookup
     instead of one cascade per method.
     -}
@@ -3008,7 +3010,7 @@ buildBatchedTables entries =
         uuidList = Set.toAscList uuidSet
         uuidIndex = M.fromList (zip uuidList [0 ..])
         nFlows = length uuidList
-        judged = intersections (map (M.keysSet . mtFilledOver . mseTables) (V.toList entries)) `Set.difference` uuidSet
+        judged = intersections (map (mtJudged . mseTables) (V.toList entries)) `Set.difference` uuidSet
         mat = U.create $ do
             mv <- MU.replicate (nFlows * nMethods) (0.0 :: Double)
             V.iforM_ entries $ \i e ->
@@ -3118,9 +3120,8 @@ For each non-zero @(uuid, qty)@ in the inventory, accumulates
 major layout) so the cost is @nnz × nMethods@ FMAs with cache-friendly
 reads. A UUID outside the broadcast that every method's fill walked
 ('btJudged') carries no factor and is skipped; any other falls back to each
-non-regional method's 'lookupCascadeCF' (same fix as the mono-method
-'fastScore') so an inventory reaching flows the fill never saw does not
-silently lose them.
+non-regional method's 'lookupCascadeCF', so an inventory reaching flows the
+fill never saw does not silently lose them.
 -}
 scoreBatched ::
     UnitConfig ->
