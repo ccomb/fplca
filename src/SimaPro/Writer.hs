@@ -84,10 +84,12 @@ import qualified Data.ByteString as BS
 import Data.Either (lefts)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Database.Allocation (AllocationRefusal (..), asAllocated, describeRefusal)
 import SimaPro.Parser (isMetadataKey, parsePedigreePrefix)
 import Types
 
@@ -164,6 +166,7 @@ checkSimaProExportable db =
         , checkMedia
         , checkAmounts
         , checkAllocation
+        , checkCoproducts
         , checkUnits
         , checkNewlines
         , checkComments
@@ -226,6 +229,20 @@ checkSimaProExportable db =
                         <> " is not finite — the writer divides the allocation-scaled"
                         <> " amounts back out, so a non-finite percentage would lose"
                         <> " them on re-import."
+    -- A block gives every product row a share, so an activity whose products
+    -- carry none cannot be written as one: each row would claim the whole
+    -- and re-import would give every product the full inventory.
+    checkCoproducts =
+        case coproductOffenders of
+            [] -> Right ()
+            ((name, refusal) : _) ->
+                Left $
+                    "SimaPro export cannot represent activity \""
+                        <> name
+                        <> "\": "
+                        <> describeRefusal refusal
+                        <> ". A SimaPro block carries a share on every product row, so"
+                        <> " re-importing it would give each product the whole inventory."
     checkUnits =
         case unitOffenders of
             [] -> Right ()
@@ -263,6 +280,11 @@ checkSimaProExportable db =
     -- one Process block per activity with one Products row per reference; zero
     -- references → an empty Products section → the parser drops the block, and
     -- >1 → several Products rows → the parser splits it into one activity each.
+    coproductOffenders =
+        [ (activityName act, refusal)
+        | act <- M.elems (sdbActivities db)
+        , Left refusal@UnallocatedOutputs{} <- [asAllocated act]
+        ]
     referenceOffenders =
         [ (activityName act, n)
         | act <- M.elems (sdbActivities db)

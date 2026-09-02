@@ -501,6 +501,12 @@ spec = describe "SimaPro.Writer round-trip" $ do
                 `shouldSatisfy` either (const True) (const False)
 
     describe "checkSimaProExportable (round-trip guards)" $ do
+        it "refuses an activity whose product rows carry no share: each row would claim the whole" $
+            case checkSimaProExportable (guardDb Nothing Nothing [refProd, refProd2{techRole = Coproduct}]) of
+                Left msg -> do
+                    msg `shouldSatisfy` T.isInfixOf "guard maker"
+                    msg `shouldSatisfy` T.isInfixOf "without a declared share"
+                Right () -> expectationFailure "an unallocated activity was accepted"
         it "accepts a pedigree-less exchange with an ordinary comment" $
             checkSimaProExportable (commentDb Nothing (Just "ordinary free text"))
                 `shouldBe` Right ()
