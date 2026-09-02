@@ -176,8 +176,9 @@ resolveScorable db queryText = do
             Left . NotScorable $
                 "Activity \"" <> activityName act <> "\" (" <> queryText <> ") cannot be scored: " <> describeRefusal refusal
 
-{- | Resolve activity and get both ProcessId and Activity
-This is the preferred function when you need the ProcessId (e.g., for matrix operations)
+{- | Resolve activity and get both ProcessId and Activity, for reading.
+Anything that scores goes through 'resolveScorable', which adds the
+allocation gate; a matrix operation reached from here bypasses it.
 -}
 resolveActivityAndProcessId :: Database -> Text -> Either ServiceError (ProcessId, Activity)
 resolveActivityAndProcessId db queryText =

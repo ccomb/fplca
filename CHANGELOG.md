@@ -64,8 +64,8 @@
   it (HTTP 422; the tools return the same text). The activity itself still
   loads and reads as before. What triggers it: a product output the source
   declares no share for, which happens on an unlinked (multi-output)
-  EcoSpold 2 dataset, a multi-output ILCD or Brightway process, or an
-  authored activity with a coproduct; and an activity without exactly one
+  EcoSpold 2 dataset or a multi-output ILCD or Brightway process; and an
+  activity without exactly one
   reference exchange, which the EcoSpold parsers used to drop at parse time.
   None of the databases shipped as examples trigger it. Nothing changes in
   any score: a SimaPro block's products are split into one process per
