@@ -132,7 +132,9 @@
   dataset two identifiers on two servers. From now on an activity is named by
   the "Process identifier" its block publishes, and a flow by its name folded in
   case and its compartment. The identifiers of these two formats therefore move
-  once more, and `volca/examples/process_id_remap` converts a stored list.
+  once more. Converting a stored list means asking the engine for every activity
+  it holds and recomputing the ids each one used to answer to: a uuid5 cannot be
+  inverted, so that is the only direction that works.
   EcoSpold 1 and 2 and ILCD are untouched: they carry identifiers of their own.
 - Every row of these two formats is recorded in the reference unit of its
   dimension, where only the reference product was before. An input written in
