@@ -177,25 +177,30 @@ registerSimaPro = do
         Nothing -> pure []
         Just path -> do
             -- Parse once to learn N_actual; the bench measurement re-parses fresh.
-            (acts, _, _, _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
-            let !n = length acts
-            pure
-                [ BenchSpec
-                    { bsCapability = "parser.simapro"
-                    , bsLabel = T.pack ("Parse " <> show n <> " processes from a SimaPro CSV")
-                    , bsDescription =
-                        "Reads a SimaPro CSV export (Windows-1252 encoded) and parses every process block into \
-                        \Haskell structures. Internally splits the file across worker threads at process \
-                        \boundaries. SimaPro CSV is the dominant interchange format from food and agriculture LCA \
-                        \databases; this benches the cold-start parsing cost."
-                    , bsUnitOfWork = UnitOfWork{uowKind = "simapro_processes", uowN = n}
-                    , bsMetric = "seconds"
-                    , bsFixture = J.Fixture{J.fSource = F.fixtureSourceLabel F.Agribalyse, J.fSlice = "whole file"}
-                    , bsAction = nfIO $ do
-                        (acts', _, _, _, _) <- SP.parseSimaProCSV UC.defaultUnitConfig path
-                        evaluate (length acts')
-                    }
-                ]
+            parsed <- SP.parseSimaProCSV UC.defaultUnitConfig path
+            case parsed of
+                Left err -> do
+                    putStrLn $ "[bench] parser.simapro: parse failed (" <> T.unpack err <> "), skipping"
+                    pure []
+                Right (acts, _, _, _, _) -> do
+                    let !n = length acts
+                    pure
+                        [ BenchSpec
+                            { bsCapability = "parser.simapro"
+                            , bsLabel = T.pack ("Parse " <> show n <> " processes from a SimaPro CSV")
+                            , bsDescription =
+                                "Reads a SimaPro CSV export (Windows-1252 encoded) and parses every process block into \
+                                \Haskell structures. Internally splits the file across worker threads at process \
+                                \boundaries. SimaPro CSV is the dominant interchange format from food and agriculture LCA \
+                                \databases; this benches the cold-start parsing cost."
+                            , bsUnitOfWork = UnitOfWork{uowKind = "simapro_processes", uowN = n}
+                            , bsMetric = "seconds"
+                            , bsFixture = J.Fixture{J.fSource = F.fixtureSourceLabel F.Agribalyse, J.fSlice = "whole file"}
+                            , bsAction = nfIO $ do
+                                reparsed <- SP.parseSimaProCSV UC.defaultUnitConfig path
+                                evaluate (fmap (\(acts', _, _, _, _) -> length acts') reparsed)
+                            }
+                        ]
 
 -- ---------------------------------------------------------------------------
 -- ILCD directory parser
