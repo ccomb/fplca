@@ -13,6 +13,7 @@ module MethodSetTablesSpec (spec) where
 
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
@@ -270,6 +271,48 @@ spec = do
                         M.empty
                         (NE.singleton (unusedDatabase, U.empty, mst))
             -- Both contribute against CF=3: (2 + 4) × 3 = 18.
+            map snd results `shouldBe` [Right 18.0]
+
+        it "skips a flow the fill judged without a factor, still cascades one the fill never saw" $ do
+            -- The fill walked fidBuild (characterized) and fidNoCF (no factor
+            -- anywhere); fidCrossDB reaches the inventory later, as a what-if
+            -- substitution into a database loaded since would, and resolves
+            -- through the UUID rung. Only fidNoCF is judged: it costs no
+            -- cascade, and the two others still score.
+            let fidBuild = mkUuid 100
+                fidNoCF = mkUuid 101
+                fidCrossDB = mkUuid 999
+                uidKg = mkUuid 200
+                cfBuild = mkCF fidBuild 3.0
+                cfCross = mkCF fidCrossDB 3.0
+                m1 = mkMethod 1 "m1" [cfBuild, cfCross]
+                buildFlowDB =
+                    M.fromList
+                        [ (fidBuild, mkFlow fidBuild "co2" uidKg)
+                        , (fidNoCF, mkFlow fidNoCF "argon" uidKg)
+                        ]
+                scoringFlowDB = M.insert fidCrossDB (mkFlow fidCrossDB "co2" uidKg) buildFlowDB
+                udb = M.singleton uidKg (mkUnit uidKg "kg")
+                t =
+                    fillBroadcastVector UnitConversion.defaultUnitConfig udb buildFlowDB $
+                        buildMethodTables
+                            OtherCFFamily
+                            M.empty
+                            M.empty
+                            [ (cfBuild, Just (mkFlow fidBuild "co2" uidKg, ByUUID))
+                            , (cfCross, Just (mkFlow fidCrossDB "co2" uidKg, ByUUID))
+                            ]
+                mst = buildMethodSetTables [(m1, t)]
+                inv = M.fromList [(fidBuild, 2.0), (fidNoCF, 5.0), (fidCrossDB, 4.0)]
+                results =
+                    computeLCIAScoreSetFromTables
+                        UnitConversion.defaultUnitConfig
+                        udb
+                        scoringFlowDB
+                        inv
+                        M.empty
+                        (NE.singleton (unusedDatabase, U.empty, mst))
+            btJudged (msBatched mst) `shouldBe` Set.singleton fidNoCF
             map snd results `shouldBe` [Right 18.0]
 
     describe "msAllMethods preserves caller-given order" $ do

@@ -200,6 +200,7 @@ spec = do
                     , mtCompartmentMap = M.empty
                     , mtEnergyDensities = M.empty
                     , mtResolution = M.empty
+                    , mtFilledOver = M.empty
                     , mtBroadcast = M.empty
                     , mtRegionalActivityWeights = Nothing
                     }
