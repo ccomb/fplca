@@ -405,6 +405,15 @@ jobs:
           # Windows: re-source GHCup env in this MSYS2 shell since the wrapper
           # does not inherit PATH from the previous step.
           [[ -f /d/ghcup/env ]] && source /d/ghcup/env
+          # The Linux rows run in an Alpine container that has no git when
+          # checkout runs, so checkout falls back to the REST tarball and
+          # leaves no .git behind: gen-version.sh found nothing to read and
+          # every released Linux binary reported its commit as "unknown".
+          # The runner knows what it checked out, and the script already
+          # prefers these variables over git, so hand them over on every
+          # platform rather than making one row special.
+          export GIT_HASH="${GITHUB_SHA:0:7}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] && export GIT_TAG="$GITHUB_REF_NAME"
           # Per-platform behaviour:
           # - Windows: only platform with indefinite test hangs
           #   (waitForProcess never reaping volca.exe). Wrap with GNU
