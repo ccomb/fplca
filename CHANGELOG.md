@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- A released Linux binary now reports the commit it was built from, and a
+  release binary the tag it carries. Both used to come out as `unknown` and
+  an empty tag on Linux alone (`volca --version`, `GET /api/v1/version`),
+  because that build runs in a container without git and had nothing to
+  read; the macOS and Windows binaries were already correct.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added
