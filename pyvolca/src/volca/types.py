@@ -1880,6 +1880,10 @@ class UnmappedFlow(FromJson):
     flow_ref: str
     flow_name: str
     direction: str
+    #: The compartment the method states, rendered as the factors route renders
+    #: it ("air", "water/groundwater/long-term"); None when the row states none,
+    #: or when the engine predates wire revision 13.
+    compartment: str | None = None
 
 
 @dataclass

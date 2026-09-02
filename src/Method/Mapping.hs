@@ -22,6 +22,7 @@ module Method.Mapping (
     expandPatternCF,
     dropExcludedMappings,
     exclusionWarning,
+    compartmentGapWarning,
     buildMapContext,
     mapContextFor,
 
@@ -123,7 +124,7 @@ import Data.List (find, partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.Ord (Down (..))
 import Data.STRef (modifySTRef', newSTRef, readSTRef)
 import qualified Data.Set as S
@@ -278,6 +279,7 @@ mapMethodFlows ctx0 method = do
             then mapM resolve cfs
             else concat <$> mapConcurrently (mapM resolve) (chunksOf (max 1 ((n + caps - 1) `div` caps)) cfs)
     mapM_ (warn . pure) (mapMaybe (exclusionWarning (mcBioFlowsByUUID ctx0)) exclusionCFs)
+    warn (maybeToList (compartmentGapWarning (mcCompartmentMap ctx0) (mcBioFlowsByName ctx0) concrete))
     expanded <- fmap concat . mapM (materialize exclusionCFs) $ patternCFs
     pure (concrete ++ expanded)
   where
@@ -374,16 +376,16 @@ under "resource".
 sameMedium :: Text -> Text -> Bool
 sameMedium a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
 
-{- | Does a flow's medium satisfy the one a method row states? The row's medium
-may be the broader spelling of the flow's, as "air" is of "urban air", which is
-the row widening to cover a narrower filing and not the other way round. An
-empty statement constrains nothing.
+{- | Does a flow's medium satisfy the one a method row states? Equal after
+normalization, as the scoring tables key it: 'buildMethodTables' indexes a
+factor under the row's normalized medium and 'flowMediumSub' files a flow
+under its own, so a match judged any looser here promises a factor the read
+side never serves. "air" against "emissions to air" is a vocabulary gap that
+only a compartment rule bridges, not a widening. An empty statement
+constrains nothing.
 -}
 mediumFits :: Text -> Text -> Bool
-mediumFits stated actual =
-    T.null stated || sameMedium stated actual || norm stated `T.isInfixOf` norm actual
-  where
-    norm = normalizeMedium . T.toCaseFold
+mediumFits stated actual = T.null stated || sameMedium stated actual
 
 {- | Does a flow's subcompartment satisfy the one a method row states? A
 statement that names no particular subcompartment constrains only the medium,
@@ -489,6 +491,45 @@ exclusionWarning flows cf
     | otherwise = Nothing
   where
     why reason = "exclusion CF '" <> mcfFlowName cf <> "' " <> reason
+
+{- | The factors the cascade left unmatched although a flow of their name is
+in the database, stated in a medium no flow of the database is filed under.
+That is a vocabulary gap ("air" against "emissions to air"), which a
+compartment mapping bridges and nothing else will: said once per method,
+with both vocabularies, so the operator knows what to declare.
+
+Judged on the whole database, not on the flows of that name: a substance the
+database has in water and not in air leaves a factor stated in air unmatched
+too, and that is the database's inventory, not its vocabulary.
+-}
+compartmentGapWarning :: CompartmentMap -> M.Map Text [BiosphereFlow] -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> Maybe Text
+compartmentGapWarning cmap flowsByName mappings
+    | null gaps = Nothing
+    | otherwise =
+        Just $
+            T.pack (show (length gaps))
+                <> " factor(s) name a flow this database files under another compartment (method: "
+                <> quoted (S.fromList (map fst gaps))
+                <> "; database: "
+                <> quoted (S.unions (map snd gaps))
+                <> "). Declare a [[compartment-mappings]] table bridging them."
+  where
+    mediumOf :: BiosphereFlow -> Text
+    mediumOf fl = let (Medium m, _) = flowMediumSub cmap fl in m
+    databaseMedia :: S.Set Text
+    databaseMedia = S.fromList (map mediumOf (concat (M.elems flowsByName)))
+    gaps :: [(Text, S.Set Text)]
+    gaps =
+        [ (stated, seen)
+        | (cf, Nothing) <- mappings
+        , Just (Medium stated, _) <- [cfMediumSub cmap cf]
+        , stated `S.notMember` databaseMedia
+        , Just flows <- [M.lookup (normalizeName (mcfFlowName cf)) flowsByName]
+        , let seen = S.fromList (map mediumOf flows)
+        , not (S.null seen)
+        ]
+    quoted :: S.Set Text -> Text
+    quoted = T.intercalate ", " . map (\t -> "\"" <> t <> "\"") . S.toList
 
 -- | Wire name for a match strategy.
 strategyToText :: MatchStrategy -> Text

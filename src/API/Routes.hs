@@ -1295,7 +1295,8 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 12: the @MissingNode@ a tree export reports where a link names a
+(revision 13: the @compartment@ an unmapped factor of the mapping report
+carries; revision 12: the @MissingNode@ a tree export reports where a link names a
 row no loaded database holds, and the @missing:@ prefixed id such a node and
 its edge carry in place of a process id;
 revision 11: the @dataVersion@ the version route reports; revision 10: the
@@ -1313,7 +1314,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 12
+currentWireVersion = 13
 
 getVersion :: AppM Value
 getVersion = do
@@ -1981,6 +1982,7 @@ getMethodMapping dbName methodIdText = do
                     , ufaDirection = case mcfDirection cf of
                         MT.Input -> "Input"
                         MT.Output -> "Output"
+                    , ufaCompartment = compartmentPath <$> mcfCompartment cf
                     }
                 | (cf, Nothing) <- mappings
                 ]
