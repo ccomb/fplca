@@ -22,6 +22,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Conc (getNumProcessors)
 import GHC.IO.Exception (ExitCode (ExitSuccess))
 import System.Environment (getArgs, lookupEnv)
+import System.Exit (exitFailure)
 import System.IO (hFlush, stdout)
 import System.Process (readProcessWithExitCode)
 import Text.Printf (printf)
@@ -29,6 +30,9 @@ import Text.Printf (printf)
 import qualified Criterion.Measurement as Meas
 import qualified Criterion.Measurement.Types as MeasTypes
 import System.Mem (performMajorGC)
+
+import qualified Builtin as B
+import qualified UnitConversion as UC
 
 import qualified Bench.Json as J
 import qualified Bench.Lcia as Lcia
@@ -41,14 +45,16 @@ main = do
     outPath <- resolveOutput
     putStrLn $ "[bench] output: " <> outPath
 
+    unitCfg <- resolveUnitConfig
+
     putStrLn "[bench] collecting bench specs..."
     specs <-
         concat
             <$> sequence
-                [ Parsers.register
-                , Loader.register
-                , Solve.register
-                , Lcia.register
+                [ Parsers.register unitCfg
+                , Loader.register unitCfg
+                , Solve.register unitCfg
+                , Lcia.register unitCfg
                 ]
     putStrLn $ "[bench] " <> show (length specs) <> " benchs ready"
 
@@ -66,6 +72,22 @@ main = do
                 }
     J.writeBenchResults outPath out
     putStrLn $ "[bench] wrote " <> outPath <> " (" <> show (length results) <> " results)"
+
+{- | The unit table every bench reads a real database with: the one the
+engine carries in its binary, which is what an engine started with no
+configuration runs on. 'UC.defaultUnitConfig' knows four units, so a real
+database refuses to load against it: two rows written in kg and in g are
+then two flows no conversion relates.
+-}
+resolveUnitConfig :: IO UC.UnitConfig
+resolveUnitConfig =
+    case UC.buildFromCSV (B.builtinContent B.BuiltinUnits) of
+        Left err -> do
+            putStrLn $ "[bench] cannot read the built-in unit table: " <> T.unpack err
+            exitFailure
+        Right cfg -> do
+            putStrLn $ "[bench] unit table: " <> show (UC.unitCount cfg) <> " units"
+            pure cfg
 
 resolveOutput :: IO FilePath
 resolveOutput = do

@@ -24,15 +24,15 @@ expected to invoke it once at registration time and reuse the result.
 Returns 'Left' with a human-readable message if the parse or matrix build
 fails. The bench module is responsible for skipping its specs in that case.
 -}
-loadFullDatabase :: FilePath -> IO (Either Text Database)
-loadFullDatabase path = do
-    res <- Loader.loadDatabase UC.defaultUnitConfig path
+loadFullDatabase :: UC.UnitConfig -> FilePath -> IO (Either Text Database)
+loadFullDatabase unitCfg path = do
+    res <- Loader.loadDatabase unitCfg path
     case res of
         Left err -> pure (Left ("loadDatabase failed: " <> err))
         Right sdb -> do
             built <-
                 buildDatabaseWithMatrices
-                    (BuildInputs UC.defaultUnitConfig mempty)
+                    (BuildInputs unitCfg mempty)
                     (sdbActivities sdb)
                     (sdbTechFlows sdb)
                     (sdbBioFlows sdb)

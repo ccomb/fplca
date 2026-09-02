@@ -54,11 +54,11 @@ nProcessFiles = 1000
 -- Public registration
 -- ---------------------------------------------------------------------------
 
-register :: IO [BenchSpec]
-register = do
+register :: UC.UnitConfig -> IO [BenchSpec]
+register unitCfg = do
     es2 <- registerEcoSpold2
     es1 <- registerEcoSpold1
-    sp <- registerSimaPro
+    sp <- registerSimaPro unitCfg
     ilcd <- registerIlcd
     methods <- registerMethodParsers
     pure (es2 ++ es1 ++ sp ++ ilcd ++ methods)
@@ -170,14 +170,14 @@ registerEcoSpold1 = do
 -- SimaPro CSV (single-file, parallel internally)
 -- ---------------------------------------------------------------------------
 
-registerSimaPro :: IO [BenchSpec]
-registerSimaPro = do
+registerSimaPro :: UC.UnitConfig -> IO [BenchSpec]
+registerSimaPro unitCfg = do
     mPath <- F.lookupFixture F.Agribalyse
     case mPath of
         Nothing -> pure []
         Just path -> do
             -- Parse once to learn N_actual; the bench measurement re-parses fresh.
-            parsed <- SP.parseSimaProCSV UC.defaultUnitConfig path
+            parsed <- SP.parseSimaProCSV unitCfg path
             case parsed of
                 Left err -> do
                     putStrLn $ "[bench] parser.simapro: parse failed (" <> T.unpack err <> "), skipping"
@@ -197,7 +197,7 @@ registerSimaPro = do
                             , bsMetric = "seconds"
                             , bsFixture = J.Fixture{J.fSource = F.fixtureSourceLabel F.Agribalyse, J.fSlice = "whole file"}
                             , bsAction = nfIO $ do
-                                reparsed <- SP.parseSimaProCSV UC.defaultUnitConfig path
+                                reparsed <- SP.parseSimaProCSV unitCfg path
                                 evaluate (fmap (\(acts', _, _, _, _) -> length acts') reparsed)
                             }
                         ]
