@@ -63,6 +63,7 @@ import Types (
     Activity (..),
     BioDirection (..),
     BiosphereFlow (..),
+    BuildInputs (..),
     Compartment (..),
     Database (..),
     Exchange (..),
@@ -354,7 +355,7 @@ buildFrom :: M.Map (UUID, UUID) Activity -> IO Database
 buildFrom activities = do
     r <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             activities
             (M.singleton supplierProdId milkFlow)
             (M.singleton co2Id co2Flow)

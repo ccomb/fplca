@@ -18,7 +18,6 @@ import qualified Search.BM25.Types as BM25T
 import qualified Search.Fuzzy as Fuzzy
 import qualified Search.Normalize as Normalize
 import Types
-import UnitConversion (UnitConfig)
 
 {- | Build complete database with pre-computed sparse matrices
 
@@ -40,8 +39,8 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: UnitConfig -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> IO (Either Text Database)
-buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowDB unitDB = do
+buildDatabaseWithMatrices :: BuildInputs -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> IO (Either Text Database)
+buildDatabaseWithMatrices inputs activityMap techFlowDB bioFlowDB wasteFlowDB unitDB = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
     let !tables = buildInterningTables activityMap
         !supplierRefUnits = buildSupplierRefUnits unitDB (itActivities tables)
@@ -50,7 +49,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowD
 
     reportMatrixOperation ("Activity index built: " ++ show activityCount ++ " activities")
     reportMatrixOperation "Building technosphere matrix triplets"
-    case buildTechTriples unitConfig unitDB tables supplierRefUnits of
+    case buildTechTriples (biUnitConfig inputs) unitDB tables supplierRefUnits of
         Left err -> pure (Left err)
         Right (techTriples, techWarnings) -> do
             mapM_ (reportProgress Warning) techWarnings
@@ -98,6 +97,7 @@ buildDatabaseWithMatrices unitConfig activityMap techFlowDB bioFlowDB wasteFlowD
                         , dbCrossDBLinks = []
                         , dbDependsOn = []
                         , dbLinkingStats = mempty
+                        , dbBuiltWith = inputs
                         , dbSynonymDB = Nothing
                         , dbFlowsByName = M.empty
                         , dbFlowsByCAS = M.empty

@@ -9,6 +9,9 @@ The PR these tests guard introduced two related changes:
      (i.e. cross-DB linking was NOT freshly run against 'otherIndexes').
   2. 'loadDatabaseSingleFromConfig' uses that flag to skip the no-op
      self-relink on fresh parses.
+  3. A cache is a hit only when the unit table and the location aliases it
+     was built with are the ones in force; with either changed, the source
+     is read again, since both shape what the cache holds.
 
 The 'fromCache' flag is the contract these tests pin down. The end-to-end
 dep-set-swap scenario (load consumer with deps A → swap to B → reload
@@ -34,7 +37,7 @@ import Test.Hspec
 import Database.Manager (loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
 import Types (GeographyPolicy (..))
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
 
 {- | Copy regular files from one directory into another (non-recursive,
 which is all the EcoSpold v2 fixtures here need).
@@ -50,19 +53,31 @@ test cares about. Cross-DB linking is not exercised; we only need the
 cache-hit detection.
 -}
 runRaw :: FilePath -> IO (Either T.Text Bool)
-runRaw dstDir = do
+runRaw = runRawWith defaultUnitConfig M.empty
+
+-- | The same, under a chosen unit table and location aliases.
+runRawWith :: UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text Bool)
+runRawWith unitConfig locationAliases dstDir = do
     result <-
         loadDatabaseRawWithCrossDB
             "test"
-            M.empty
+            locationAliases
             dstDir
             False -- noCache disabled: cache must be written/read
             emptySynonymDB
-            defaultUnitConfig
+            unitConfig
             []
             M.empty
             GeoGlobal
     return (fmap snd result)
+
+-- | The default unit table plus one unit, so the table differs in content.
+withGram :: UnitConfig
+withGram =
+    mkUnitConfig
+        (ucDimensionOrder defaultUnitConfig)
+        (M.insert "g" (UnitDef [1, 0, 0, 0, 0, 0, 0, 0] 0.001) (ucUnits defaultUnitConfig))
+        (M.insert "g" "g" (ucOriginalKeys defaultUnitConfig))
 
 spec :: Spec
 spec = do
@@ -93,3 +108,21 @@ spec = do
                 -- Second call: must come back from the cache.
                 r2 <- runRaw dstDir
                 r2 `shouldBe` Right True
+
+        it "reads the source again when the cache was built with another unit table" $
+            withSystemTempDirectory "volca-relink" $ \tmp -> do
+                let dstDir = tmp </> "sample"
+                copyDirContents "test-data/SAMPLE.min1" dstDir
+
+                _ <- runRaw dstDir
+                runRawWith withGram M.empty dstDir `shouldReturn` Right False
+                -- The rebuilt cache records the new table and is trusted again.
+                runRawWith withGram M.empty dstDir `shouldReturn` Right True
+
+        it "reads the source again when the cache was built with other location aliases" $
+            withSystemTempDirectory "volca-relink" $ \tmp -> do
+                let dstDir = tmp </> "sample"
+                copyDirContents "test-data/SAMPLE.min1" dstDir
+
+                _ <- runRaw dstDir
+                runRawWith defaultUnitConfig (M.fromList [("CH", "GLO")]) dstDir `shouldReturn` Right False

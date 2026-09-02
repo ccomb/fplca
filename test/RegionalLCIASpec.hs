@@ -35,7 +35,7 @@ import Types (
     emptyProductIndex,
  )
 import qualified Types as VT
-import UnitConversion (UnitConfig (..), UnitDef (..), mkUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
 -- ---------------------------------------------------------------------------
 -- Fixture
@@ -128,6 +128,7 @@ mkDB locsAndEmissions =
             , dbCrossDBLinks = []
             , dbDependsOn = []
             , dbLinkingStats = mempty
+            , dbBuiltWith = VT.BuildInputs defaultUnitConfig mempty
             , dbSynonymDB = Nothing
             , dbFlowsByName = M.empty
             , dbFlowsByCAS = M.empty

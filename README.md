@@ -32,7 +32,7 @@ It loads EcoSpold2, EcoSpold1, SimaPro CSV, ILCD process, and Brightway Excel da
 - **Fuzzy search**: Trigram-based typo and stem tolerance on activity and supply-chain name filters
 - **Auto-extracted synonyms**: Synonym pairs extracted automatically from loaded databases and method packages, available for toggling and download
 - **Reference data management**: Flow synonyms, compartment mappings, and unit definitions can be configured in TOML, uploaded via the API, or toggled independently
-- **Fast cache**: Per-database cache co-located with the source path, with automatic schema-based invalidation (figures in the Performance table below)
+- **Fast cache**: Per-database cache co-located with the source path, rebuilt when the cache schema changes or when the unit table or location aliases it was built with are no longer the ones in force (figures in the Performance table below)
 - **Optional access control**: Single-code login with cookie-based session
 
 ---

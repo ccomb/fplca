@@ -17,7 +17,7 @@ for subsequent runs.
 
 Key performance features:
 - Parallel parsing with controlled concurrency (prevents resource exhaustion)
-- Automatic cache invalidation based on source file changes
+- Automatic cache invalidation when the schema or the build inputs change
 - Memory-efficient chunked processing for large databases
 - Hash-based cache filenames for multi-dataset support
 
@@ -38,7 +38,6 @@ module Database.Loader (
     -- * Cache Operations
     loadCachedDatabaseWithMatrices,
     saveCachedDatabaseWithMatrices,
-    loadDatabaseFromCacheFile,
     generateMatrixCacheFilename,
 
     -- * Cross-Database Linking
@@ -101,7 +100,7 @@ import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
 import Data.Either (lefts, partitionEithers, rights)
-import Data.List (sort, sortBy, sortOn)
+import Data.List (intercalate, sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 
@@ -155,7 +154,7 @@ import Method.Types (Location)
 import Progress
 import qualified SimaPro.Parser as SimaPro
 import SynonymDB (SynonymDB)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeBaseName, takeDirectory, takeExtension, (</>))
 import Text.Printf (printf)
 import Types
@@ -200,17 +199,13 @@ unzip9 = foldr step ([], [], [], [], [], [], [], [], [])
         (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs, i : is)
 
 {- |
-Schema signature automatically derived from the Database type structure.
+Schema signature of the cache payload.
 
-Automatically changes when:
-- Fields are added/removed from Database or nested types
-- Type names change
-- Type structure changes
-
-The trailing 'xor' constant is a manual cache-busting salt — bump it (e.g.
-4 → 5) when the semantics of the cached matrices change without any type
-change, so existing caches are treated as incompatible and rebuilt on the
-next load instead of silently returning stale numbers.
+The 'Typeable' fingerprint names the 'Database' type (package, module, name)
+and nothing more: it does not move when a field is added or a nested type
+changes. Every change to what the cache holds, layout or meaning, therefore
+needs a bump of the trailing constant, so existing caches are rebuilt on the
+next load instead of being misread or silently returning stale numbers.
 
 History of manual bumps:
 - 5: reference-product amounts normalized to canonical base unit at ingest
@@ -282,6 +277,9 @@ History of manual bumps:
      share and its category, and every activity passes the allocation gate
      before the matrix. The cached exchanges of an allocated database say
      less than the loader now reads, so they are read again.
+- 20: the payload records the unit table and location aliases the database
+     was built with ('dbBuiltWith'), compared before a cache is trusted. Old
+     caches end before the field.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -289,7 +287,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 19
+     in hi `xor` lo `xor` 20
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1159,30 +1157,6 @@ generateMatrixCacheFilename dbName sourcePath = do
     return $ cacheDir </> cacheFilename
 
 {- |
-Validate cache file integrity before attempting to decode.
-
-Checks:
-- File size is reasonable (> 1KB to avoid empty/corrupted files)
-- File exists and is readable
-
-Returns True if cache file appears valid, False otherwise.
--}
-validateCacheFile :: FilePath -> IO Bool
-validateCacheFile cacheFile = do
-    exists <- doesFileExist cacheFile
-    if not exists
-        then return False
-        else do
-            fileSize <- getFileSize cacheFile
-            -- Cache file should be at least 1KB for a valid database
-            -- Typical size is 100MB-600MB
-            if fileSize < 1024
-                then do
-                    reportCacheOperation $ "Cache file is too small (" ++ show fileSize ++ " bytes), likely corrupted"
-                    return False
-                else return True
-
-{- |
 Load Database with pre-computed matrices from cache (second-tier).
 
 This is the fastest loading method (~0.5s) as it bypasses both
@@ -1192,10 +1166,12 @@ XML parsing and matrix construction. The Database includes:
 - Pre-computed sparse matrices (technosphere A, biosphere B)
 - Activity and flow UUID mappings for matrix operations
 
-Returns Nothing if no matrix cache exists.
+Returns Nothing if no matrix cache exists, or if the one found was built with
+other inputs than the ones in force: what it holds would not be what a fresh
+read produces.
 -}
-loadCachedDatabaseWithMatrices :: T.Text -> FilePath -> IO (Maybe Database)
-loadCachedDatabaseWithMatrices dbName dataDir = do
+loadCachedDatabaseWithMatrices :: T.Text -> FilePath -> BuildInputs -> IO (Maybe Database)
+loadCachedDatabaseWithMatrices dbName dataDir inputs = do
     cacheFile <- generateMatrixCacheFilename dbName dataDir
     let zstdFile = cacheFile ++ ".zst"
     zstdExists <- doesFileExist zstdFile
@@ -1206,43 +1182,28 @@ loadCachedDatabaseWithMatrices dbName dataDir = do
         else do
             -- Delegate to the shared reader; a Nothing here means the cache
             -- is corrupted or was written by another schema, and the database
-            -- is rebuilt from source. The file is left alone: a rebuild
-            -- overwrites it anyway, and a host that ships only the cache (see
+            -- is rebuilt from source, as it is when the cache was built under
+            -- other inputs. The file is left alone: a rebuild overwrites it
+            -- anyway, and a host that ships only the cache (see
             -- 'Manager.loadDatabaseRawWithCrossDB') has no source to rebuild
             -- from, so deleting it there destroyed the only copy of the data.
             result <- loadCompressedCacheFile zstdFile
             case result of
-                Just _ -> return result
-                Nothing -> do
-                    reportCacheOperation "Will rebuild database from source files"
-                    return Nothing
+                Just db | dbBuiltWith db == inputs -> return (Just db)
+                Just db -> do
+                    reportCacheOperation $ "Cache was built with another " ++ builtWithDifference (dbBuiltWith db) inputs
+                    rebuild
+                Nothing -> rebuild
+  where
+    rebuild :: IO (Maybe Database)
+    rebuild = Nothing <$ reportCacheOperation "Will rebuild database from source files"
 
-{- |
-Load Database directly from a specified cache file.
-
-Similar to loadCachedDatabaseWithMatrices but takes an explicit cache file path
-instead of generating it from a data directory. Supports both compressed (.bin.zst)
-and uncompressed (.bin) formats.
-
-This is useful for deploying just the cache file without the original .spold files.
-
-Returns Nothing if the file cannot be loaded.
--}
-loadDatabaseFromCacheFile :: FilePath -> IO (Maybe Database)
-loadDatabaseFromCacheFile cacheFile = do
-    let ext = takeExtension cacheFile
-    let isCompressed = ext == ".zst"
-
-    -- Validate file exists
-    fileExists <- doesFileExist cacheFile
-    if not fileExists
-        then do
-            reportError $ "Cache file not found: " ++ cacheFile
-            return Nothing
-        else do
-            if isCompressed
-                then loadCompressedCacheFile cacheFile
-                else loadUncompressedCacheFile cacheFile
+-- | Which of the build inputs a cache disagrees with, for the log line.
+builtWithDifference :: BuildInputs -> BuildInputs -> String
+builtWithDifference cached current =
+    intercalate " and " $
+        ["unit table" | biUnitConfig cached /= biUnitConfig current]
+            ++ ["location aliases" | biLocationAliases cached /= biLocationAliases current]
 
 -- | Load compressed (.bin.zst) cache file with header validation
 loadCompressedCacheFile :: FilePath -> IO (Maybe Database)
@@ -1300,36 +1261,6 @@ loadCompressedCacheFile zstdFile = do
             reportCacheOperation "The compressed cache file is corrupted or incompatible"
             return Nothing
         )
-
--- | Load uncompressed (.bin) cache file
-loadUncompressedCacheFile :: FilePath -> IO (Maybe Database)
-loadUncompressedCacheFile cacheFile = do
-    -- Validate cache file before attempting to decode
-    isValid <- validateCacheFile cacheFile
-    if not isValid
-        then do
-            reportCacheOperation "Cache file validation failed"
-            return Nothing
-        else do
-            reportCacheInfo cacheFile
-            catch
-                ( withProgressTiming Cache "Matrix cache load" $ do
-                    !db <- BS.readFile cacheFile >>= \bs -> evaluate (force (decodeEx bs))
-                    reportCacheOperation $
-                        "Matrix cache loaded: "
-                            ++ show (dbActivityCount db)
-                            ++ " activities, "
-                            ++ show (VU.length $ dbTechnosphereTriples db)
-                            ++ " tech entries, "
-                            ++ show (VU.length $ dbBiosphereTriples db)
-                            ++ " bio entries"
-                    return (Just db)
-                )
-                ( \(e :: SomeException) -> do
-                    reportError $ "Cache load failed: " ++ show e
-                    reportCacheOperation "The cache file is corrupted or incompatible with the current version"
-                    return Nothing
-                )
 
 {- |
 Save Database with pre-computed matrices to cache.

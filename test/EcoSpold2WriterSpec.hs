@@ -302,7 +302,7 @@ buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
     res <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (sdbActivities sdb)
             (sdbTechFlows sdb)
             (sdbBioFlows sdb)

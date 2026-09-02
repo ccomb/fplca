@@ -181,7 +181,7 @@ buildFixture :: Activity -> M.Map (UUID, UUID) Activity -> M.Map UUID Technosphe
 buildFixture consumer rows flows = do
     r <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (M.insert (consumerActId, consumerProdId) consumer rows)
             (M.insert consumerProdId (techFlow consumerProdId "cheese") flows)
             M.empty

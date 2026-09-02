@@ -55,7 +55,7 @@ import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, fill
 import Method.Types (CFFamily (..), FlowDirection (..), MethodCF (..))
 import Types
 import qualified Types as VT
-import UnitConversion (UnitConfig (..), UnitDef (..), mkUnitConfig)
+import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
 -- | One biosphere flow shared by both DBs (cross-DB merging keys on UUID).
 flowUUID :: UUID
@@ -155,6 +155,7 @@ mkDB offset locs bioTriples =
             , dbCrossDBLinks = []
             , dbDependsOn = []
             , dbLinkingStats = mempty
+            , dbBuiltWith = BuildInputs defaultUnitConfig mempty
             , dbSynonymDB = Nothing
             , dbFlowsByName = M.empty
             , dbFlowsByCAS = M.empty

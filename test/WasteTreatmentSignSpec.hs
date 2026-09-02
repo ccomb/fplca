@@ -151,7 +151,7 @@ techFlowDB =
 buildDB :: T.Text -> M.Map (UUID, UUID) Activity -> IO Database
 buildDB name acts =
     buildDatabaseWithMatrices
-        defaultUnitConfig
+        (BuildInputs defaultUnitConfig mempty)
         acts
         techFlowDB
         (M.singleton co2 co2Flow)

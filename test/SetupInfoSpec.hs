@@ -126,7 +126,7 @@ buildDb :: [((UUID.UUID, UUID.UUID), Activity)] -> [(UUID.UUID, Text)] -> IO Dat
 buildDb acts flows = do
     res <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (M.fromList acts)
             (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
             M.empty

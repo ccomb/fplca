@@ -17,6 +17,14 @@
   vocabulary gap without reading the log. Wire revision 13.
 
 ### Fixed
+- A database's matrix cache (`volca.cache.<name>.bin.zst`, beside its
+  source) is now trusted only when the unit table and the location aliases
+  it was built with are the ones in force. It used to be read back
+  regardless, so a cache built while the unit table was missing kept every
+  exchange it could not convert unlinked at every later start (one SimaPro
+  database: 1,335 unlinked from such a cache, none from a fresh read). The
+  log now says which of the two changed, and every existing cache is
+  rebuilt once.
 - The method mapping report no longer counts as matched a factor whose only
   name hit is filed under another compartment vocabulary ("air" against
   "emissions to air"). Such a method used to report 82% coverage and score
