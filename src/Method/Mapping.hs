@@ -843,6 +843,15 @@ data MethodTables = MethodTables
     method's own zero" — this map is what keeps those three apart. Absent key
     = the cascade found no CF at all.
     -}
+    , mtJudged :: !(S.Set UUID)
+    {- ^ The flows 'fillBroadcastVector' walked, the keys of the flow table it
+    was given. Each went through the cascade, so one this set holds that
+    'mtBroadcast' omits carries no factor and a scorer need not ask again; a
+    flow outside it arrived after the fill (a what-if substitution into a
+    database loaded since) and still takes the cascade. Only the keys are
+    kept: the records themselves would outlive their database's unload.
+    Empty until the fill.
+    -}
     , mtBroadcast :: !(M.Map UUID Double)
     {- ^ Pre-multiplied broadcast CFs: flow UUID → effective CF (CF value × flow→CF unit conversion).
     Collapses the UUID/exact/fallback cascade into a single Map and absorbs unit conversion
@@ -1543,6 +1552,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         , mtCompartmentMap = cmap
         , mtEnergyDensities = energyDensities
         , mtResolution = M.empty -- filled alongside 'mtBroadcast'
+        , mtJudged = S.empty -- filled alongside 'mtBroadcast'
         , mtBroadcast = M.empty -- fill via 'fillBroadcastVector' to enable the fast path
         , mtRegionalActivityWeights = Nothing -- fill via 'fillRegionalActivityWeights' for regional fast path
         }
@@ -1837,6 +1847,7 @@ fillBroadcastVector unitConfig unitDB flowDB tables =
     tables
         { mtBroadcast = M.map fst resolved
         , mtResolution = M.map snd resolved
+        , mtJudged = M.keysSet flowDB
         }
   where
     resolved = M.mapMaybeWithKey buildEntry flowDB
@@ -2956,6 +2967,12 @@ data BatchedTables = BatchedTables
     {- ^ Column-major dense broadcast, length @btNFlows * btNMethods@. Empty
     when @btNMethods == 0@.
     -}
+    , btJudged :: !(Set.Set UUID)
+    {- ^ Flows every method's fill walked and none characterizes: the
+    intersection of the methods' 'mtJudged', minus 'btUuidIndex'. Such a
+    flow contributes nothing, and the scoring loop knows it in one lookup
+    instead of one cascade per method.
+    -}
     }
 
 {- | Build 'MethodSetTables' from per-method 'MethodTables'. The list order
@@ -2993,6 +3010,7 @@ buildBatchedTables entries =
         uuidList = Set.toAscList uuidSet
         uuidIndex = M.fromList (zip uuidList [0 ..])
         nFlows = length uuidList
+        judged = intersections (map (mtJudged . mseTables) (V.toList entries)) `Set.difference` uuidSet
         mat = U.create $ do
             mv <- MU.replicate (nFlows * nMethods) (0.0 :: Double)
             V.iforM_ entries $ \i e ->
@@ -3009,7 +3027,12 @@ buildBatchedTables entries =
             , btNFlows = nFlows
             , btNMethods = nMethods
             , btMat = mat
+            , btJudged = judged
             }
+  where
+    intersections :: [Set.Set UUID] -> Set.Set UUID
+    intersections [] = Set.empty
+    intersections (x : xs) = foldr Set.intersection x xs
 
 {- | Score an inventory against every method in a 'MethodSetTables', emitting
 @(methodId, Right score)@ on success and @(methodId, Left err)@ for a
@@ -3095,10 +3118,10 @@ For each non-zero @(uuid, qty)@ in the inventory, accumulates
 @qty * btMat[j*nMethods + i]@ into score @i@ for every method @i@, where
 @j@ is the flow's row. The inner loop walks contiguous CF cells (column-
 major layout) so the cost is @nnz × nMethods@ FMAs with cache-friendly
-reads. An out-of-broadcast UUID falls back to each non-regional method's
-'lookupCascadeCF' (same fix as the mono-method 'fastScore') so cross-DB
-merged inventories don't silently lose flows that the per-method path
-would have caught via name/compartment cascade.
+reads. A UUID outside the broadcast that every method's fill walked
+('btJudged') carries no factor and is skipped; any other falls back to each
+non-regional method's 'lookupCascadeCF', so an inventory reaching flows the
+fill never saw does not silently lose them.
 -}
 scoreBatched ::
     UnitConfig ->
@@ -3135,13 +3158,15 @@ scoreBatched unitCfg unitDB flowDB bt inventory
                                                 MU.unsafeModify mv (+ qty * cf) i
                                                 loop (i + 1)
                                     loop 0
-                                Nothing ->
-                                    V.imapM_
-                                        ( \i e -> do
-                                            let !c = cascadeContrib (mseTables e) uuid qty
-                                            MU.unsafeModify mv (+ c) i
-                                        )
-                                        entriesV
+                                Nothing
+                                    | Set.member uuid (btJudged bt) -> pure ()
+                                    | otherwise ->
+                                        V.imapM_
+                                            ( \i e -> do
+                                                let !c = cascadeContrib (mseTables e) uuid qty
+                                                MU.unsafeModify mv (+ c) i
+                                            )
+                                            entriesV
                     )
                     (M.toList inventory)
                 pure mv

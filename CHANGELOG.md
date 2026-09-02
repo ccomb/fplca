@@ -206,6 +206,12 @@
   On the Agribalyse 4.0 export of 13 May 2026 it names the nine that were being
   filled with a supplier nobody asked for.
 - Every database cache is rebuilt on first load.
+- Scoring a batch of activities is faster on a database whose inventories
+  carry many flows no method characterizes: on Agribalyse 3.2 with EF 3.1 a
+  batch of 500 activities takes about 25 seconds instead of about 70. Such a
+  flow used to be looked up again by name, for every method and every
+  activity, although the tables had already found it carries no factor; it
+  is now skipped. No score changes.
 
 ### Removed
 - The fuzzy match strategy, which nothing produced. No matcher ever returned
