@@ -43,6 +43,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Types (
     Activity (..),
+    BuildInputs (..),
     CrossDBLink (..),
     Database (..),
     Exchange (..),
@@ -159,7 +160,7 @@ supplierLoadedConfig name =
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices defaultUnitConfig acts flows M.empty M.empty units
+    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) acts flows M.empty M.empty units
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)

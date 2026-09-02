@@ -42,6 +42,7 @@ import Search.BM25.Types (BM25Index)
 import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
 import SynonymDB (normalizeName)
 import SynonymDB.Types (SynonymDB)
+import UnitConversion (UnitConfig)
 
 -- | Orphan Store instance for UUID (16 bytes, host-native word order)
 instance Store UUID where
@@ -969,6 +970,25 @@ data ProductIndex = ProductIndex
 emptyProductIndex :: ProductIndex
 emptyProductIndex = ProductIndex M.empty M.empty M.empty
 
+{- | What the loader read besides the source files, and what shapes a database
+as much as they do. The unit table decides which exchanges convert, which of
+them link, and the unit every amount is recorded in; the location aliases
+decide which dataset an EcoSpold 1 exchange resolves to. A database records
+the pair it was built with in 'dbBuiltWith', and its matrix cache is trusted
+only while that pair is the one in force.
+
+Everything else the loader is handed (the synonym set, the geography
+hierarchy and policy, the other databases) shapes the cross-database links
+alone, and every cache hit derives those again. It is left out on purpose:
+the synonym set grows after every load, so stamping it would rebuild every
+database at the next start.
+-}
+data BuildInputs = BuildInputs
+    { biUnitConfig :: !UnitConfig
+    , biLocationAliases :: !(M.Map Text Text)
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+
 -- | Complete database with indexes for efficient searches
 data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
@@ -995,8 +1015,10 @@ data Database = Database
     , dbDependsOn :: ![Text] -- Names of databases this database depends on
     -- Linking statistics (serialized to cache for setup page)
     , dbLinkingStats :: !CrossDBLinkingStats -- Cross-DB linking statistics (completeness, fallbacks, etc.)
-    -- Runtime-only fields (not serialized to cache)
-    , dbSynonymDB :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
+    -- What it was built with (serialized to cache, compared before a cache is trusted)
+    , dbBuiltWith :: !BuildInputs
+    , -- Runtime-only fields (not serialized to cache)
+      dbSynonymDB :: !(Maybe SynonymDB) -- Embedded synonym database for flow matching
     , dbFlowsByName :: !(M.Map Text [BiosphereFlow]) -- Biosphere flow name index for LCIA matching
     , dbFlowsByCAS :: !(M.Map Text [BiosphereFlow]) -- CAS → biosphere flows for LCIA matching
     -- Product name search index: word token → ProcessId set (built at runtime)
@@ -1031,6 +1053,7 @@ instance Store Database where
             + getSize (dbCrossDBLinks db)
             + getSize (dbDependsOn db)
             + getSize (dbLinkingStats db)
+            + getSize (dbBuiltWith db)
 
     poke db = do
         poke (dbProcessIdTable db)
@@ -1054,6 +1077,7 @@ instance Store Database where
         poke (dbCrossDBLinks db)
         poke (dbDependsOn db)
         poke (dbLinkingStats db)
+        poke (dbBuiltWith db)
 
     -- Runtime-only fields are NOT serialized
 
@@ -1078,6 +1102,7 @@ instance Store Database where
         crossDBLinks <- peek
         dependsOn <- peek
         linkingStats <- peek
+        builtWith <- peek
         return
             Database
                 { dbProcessIdTable = processIdTable
@@ -1101,6 +1126,7 @@ instance Store Database where
                   dbCrossDBLinks = crossDBLinks
                 , dbDependsOn = dependsOn
                 , dbLinkingStats = linkingStats
+                , dbBuiltWith = builtWith
                 , -- Runtime-only fields set to defaults
                   dbSynonymDB = Nothing
                 , dbFlowsByName = M.empty

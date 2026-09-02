@@ -53,6 +53,7 @@ import Data.List (elemIndex)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
+import Data.Store (Store)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -72,6 +73,7 @@ data UnitDef = UnitDef
     deriving (Eq, Show, Generic)
 
 instance NFData UnitDef
+instance Store UnitDef
 
 -- | Unit configuration loaded from CSV.
 data UnitConfig = UnitConfig
@@ -80,9 +82,10 @@ data UnitConfig = UnitConfig
     , ucOriginalKeys :: !(M.Map Text Text) -- normalized -> original (for error messages)
     , ucCanonical :: !(M.Map Text Text) -- normalized -> reference unit of its dimension
     }
-    deriving (Show, Generic)
+    deriving (Eq, Show, Generic)
 
 instance NFData UnitConfig
+instance Store UnitConfig
 
 -- | Default dimension order.
 defaultDimensionOrder :: [Text]

@@ -184,7 +184,7 @@ spec = do
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB M.empty unitDB
+            result <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) activityMap techFlowDB bioFlowDB M.empty unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db -> do
@@ -259,7 +259,7 @@ spec = do
                         , (kgUnitId, Unit kgUnitId "kg" "kg" "")
                         ]
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB M.empty unitDB
+            result <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) activityMap techFlowDB bioFlowDB M.empty unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db ->
@@ -373,7 +373,7 @@ spec = do
                 wasteFlowDB = M.singleton wW (WasteFlow wW "waste W" kgU M.empty Nothing Nothing)
                 unitDB = M.singleton kgU (Unit kgU "kg" "kg" "")
 
-            result <- buildDatabaseWithMatrices defaultUnitConfig activityMap techFlowDB bioFlowDB wasteFlowDB unitDB
+            result <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) activityMap techFlowDB bioFlowDB wasteFlowDB unitDB
             case result of
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db -> case elemIndex (pA, yY) (V.toList (dbProcessIdTable db)) of

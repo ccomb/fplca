@@ -201,7 +201,7 @@ inventoryByName :: SimpleDatabase -> Text -> IO (M.Map Text Double)
 inventoryByName db target = do
     built <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (sdbActivities db)
             (sdbTechFlows db)
             (sdbBioFlows db)

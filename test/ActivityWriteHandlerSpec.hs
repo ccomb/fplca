@@ -55,6 +55,7 @@ import Types (
     Activity (..),
     BioDirection (..),
     BiosphereFlow (..),
+    BuildInputs (..),
     Compartment (..),
     Database (..),
     Exchange (..),
@@ -449,7 +450,7 @@ buildFixture :: IO Database
 buildFixture = do
     r <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (M.singleton (supplierActId, supplierProdId) milkActivity)
             (M.singleton supplierProdId milkFlow)
             (M.singleton co2Id co2Flow)

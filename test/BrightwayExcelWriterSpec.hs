@@ -847,7 +847,7 @@ co2Inventory :: SimpleDatabase -> IO (Either Text (Maybe Double))
 co2Inventory sdb = do
     built <-
         buildDatabaseWithMatrices
-            defaultUnitConfig
+            (BuildInputs defaultUnitConfig mempty)
             (sdbActivities sdb)
             (sdbTechFlows sdb)
             (sdbBioFlows sdb)

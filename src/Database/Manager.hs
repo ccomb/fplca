@@ -217,6 +217,7 @@ import Types (
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
+    BuildInputs (..),
     CrossDBLink (..),
     CrossDBLinkingStats (..),
     Database (..),
@@ -1820,7 +1821,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
     mCachedDb <-
         if noCache
             then return Nothing
-            else Loader.loadCachedDatabaseWithMatrices dbName sourcePath
+            else Loader.loadCachedDatabaseWithMatrices dbName sourcePath inputs
     let cacheUsable = case mCachedDb of
             Just db
                 | unresolvedCount (dbLinkingStats db) > 0
@@ -1866,7 +1867,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
             Left err -> return $ Left err
             Right linkedDb -> do
                 reportProgress Info $ "Building database from " <> show (M.size (sdbActivities linkedDb)) <> " activities"
-                dbResult <- buildDatabaseWithMatrices unitConfig (sdbActivities linkedDb) (sdbTechFlows linkedDb) (sdbBioFlows linkedDb) (sdbWasteFlows linkedDb) (sdbUnits linkedDb)
+                dbResult <- buildDatabaseWithMatrices inputs (sdbActivities linkedDb) (sdbTechFlows linkedDb) (sdbBioFlows linkedDb) (sdbWasteFlows linkedDb) (sdbUnits linkedDb)
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -1890,7 +1891,7 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
             Right (simpleDb, stats) -> do
                 dbResult <-
                     buildDatabaseWithMatrices
-                        unitConfig
+                        inputs
                         (sdbActivities simpleDb)
                         (sdbTechFlows simpleDb)
                         (sdbBioFlows simpleDb)
@@ -1910,6 +1911,9 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                         unless noCache $
                             Loader.saveCachedDatabaseWithMatrices dbName sourcePath dbWithLinks
                         return $ Right (dbWithLinks, False)
+
+    inputs :: BuildInputs
+    inputs = BuildInputs unitConfig locationAliases
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -2450,35 +2454,22 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
     reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
 
     -- Try cache first: if valid, reconstruct StagedDatabase without re-parsing
-    mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig)
+    inputs <- currentBuildInputs manager dbConfig
+    mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig) inputs
 
     case mCachedDb of
         Just cachedDb -> do
             -- Cache hit: auto-load dependencies so cross-DB solving works
             _ <- autoLoadDeps manager (dbDependsOn cachedDb)
-            -- Recompute unknownUnits against the current unitConfig (cache may be stale)
-            unitConfig <- getMergedUnitConfig manager
-            let simpleDb = toSimpleDatabase cachedDb
-                freshUnknownUnits =
-                    S.fromList
-                        [ unitName u
-                        | u <- M.elems (sdbUnits simpleDb)
-                        , not (UnitConversion.isKnownUnit unitConfig (unitName u))
-                        , not (T.null (unitName u))
-                        ]
-                freshStats =
-                    (dbLinkingStats cachedDb)
-                        { cdlUnknownUnits = freshUnknownUnits
-                        }
-                staged =
+            let staged =
                     StagedDatabase
-                        { sdSimpleDB = simpleDb
+                        { sdSimpleDB = toSimpleDatabase cachedDb
                         , sdConfig = dbConfig
                         , sdUnlinkedCount = 0 -- was finalized successfully
                         , sdMissingProducts = []
                         , sdSelectedDeps = dbDependsOn cachedDb
                         , sdCrossDBLinks = dbCrossDBLinks cachedDb
-                        , sdLinkingStats = freshStats
+                        , sdLinkingStats = dbLinkingStats cachedDb
                         , sdCachedDB = Just cachedDb
                         }
             atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
@@ -3302,10 +3293,10 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
                                         || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
                             return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
                         Nothing -> do
-                            unitConfig <- getMergedUnitConfig manager
+                            inputs <- currentBuildInputs manager (sdConfig staged)
                             dbResult <-
                                 buildDatabaseWithMatrices
-                                    unitConfig
+                                    inputs
                                     (sdbActivities (sdSimpleDB staged))
                                     (sdbTechFlows (sdSimpleDB staged))
                                     (sdbBioFlows (sdSimpleDB staged))
@@ -3702,6 +3693,15 @@ getMergedUnitConfig manager = do
                         else UnitConversion.mergeUnitConfigs (M.elems loaded)
             atomically $ writeTVar (dmMergedUnitConfigCache manager) (Just cfg)
             pure cfg
+
+{- | What a database of this configuration is parsed under right now: the
+merged unit table and the location aliases its configuration declares. A
+cache is trusted only if it records the same pair.
+-}
+currentBuildInputs :: DatabaseManager -> DatabaseConfig -> IO BuildInputs
+currentBuildInputs manager dbConfig = do
+    unitConfig <- getMergedUnitConfig manager
+    pure (BuildInputs unitConfig (dcLocationAliases dbConfig))
 
 {- | Snapshot of flow + unit metadata across every currently-loaded DB.
 Used to characterize or display a cross-DB-merged 'Inventory', whose
