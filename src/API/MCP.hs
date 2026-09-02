@@ -543,6 +543,16 @@ requireDatabase dbManager dbName =
 liftShow :: (Show e) => Either e a -> ExceptT Text IO a
 liftShow = either (throwE . T.pack . show) pure
 
+{- | Lift a service result. A refusal to score is a sentence written for the
+caller and travels as is; every other error renders as before.
+-}
+liftService :: Either Service.ServiceError a -> ExceptT Text IO a
+liftService = either (throwE . render) pure
+  where
+    render :: Service.ServiceError -> Text
+    render (Service.NotScorable msg) = msg
+    render e = T.pack (show e)
+
 textArg :: Text -> KeyMap Value -> Maybe Text
 textArg key args = case KM.lookup (fromText key) args of
     Just (String t) -> Just t
@@ -889,7 +899,7 @@ callGetSupplyChain dbManager presets rid args = runTool rid $ do
                 toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf False) >>= liftShow)
             else do
                 -- Substitution-aware: re-solve the root scaling, then build from it.
-                (processId, _) <- liftShow (Service.resolveScorable db pid)
+                (processId, _) <- liftService (Service.resolveScorable db pid)
                 (scalingVec, virtualLinks) <-
                     liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db dbName solver processId subs) >>= liftShow
                 resp <-
@@ -1017,7 +1027,7 @@ callGetInventory dbManager rid args =
             limit = fromMaybe 50 (intArg "limit" args)
             nameFilter = textArg "flow" args
         except $ ensureLinked dbName "computing inventory" db
-        (processId, activity) <- liftShow (Service.resolveScorable db pid)
+        (processId, activity) <- liftService (Service.resolveScorable db pid)
         subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
@@ -1894,7 +1904,7 @@ loadLcaRequest dbManager args = do
                 <*> optionalText "collection" args
     ld <- requireDatabase dbManager dbName
     (col, method) <- ExceptT (resolveMethod dbManager mCol methodIdText)
-    (pid, act) <- liftShow (Service.resolveScorable (ldDatabase ld) pidText)
+    (pid, act) <- liftService (Service.resolveScorable (ldDatabase ld) pidText)
     pure
         LcaRequest
             { lrDbName = dbName

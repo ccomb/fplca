@@ -1284,7 +1284,7 @@ withActivityAndMethod dbName collectionName processIdText methodIdText k = do
         Left (Service.ActivityNotFound _) -> throwError err404{errBody = "Activity not found"}
         Left (Service.InvalidProcessId _) -> throwError err400{errBody = "Invalid ProcessId format"}
         Left (Service.AmbiguousActivity msg) -> throwError err400{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
-        Left err -> throwError err500{errBody = BSL.fromStrict $ T.encodeUtf8 $ T.pack $ show err}
+        Left err -> throwError (serviceErrorToServerError err)
         Right (actProcessId, activity) -> k db sharedSolver actProcessId activity method
 
 -- ---------------------------------------------------------------------------

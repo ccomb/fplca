@@ -2088,6 +2088,7 @@ resolveRootOnly db t
             Left (InvalidProcessId msg) -> Left msg
             Left (AmbiguousActivity msg) -> Left msg
             Left (ActivityNotFound msg) -> Left ("activity not found: " <> msg)
+            Left (NotScorable msg) -> Left msg
             Left e -> Left (T.pack (show e))
 
 -- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
