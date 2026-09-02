@@ -292,6 +292,12 @@ data StagedDatabase = StagedDatabase
     -- ^ Cross-DB links found so far
     , sdLinkingStats :: !CrossDBLinkingStats
     -- ^ Linking statistics
+    , sdBuiltWith :: !BuildInputs
+    {- ^ What the parse ran under. The finalized database is stamped with it,
+    not with whatever is in force at finalize time: the amounts and the
+    unknown units were read under this table, so a table that changed in
+    between makes the next start read the source again.
+    -}
     , sdCachedDB :: !(Maybe Database)
     -- ^ Pre-built DB from cache (skip rebuild)
     }
@@ -1790,8 +1796,11 @@ narrowToDataFile fmt path = case dataFileExtension fmt of
 
 The cache lives next to @sourcePath@ (see 'Loader.generateMatrixCacheFilename').
 We probe it first using the unresolved @sourcePath@, so a deployment that ships
-only the cache (no source archive on disk) still loads. On cache miss/stale we
-'resolveDataPath' and parse, saving a fresh cache on success.
+only the cache (no source archive on disk) still loads, as long as the cache
+was built under the unit table and location aliases in force: one that was not
+is refused like a stale one, and with no source to read the load fails. On
+cache miss/stale we 'resolveDataPath' and parse, saving a fresh cache on
+success.
 -}
 loadDatabaseRawWithCrossDB ::
     -- | Database name
@@ -2470,6 +2479,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                         , sdSelectedDeps = dbDependsOn cachedDb
                         , sdCrossDBLinks = dbCrossDBLinks cachedDb
                         , sdLinkingStats = dbLinkingStats cachedDb
+                        , sdBuiltWith = dbBuiltWith cachedDb
                         , sdCachedDB = Just cachedDb
                         }
             atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
@@ -2495,7 +2505,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
 
             -- Parse and run cross-DB linking (but don't build matrices)
             synonymDB <- getMergedSynonymDB manager
-            unitConfig <- getMergedUnitConfig manager
+            let unitConfig = biUnitConfig inputs
             loadResult <-
                 Loader.loadDatabaseWithCrossDBLinking
                     locationAliases
@@ -2547,6 +2557,7 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                                 , sdSelectedDeps = minimalDeps
                                 , sdCrossDBLinks = Loader.cdlLinks finalStats
                                 , sdLinkingStats = finalStats
+                                , sdBuiltWith = inputs
                                 , sdCachedDB = Nothing
                                 }
 
@@ -3144,6 +3155,7 @@ restageLoadedDatabase manager dbName ld = do
                 , sdSelectedDeps = dbDependsOn db
                 , sdCrossDBLinks = dbCrossDBLinks db
                 , sdLinkingStats = stats
+                , sdBuiltWith = dbBuiltWith db
                 , sdCachedDB = Nothing
                 }
     atomically $ do
@@ -3293,10 +3305,9 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
                                         || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
                             return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
                         Nothing -> do
-                            inputs <- currentBuildInputs manager (sdConfig staged)
                             dbResult <-
                                 buildDatabaseWithMatrices
-                                    inputs
+                                    (sdBuiltWith staged)
                                     (sdbActivities (sdSimpleDB staged))
                                     (sdbTechFlows (sdSimpleDB staged))
                                     (sdbBioFlows (sdSimpleDB staged))

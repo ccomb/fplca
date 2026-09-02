@@ -1182,8 +1182,9 @@ loadCachedDatabaseWithMatrices dbName dataDir inputs = do
         else do
             -- Delegate to the shared reader; a Nothing here means the cache
             -- is corrupted or was written by another schema, and the database
-            -- is rebuilt from source. The file is left alone: a rebuild
-            -- overwrites it anyway, and a host that ships only the cache (see
+            -- is rebuilt from source, as it is when the cache was built under
+            -- other inputs. The file is left alone: a rebuild overwrites it
+            -- anyway, and a host that ships only the cache (see
             -- 'Manager.loadDatabaseRawWithCrossDB') has no source to rebuild
             -- from, so deleting it there destroyed the only copy of the data.
             result <- loadCompressedCacheFile zstdFile
