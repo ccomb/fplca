@@ -34,6 +34,7 @@
   and still honoured through `VOLCA_DATA_DIR` for configurations that point
   into it; the version route reports the built-in data version when the flow
   registry is the built-in one, and the bundle's own otherwise, as before.
+  Reported by @mklarmann (#348).
 - A database whose regional factors all come from a database it depends on is
   now scored on the regionalized path, like the database it mirrors. Two
   consequences, both of them that path's existing behaviour reaching a new set
