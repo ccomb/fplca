@@ -246,10 +246,10 @@ benchSetBatched fx =
 -- Public registration
 -- ---------------------------------------------------------------------------
 
-register :: IO [BenchSpec]
-register = do
+register :: UC.UnitConfig -> IO [BenchSpec]
+register unitCfg = do
     syn <- registerSynthetic
-    real <- registerReal
+    real <- registerReal unitCfg
     pure (syn ++ real)
 
 -- ---------------------------------------------------------------------------
@@ -315,14 +315,14 @@ registerSynthetic = do
 -- Real-data benches (need both a loaded Database and a parsed Method)
 -- ---------------------------------------------------------------------------
 
-registerReal :: IO [BenchSpec]
-registerReal = do
+registerReal :: UC.UnitConfig -> IO [BenchSpec]
+registerReal unitCfg = do
     mDb <- pickDbFixture
     mMethod <- F.lookupFixture F.MethodEFIlcd
     case (mDb, mMethod) of
         (Just (src, dbPath), Just methodPath) -> do
             putStrLn "[bench] lcia.real.score_method: loading database..."
-            dbRes <- H.loadFullDatabase dbPath
+            dbRes <- H.loadFullDatabase unitCfg dbPath
             case dbRes of
                 Left err -> do
                     putStrLn $ "[bench] lcia.real.score_method: load failed (" <> show err <> "), skipping"
@@ -343,7 +343,7 @@ registerReal = do
                             let unitDB = dbUnits db
                                 flowDB = dbBioFlows db
                                 tables0 = buildMethodTables (cfFamily (methodUnit method)) M.empty M.empty mappings
-                                !tables = fillBroadcastVector UC.defaultUnitConfig unitDB flowDB tables0
+                                !tables = fillBroadcastVector unitCfg unitDB flowDB tables0
                                 !nCFs = length (methodFactors method)
                             putStrLn "[bench] lcia.real.score_method: computing inventory for first product..."
                             inventory <- Matrix.computeInventoryMatrix db 0
@@ -371,7 +371,7 @@ registerReal = do
                                             }
                                     , bsAction =
                                         nf
-                                            (\inv -> loScore (computeLCIAScoreFromTables UC.defaultUnitConfig unitDB flowDB inv tables))
+                                            (\inv -> loScore (computeLCIAScoreFromTables unitCfg unitDB flowDB inv tables))
                                             inventory
                                     }
                                 ]

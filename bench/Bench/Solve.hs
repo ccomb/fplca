@@ -38,6 +38,7 @@ import Types (
     ProcessId,
     SparseTriple (..),
  )
+import qualified UnitConversion as UC
 
 import qualified Bench.Helpers as H
 import Bench.Json (BenchSpec (..), UnitOfWork (..))
@@ -51,8 +52,8 @@ import qualified Fixtures as F
 nBatchProducts :: Int
 nBatchProducts = 100
 
-register :: IO [BenchSpec]
-register = do
+register :: UC.UnitConfig -> IO [BenchSpec]
+register unitCfg = do
     mFx <- pickSolveFixture
     case mFx of
         Nothing -> do
@@ -60,7 +61,7 @@ register = do
             pure []
         Just (src, path) -> do
             putStrLn $ "[bench] solve.*: loading database from " <> path <> " ..."
-            res <- H.loadFullDatabase path
+            res <- H.loadFullDatabase unitCfg path
             case res of
                 Left err -> do
                     putStrLn $ "[bench] solve.*: load failed (" <> T.unpack err <> "), skipping"

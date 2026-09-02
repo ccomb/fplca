@@ -34,10 +34,10 @@ import Bench.Json (BenchSpec (..), UnitOfWork (..))
 import qualified Bench.Json as J
 import qualified Fixtures as F
 
-register :: IO [BenchSpec]
-register = do
-    single <- registerSingleDb
-    cross <- registerCrossDbLinking
+register :: UC.UnitConfig -> IO [BenchSpec]
+register unitCfg = do
+    single <- registerSingleDb unitCfg
+    cross <- registerCrossDbLinking unitCfg
     pure (single ++ cross)
 
 -- ---------------------------------------------------------------------------
@@ -48,8 +48,8 @@ register = do
 fixture among (Agribalyse → Bafu → Ecoinvent) so the bench runs on
 whatever happens to be on disk. Reports the actual process count.
 -}
-registerSingleDb :: IO [BenchSpec]
-registerSingleDb = do
+registerSingleDb :: UC.UnitConfig -> IO [BenchSpec]
+registerSingleDb unitCfg = do
     mFx <- pickFirstAvailable [F.Agribalyse, F.Bafu, F.Ecoinvent]
     case mFx of
         Nothing -> do
@@ -57,7 +57,7 @@ registerSingleDb = do
             pure []
         Just (src, path) -> do
             -- One probe load to learn the process count for the unit_of_work.
-            res <- Loader.loadDatabase UC.defaultUnitConfig path
+            res <- Loader.loadDatabase unitCfg path
             case res of
                 Left err -> do
                     putStrLn $
@@ -79,13 +79,13 @@ registerSingleDb = do
                             , bsUnitOfWork = UnitOfWork{uowKind = "processes", uowN = n}
                             , bsMetric = "seconds"
                             , bsFixture = J.Fixture{J.fSource = F.fixtureSourceLabel src, J.fSlice = "whole database"}
-                            , bsAction = loadBench path
+                            , bsAction = loadBench unitCfg path
                             }
                         ]
 
-loadBench :: FilePath -> Benchmarkable
-loadBench path = nfIO $ do
-    r <- Loader.loadDatabase UC.defaultUnitConfig path
+loadBench :: UC.UnitConfig -> FilePath -> Benchmarkable
+loadBench unitCfg path = nfIO $ do
+    r <- Loader.loadDatabase unitCfg path
     case r of
         Left err -> evaluate (T.length err)
         Right sdb -> evaluate (M.size (sdbActivities sdb))
@@ -98,8 +98,8 @@ loadBench path = nfIO $ do
 in the background, so unlinked technosphere inputs resolve against the
 Ecoinvent supplier index. Requires both fixtures.
 -}
-registerCrossDbLinking :: IO [BenchSpec]
-registerCrossDbLinking = do
+registerCrossDbLinking :: UC.UnitConfig -> IO [BenchSpec]
+registerCrossDbLinking unitCfg = do
     mFg <- F.lookupFixture F.Agribalyse
     mBg <- F.lookupFixture F.Ecoinvent
     case (mFg, mBg) of
@@ -109,7 +109,7 @@ registerCrossDbLinking = do
             -- attach to it). The bench iteration only re-runs the
             -- foreground load + linking step.
             putStrLn "[bench] loader.multi_db_cross_link: pre-loading background DB..."
-            bgRes <- Loader.loadDatabase UC.defaultUnitConfig bgPath
+            bgRes <- Loader.loadDatabase unitCfg bgPath
             case bgRes of
                 Left err -> do
                     putStrLn $
@@ -130,7 +130,7 @@ registerCrossDbLinking = do
                             M.empty
                             [bgIndex]
                             Syn.emptySynonymDB
-                            UC.defaultUnitConfig
+                            unitCfg
                             M.empty
                             GeoGlobal
                             fgPath
@@ -164,21 +164,21 @@ registerCrossDbLinking = do
                                             { J.fSource = T.pack "agribalyse + ecoinvent"
                                             , J.fSlice = "whole databases (foreground reload each iteration)"
                                             }
-                                    , bsAction = crossLinkBench bgIndex fgPath
+                                    , bsAction = crossLinkBench unitCfg bgIndex fgPath
                                     }
                                 ]
         _ -> do
             putStrLn "[bench] loader.multi_db_cross_link: need both VOLCA_BENCH_AGRIBALYSE and VOLCA_BENCH_ECOINVENT, skipping"
             pure []
 
-crossLinkBench :: CL.IndexedDatabase -> FilePath -> Benchmarkable
-crossLinkBench bgIndex fgPath = nfIO $ do
+crossLinkBench :: UC.UnitConfig -> CL.IndexedDatabase -> FilePath -> Benchmarkable
+crossLinkBench unitCfg bgIndex fgPath = nfIO $ do
     r <-
         Loader.loadDatabaseWithCrossDBLinking
             M.empty
             [bgIndex]
             Syn.emptySynonymDB
-            UC.defaultUnitConfig
+            unitCfg
             M.empty
             GeoGlobal
             fgPath
