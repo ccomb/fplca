@@ -21,6 +21,14 @@
   rather than copied. The same applies to an inventory edit that adds such a
   line, and to replaying one from a journal.
 
+  An amount to a supplier in another database must now be stated in that
+  supplier's product's own unit. A cross-database link carries the product
+  flow's unit rather than the exchange's, and the amount is converted from it,
+  so a convertible-but-different unit would have entered the matrix as a
+  number in the wrong one (two tonnes demanded as two kilograms) where the
+  same exchange to a local supplier is converted. It is refused, naming the
+  unit to restate it in.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added

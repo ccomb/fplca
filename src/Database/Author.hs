@@ -679,6 +679,7 @@ resolveLinked ctx provider amount mUnit build =
             maybe (Left ("unknown unit \"" <> stated <> "\"")) Right (lookupUnit ctx stated)
         maybe (Right ()) Left (unitError ctx sup unitLabel)
         newTechFlow <- adoptTechFlow ctx sup
+        maybe (Right ()) Left (dependencyUnitError ctx sup unitLabel)
         pure
             ResolvedExchange
                 { reExchange = build sup unitRef
@@ -899,38 +900,49 @@ data Supplier = Supplier
     -- ^ which database the provider was found in, and what has to be copied out of it.
     }
 
-{- | Where a resolved provider lives, carrying what a foreign one obliges the
-edited database to adopt: its product flow, and the name of the unit that flow
-is stated in over there.
+{- | Where a resolved provider lives, and what a foreign one obliges the edited
+database to adopt.
+
+'Dependency' carries the product flow that database declares for the provider
+and the name of the unit that flow is stated in over there — or nothing, when
+that database names a process whose product flow it never declared. That is a
+malformed database rather than an impossible one, so it is a state here and
+'adoptTechFlow' says which of the two it is.
 -}
 data SupplierHome
     = OwnDatabase
-    | Dependency TechnosphereFlow Text
+    | Dependency (Maybe (TechnosphereFlow, Text))
 
 resolveSupplier :: AuthorContext -> Text -> Either Text Supplier
 resolveSupplier ctx provider =
-    case mapMaybe inDatabase (zip (True : repeat False) (acDb ctx : acDeps ctx)) of
+    case mapMaybe inDatabase (zip (OwnDatabase : repeat foreign') (acDb ctx : acDeps ctx)) of
         [] -> Left ("unknown provider \"" <> provider <> "\"")
         (sup : _) -> Right sup
   where
-    inDatabase (local, db) = do
+    -- The first database in the list is the one being written, and the rest
+    -- are its dependencies; only those oblige a flow to be copied in.
+    foreign' :: SupplierHome
+    foreign' = Dependency Nothing
+
+    inDatabase :: (SupplierHome, Database) -> Maybe Supplier
+    inDatabase (home, db) = do
         pid <- resolveProcess db provider
         key <- dbProcessIdTable db V.!? fromIntegral pid
         act <- dbActivities db V.!? fromIntegral pid
-        home <- if local then Just OwnDatabase else foreignHome db (snd key)
         pure
             Supplier
                 { supKey = uncurry ProcessRef key
                 , supProducedUnit = refUnitOf db act (\e -> exchangeIsReference e && not (exchangeIsInput e))
                 , supAnyRefUnit = refUnitOf db act exchangeIsReference
-                , supHome = home
+                , supHome = case home of
+                    OwnDatabase -> OwnDatabase
+                    Dependency _ -> Dependency (declaredFlow db (snd key))
                 }
-    -- A dependency that cannot show the product flow behind its own process id
-    -- cannot supply anything writable, so it is passed over rather than
-    -- resolved into an exchange nothing would link.
-    foreignHome db flowId = do
+
+    declaredFlow :: Database -> UUID -> Maybe (TechnosphereFlow, Text)
+    declaredFlow db flowId = do
         flow <- M.lookup flowId (dbTechFlows db)
-        pure (Dependency flow (unitNameOf (dbUnits db) (tfUnitId flow)))
+        pure (flow, unitNameOf (dbUnits db) (tfUnitId flow))
 
 {- | The product flow the edited database has to gain before this exchange can
 be linked, if any.
@@ -947,7 +959,9 @@ carries the flow's unit name and would otherwise read it out of the wrong one.
 adoptTechFlow :: AuthorContext -> Supplier -> Either Text (Maybe TechnosphereFlow)
 adoptTechFlow ctx sup = case supHome sup of
     OwnDatabase -> Right Nothing
-    Dependency flow flowUnit
+    Dependency Nothing ->
+        Left "the database declaring this provider does not declare its product flow"
+    Dependency (Just (flow, flowUnit))
         | M.member (tfId flow) (dbTechFlows (acDb ctx)) -> Right Nothing
         | otherwise -> case lookupUnit ctx flowUnit of
             Nothing ->
@@ -959,6 +973,46 @@ adoptTechFlow ctx sup = case supHome sup of
                         <> "\", a unit this database does not have"
                     )
             Just (unitRef, _) -> Right (Just flow{tfUnitId = unitRef})
+
+{- | Whether two unit names denote the same unit, spelling aside.
+
+Two databases keep two unit tables, so one unit can be written @kg@ in one and
+@kilogram@ in the other. What decides is the factor between them, not the
+string.
+-}
+sameUnit :: UnitConfig -> Text -> Text -> Bool
+sameUnit cfg stated other =
+    normalizeUnit stated == normalizeUnit other
+        || maybe False (\factor -> abs (factor - 1) < 1e-12) (convertUnit cfg stated other 1)
+
+{- | Judge the unit an exchange to a dependency's supplier is stated in.
+
+A link into a dependency carries the *flow's* unit, not the exchange's
+('Database.Loader.findExchangeCrossDBLink' reads it off the flow), and
+'Matrix.depDemandsToVector' then converts the raw amount from that unit. So an
+exchange stated in anything else enters the matrix as a number in the wrong
+unit — two tonnes of a product recorded in kilograms would be demanded as two
+kilograms — where the same exchange to a local supplier is converted. Refuse
+and name the unit to restate in, exactly as a biosphere amount is.
+-}
+dependencyUnitError :: AuthorContext -> Supplier -> Text -> Maybe Text
+dependencyUnitError ctx sup stated = case supHome sup of
+    OwnDatabase -> Nothing
+    Dependency Nothing -> Nothing
+    Dependency (Just (_, flowUnit))
+        | T.null flowUnit -> Nothing
+        | sameUnit (acUnitConfig ctx) stated flowUnit -> Nothing
+        | otherwise ->
+            Just
+                ( "this provider's product is recorded in \""
+                    <> flowUnit
+                    <> "\" but the exchange states \""
+                    <> stated
+                    <> "\"; an amount to a supplier in another database is not "
+                    <> "converted, so restate it in \""
+                    <> flowUnit
+                    <> "\""
+                )
 
 {- | Resolve a process id string the same two ways the rest of the engine
 does: the canonical @activityUUID_productUUID@ pair, or a bare activity UUID

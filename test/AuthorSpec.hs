@@ -218,6 +218,36 @@ spec = do
                         [tfUnitId f | f <- riNewTechFlows r, tfName f == "milk"] `shouldBe` [kgUnitId]
                     Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
 
+            it "refuses an amount to a dependency stated in another unit than its product's" $ do
+                -- The link into a dependency carries the flow's unit, not the
+                -- exchange's, and the matrix converts the raw amount from it.
+                -- A unit the local path would convert would land here as a
+                -- number in the wrong one, which is the silent kind of wrong.
+                built <- buildFixture
+                let depDb =
+                        built
+                            { dbTechFlows =
+                                M.adjust (\f -> f{tfUnitId = metreUnitId}) supplierProdId (dbTechFlows built)
+                            }
+                    writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case validateAuthored ctx [baseActivity{aaExchanges = [techInput supplierPid 3 Nothing]}] of
+                    Left errs ->
+                        errs `shouldSatisfy` any (isInfixOf "is not converted, so restate it")
+                    Right _ -> expectationFailure "expected a refusal on the unit the amount is stated in"
+
+            it "takes a dependency's supplier in its product's own unit" $ do
+                -- The ordinary case, and the one the refusal above must not
+                -- catch: the flow and the reference exchange agree, so an
+                -- omitted unit defaults to the right one.
+                depDb <- buildFixture
+                let writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case validateAuthored ctx [baseActivity{aaExchanges = [techInput supplierPid 3 (Just "kg")]}] of
+                    Left errs -> expectationFailure ("expected acceptance, got " <> show errs)
+                    Right ([_], _) -> pure ()
+                    Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
+
             it "refuses a dependency's supplier whose product unit is not here" $ do
                 -- Same rule the biosphere side states: a flow copied in has to
                 -- carry a unit this database can name, or the link would read
