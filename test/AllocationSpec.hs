@@ -26,7 +26,26 @@ import Database.MatrixBuild (InterningTables (..), buildInterningTables, buildSu
 import Database.Quality (QualityCheck (..), QualityOffender (..), QualityReport (..), qualityReport)
 import qualified Service
 import Types
-import UnitConversion (defaultUnitConfig)
+import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
+
+-- | Amounts of the five products of the Abondance cheese block, in kilograms.
+abondance :: NE.NonEmpty (Text, Double)
+abondance = NE.fromList [("kg", q) | q <- [1.0, 5.58318, 1.12527, 0.775791, 0.0686462]]
+
+-- | 'defaultUnitConfig' plus a gram and a megajoule, to have a second mass and a non-mass.
+massUnits :: UnitConfig
+massUnits =
+    mkUnitConfig
+        (ucDimensionOrder defaultUnitConfig)
+        (M.union (M.fromList [("g", UnitDef mass 0.001), ("mj", UnitDef energy 1.0)]) (ucUnits defaultUnitConfig))
+        (M.union (M.fromList [("g", "g"), ("mj", "MJ")]) (ucOriginalKeys defaultUnitConfig))
+  where
+    mass, energy :: [Int]
+    mass = [1, 0, 0, 0, 0, 0, 0, 0]
+    energy = [0, 0, 0, 1, 0, 0, 0, 0]
+
+round1 :: Double -> Double
+round1 x = fromIntegral (round (x * 10) :: Int) / 10
 
 spec :: Spec
 spec = do
@@ -119,6 +138,25 @@ spec = do
             describeRefusal (UnallocatedOutputs 3 3) `shouldSatisfy` T.isInfixOf "state a share on every product row"
             describeRefusal (NoSingleReference 0) `shouldSatisfy` T.isInfixOf "no reference exchange"
             describeRefusal (NoSingleReference 2) `shouldSatisfy` T.isInfixOf "2 reference exchanges"
+
+    describe "massShares" $ do
+        it "reads the Abondance block the way the mass would, against its declared key" $
+            -- Quantities of AGRIBALU000000003100165, whose declared key is dry matter:
+            -- cheese 51.4 %, permeate 24.3 %, concentrated whey 17.6 %, whey 4.4 %, cream 2.3 %.
+            fmap (map round1 . NE.toList) (massShares massUnits abondance)
+                `shouldBe` Right [11.7, 65.3, 13.2, 9.1, 0.8]
+
+        it "converts before summing, so a half-kilo is a third and not almost everything" $
+            fmap (map round1 . NE.toList) (massShares massUnits (NE.fromList [("kg", 1.0), ("g", 500.0)]))
+                `shouldBe` Right [66.7, 33.3]
+
+        it "refuses a block whose product is not stated in a mass" $
+            massShares massUnits (NE.fromList [("kg", 1.0), ("MJ", 4.0)])
+                `shouldBe` Left (NotAMass "MJ")
+
+        it "refuses an amount no share can be read from, rather than dropping it to zero" $ do
+            massShares massUnits (NE.fromList [("kg", 1.0), ("kg", 0.0)]) `shouldBe` Left (NonPositiveMass 0.0)
+            massShares massUnits (NE.fromList [("kg", -1.0)]) `shouldBe` Left (NonPositiveMass (-1.0))
 
     describe "the matrix" $ do
         it "gives a refused activity no column, and says why" $ do

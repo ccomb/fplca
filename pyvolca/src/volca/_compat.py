@@ -32,7 +32,7 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 14
+KNOWN_WIRE = 15
 """The newest wire revision this pyvolca understands (revision 14 adds the
 ``AvoidedProduct`` exchange role, the ``unallocated`` quality check and the
 ``share`` and ``classification`` fields of a technosphere exchange; revision

@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.11.0** speaks wire formats **2 to 14** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.11.0** speaks wire formats **2 to 15** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1263,6 +1263,14 @@ processes. ``allocation_formula`` carries the raw symbolic formula when
 the source expressed the share as an expression rather than a number,
 else ``None``.
 
+``mass_percent`` is the share the same product would carry if the key
+were its mass rather than what the source declared, so the two read
+side by side: the cheese above is declared 51.4 % of its block where its
+mass is 11.7 %, and a kilo of it therefore carries 4.4 times more under
+the declared key. It is ``None`` outside an activity's own product list,
+when the block's products are not all stated in a mass, and against an
+engine older than wire revision 15.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | _required_ |
@@ -1273,6 +1281,7 @@ else ``None``.
 | `product_unit` | `str` | _required_ |
 | `allocation_percent` | `float \| None` | None |
 | `allocation_formula` | `str \| None` | None |
+| `mass_percent` | `float \| None` | None |
 
 ### `ActivityContribution`
 
