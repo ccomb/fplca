@@ -289,12 +289,13 @@ refusedActId = u "a1"
 consumerActId = u "a2"
 
 -- ---------------------------------------------------------------------------
--- End to end: an unlinked EcoSpold 2 dataset with two reference outputs.
+-- End to end: an unlinked EcoSpold 2 dataset with a reference product and
+-- a coproduct the source declares no share for.
 -- ---------------------------------------------------------------------------
 
 endToEnd :: Spec
 endToEnd =
-    describe "an EcoSpold 2 dataset with two reference outputs, loaded" $ do
+    describe "an EcoSpold 2 dataset with an unallocated coproduct, loaded" $ do
         it "loads, reads, is refused a score and is named by the quality report" $
             withTwoOutputDataset $ \(simpleDb, db) -> do
                 V.length (dbActivities db) `shouldBe` 1
