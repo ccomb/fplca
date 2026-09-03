@@ -169,6 +169,17 @@ spec = do
                 Left err -> expectationFailure ("replay: " <> show err)
                 Right db -> map bfName (M.elems (dbBioFlows db)) `shouldSatisfy` elem "Methane"
 
+        it "brings along the product flow an added dependency line needs" $ do
+            -- The technosphere twin of the line above. A replay that dropped
+            -- the flow would rebuild a database whose exchange links nothing,
+            -- and the edit would score zero where the live one did not.
+            depDb <- buildDepFixture
+            let depCtx = ctx{acDeps = [depDb]}
+                added = AuthoredTechInput depPid 2.0 (Just "kg") Nothing
+            case replayJournal depCtx [event (Edited supplierPid [(AddExchange added, 1)])] of
+                Left err -> expectationFailure ("replay: " <> show err)
+                Right db -> M.member depProdId (dbTechFlows db) `shouldBe` True
+
         it "refuses an edit whose selectors no longer match what they matched" $
             -- The guard that makes a recorded edit safe to replay: the
             -- inventory it was made against must still be the one it named.
@@ -366,6 +377,21 @@ expectedEditJSON =
 -- Fixture: one supplier producing milk in kg, emitting CO2
 -- ---------------------------------------------------------------------------
 
+{- | A second database, sharing nothing with the fixture but its unit table:
+the dependency a replayed edit consumes from.
+-}
+buildDepFixture :: IO Database
+buildDepFixture = do
+    built <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty)
+            (M.singleton (depActId, depProdId) depActivity)
+            (M.singleton depProdId wheatFlow)
+            M.empty
+            M.empty
+            unitTable
+    either (fail . show) pure built
+
 buildFixture :: IO Database
 buildFixture = do
     built <-
@@ -381,14 +407,50 @@ buildFixture = do
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
 
-supplierActId, supplierProdId, co2Id, kgUnitId :: UUID
+supplierActId, supplierProdId, co2Id, depActId, depProdId, kgUnitId :: UUID
 supplierActId = mkUUID 1
 supplierProdId = mkUUID 2
 co2Id = mkUUID 3
+depActId = mkUUID 4
+depProdId = mkUUID 5
 kgUnitId = mkUUID 10
 
-supplierPid :: Text
+supplierPid, depPid :: Text
 supplierPid = renderKey (supplierActId, supplierProdId)
+depPid = renderKey (depActId, depProdId)
+
+wheatFlow :: TechnosphereFlow
+wheatFlow =
+    TechnosphereFlow
+        { tfId = depProdId
+        , tfName = "wheat"
+        , tfUnitId = kgUnitId
+        , tfSynonyms = M.empty
+        , tfCAS = Nothing
+        , tfSubstanceId = Nothing
+        }
+
+-- | The dependency's one activity: a reference product and nothing else.
+depActivity :: Activity
+depActivity =
+    supplierActivity
+        { activityName = "wheat production"
+        , exchanges =
+            [ TechnosphereExchange
+                { techFlowId = depProdId
+                , techAmount = 1.0
+                , techUnitId = kgUnitId
+                , techRole = ReferenceProduct
+                , techActivityLinkId = depActId
+                , techProcessLinkId = Nothing
+                , techLocation = ""
+                , techComment = Nothing
+                , techPedigree = Nothing
+                , techShare = Nothing
+                , techClassification = M.empty
+                }
+            ]
+        }
 
 unitTable :: M.Map UUID Unit
 unitTable =

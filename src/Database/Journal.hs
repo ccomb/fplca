@@ -412,7 +412,7 @@ applyOp ctx = \case
                     [ ResolvedInsert
                         { riKey = key
                         , riActivity = eaActivity edited
-                        , riNewTechFlows = []
+                        , riNewTechFlows = eaNewTechFlows edited
                         , riNewBioFlows = eaNewBioFlows edited
                         }
                     ]
