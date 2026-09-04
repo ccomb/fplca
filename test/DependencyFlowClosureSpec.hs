@@ -35,8 +35,8 @@ import Types
 
 import CrossDBRegionalLCIAFixture (buildTables, kgUnit, kgUnitConfig, mkDB, mkUUID)
 
-collection :: Text
-collection = "EF-3.1"
+collection :: DM.CollectionName
+collection = DM.CollectionName "EF-3.1"
 
 -- | The flow only the dependency database owns.
 riverWater :: BiosphereFlow

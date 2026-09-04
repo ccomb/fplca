@@ -41,7 +41,7 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 
-import Database.Manager (DatabaseManager (..), getMergedFlowMetadata, getMergedUnitConfig, mapMethodToTablesCached)
+import Database.Manager (CollectionName, DatabaseManager (..), getMergedFlowMetadata, getMergedUnitConfig, mapMethodToTablesCached)
 import Matrix (Inventory)
 import Method.Mapping (
     LCIAOutcome (..),
@@ -65,8 +65,8 @@ not tell from a real score.
 -}
 scoreSolution ::
     DatabaseManager ->
-    -- | Method collection name, to reach each dependency database's tables
-    Text ->
+    -- | Reaches each dependency database's tables
+    CollectionName ->
     Method ->
     MethodTables ->
     SharedSolver.CrossDBSolution ->

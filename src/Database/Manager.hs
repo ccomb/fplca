@@ -102,6 +102,7 @@ module Database.Manager (
     finalizeDatabase,
 
     -- * Cached flow mapping
+    CollectionName (..),
     mapMethodToFlowsCached,
     effectiveMethodMappings,
     mapMethodToTablesCached,
@@ -555,26 +556,26 @@ data DatabaseManager = DatabaseManager
     linking paths read it, derived once beside it. Sourced from the configured
     geographies file, empty when none is configured or it fails to parse.
     -}
-    , dmMethodMappingCache :: !(TVar (Map (Text, Text, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
+    , dmMethodMappingCache :: !(TVar (Map (Text, CollectionName, UUID) [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]))
     {- ^ Cached flow mappings: (dbName, collection, methodId) → mappings.
     The collection is part of the key because a method UUID is a UUIDv5 of the
     method name alone, so the same name in two collections collides on UUID
     while carrying different CF lists. Invalidated on database/method/synonym
     reload.
     -}
-    , dmMethodTablesCache :: !(TVar (Map (Text, Text, UUID) MethodTables))
+    , dmMethodTablesCache :: !(TVar (Map (Text, CollectionName, UUID) MethodTables))
     {- ^ Cached LCIA-score lookup tables built from mappings.
     These depend only on (db, collection, method), so building them once per
     triple saves O(n log n) Map constructions on every LCIA call.
     -}
-    , dmMethodTablesInflight :: !(TVar (Map (Text, Text, UUID) (TMVar (Either SomeException MethodTables))))
+    , dmMethodTablesInflight :: !(TVar (Map (Text, CollectionName, UUID) (TMVar (Either SomeException MethodTables))))
     {- ^ Single-flight slots guarding 'dmMethodTablesCache' builds. The first
     caller for a key installs an empty 'TMVar' and runs the (expensive) build;
     concurrent callers — including the load-time warm-up — await that slot
     instead of each rebuilding the same tables. The slot is removed when the
     build finishes, so a failed build is retried rather than cached.
     -}
-    , dmMethodSetTablesCache :: !(TVar (Map (Text, Text, [UUID]) MethodSetTables))
+    , dmMethodSetTablesCache :: !(TVar (Map (Text, CollectionName, [UUID]) MethodSetTables))
     {- ^ Cached stacked CF tables for multi-method scoring.
     Key is (dbName, collection, sortedMethodIds) so subset-arbitrary requests
     share cache entries with named-collection ones whenever the method ids
@@ -582,7 +583,7 @@ data DatabaseManager = DatabaseManager
     'dmMethodTablesCache' on any reload that invalidates the per-method cache
     (collection / synonym / DB load).
     -}
-    , dmMethodIndexCache :: !(TVar (Map (Text, Text, UUID) MethodIndex))
+    , dmMethodIndexCache :: !(TVar (Map (Text, CollectionName, UUID) MethodIndex))
     {- ^ Cached inverted indices over a method (CF tokens, by-medium, by-CAS).
     Used by the post-scoring suggester to surface candidate matches for
     uncharacterized flows. Keyed identically to the tables cache and
@@ -658,10 +659,17 @@ getFlowClosure manager dbName db = atomically $ do
             modifyTVar' (dmFlowClosureCache manager) (M.insert dbName closure)
             pure closure
 
+{- | The name of a method collection. A newtype because it travels next to a
+database name, of the same type, through every cache lookup below: swapped,
+the two would read and fill the wrong cache entry and nothing would say so.
+-}
+newtype CollectionName = CollectionName {unCollectionName :: Text}
+    deriving (Eq, Ord, Show)
+
 {- | Cached flow mapping: avoids re-matching method CFs to database flows on every LCIA call.
 The mapping depends only on (database, method), not on the process being evaluated.
 -}
-mapMethodToFlowsCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+mapMethodToFlowsCached :: DatabaseManager -> Text -> CollectionName -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 mapMethodToFlowsCached manager dbName collection db method = do
     let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodMappingCache manager)
@@ -688,7 +696,7 @@ The method's exclusions are re-applied last: the expansions travel by flow
 name and would otherwise hand an excepted flow the factor of a sibling it
 shares a synonym group with (see 'dropExcludedMappings').
 -}
-effectiveMethodMappings :: DatabaseManager -> Text -> Text -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
+effectiveMethodMappings :: DatabaseManager -> Text -> CollectionName -> Database -> Method -> IO [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))]
 effectiveMethodMappings manager dbName collection db method = do
     mappings <- mapMethodToFlowsCached manager dbName collection db method
     closure <- getFlowClosure manager dbName db
@@ -701,7 +709,7 @@ effectiveMethodMappings manager dbName collection db method = do
                     expandSynonymMappings synDB (fcByName closure) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
-mapMethodToTablesCached :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
+mapMethodToTablesCached :: DatabaseManager -> Text -> CollectionName -> Database -> Method -> IO MethodTables
 mapMethodToTablesCached manager dbName collection db method = do
     let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodTablesCache manager)
@@ -723,7 +731,7 @@ coverage gaps are surfaced once here, at build time, rather than per-pid on the
 scoring path. Caching and single-flighting are the caller's responsibility.
 -}
 buildMethodTablesFor ::
-    DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodTables
+    DatabaseManager -> Text -> CollectionName -> Database -> Method -> IO MethodTables
 buildMethodTablesFor manager dbName collection db method = do
     let hier = dmLocationHierarchy manager
     expanded <- effectiveMethodMappings manager dbName collection db method
@@ -747,7 +755,9 @@ buildMethodTablesFor manager dbName collection db method = do
     -- This assumes the method carries such an unlocated default for the flows in
     -- question; a method whose CFs are all region-tagged would be left with none.
     -- The config loader warns when a 'global-methods' name matches no method.
-    globalMethods <- maybe [] mcGlobalMethods . M.lookup collection <$> readTVarIO (dmAvailableMethods manager)
+    globalMethods <-
+        maybe [] mcGlobalMethods . M.lookup (unCollectionName collection)
+            <$> readTVarIO (dmAvailableMethods manager)
     let !raw0 = buildMethodTables (cfFamily (methodUnit method)) cmap energyDensities expanded
         !raw =
             if methodName method `elem` globalMethods
@@ -913,7 +923,7 @@ warmMethodTables manager dbName db = void $ forkIO $ withLogScope dbName $ do
     reportProgress Info $
         "[warm] " <> T.unpack dbName <> ": warming " <> show (length methods) <> " method table(s) in background…"
     forM_ methods $ \(collName, method) -> do
-        r <- try (void (mapMethodToTablesCached manager dbName collName db method))
+        r <- try (void (mapMethodToTablesCached manager dbName (CollectionName collName) db method))
         case r of
             Right () -> pure ()
             Left (e :: SomeException) ->
@@ -940,7 +950,7 @@ warmMethodTables manager dbName db = void $ forkIO $ withLogScope dbName $ do
 'mapMethodToTablesCached' and re-used; the only set-level work is stacking
 broadcasts into a dense matrix when none of the methods are regionalized.
 -}
-mapMethodSetToTablesCached :: DatabaseManager -> Text -> Text -> Database -> [Method] -> IO MethodSetTables
+mapMethodSetToTablesCached :: DatabaseManager -> Text -> CollectionName -> Database -> [Method] -> IO MethodSetTables
 mapMethodSetToTablesCached manager dbName collection db methods = do
     -- Canonical key = (dbName, collection, sorted methodIds). Stable regardless
     -- of input ordering so subset-arbitrary requests don't fragment the cache.
@@ -969,7 +979,7 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
 'Database' itself — only on the method's CF list — but keyed by (dbName,
 methodId) to share lifetime semantics with the tables cache.
 -}
-mapMethodToIndexCached :: DatabaseManager -> Text -> Text -> Method -> IO MethodIndex
+mapMethodToIndexCached :: DatabaseManager -> Text -> CollectionName -> Method -> IO MethodIndex
 mapMethodToIndexCached manager dbName collection method = do
     let key = (dbName, collection, methodId method)
     cache <- readTVarIO (dmMethodIndexCache manager)
@@ -2950,7 +2960,7 @@ by the same tables and must be explainable by them too.
 explainFlowFactor ::
     DatabaseManager ->
     Text ->
-    Text ->
+    CollectionName ->
     Database ->
     Method ->
     UUID ->
@@ -2985,8 +2995,8 @@ databaseCoverageReport manager dbName mCollection = do
         Nothing -> Right (M.toList loaded)
     collectionBridgesFor db (collName, mc) = do
         let methods = mcMethods mc
-        tables <- mapM (mapMethodToTablesCached manager dbName collName db) methods
-        mappings <- mapM (effectiveMethodMappings manager dbName collName db) methods
+        tables <- mapM (mapMethodToTablesCached manager dbName (CollectionName collName) db) methods
+        mappings <- mapM (effectiveMethodMappings manager dbName (CollectionName collName) db) methods
         let characterized = S.size (S.unions (map (`characterizedFlowIds` dbBioFlows db) tables))
             total = fromIntegral (dbBiosphereCount db)
         pure (Coverage.collectionBridges collName total characterized mappings)

@@ -609,7 +609,7 @@ buildPerDbSetTables ::
 buildPerDbSetTables dbManager collection scalings methods =
     traverse
         ( \(n, d, sv) -> do
-            mst <- DM.mapMethodSetToTablesCached dbManager n collection d methods
+            mst <- DM.mapMethodSetToTablesCached dbManager n (DM.CollectionName collection) d methods
             pure (d, sv, mst)
         )
         scalings
@@ -666,8 +666,8 @@ and 'inventoryContributions' calls hit a warm cache.
 -}
 prepMethodCtx :: DatabaseManager -> Text -> Text -> Database -> Method -> IO MethodCtx
 prepMethodCtx dbManager dbName collection db method = do
-    mappings <- DM.mapMethodToFlowsCached dbManager dbName collection db method
-    _ <- DM.mapMethodToTablesCached dbManager dbName collection db method
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName (DM.CollectionName collection) db method
+    _ <- DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collection) db method
     let stats = computeMappingStats mappings
     pure MethodCtx{mctxMethod = method, mctxMappedFlows = msTotal stats - msUnmatched stats}
 
@@ -689,8 +689,8 @@ computeCategoryResult ::
 computeCategoryResult dbManager dbName collection db sol activity topFlows precomputedScore method = do
     unitCfg <- getMergedUnitConfig dbManager
     (mFlows, mUnits) <- DM.getMergedFlowMetadata dbManager
-    mappings <- DM.mapMethodToFlowsCached dbManager dbName collection db method
-    tables <- DM.mapMethodToTablesCached dbManager dbName collection db method
+    mappings <- DM.mapMethodToFlowsCached dbManager dbName (DM.CollectionName collection) db method
+    tables <- DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collection) db method
     let inventory = SharedSolver.csInventory sol
     let stats = computeMappingStats mappings
     -- A Left is a scoring integrity error (see 'resolveBatchedScore') — it
@@ -699,7 +699,7 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
     -- 'resolveBatchedScore'; only the locally computed one is labeled here.
     scoreE <- case precomputedScore of
         Just e -> traverse evaluate e
-        Nothing -> Impact.scoreSolution dbManager collection method tables sol inventory
+        Nothing -> Impact.scoreSolution dbManager (DM.CollectionName collection) method tables sol inventory
     case scoreE of
         Left err -> pure (Left err)
         Right score -> buildResult unitCfg mFlows mUnits inventory tables stats score
@@ -808,7 +808,7 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
             topContributors <- case mUnitCfg of
                 Nothing -> pure []
                 Just unitCfg -> do
-                    tables <- DM.mapMethodToTablesCached dbManager dbName collectionName db method
+                    tables <- DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db method
                     let (rawContribs, _unknownUuids) =
                             inventoryContributions unitCfg mUnits mFlows inventory tables
                         sorted = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
@@ -1856,7 +1856,7 @@ getContributingFlows dbName processIdText collectionName methodIdText limitParam
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
         inventory <- applyLongTermMode mFlows ltMode <$> inventoryWithDeps dbName db sharedSolver actProcessId
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db method
         let score = loScore (computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables)
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
             contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
@@ -1899,7 +1899,7 @@ getContributingActivities dbName processIdText collectionName methodIdText limit
         requireFullyLinked dbName db
         unitCfg <- liftIO $ getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
-        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
+        tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db method
         eContribs <-
             liftIO $
                 SharedSolver.crossDBProcessContributions
@@ -1990,8 +1990,8 @@ getMethodMapping dbName methodIdText = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
     (collectionName, method) <- loadMethodByUUID methodIdText
-    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName collectionName db method
-    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
+    mappings <- liftIO $ DM.mapMethodToFlowsCached dbManager dbName (DM.CollectionName collectionName) db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db method
     let stats = computeMappingStats mappings
         totalFactors = length mappings
         coverage =
@@ -2037,7 +2037,7 @@ getFlowCFMapping dbName methodIdText = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
     (collectionName, method) <- loadMethodByUUID methodIdText
-    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName collectionName db method
+    tables <- liftIO $ DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db method
     let entries = map (buildFlowEntry db tables) (V.toList (dbBiosphereOrder db))
         matchedCount = length [() | e <- entries, isJust (fceCfValue e)]
     return
@@ -2059,7 +2059,7 @@ getCollectionCoverage dbName collectionName = do
     dbManager <- asks aeDbManager
     (db, _) <- requireDatabaseByName dbName
     (methods, _, _, _) <- loadCollection collectionName
-    tablesList <- liftIO $ mapM (DM.mapMethodToTablesCached dbManager dbName collectionName db) methods
+    tablesList <- liftIO $ mapM (DM.mapMethodToTablesCached dbManager dbName (DM.CollectionName collectionName) db) methods
     return
         CollectionCoverage
             { ccvCollection = collectionName
@@ -2083,7 +2083,7 @@ explainCFHandler dbName methodIdText flowIdText = do
     fid <- case UUID.fromText (T.strip flowIdText) of
         Nothing -> throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 ("Malformed flow id: " <> flowIdText))}
         Just u -> pure u
-    explained <- liftIO $ DM.explainFlowFactor dbManager dbName collectionName db method fid
+    explained <- liftIO $ DM.explainFlowFactor dbManager dbName (DM.CollectionName collectionName) db method fid
     case explained of
         Left err -> throwError err404{errBody = BSL.fromStrict (T.encodeUtf8 err)}
         Right (flow, explanation) ->
@@ -2096,7 +2096,7 @@ getCharacterization dbName methodIdText flowFilter limitParam = do
     (collectionName, method) <- loadMethodByUUID methodIdText
     let lim = fromMaybe 50 limitParam
         queryLower = fmap T.toLower flowFilter
-    mappings <- liftIO $ DM.effectiveMethodMappings dbManager dbName collectionName db method
+    mappings <- liftIO $ DM.effectiveMethodMappings dbManager dbName (DM.CollectionName collectionName) db method
     let matched =
             [ (cf, f, strat)
             | (cf, Just (f, strat)) <- mappings
