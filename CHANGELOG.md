@@ -9,6 +9,26 @@
   because that build runs in a container without git and had nothing to
   read; the macOS and Windows binaries were already correct.
 
+### Fixed
+- Writing an activity whose supplier lives in a dependency database no longer
+  produces an exchange that contributes nothing. The write was accepted, but
+  the supplier's product flow was never copied into the database being
+  written, and cross-database relinking reads the consumer's own flow table:
+  finding nothing there it dropped the exchange in silence, leaving an empty
+  supply chain and a score of zero. The flow is now copied in with its unit
+  remapped, exactly as a biosphere flow from a dependency already was, and a
+  product stated in a unit the writing database does not have is refused
+  rather than copied. The same applies to an inventory edit that adds such a
+  line, and to replaying one from a journal.
+
+  An amount to a supplier in another database must now be stated in that
+  supplier's product's own unit. A cross-database link carries the product
+  flow's unit rather than the exchange's, and the amount is converted from it,
+  so a convertible-but-different unit would have entered the matrix as a
+  number in the wrong one (two tonnes demanded as two kilograms) where the
+  same exchange to a local supplier is converted. It is refused, naming the
+  unit to restate it in.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added

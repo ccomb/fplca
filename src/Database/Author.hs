@@ -153,9 +153,10 @@ them mint a twin of a curated flow, uncharacterized and scoring as zero.
 
 There is deliberately no technosphere counterpart. A technosphere input always
 names a *supplier* — a product that something in scope produces — so the flow
-is whatever that supplier's process key already says it is. The only new
-technosphere flow authoring can create is the authored activity's own product,
-and that one is minted from the activity itself, never stated as an input.
+is whatever that supplier's process key already says it is. Authoring therefore
+never mints a technosphere flow from words: the activity's own product is
+minted from the activity, and a supplier living in a dependency has its product
+flow copied out of that dependency ('adoptTechFlow'), never invented.
 -}
 data FlowRef
     = FlowById UUID
@@ -305,7 +306,9 @@ validateOne ctx a =
                     ( ResolvedInsert
                         { riKey = key
                         , riActivity = buildActivity a unitLabel (productExchange : map reExchange resolved)
-                        , riNewTechFlows = [productFlow | not (M.member (snd key) (dbTechFlows (acDb ctx)))]
+                        , riNewTechFlows =
+                            [productFlow | not (M.member (snd key) (dbTechFlows (acDb ctx)))]
+                                <> mapMaybe reNewTechFlow resolved
                         , riNewBioFlows = mapMaybe reNewBioFlow resolved
                         }
                     , map here (concatMap reWarnings resolved)
@@ -415,6 +418,7 @@ data EditedActivity = EditedActivity
     { eaActivity :: Activity
     , eaMatched :: [Int]
     , eaNewBioFlows :: [BiosphereFlow]
+    , eaNewTechFlows :: [TechnosphereFlow]
     , eaWarnings :: [Text]
     }
 
@@ -438,6 +442,7 @@ applyExchangeEdits ctx edits act = case accErrors final of
                 { eaActivity = act{exchanges = accExchanges final}
                 , eaMatched = accMatched final
                 , eaNewBioFlows = accNewFlows final
+                , eaNewTechFlows = accNewTechFlows final
                 , eaWarnings = accWarnings final
                 }
     errs -> Left errs
@@ -448,6 +453,7 @@ applyExchangeEdits ctx edits act = case accErrors final of
             { accExchanges = exchanges act
             , accMatched = []
             , accNewFlows = []
+            , accNewTechFlows = []
             , accWarnings = []
             , accErrors = []
             }
@@ -457,6 +463,7 @@ data EditAcc = EditAcc
     { accExchanges :: [Exchange]
     , accMatched :: [Int]
     , accNewFlows :: [BiosphereFlow]
+    , accNewTechFlows :: [TechnosphereFlow]
     , accWarnings :: [Text]
     , accErrors :: [Text]
     }
@@ -473,6 +480,7 @@ applyStep ctx acc edit = case applyOneEdit ctx (accExchanges acc) edit of
             { accExchanges = esExchanges step
             , accMatched = accMatched acc <> [esMatched step]
             , accNewFlows = accNewFlows acc <> esNewFlows step
+            , accNewTechFlows = accNewTechFlows acc <> esNewTechFlows step
             , accWarnings = accWarnings acc <> esWarnings step
             }
 
@@ -481,6 +489,7 @@ data EditStep = EditStep
     { esExchanges :: [Exchange]
     , esMatched :: Int
     , esNewFlows :: [BiosphereFlow]
+    , esNewTechFlows :: [TechnosphereFlow]
     , esWarnings :: [Text]
     }
 
@@ -504,11 +513,18 @@ applyOneEdit ctx current edit = case edit of
                     { esExchanges = current <> [reExchange resolved]
                     , esMatched = 1
                     , esNewFlows = maybeToList (reNewBioFlow resolved)
+                    , esNewTechFlows = maybeToList (reNewTechFlow resolved)
                     , esWarnings = reWarnings resolved
                     }
   where
     changed exchangeList matched =
-        EditStep{esExchanges = exchangeList, esMatched = matched, esNewFlows = [], esWarnings = []}
+        EditStep
+            { esExchanges = exchangeList
+            , esMatched = matched
+            , esNewFlows = []
+            , esNewTechFlows = []
+            , esWarnings = []
+            }
     restate isSelected amount ex = if isSelected ex then withAmount amount ex else ex
 
 {- | The lines a selector names, and how many there are. Zero is a refusal: an
@@ -602,6 +618,7 @@ describeSelector sel = case sel of
 data ResolvedExchange = ResolvedExchange
     { reExchange :: Exchange
     , reNewBioFlow :: Maybe BiosphereFlow
+    , reNewTechFlow :: Maybe TechnosphereFlow
     , reWarnings :: [Text]
     }
 
@@ -651,17 +668,26 @@ resolveLinked ::
     Either [Text] ResolvedExchange
 resolveLinked ctx provider amount mUnit build =
     case (amountCheck amount, resolveSupplier ctx provider) of
-        ([], Right sup) ->
-            let stated = fromMaybe (defaultUnit sup) mUnit
-             in case lookupUnit ctx stated of
-                    Nothing -> Left ["unknown unit \"" <> stated <> "\""]
-                    Just (unitRef, unitLabel) ->
-                        case unitError ctx sup unitLabel of
-                            Just err -> Left [err]
-                            Nothing -> Right (ResolvedExchange (build sup unitRef) Nothing [])
+        ([], Right sup) -> mapLeft (: []) (resolved sup)
         (errs, Right _) -> Left errs
         (errs, Left err) -> Left (errs <> [err])
   where
+    resolved :: Supplier -> Either Text ResolvedExchange
+    resolved sup = do
+        let stated = fromMaybe (defaultUnit sup) mUnit
+        (unitRef, unitLabel) <-
+            maybe (Left ("unknown unit \"" <> stated <> "\"")) Right (lookupUnit ctx stated)
+        maybe (Right ()) Left (unitError ctx sup unitLabel)
+        newTechFlow <- adoptTechFlow ctx sup
+        maybe (Right ()) Left (dependencyUnitError ctx sup unitLabel)
+        pure
+            ResolvedExchange
+                { reExchange = build sup unitRef
+                , reNewBioFlow = Nothing
+                , reNewTechFlow = newTechFlow
+                , reWarnings = []
+                }
+    defaultUnit :: Supplier -> Text
     defaultUnit sup =
         case (supProducedUnit sup, supAnyRefUnit sup) of
             ("", "") -> ""
@@ -821,6 +847,7 @@ resolveBio ctx flowRef direction amount mUnit comment
                     , bioPedigree = Nothing
                     }
                 mNew
+                Nothing
                 warnings
             )
     -- The biosphere matrix carries amounts through unconverted, so a unit the
@@ -869,15 +896,36 @@ data Supplier = Supplier
     {- ^ unit of the first reference exchange either way, used only to default
     an omitted unit — a treatment provider has no produced unit to borrow.
     -}
+    , supHome :: SupplierHome
+    -- ^ which database the provider was found in, and what has to be copied out of it.
     }
+
+{- | Where a resolved provider lives, and what a foreign one obliges the edited
+database to adopt.
+
+'Dependency' carries the product flow that database declares for the provider
+and the name of the unit that flow is stated in over there — or nothing, when
+that database names a process whose product flow it never declared. That is a
+malformed database rather than an impossible one, so it is a state here and
+'adoptTechFlow' says which of the two it is.
+-}
+data SupplierHome
+    = OwnDatabase
+    | Dependency (Maybe (TechnosphereFlow, Text))
 
 resolveSupplier :: AuthorContext -> Text -> Either Text Supplier
 resolveSupplier ctx provider =
-    case mapMaybe inDatabase (acDb ctx : acDeps ctx) of
+    case mapMaybe inDatabase (zip (OwnDatabase : repeat foreign') (acDb ctx : acDeps ctx)) of
         [] -> Left ("unknown provider \"" <> provider <> "\"")
         (sup : _) -> Right sup
   where
-    inDatabase db = do
+    -- The first database in the list is the one being written, and the rest
+    -- are its dependencies; only those oblige a flow to be copied in.
+    foreign' :: SupplierHome
+    foreign' = Dependency Nothing
+
+    inDatabase :: (SupplierHome, Database) -> Maybe Supplier
+    inDatabase (home, db) = do
         pid <- resolveProcess db provider
         key <- dbProcessIdTable db V.!? fromIntegral pid
         act <- dbActivities db V.!? fromIntegral pid
@@ -886,7 +934,85 @@ resolveSupplier ctx provider =
                 { supKey = uncurry ProcessRef key
                 , supProducedUnit = refUnitOf db act (\e -> exchangeIsReference e && not (exchangeIsInput e))
                 , supAnyRefUnit = refUnitOf db act exchangeIsReference
+                , supHome = case home of
+                    OwnDatabase -> OwnDatabase
+                    Dependency _ -> Dependency (declaredFlow db (snd key))
                 }
+
+    declaredFlow :: Database -> UUID -> Maybe (TechnosphereFlow, Text)
+    declaredFlow db flowId = do
+        flow <- M.lookup flowId (dbTechFlows db)
+        pure (flow, unitNameOf (dbUnits db) (tfUnitId flow))
+
+{- | The product flow the edited database has to gain before this exchange can
+be linked, if any.
+
+Cross-database relinking reads the *consumer's* flow table
+('Database.Loader.findExchangeCrossDBLink' opens on @M.lookup fid techFlowDb@)
+and drops in silence what it does not find there, so an exchange must never
+reference a product flow only a dependency declares. The biosphere side already
+copies for exactly this reason; this is the same rule on the technosphere side.
+
+The unit is remapped into the edited database's own table, because the link
+carries the flow's unit name and would otherwise read it out of the wrong one.
+-}
+adoptTechFlow :: AuthorContext -> Supplier -> Either Text (Maybe TechnosphereFlow)
+adoptTechFlow ctx sup = case supHome sup of
+    OwnDatabase -> Right Nothing
+    Dependency Nothing ->
+        Left "the database declaring this provider does not declare its product flow"
+    Dependency (Just (flow, flowUnit))
+        | M.member (tfId flow) (dbTechFlows (acDb ctx)) -> Right Nothing
+        | otherwise -> case lookupUnit ctx flowUnit of
+            Nothing ->
+                Left
+                    ( "the product \""
+                        <> tfName flow
+                        <> "\" of this provider is stated in \""
+                        <> flowUnit
+                        <> "\", a unit this database does not have"
+                    )
+            Just (unitRef, _) -> Right (Just flow{tfUnitId = unitRef})
+
+{- | Whether two unit names denote the same unit, spelling aside.
+
+Two databases keep two unit tables, so one unit can be written @kg@ in one and
+@kilogram@ in the other. What decides is the factor between them, not the
+string.
+-}
+sameUnit :: UnitConfig -> Text -> Text -> Bool
+sameUnit cfg stated other =
+    normalizeUnit stated == normalizeUnit other
+        || maybe False (\factor -> abs (factor - 1) < 1e-12) (convertUnit cfg stated other 1)
+
+{- | Judge the unit an exchange to a dependency's supplier is stated in.
+
+A link into a dependency carries the *flow's* unit, not the exchange's
+('Database.Loader.findExchangeCrossDBLink' reads it off the flow), and
+'Matrix.depDemandsToVector' then converts the raw amount from that unit. So an
+exchange stated in anything else enters the matrix as a number in the wrong
+unit — two tonnes of a product recorded in kilograms would be demanded as two
+kilograms — where the same exchange to a local supplier is converted. Refuse
+and name the unit to restate in, exactly as a biosphere amount is.
+-}
+dependencyUnitError :: AuthorContext -> Supplier -> Text -> Maybe Text
+dependencyUnitError ctx sup stated = case supHome sup of
+    OwnDatabase -> Nothing
+    Dependency Nothing -> Nothing
+    Dependency (Just (_, flowUnit))
+        | T.null flowUnit -> Nothing
+        | sameUnit (acUnitConfig ctx) stated flowUnit -> Nothing
+        | otherwise ->
+            Just
+                ( "this provider's product is recorded in \""
+                    <> flowUnit
+                    <> "\" but the exchange states \""
+                    <> stated
+                    <> "\"; an amount to a supplier in another database is not "
+                    <> "converted, so restate it in \""
+                    <> flowUnit
+                    <> "\""
+                )
 
 {- | Resolve a process id string the same two ways the rest of the engine
 does: the canonical @activityUUID_productUUID@ pair, or a bare activity UUID

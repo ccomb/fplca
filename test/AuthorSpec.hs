@@ -203,6 +203,74 @@ spec = do
                             other -> expectationFailure ("expected one dependency input, got " <> show (length other))
                     Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
 
+            it "copies a dependency's product flow into the edited database" $ do
+                -- Cross-database relinking reads the consumer's own flow table
+                -- and drops in silence what is not in it, so an exchange on a
+                -- flow only the dependency declares would score zero.
+                depDb <- buildFixture
+                let writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                    authored = baseActivity{aaExchanges = [techInput supplierPid 3 Nothing]}
+                case validateAuthored ctx [authored] of
+                    Left errs -> expectationFailure ("expected acceptance, got " <> show errs)
+                    Right ([r], _) -> do
+                        map tfName (riNewTechFlows r) `shouldSatisfy` elem "milk"
+                        [tfUnitId f | f <- riNewTechFlows r, tfName f == "milk"] `shouldBe` [kgUnitId]
+                    Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
+
+            it "refuses an amount to a dependency stated in another unit than its product's" $ do
+                -- The link into a dependency carries the flow's unit, not the
+                -- exchange's, and the matrix converts the raw amount from it.
+                -- A unit the local path would convert would land here as a
+                -- number in the wrong one, which is the silent kind of wrong.
+                built <- buildFixture
+                let depDb =
+                        built
+                            { dbTechFlows =
+                                M.adjust (\f -> f{tfUnitId = metreUnitId}) supplierProdId (dbTechFlows built)
+                            }
+                    writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case validateAuthored ctx [baseActivity{aaExchanges = [techInput supplierPid 3 Nothing]}] of
+                    Left errs ->
+                        errs `shouldSatisfy` any (isInfixOf "is not converted, so restate it")
+                    Right _ -> expectationFailure "expected a refusal on the unit the amount is stated in"
+
+            it "takes a dependency's supplier in its product's own unit" $ do
+                -- The ordinary case, and the one the refusal above must not
+                -- catch: the flow and the reference exchange agree, so an
+                -- omitted unit defaults to the right one.
+                depDb <- buildFixture
+                let writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case validateAuthored ctx [baseActivity{aaExchanges = [techInput supplierPid 3 (Just "kg")]}] of
+                    Left errs -> expectationFailure ("expected acceptance, got " <> show errs)
+                    Right ([_], _) -> pure ()
+                    Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
+
+            it "refuses a dependency's supplier whose product unit is not here" $ do
+                -- Same rule the biosphere side states: a flow copied in has to
+                -- carry a unit this database can name, or the link would read
+                -- its unit out of the wrong table. Two databases are two unit
+                -- tables, so the dependency records its product in one the
+                -- writing database does not have.
+                built <- buildFixture
+                let depDb =
+                        built
+                            { dbTechFlows =
+                                M.adjust (\f -> f{tfUnitId = metreUnitId}) supplierProdId (dbTechFlows built)
+                            }
+                    writing =
+                        (emptyOf fixtureDb)
+                            { dbTechFlows = M.empty
+                            , dbUnits = M.delete metreUnitId (dbUnits fixtureDb)
+                            }
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case validateAuthored ctx [baseActivity{aaExchanges = [techInput supplierPid 3 Nothing]}] of
+                    Left errs ->
+                        errs `shouldSatisfy` any (isInfixOf "a unit this database does not have")
+                    Right _ -> expectationFailure "expected a refusal on the copied flow's unit"
+
             it "warns about a biosphere flow new to the database without refusing it" $ do
                 let authored = baseActivity{aaExchanges = [bioOf (FlowByName "Nitrous oxide" air "kg") 0.5 Nothing]}
                 case validateAuthored (contextOf fixtureDb) [authored] of
@@ -441,6 +509,17 @@ spec = do
                 eaMatched edited `shouldBe` [1]
                 map bfName (eaNewBioFlows edited) `shouldBe` ["Nitrous oxide"]
                 eaWarnings edited `shouldSatisfy` any (isInfixOf "no characterization factor matches it")
+
+            it "brings along the product flow an added dependency line needs" $ do
+                -- The technosphere twin of the line above: an added input whose
+                -- supplier lives in a dependency has to bring that supplier's
+                -- product flow with it, or the relink drops the line.
+                depDb <- buildFixture
+                let writing = (emptyOf fixtureDb){dbTechFlows = M.empty}
+                    ctx = (contextOf writing){acDeps = [depDb]}
+                case applyExchangeEdits ctx [AddExchange (techInput supplierPid 2 Nothing)] importedActivity of
+                    Left errs -> expectationFailure ("expected acceptance, got " <> show errs)
+                    Right edited -> map tfName (eaNewTechFlows edited) `shouldBe` ["milk"]
 
             it "refuses a selector that matches nothing" $
                 editRefused "matches no exchange" [RemoveExchange (SelectBiosphere (mkUUID 998))]
