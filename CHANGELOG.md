@@ -29,6 +29,19 @@
   same exchange to a local supplier is converted. It is refused, naming the
   unit to restate it in.
 
+### Added
+- The products of a multi-output block now each report what their share
+  would be if the allocation key were their mass (`massAllocationPercent`), beside
+  the share the source declared. Nothing is split and nothing is scored
+  differently: it is a second column to read against the first, and the
+  impact per kilo under one key over the other is the quotient of the two
+  numbers. The Abondance cheese block of a French agricultural database
+  declares 51.4 % to the cheese where its mass is 11.7 % of the block, so
+  a kilo of that cheese carries 4.4 times more under the declared key than
+  under the mass. Amounts are converted to kilograms before being summed,
+  and a block whose products are not all stated in a mass reports nothing
+  rather than a number read off mismatched units. Wire revision 15.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added

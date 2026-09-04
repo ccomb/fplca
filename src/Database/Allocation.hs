@@ -32,6 +32,9 @@ module Database.Allocation (
     asAllocated,
     describeRefusal,
     scaleExchange,
+    MassKeyRefusal (..),
+    StatedAmount (..),
+    massShares,
 ) where
 
 import Data.List (partition)
@@ -42,6 +45,7 @@ import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Types
+import UnitConversion (UnitConfig, convertUnit)
 
 -- | How the shares of a multi-output activity are decided.
 data AllocationKey
@@ -126,6 +130,48 @@ describeRefusal refusal = case refusal of
             <> " without a declared share: state a share on every product row, or load the dataset already allocated"
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
+
+-- | One product row's amount and the unit it states that amount in.
+data StatedAmount = StatedAmount
+    { saUnit :: !Text
+    , saAmount :: !Double
+    }
+    deriving (Eq, Show)
+
+-- | Why the mass of a block's products cannot serve as a key.
+data MassKeyRefusal
+    = -- | The unit a product is stated in, which is not a mass.
+      NotAMass !Text
+    | -- | The amount a product states, which no share can be read from.
+      NonPositiveMass !Double
+    deriving (Eq, Show)
+
+{- | The share each product of one source block would carry if the key were
+its mass, as percentages in the order given.
+
+This is not an 'AllocationKey'. Nothing is split and nothing is scored: it
+answers what the mass would say beside what the source declared, and the
+reader draws the comparison. An impact per kilo is the quotient of the two
+fractions, so the whole comparison follows from these numbers alone.
+
+Every amount is converted to kilograms first, because summing amounts as
+written would hand the half-kilo of a 1 kg / 500 g pair 99.8 % of the load.
+A unit that is not a mass, or an amount at or below zero, refuses the whole
+block rather than dropping one product to a silent zero.
+-}
+massShares :: UnitConfig -> NonEmpty StatedAmount -> Either MassKeyRefusal (NonEmpty Double)
+massShares cfg products = share <$> traverse mass products
+  where
+    mass :: StatedAmount -> Either MassKeyRefusal Double
+    mass stated
+        | saAmount stated <= 0 = Left (NonPositiveMass (saAmount stated))
+        | otherwise =
+            maybe (Left (NotAMass (saUnit stated))) Right $
+                convertUnit cfg (saUnit stated) "kg" (saAmount stated)
+
+    -- Every mass is strictly positive, so their total is too.
+    share :: NonEmpty Double -> NonEmpty Double
+    share masses = (* (100 / sum masses)) <$> masses
 
 {- | The two rules the EcoSpold parsers used to apply to every dataset: a
 zero-amount coproduct the source states no share for is not an output, and

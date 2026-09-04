@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.Allocation (asAllocated, describeRefusal)
+import Database.Allocation (StatedAmount (..), asAllocated, describeRefusal, massShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
@@ -290,6 +290,7 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                         , prsProductUnit = prodUnit
                         , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                         , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
+                        , prsMassAllocationPercent = Nothing
                         , prsNativeType = activityNativeType rootActivity
                         }
                 , imTotalFlows = length flowDetails
@@ -1267,6 +1268,7 @@ mkActivitySummary db processId activity =
             , prsProductUnit = prodUnit
             , prsAllocationPercent = dsPercent <$> activityReferenceShare activity
             , prsAllocationFormula = dsFormula =<< activityReferenceShare activity
+            , prsMassAllocationPercent = Nothing
             , prsNativeType = activityNativeType activity
             }
 
@@ -1285,6 +1287,7 @@ unknownActivitySummary db pid =
         , prsProductUnit = ""
         , prsAllocationPercent = Nothing
         , prsAllocationFormula = Nothing
+        , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
         }
 
@@ -1297,9 +1300,42 @@ getAllProductsForActivity db groupKey =
     case M.lookup groupKey (dbActivityProductsIndex db) of
         Nothing -> []
         Just processIds ->
-            [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)
-            | pid <- processIds
-            ]
+            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) $
+                [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)
+                | pid <- processIds
+                ]
+
+{- | Fill in what each product of one block would carry under a mass key, to be
+read beside the share its source declared.
+
+Only a block of several products, each carrying a share its source stated,
+gets one. That condition is what says these amounts are the joint outputs of
+one run: a database whose datasets arrive already allocated declares no share
+and normalises each product to one of its own unit, so summing those amounts
+would compare quantities that never occurred together. And a lone product has
+nothing to be compared against.
+
+Left as it is again when the mass cannot serve as a key. The comparison is one
+extra column, so a block whose products are not all stated in a mass has none.
+-}
+withMassAllocationPercent :: UnitConfig -> [ActivitySummary] -> [ActivitySummary]
+withMassAllocationPercent unitCfg summaries
+    | length summaries < 2 = summaries
+    | not (all (isJust . prsAllocationPercent) summaries) = summaries
+    | otherwise = maybe summaries attachAll (NE.nonEmpty summaries)
+  where
+    attachAll :: NE.NonEmpty ActivitySummary -> [ActivitySummary]
+    attachAll block =
+        either
+            (const summaries)
+            (NE.toList . NE.zipWith attach block)
+            (massShares unitCfg (NE.map stated block))
+
+    stated :: ActivitySummary -> StatedAmount
+    stated s = StatedAmount{saUnit = prsProductUnit s, saAmount = prsProductAmount s}
+
+    attach :: ActivitySummary -> Double -> ActivitySummary
+    attach s percent = s{prsMassAllocationPercent = Just percent}
 
 -- | Get target activity for technosphere navigation.
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
@@ -1352,6 +1388,7 @@ crossDBLinkToSummary link =
         , prsProductUnit = cdlExchangeUnit link
         , prsAllocationPercent = Nothing
         , prsAllocationFormula = Nothing
+        , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
         }
 
@@ -1740,6 +1777,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
+                , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
                 }
      in SupplyChainResponse
@@ -1802,6 +1840,7 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
+                , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
                 }
     eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf includeEdges 1 S.empty
