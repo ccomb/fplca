@@ -973,9 +973,25 @@ data SearchCounts = SearchCounts
     }
     deriving (Eq, Show)
 
+{- | How a caller is going to list the processes it is about to count.
+
+Not decoration: 'tryBm25Retrieve' drops to the AND-of-tokens matcher when the
+caller sorts by name or location, or asks for exact matching, and BM25 keeps
+any row matching /one/ token. Counting with different settings from the list
+would label a tab "1200" over a table of nine.
+-}
+data CountAs = CountAs
+    { caSort :: !(Maybe Text)
+    , caExact :: !Bool
+    }
+
+-- | Counted the way the default listing lists.
+countAsListed :: CountAs
+countAsListed = CountAs{caSort = Nothing, caExact = False}
+
 -- | The counts one query finds. The query is required: an empty box has nothing to count.
-searchCounts :: Database -> Text -> SearchCounts
-searchCounts db query =
+searchCounts :: Database -> CountAs -> Text -> SearchCounts
+searchCounts db listedAs query =
     SearchCounts
         { scProcesses = length (activityMatches db (nameOnly query))
         , scProducts = count KindTechnosphere
@@ -988,7 +1004,9 @@ searchCounts db query =
     count :: ExchangeKind -> Int
     count kind = length (filter ((== kind) . kindOfFlow) matchedFlows)
 
-    -- The tab counters describe one search box, so only the name is filtered on.
+    -- The tab counters describe one search box, so only the name is filtered
+    -- on; the sort and exactness come from the caller because they decide
+    -- which matcher runs.
     nameOnly :: Text -> SearchFilter
     nameOnly q =
         SearchFilter
@@ -1000,10 +1018,10 @@ searchCounts db query =
                     , afcClassifications = []
                     , afcLimit = Nothing
                     , afcOffset = Nothing
-                    , afcSort = Nothing
+                    , afcSort = caSort listedAs
                     , afcOrder = Nothing
                     }
-            , sfExactMatch = False
+            , sfExactMatch = caExact listedAs
             }
 
 -- | List all classification systems and their distinct values for a database

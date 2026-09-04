@@ -44,7 +44,7 @@ import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Routes (collectionNotLoadedMessage)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeEditRequest (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..), toExchangeEdits)
-import Control.Monad (unless, when)
+import Control.Monad (mfilter, unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
 import qualified Method.Explain as Explain
@@ -54,6 +54,7 @@ import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodColle
 import Network.HTTP.Types.Header (RequestHeaders, hAccept, hAllow, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
+import qualified Search.Normalize as Normalize
 import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
@@ -770,10 +771,10 @@ database has nothing", which is a different answer from "you asked nothing".
 -}
 callCountSearchMatches :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callCountSearchMatches rid args (db, _) =
-    case textArg "q" args of
-        Nothing -> return $ toolError rid "q is required: there is nothing to count without a query"
+    case mfilter (not . null . Normalize.queryWords) (textArg "query" args) of
+        Nothing -> return $ toolError rid "query is required: there is nothing to count without one"
         Just query ->
-            let counts = Service.searchCounts db query
+            let counts = Service.searchCounts db Service.countAsListed query
              in return $
                     toolSuccessJson rid $
                         object

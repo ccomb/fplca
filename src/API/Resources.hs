@@ -902,7 +902,7 @@ params r = case r of
         ]
     CountSearchMatches ->
         [ pDatabase
-        , Param "q" "string" Required "The search term to count matches for"
+        , Param "query" "string" Required "The search term to count matches for"
         ]
     GetConsumers ->
         [ pDatabase

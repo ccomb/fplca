@@ -9,7 +9,7 @@ taken from the very function the process list is built from.
 -}
 module SearchCountsSpec (spec) where
 
-import Service (SearchCounts (..), searchCounts)
+import Service (CountAs (..), SearchCounts (..), countAsListed, searchCounts)
 import Test.Hspec
 import TestHelpers (loadSampleDatabase)
 
@@ -17,15 +17,24 @@ spec :: Spec
 spec = describe "the counts behind a search box's tabs" $ do
     it "counts the processes a term matches" $ do
         db <- loadSampleDatabase "SAMPLE.ilcd"
-        scProcesses (searchCounts db "Coal") `shouldBe` 1
+        scProcesses (searchCounts db countAsListed "Coal") `shouldBe` 1
 
     it "counts a product under products, not under flows" $ do
         -- SAMPLE.ilcd's outputs are technosphere flows, so a term matching
         -- them belongs to the middle tab and leaves the right-hand one empty.
         db <- loadSampleDatabase "SAMPLE.ilcd"
-        let counts = searchCounts db "Coal"
+        let counts = searchCounts db countAsListed "Coal"
         (scProducts counts > 0, scFlows counts) `shouldBe` (True, 0)
 
     it "answers zero everywhere for a term the database does not have" $ do
         db <- loadSampleDatabase "SAMPLE.ilcd"
-        searchCounts db "zirconium" `shouldBe` SearchCounts 0 0 0
+        searchCounts db countAsListed "zirconium" `shouldBe` SearchCounts 0 0 0
+
+    it "counts the way an exact listing would list, not the way a fuzzy one would" $ do
+        -- Two matchers answer this query: BM25 keeps a row matching one token,
+        -- the exact path keeps only a row matching them all. A tab labelled
+        -- with one number over a table built by the other is the bug.
+        db <- loadSampleDatabase "SAMPLE.ilcd"
+        let fuzzy = searchCounts db countAsListed "Coal extraction"
+            exact = searchCounts db CountAs{caSort = Nothing, caExact = True} "Coal extraction"
+        (scProcesses fuzzy >= scProcesses exact) `shouldBe` True

@@ -54,7 +54,10 @@
   processes and 300 flows is a substance name, not a product. A search box
   that labels three tabs with counts no longer costs three searches per
   keystroke. A blank query is refused rather than answered with three zeros,
-  which would read as "this database has nothing". Wire revision 16.
+  which would read as "this database has nothing", and so is one made only of
+  punctuation, which reaches the matchers as no words at all. The counts take
+  the same `sort` and `exact` the listing will use, because those decide which
+  matcher runs and therefore how many rows there are. Wire revision 16.
 - The products of a multi-output block now each report what their share
   would be if the allocation key were their mass (`massAllocationPercent`), beside
   the share the source declared. Nothing is split and nothing is scored

@@ -53,6 +53,7 @@ import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodColl
 import qualified Method.Types as MT
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Info, Warning), getLogLines, reportProgress)
+import qualified Search.Normalize as Normalize
 import Servant
 import Servant.OpenApi (toOpenApi)
 import qualified Service
@@ -119,7 +120,7 @@ type LCAAPI =
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "characterization" :> QueryParam "flow" Text :> QueryParam "limit" Int :> Get '[JSON] CharacterizationResult
                 :<|> "db" :> Capture "dbName" Text :> "method" :> Capture "methodId" Text :> "explain-cf" :> Capture "flowId" Text :> Get '[JSON] ExplainCFResult
                 :<|> "db" :> Capture "dbName" Text :> "flows" :> QueryParam "q" Text :> QueryParam "lang" Text :> QueryParam "kind" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults FlowSearchResult)
-                :<|> "db" :> Capture "dbName" Text :> "search-counts" :> QueryParam "q" Text :> Get '[JSON] SearchCountsAPI
+                :<|> "db" :> Capture "dbName" Text :> "search-counts" :> QueryParam "q" Text :> QueryParam "sort" Text :> QueryParam "exact" Bool :> Get '[JSON] SearchCountsAPI
                 :<|> "db" :> Capture "dbName" Text :> "activities" :> QueryParam "name" Text :> QueryParam "geo" Text :> QueryParam "product" Text :> QueryParam "exact" Bool :> QueryParam "preset" Text :> QueryParams "classification" Text :> QueryParams "classification-value" Text :> QueryParams "classification-mode" Text :> QueryParam "limit" Int :> QueryParam "offset" Int :> QueryParam "sort" Text :> QueryParam "order" Text :> Get '[JSON] (SearchResults ActivitySummary)
                 :<|> "db" :> Capture "dbName" Text :> "classifications" :> Get '[JSON] [ClassificationSystem]
                 :<|> "db" :> Capture "dbName" Text :> "impacts" :> Capture "collection" Text :> QueryParam "top-flows" Int :> QueryParam "exclude-long-term" Bool :> ReqBody '[JSON] BatchImpactsRequest :> Post '[JSON] BatchImpactsResponse
@@ -2400,12 +2401,16 @@ searchFlowsInternal db ff@Service.FlowFilter{Service.ffQuery = query, Service.ff
 The query is required: an empty search box has nothing to count, and counting
 every row of a database to say so would be the most expensive way to answer
 nothing.
+
+@sort@ and @exact@ are the ones the caller is going to list with, because they
+decide which matcher runs and therefore how many rows there are.
 -}
-countSearchMatches :: Text -> Maybe Text -> AppM SearchCountsAPI
-countSearchMatches dbName mQuery = do
+countSearchMatches :: Text -> Maybe Text -> Maybe Text -> Maybe Bool -> AppM SearchCountsAPI
+countSearchMatches dbName mQuery sortParam exactParam = do
     (db, _) <- requireDatabaseByName dbName
     query <- maybe (badRequest "q is required: there is nothing to count without a query") pure (nonBlank mQuery)
-    let counts = Service.searchCounts db query
+    let listedAs = Service.CountAs{Service.caSort = sortParam, Service.caExact = fromMaybe False exactParam}
+        counts = Service.searchCounts db listedAs query
     pure
         SearchCountsAPI
             { scaProcesses = Service.scProcesses counts
@@ -2413,8 +2418,10 @@ countSearchMatches dbName mQuery = do
             , scaFlows = Service.scFlows counts
             }
   where
+    -- Punctuation alone survives a blank test and then tokenises to nothing,
+    -- so it would answer three zeros where an empty box is refused.
     nonBlank :: Maybe Text -> Maybe Text
-    nonBlank = mfilter (not . T.null) . fmap T.strip
+    nonBlank = mfilter (not . null . Normalize.queryWords) . fmap T.strip
 
 -- | Proxy for the API
 lcaAPI :: Proxy LCAAPI
