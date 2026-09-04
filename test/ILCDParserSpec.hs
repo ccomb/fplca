@@ -3,7 +3,7 @@
 module ILCDParserSpec (spec) where
 
 import qualified Data.ByteString as BS
-import Data.List (find)
+import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.UUID as UUID
@@ -283,6 +283,22 @@ spec = do
             fmap iprProcessType (parseProcessXML ilcdProcessWithClassification)
                 `shouldBe` Just ""
 
+    describe "the shares an ILCD dataset declares" $ do
+        it "reads the fraction a product output allocates to itself" $
+            fmap (map ierShare . sortOn ierInternalId . iprExchanges) (parseProcessXML ilcdAllocatedProcess)
+                `shouldBe` Just [Just 60.0, Just 40.0]
+
+        it "leaves a dataset that declares none without shares" $
+            fmap (map ierShare . iprExchanges) (parseProcessXML ilcdProcessWithClassification)
+                `shouldBe` Just [Nothing]
+
+        it "ignores a fraction allocated to another co-product" $
+            -- ILCD lets an exchange allocate to any co-product by internal id.
+            -- Only the entry naming the exchange itself says "this product's
+            -- share", which is the one DeclaredShare can hold.
+            fmap (map ierShare . sortOn ierInternalId . iprExchanges) (parseProcessXML ilcdCrossAllocatedProcess)
+                `shouldBe` Just [Just 60.0, Nothing]
+
     describe "parseProcessXML exchange fields" $ do
         it "parses single exchange flow ref" $ do
             let Just raw = parseProcessXML ilcdProcessWithClassification
@@ -506,3 +522,56 @@ ilcdProcessWithProcessType =
     \</exchange>\
     \</exchanges>\
     \</processDataSet>"
+
+{- | Two product outputs, each allocating a fraction to itself: the shape a
+dataset takes when its author states an allocation key.
+-}
+ilcdAllocatedProcess :: BS.ByteString
+ilcdAllocatedProcess = allocatedProcess "0" "60.0" "1" "40.0"
+
+{- | The same block, except the second exchange allocates to the first. No
+share is then readable for it, and the allocation gate refuses the dataset
+rather than splitting on a number that meant something else.
+-}
+ilcdCrossAllocatedProcess :: BS.ByteString
+ilcdCrossAllocatedProcess = allocatedProcess "0" "60.0" "0" "40.0"
+
+-- | A two-output dataset whose two @<allocation>@ entries are given.
+allocatedProcess :: BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString -> BS.ByteString
+allocatedProcess ref0 pct0 ref1 pct1 =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+    \<processDataSet xmlns=\"http://lca.jrc.it/ILCD/Process\" \
+    \xmlns:common=\"http://lca.jrc.it/ILCD/Common\">\
+    \<processInformation>\
+    \<dataSetInformation>\
+    \<common:UUID>52345678-1234-1234-1234-123456789abc</common:UUID>\
+    \<name><baseName>Allocated block</baseName></name>\
+    \</dataSetInformation>\
+    \<geography location=\"FR\"/>\
+    \<quantitativeReference>\
+    \<referenceToReferenceFlow>0</referenceToReferenceFlow>\
+    \</quantitativeReference>\
+    \</processInformation>\
+    \<exchanges>\
+    \<exchange dataSetInternalID=\"0\">\
+    \<referenceToFlowDataSet refObjectId=\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"/>\
+    \<exchangeDirection>Output</exchangeDirection>\
+    \<resultingAmount>1.0</resultingAmount>\
+    \<allocations><allocation internalReferenceToCoProduct=\""
+        <> ref0
+        <> "\" allocatedFraction=\""
+        <> pct0
+        <> "\"/></allocations>\
+           \</exchange>\
+           \<exchange dataSetInternalID=\"1\">\
+           \<referenceToFlowDataSet refObjectId=\"bbbbbbbb-cccc-dddd-eeee-ffffffffffff\"/>\
+           \<exchangeDirection>Output</exchangeDirection>\
+           \<resultingAmount>2.0</resultingAmount>\
+           \<allocations><allocation internalReferenceToCoProduct=\""
+        <> ref1
+        <> "\" allocatedFraction=\""
+        <> pct1
+        <> "\"/></allocations>\
+           \</exchange>\
+           \</exchanges>\
+           \</processDataSet>"

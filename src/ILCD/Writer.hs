@@ -27,8 +27,13 @@ What round-trips: process UUID, name, location, classifications, processType,
 every exchange (flow ref, direction, amount, location, per-exchange comment), and the
 full flow + unit catalog (names, CAS, biosphere compartment, flow type, the
 flow→unit reference). These are exactly the fields "ILCD.Parser" reads back;
-fields the parser drops (activity description, synonyms, params, allocation,
-pedigree) are not representable in this ILCD profile and are not emitted.
+fields the parser drops (activity description, synonyms, params, pedigree)
+are not representable in this ILCD profile and are not emitted.
+
+The declared allocation fractions are the exception: the parser now reads
+them, and this writer does not yet write them back, so a block exported here
+loses the shares it was loaded with and its re-import is refused by the
+allocation gate. Emitting @<allocations>@ is what closes that.
 
 The flow→unit indirection mirrors the parser's resolution chain
 @flow → flowProperty → unitGroup@: we emit one flowProperty and one unitGroup
