@@ -1334,7 +1334,7 @@ loadAllDatabases manager allDbConfigs =
                     ++ " database(s) in "
                     ++ show (length levels)
                     ++ " dependency levels: "
-                    ++ T.unpack (T.intercalate " \8594 " [T.intercalate "," names | names <- levels])
+                    ++ T.unpack (T.intercalate " → " [T.intercalate "," names | names <- levels])
             forM_ (zip [1 :: Int ..] levels) $ \(levelNum, levelNames) -> do
                 let levelConfigs = configsNamed levelNames
                 reportProgress Info $
@@ -1395,7 +1395,7 @@ warnUnknownGlobalMethods mc collection =
                 <> T.unpack (mcName mc)
                 <> ": no method named "
                 <> T.unpack (T.intercalate ", " unknownGlobals)
-                <> " \8212 these stay regionalized; check for a typo."
+                <> " — these stay regionalized; check for a typo."
   where
     unknownGlobals :: [Text]
     unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
@@ -1726,7 +1726,7 @@ resolveDataPath path = do
                         reportProgress Info "Extraction complete"
                         Upload.findDataDirectory extractDir
 
-    -- \| A directory that exists and holds at least one entry.
+    -- A directory that exists and holds at least one entry.
     hasContent :: FilePath -> IO Bool
     hasContent dir = do
         exists <- doesDirectoryExist dir
@@ -2589,7 +2589,7 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
                         <> T.unpack dbName
                         <> ": "
                         <> show (rresUnresolvedBefore result)
-                        <> " \8594 "
+                        <> " → "
                         <> show (rresUnresolvedAfter result)
                         <> " unresolved products ("
                         <> show (rresCrossDBLinks result)
