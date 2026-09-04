@@ -1308,12 +1308,21 @@ getAllProductsForActivity db groupKey =
 {- | Fill in what each product of one block would carry under a mass key, to be
 read beside the share its source declared.
 
-The list is left as it is when the mass cannot serve as a key here. The
-comparison is one extra column, so a block whose products are not all stated in
-a mass simply has none.
+Only a block of several products, each carrying a share its source stated,
+gets one. That condition is what says these amounts are the joint outputs of
+one run: a database whose datasets arrive already allocated declares no share
+and normalises each product to one of its own unit, so summing those amounts
+would compare quantities that never occurred together. And a lone product has
+nothing to be compared against.
+
+Left as it is again when the mass cannot serve as a key. The comparison is one
+extra column, so a block whose products are not all stated in a mass has none.
 -}
 withMassPercent :: UnitConfig -> [ActivitySummary] -> [ActivitySummary]
-withMassPercent unitCfg summaries = maybe summaries attachAll (NE.nonEmpty summaries)
+withMassPercent unitCfg summaries
+    | length summaries < 2 = summaries
+    | not (all (isJust . prsAllocationPercent) summaries) = summaries
+    | otherwise = maybe summaries attachAll (NE.nonEmpty summaries)
   where
     attachAll :: NE.NonEmpty ActivitySummary -> [ActivitySummary]
     attachAll block =
