@@ -692,9 +692,22 @@ method unless you pin it.
 
 Detail of one flow: its record, unit, and how many exchanges use it.
 
-##### `Client.get_flow_activities(flow_id: str, db_name: str | None = None) -> list[Activity]`
+##### `Client.get_flow_activities(flow_id: str, db_name: str | None = None, *, role: str | None = None) -> list[Activity]`
 
-Activities that produce or consume a given flow.
+Activities on one side of a flow, or both.
+
+Args:
+    flow_id: The flow to ask about.
+    db_name: Database to ask; the current one by default.
+    role: ``"producer"`` for the activities that make the flow,
+        ``"consumer"`` for those that use it, ``"any"`` or omitted for
+        both. Needs engine wire revision 16; an older engine would
+        ignore the parameter and answer with both sides, so the
+        request is refused rather than sent.
+
+Note that both sides together are narrower than asking for both: an
+avoided product is an exchange on the flow that neither makes it for
+sale nor consumes it, and only the unfiltered call lists it.
 
 ##### `Client.get_flow_mapping(method_id: str) -> FlowMapping`
 

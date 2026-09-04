@@ -100,6 +100,19 @@ spec = do
             fmap (Service.producerCount db . TechKind) (M.lookup milkId (dbTechFlows db))
                 `shouldBe` Just (Just 1)
 
+        it "counts a treatment activity among the producers of what it treats" $ do
+            -- A treatment activity's reference is an input, so a producer test
+            -- written on "is this an output" answers no to every one of them
+            -- and reports that nothing makes the flow.
+            db <- treatmentFixture
+            fmap (Service.producerCount db . TechKind) (M.lookup milkId (dbTechFlows db))
+                `shouldBe` Just (Just 1)
+
+        it "lists that treatment activity when asked for producers" $ do
+            db <- treatmentFixture
+            map prsProcessId (Service.getActivitiesUsingFlow db ProducersOnly milkId)
+                `shouldBe` [pidText milkId]
+
         it "counts no producer for a biosphere flow, rather than none at all" $ do
             -- A zero would say "nothing makes it"; Nothing says the question
             -- does not apply to this side of the inventory.
@@ -173,6 +186,23 @@ the one with the lower product UUID.
 -}
 twoCoproductFixture :: IO Database
 twoCoproductFixture = buildFixture (consumerActivity [milkInput] []) supplierRows supplierFlows
+
+{- | A row whose reference exchange is an /input/: the shape of an activity
+that treats what it is given rather than selling what it makes. It still
+produces its reference flow as far as the matrix is concerned.
+-}
+treatmentFixture :: IO Database
+treatmentFixture =
+    buildFixture
+        (consumerActivity [milkInput] [])
+        (M.singleton (supplierActId, milkId) treatmentProcess)
+        (M.singleton milkId (techFlow milkId "milk"))
+
+treatmentProcess :: Activity
+treatmentProcess =
+    bareActivity
+        "milk treatment"
+        [(techExchange milkId 1.0 ReferenceProduct supplierActId){techRole = ReferenceInput}]
 
 {- | The same consumer, its input naming an activity no row in the database
 carries.

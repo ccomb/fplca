@@ -826,10 +826,7 @@ flowSearchResults units producersOfFlow FlowFilter{ffQuery = query, ffKind = kin
             , fsrCompartment = flowKindCompartmentSub flow
             , fsrUnitName = flowKindUnitName units flow
             , fsrSynonyms = M.map S.toList (flowKindSynonyms flow)
-            , -- Left unforced on purpose: the caller sorts and paginates these
-              -- rows, so counting the producers of a flow that never reaches a
-              -- page costs nothing.
-              fsrProducerCount = producersOfFlow flow
+            , fsrProducerCount = producersOfFlow flow
             }
 
 {- | Search flows (returns same format as API). The query is required by the
@@ -1365,50 +1362,55 @@ getActivityReferenceProductDetail db activity = do
 it, or both.
 
 'EitherSide' is what this answered before the side could be asked, so the
-route's default is unchanged.
+route's default is unchanged. It is wider than the two sides put together: an
+avoided product is an exchange on the flow that neither makes it for sale nor
+consumes it, so it appears under 'EitherSide' alone. Adding the two sides is
+therefore not the same as asking for both.
 -}
 getActivitiesUsingFlow :: Database -> ProducerFilter -> UUID -> [ActivitySummary]
-getActivitiesUsingFlow db side flowUUID =
-    [ mkActivitySummary db pid act
-    | (pid, act) <- activitiesTouching db flowUUID
-    , any (onSide side flowUUID) (exchanges act)
-    ]
+getActivitiesUsingFlow db side flowUUID = case side of
+    ProducersOnly -> [mkActivitySummary db pid act | (pid, act) <- producingRows db flowUUID]
+    ConsumersOnly -> touching (any consumes . exchanges)
+    EitherSide -> touching (const True)
+  where
+    touching :: (Activity -> Bool) -> [ActivitySummary]
+    touching keep = [mkActivitySummary db pid act | (pid, act) <- activitiesTouching db flowUUID, keep act]
 
-{- | Whether one exchange puts its activity on the asked side of the flow.
+    consumes :: Exchange -> Bool
+    consumes ex = exchangeFlowId ex == flowUUID && exchangeIsInput ex
 
-Producing is stated by the exchange's role, not by its sign: a waste treatment
-activity's reference is an input, and a coproduct is an output that is not the
-reference. 'exchangeIsProductOutput' is the one place that judgement lives.
+{- | The rows that make a flow, as the matrix sees them.
+
+Read from the product index rather than judged exchange by exchange, because
+that index /is/ the answer: it holds one entry per process row keyed by the
+flow that row produces, built from 'exchangeIsReference'. That matters beyond
+saving a scan. A waste treatment activity's reference is an /input/, so
+'exchangeIsProductOutput' says no to it and would hide every treatment
+activity from "what makes this flow" - the same mistake 'Database.hs' records
+having already made once with product filters.
+
+Each coproduct of an allocated block is its own row with its own reference
+product, so they are in here too. A block the allocation gate refused has no
+row and no honest column either, so it is absent from both.
 -}
-onSide :: ProducerFilter -> UUID -> Exchange -> Bool
-onSide side flowUUID ex =
-    exchangeFlowId ex == flowUUID && case side of
-        ProducersOnly -> exchangeIsProductOutput ex
-        ConsumersOnly -> exchangeIsInput ex
-        EitherSide -> True
+producingRows :: Database -> UUID -> [(ProcessId, Activity)]
+producingRows db flowUUID =
+    [ (pid, act)
+    | pid <- maybe [] NE.toList (M.lookup flowUUID (piByUUID (dbProductIndex db)))
+    , Just act <- [getActivity db pid]
+    ]
 
 {- | How many activities make this flow.
 
-'Nothing' where the question does not apply, never 0: a zero would assert that
-nothing produces the flow, which is a different statement from "this kind of
-flow has no producers".
-
-ponytail: counted by reading every activity the flow index names, which on
-ecoinvent is up to 2506 for one product. Fine for a page of results; index the
-producing side if a caller ever asks for the whole database at once.
+'Nothing' where the question does not apply, never 0 as a stand-in: a zero
+here is the true statement that no row produces the flow, and 'Nothing' the
+different one that this kind of flow has no producing side at all.
 -}
 producerCount :: Database -> FlowKind -> Maybe Int
 producerCount db flow = case flow of
-    TechKind tf -> Just (length (producersOf (tfId tf)))
+    TechKind tf -> Just (maybe 0 NE.length (M.lookup (tfId tf) (piByUUID (dbProductIndex db))))
     BioKind _ -> Nothing
     WasteKind _ -> Nothing
-  where
-    producersOf :: UUID -> [(ProcessId, Activity)]
-    producersOf fid =
-        [ pair
-        | pair@(_, act) <- activitiesTouching db fid
-        , any (onSide ProducersOnly fid) (exchanges act)
-        ]
 
 -- | The activities the flow index names for one flow, each with its id, once.
 activitiesTouching :: Database -> UUID -> [(ProcessId, Activity)]
