@@ -33,6 +33,7 @@ module Database.Allocation (
     describeRefusal,
     scaleExchange,
     MassKeyRefusal (..),
+    StatedAmount (..),
     massShares,
 ) where
 
@@ -130,6 +131,13 @@ describeRefusal refusal = case refusal of
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
 
+-- | One product row's amount and the unit it states that amount in.
+data StatedAmount = StatedAmount
+    { saUnit :: !Text
+    , saAmount :: !Double
+    }
+    deriving (Eq, Show)
+
 -- | Why the mass of a block's products cannot serve as a key.
 data MassKeyRefusal
     = -- | The unit a product is stated in, which is not a mass.
@@ -151,13 +159,15 @@ written would hand the half-kilo of a 1 kg / 500 g pair 99.8 % of the load.
 A unit that is not a mass, or an amount at or below zero, refuses the whole
 block rather than dropping one product to a silent zero.
 -}
-massShares :: UnitConfig -> NonEmpty (Text, Double) -> Either MassKeyRefusal (NonEmpty Double)
+massShares :: UnitConfig -> NonEmpty StatedAmount -> Either MassKeyRefusal (NonEmpty Double)
 massShares cfg products = share <$> traverse mass products
   where
-    mass :: (Text, Double) -> Either MassKeyRefusal Double
-    mass (unitName, amount)
-        | amount <= 0 = Left (NonPositiveMass amount)
-        | otherwise = maybe (Left (NotAMass unitName)) Right (convertUnit cfg unitName "kg" amount)
+    mass :: StatedAmount -> Either MassKeyRefusal Double
+    mass stated
+        | saAmount stated <= 0 = Left (NonPositiveMass (saAmount stated))
+        | otherwise =
+            maybe (Left (NotAMass (saUnit stated))) Right $
+                convertUnit cfg (saUnit stated) "kg" (saAmount stated)
 
     -- Every mass is strictly positive, so their total is too.
     share :: NonEmpty Double -> NonEmpty Double

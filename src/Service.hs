@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.Allocation (asAllocated, describeRefusal, massShares)
+import Database.Allocation (StatedAmount (..), asAllocated, describeRefusal, massShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
@@ -1322,8 +1322,8 @@ withMassPercent unitCfg summaries = maybe summaries attachAll (NE.nonEmpty summa
             (NE.toList . NE.zipWith attach block)
             (massShares unitCfg (NE.map stated block))
 
-    stated :: ActivitySummary -> (Text, Double)
-    stated s = (prsProductUnit s, prsProductAmount s)
+    stated :: ActivitySummary -> StatedAmount
+    stated s = StatedAmount{saUnit = prsProductUnit s, saAmount = prsProductAmount s}
 
     attach :: ActivitySummary -> Double -> ActivitySummary
     attach s percent = s{prsMassPercent = Just percent}
