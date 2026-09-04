@@ -1259,8 +1259,13 @@ initDatabaseManager config noCache = do
                         ++ show (length levelConfigs)
                         ++ " database(s) in parallel"
                 currentIndexedDbs <- readTVarIO indexedDbsVar
-                let otherIndexes = M.elems currentIndexedDbs
-                mapConcurrently_ (loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager) levelConfigs
+                let level =
+                        LoadLevel
+                            { llSynonyms = synonymDB
+                            , llUnitConfig = unitConfig
+                            , llOtherIndexes = M.elems currentIndexedDbs
+                            }
+                mapConcurrently_ (loadOneDatabase manager level) levelConfigs
             loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
             reportProgress Info $ "Multi-database mode: " ++ show loadedCount ++ " database(s) loaded"
 
@@ -1307,31 +1312,40 @@ initDatabaseManager config noCache = do
 
     return manager
 
+{- | What every database in one dependency level is loaded against. The indexes
+are a snapshot taken when the level started, and deliberately so: reading
+'dmIndexedDbs' per database instead would let each one see its siblings as they
+land, and the cross-database links would differ from one startup to the next.
+-}
+data LoadLevel = LoadLevel
+    { llSynonyms :: !SynonymDB
+    , llUnitConfig :: !UnitConversion.UnitConfig
+    , llOtherIndexes :: ![IndexedDatabase]
+    }
+
 -- | Load a single database with per-database timing, then register it
-loadOneDatabase ::
-    SynonymDB ->
-    UnitConversion.UnitConfig ->
-    Bool ->
-    [IndexedDatabase] ->
-    TVar (Map Text LoadedDatabase) ->
-    TVar (Map Text IndexedDatabase) ->
-    DatabaseManager ->
-    DatabaseConfig ->
-    IO ()
-loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDbsVar manager dbConfig = withLogScope (dcName dbConfig) $ do
+loadOneDatabase :: DatabaseManager -> LoadLevel -> DatabaseConfig -> IO ()
+loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) $ do
     dbStart <- getCurrentTime
     reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-    result <- loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes (dmLocationHierarchy manager)
+    result <-
+        loadDatabaseFromConfigWithCrossDB
+            dbConfig
+            llSynonyms
+            llUnitConfig
+            (dmNoCache manager)
+            llOtherIndexes
+            (dmLocationHierarchy manager)
     case result of
         Right (loaded0, _fromCache) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
             -- indexing, so a CAS-less source (e.g. a SimaPro export) still
             -- reaches the native CAS bridge.
             let loaded = loaded0{ldDatabase = enrichBioFlowCAS (dmCasBindings manager) (ldDatabase loaded0)}
-                indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) synonymDB (ldDatabase loaded)
+                indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) llSynonyms (ldDatabase loaded)
             atomically $ do
-                modifyTVar' loadedDbsVar (M.insert (dcName dbConfig) loaded)
-                modifyTVar' indexedDbsVar (M.insert (dcName dbConfig) indexedDb)
+                modifyTVar' (dmLoadedDbs manager) (M.insert (dcName dbConfig) loaded)
+                modifyTVar' (dmIndexedDbs manager) (M.insert (dcName dbConfig) indexedDb)
             dbEnd <- getCurrentTime
             let !dbDuration = realToFrac (diffUTCTime dbEnd dbStart) :: Double
             reportProgressWithTiming Info ("  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)) dbDuration
@@ -1361,7 +1375,7 @@ loadOneDatabase synonymDB unitConfig noCache otherIndexes loadedDbsVar indexedDb
             -- Surface it so the fix — add the unit to 'unitSuffixes' — is visible.
             let uncoveredUnits =
                     uncoveredUnitSuffixes
-                        (UnitConversion.isKnownUnit unitConfig)
+                        (UnitConversion.isKnownUnit llUnitConfig)
                         (map bfName (M.elems bioFlowDb))
             forM_ (M.toList uncoveredUnits) $ \(unit, egs) ->
                 reportProgress Warning $
@@ -3080,27 +3094,43 @@ completeness, readiness, and linking-stats fields are filled, for both the
 staged and the loaded builder. availablePaths is filled in by
 'buildSetupResult' for uploaded databases (requires IO).
 -}
-setupInfoFrom :: DatabaseConfig -> LinkCounts -> CrossDBLinkingStats -> [(Text, Int, LinkBlocker)] -> [DependencyChoice] -> Bool -> DatabaseSetupInfo
-setupInfoFrom config lc stats missing dependencies isLoaded =
+
+-- | Which of the two builders below is asking.
+data SetupOrigin = FromStaged | FromLoaded
+
+-- | The tally one setup record is assembled from.
+data SetupSource = SetupSource
+    { ssConfig :: !DatabaseConfig
+    , ssCounts :: !LinkCounts
+    , ssStats :: !CrossDBLinkingStats
+    , ssMissing :: ![(Text, Int, LinkBlocker)]
+    , ssDependencies :: ![DependencyChoice]
+    , ssOrigin :: !SetupOrigin
+    }
+
+setupInfoFrom :: SetupSource -> DatabaseSetupInfo
+setupInfoFrom SetupSource{..} =
     DatabaseSetupInfo
-        { dsiName = dcName config
-        , dsiDisplayName = dcDisplayName config
-        , dsiActivityCount = lcActivityCount lc
-        , dsiInputCount = lcTotalInputs lc
-        , dsiCompleteness = lcCompleteness lc
-        , dsiInternalLinks = lcInternalLinks lc
-        , dsiCrossDBLinks = lcCrossDBLinks lc
-        , dsiUnresolvedLinks = lcUnresolvedLinks lc
-        , dsiMissingSuppliers = take 10 (map blockerToMissingSupplier missing)
-        , dsiDependencies = dependencies
-        , dsiIsReady = isNothing (notReadyReason lc)
-        , dsiUnknownUnits = S.toList (cdlUnknownUnits stats)
-        , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks stats)
-        , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved stats)
-        , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks stats)
-        , dsiDataPath = T.pack (dcPath config)
+        { dsiName = dcName ssConfig
+        , dsiDisplayName = dcDisplayName ssConfig
+        , dsiActivityCount = lcActivityCount ssCounts
+        , dsiInputCount = lcTotalInputs ssCounts
+        , dsiCompleteness = lcCompleteness ssCounts
+        , dsiInternalLinks = lcInternalLinks ssCounts
+        , dsiCrossDBLinks = lcCrossDBLinks ssCounts
+        , dsiUnresolvedLinks = lcUnresolvedLinks ssCounts
+        , dsiMissingSuppliers = take 10 (map blockerToMissingSupplier ssMissing)
+        , dsiDependencies = ssDependencies
+        , dsiIsReady = isNothing (notReadyReason ssCounts)
+        , dsiUnknownUnits = S.toList (cdlUnknownUnits ssStats)
+        , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks ssStats)
+        , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved ssStats)
+        , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks ssStats)
+        , dsiDataPath = T.pack (dcPath ssConfig)
         , dsiAvailablePaths = []
-        , dsiIsLoaded = isLoaded
+        , dsiIsLoaded = case ssOrigin of
+            FromStaged -> False
+            FromLoaded -> True
         }
 
 -- | Build setup info from a staged database
@@ -3108,18 +3138,20 @@ buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text In
 buildStagedSetupInfo staged configs indexedDbs =
     let stats = sdLinkingStats staged
      in setupInfoFrom
-            (sdConfig staged)
-            (stagedLinkCounts staged)
-            stats
-            (sdMissingProducts staged)
-            ( buildDependencyChoices
-                (dcName (sdConfig staged))
-                (sdSelectedDeps staged)
-                (crossDBRedundantSources (cdlLinks stats) (sdSelectedDeps staged))
-                configs
-                indexedDbs
-            )
-            False
+            SetupSource
+                { ssConfig = sdConfig staged
+                , ssCounts = stagedLinkCounts staged
+                , ssStats = stats
+                , ssMissing = sdMissingProducts staged
+                , ssDependencies =
+                    buildDependencyChoices
+                        (dcName (sdConfig staged))
+                        (sdSelectedDeps staged)
+                        (crossDBRedundantSources (cdlLinks stats) (sdSelectedDeps staged))
+                        configs
+                        indexedDbs
+                , ssOrigin = FromStaged
+                }
 
 {- | Build setup info from a loaded database (already finalized). Counts come
 from 'loadedLinkCounts' (see its note on recomputing rather than trusting
@@ -3129,12 +3161,17 @@ links are ranked in with them.
 buildLoadedSetupInfo :: DatabaseConfig -> Database -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildLoadedSetupInfo config db configs indexedDbs =
     setupInfoFrom
-        config
-        (loadedLinkCounts db)
-        (dbLinkingStats db)
-        (rankMissingProducts (cdlUnresolvedProducts (dbLinkingStats db)) (Loader.collectDanglingProductNames db))
-        (buildDependencyChoices (dcName config) (dbDependsOn db) [] configs indexedDbs)
-        True
+        SetupSource
+            { ssConfig = config
+            , ssCounts = loadedLinkCounts db
+            , ssStats = dbLinkingStats db
+            , ssMissing =
+                rankMissingProducts
+                    (cdlUnresolvedProducts (dbLinkingStats db))
+                    (Loader.collectDanglingProductNames db)
+            , ssDependencies = buildDependencyChoices (dcName config) (dbDependsOn db) [] configs indexedDbs
+            , ssOrigin = FromLoaded
+            }
 
 {- | Discover candidate data paths within an uploaded database's root directory.
 Returns one 'PathCandidate' per candidate directory.
@@ -3945,46 +3982,50 @@ data RefDataOps a = RefDataOps
 flowSynOps :: RefDataOps SynonymDB
 flowSynOps =
     RefDataOps
-        dmAvailableFlowSyns
-        dmLoadedFlowSyns
-        (first T.pack . buildFromCSV)
-        synonymCount
-        "flow synonyms"
-        "uploads/flow-synonyms"
-        (\rd -> rdIsUploaded rd || rdIsAuto rd)
+        { rdoAvailableVar = dmAvailableFlowSyns
+        , rdoLoadedVar = dmLoadedFlowSyns
+        , rdoParse = first T.pack . buildFromCSV
+        , rdoCount = synonymCount
+        , rdoLabel = "flow synonyms"
+        , rdoUploadDir = "uploads/flow-synonyms"
+        , rdoCanDelete = \rd -> rdIsUploaded rd || rdIsAuto rd
+        }
 
 compMapOps :: RefDataOps CompartmentMap
 compMapOps =
     RefDataOps
-        dmAvailableCompMaps
-        dmLoadedCompMaps
-        (first T.pack . buildCompartmentMapFromCSV)
-        compartmentMapSize
-        "compartment mapping"
-        "uploads/compartment-mappings"
-        rdIsUploaded
+        { rdoAvailableVar = dmAvailableCompMaps
+        , rdoLoadedVar = dmLoadedCompMaps
+        , rdoParse = first T.pack . buildCompartmentMapFromCSV
+        , rdoCount = compartmentMapSize
+        , rdoLabel = "compartment mapping"
+        , rdoUploadDir = "uploads/compartment-mappings"
+        , rdoCanDelete = rdIsUploaded
+        }
 
 unitDefOps :: RefDataOps UnitConversion.UnitConfig
 unitDefOps =
     RefDataOps
-        dmAvailableUnitDefs
-        dmLoadedUnitDefs
-        UnitConversion.buildFromCSV
-        UnitConversion.unitCount
-        "units"
-        "uploads/units"
-        rdIsUploaded
+        { rdoAvailableVar = dmAvailableUnitDefs
+        , rdoLoadedVar = dmLoadedUnitDefs
+        , rdoParse = UnitConversion.buildFromCSV
+        , rdoCount = UnitConversion.unitCount
+        , rdoLabel = "units"
+        , rdoUploadDir = "uploads/units"
+        , rdoCanDelete = rdIsUploaded
+        }
 
 energyDensityOps :: RefDataOps EnergyDensityMap
 energyDensityOps =
     RefDataOps
-        dmAvailableEnergyDensities
-        dmLoadedEnergyDensities
-        (first T.pack . buildEnergyDensityMapFromCSV)
-        energyDensityMapSize
-        "energy densities"
-        "uploads/energy-densities"
-        rdIsUploaded
+        { rdoAvailableVar = dmAvailableEnergyDensities
+        , rdoLoadedVar = dmLoadedEnergyDensities
+        , rdoParse = first T.pack . buildEnergyDensityMapFromCSV
+        , rdoCount = energyDensityMapSize
+        , rdoLabel = "energy densities"
+        , rdoUploadDir = "uploads/energy-densities"
+        , rdoCanDelete = rdIsUploaded
+        }
 
 listRefDataG :: RefDataOps a -> DatabaseManager -> IO [RefDataStatus]
 listRefDataG ops manager = do
