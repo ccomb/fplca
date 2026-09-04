@@ -735,11 +735,6 @@ buildMethodTablesFor ::
 buildMethodTablesFor manager dbName collection db method = do
     let hier = dmLocationHierarchy manager
     expanded <- effectiveMethodMappings manager dbName collection db method
-    -- A CF matchable through the union synonym tables but not through its own
-    -- direction's view was excluded by the direction restriction alone — the
-    -- usual cause is a method whose parser defaulted the direction (no
-    -- metadata). Warn so the loss is distinguishable from a genuinely
-    -- uncharacterized flow.
     closure <- getFlowClosure manager dbName db
     cmap <- getMergedCompartmentMap manager
     let dirExcluded =
@@ -768,21 +763,7 @@ buildMethodTablesFor manager dbName collection db method = do
         -- scoring is a dot product instead of one biosphere-triple walk per pid.
         !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
     mapM_ (reportProgress Warning) (regionalGapWarning (mtRegionalActivityWeights tables))
-    -- Which side of the sea-water gate this method landed on, said out loud.
-    -- A method with no sea-water factor of its own has its medium-level factor
-    -- applied to sea emissions, and that is only right when the method had
-    -- nothing different to say there. When its sea lines were instead lost on
-    -- import, the same silence overstates every sea emission it covers — and
-    -- the two cases are indistinguishable from the outside. Report the regime
-    -- so a method author can tell them apart; only for a method that writes
-    -- water factors at all, since the others have no stake in it.
     mapM_ (reportProgress Warning) (seaWaterWarning raw0)
-    -- A CF that matched (broadcast or regionalized) but cannot be
-    -- unit-converted scores an (intentional) 0 — refusing wrong-dimension data
-    -- is right, hiding the refusal is not: unreported, it reads exactly like an
-    -- uncharacterized flow and the method silently undercounts. One
-    -- deduplicated WARN per (db, method), same channel as the regionalized
-    -- coverage gaps above.
     mapM_
         (reportProgress Warning)
         (zeroedWarning mUnits (zeroedMatchedCFs unitConfig mUnits mFlows withBroadcast))
