@@ -110,6 +110,7 @@ module Database.Manager (
 
     -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
     loadDatabaseRawWithCrossDB,
+    RawLoad (..),
 
     -- * Internal (for tests: pure dependency-list builder)
     buildDependencyChoices,
@@ -134,7 +135,7 @@ import Data.Either (fromRight, lefts, partitionEithers, rights)
 import Data.List (isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
@@ -1639,7 +1640,19 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
     reportProgress Info $ "Loading database from: " <> sourcePath
-    dbResult <- loadDatabaseRawWithCrossDB (dcName dbConfig) locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier (dcGeographyPolicy dbConfig)
+    dbResult <-
+        loadDatabaseRawWithCrossDB
+            RawLoad
+                { rlDbName = dcName dbConfig
+                , rlLocationAliases = locationAliases
+                , rlSourcePath = sourcePath
+                , rlNoCache = noCache
+                , rlSynonymDB = synonymDB
+                , rlUnitConfig = unitConfig
+                , rlOtherIndexes = otherIndexes
+                , rlLocationHierarchy = locationHier
+                , rlGeographyPolicy = dcGeographyPolicy dbConfig
+                }
 
     case dbResult of
         Left err -> return $ Left err
@@ -1808,6 +1821,39 @@ narrowToDataFile fmt path = case dataFileExtension fmt of
                                     <> " other(s)"
                             pure (Right f)
 
+{- | Everything one raw load reads. Nine values whose positional signature
+needed a comment per parameter to be readable at all.
+-}
+data RawLoad = RawLoad
+    { rlDbName :: !Text
+    , rlLocationAliases :: !(M.Map Text Text)
+    , rlSourcePath :: !FilePath
+    -- ^ Unresolved: the matrix cache is co-located with it.
+    , rlNoCache :: !Bool
+    , rlSynonymDB :: !SynonymDB
+    , rlUnitConfig :: !UnitConversion.UnitConfig
+    , rlOtherIndexes :: ![IndexedDatabase]
+    -- ^ Pre-built indexes of the databases this one may link against.
+    , rlLocationHierarchy :: !(M.Map Location [Location])
+    -- ^ Empty means the built-in hierarchy.
+    , rlGeographyPolicy :: !GeographyPolicy
+    }
+
+{- | What the matrix cache next to the source is worth for this load. A cache
+that still records unresolved links while dependencies are now available is
+worth rebuilding, and that is the one case the caller announces.
+-}
+data CacheVerdict
+    = Fresh Database
+    | Stale
+    | Absent
+
+cacheVerdict :: [IndexedDatabase] -> Maybe Database -> CacheVerdict
+cacheVerdict _ Nothing = Absent
+cacheVerdict otherIndexes (Just db)
+    | unresolvedCount (dbLinkingStats db) > 0, not (null otherIndexes) = Stale
+    | otherwise = Fresh db
+
 {- | Load raw database from a configured source path, with cross-database linking.
 
 The cache lives next to @sourcePath@ (see 'Loader.generateMatrixCacheFilename').
@@ -1819,75 +1865,56 @@ cache miss/stale we 'resolveDataPath' and parse, saving a fresh cache on
 success.
 -}
 loadDatabaseRawWithCrossDB ::
-    -- | Database name
-    T.Text ->
-    -- | Location aliases
-    M.Map T.Text T.Text ->
-    -- | Source path (unresolved; cache is co-located with it)
-    FilePath ->
-    -- | noCache flag
-    Bool ->
-    -- | Synonym database
-    SynonymDB ->
-    -- | Unit configuration
-    UnitConversion.UnitConfig ->
-    -- | Pre-built indexes from other databases
-    [IndexedDatabase] ->
-    -- | Location hierarchy (empty = use built-in)
-    M.Map Location [Location] ->
-    -- | Geography policy for this database
-    GeographyPolicy ->
+    RawLoad ->
     {- | (Database, fromCache): True iff the result came from the matrix cache
-    as-is, i.e. cross-DB linking was NOT freshly run against 'otherIndexes'.
+    as-is, i.e. cross-DB linking was NOT freshly run against 'rlOtherIndexes'.
     Callers use this to decide whether a self-relink is needed.
     -}
     IO (Either Text (Database, Bool))
-loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB unitConfig otherIndexes locationHier policy = do
+loadDatabaseRawWithCrossDB RawLoad{..} = do
     mCachedDb <-
-        if noCache
+        if rlNoCache
             then return Nothing
-            else Loader.loadCachedDatabaseWithMatrices dbName sourcePath inputs
-    let cacheUsable = case mCachedDb of
-            Just db
-                | unresolvedCount (dbLinkingStats db) > 0
-                , not (null otherIndexes) ->
-                    False -- stale: deps now available
-            Just _ -> True
-            Nothing -> False
-    case (cacheUsable, mCachedDb) of
-        (True, Just db) -> do
+            else Loader.loadCachedDatabaseWithMatrices rlDbName rlSourcePath inputs
+    case cacheVerdict rlOtherIndexes mCachedDb of
+        Fresh db -> do
             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
             return $ Right (db, True)
-        _ -> do
-            when (isJust mCachedDb && not cacheUsable) $
-                reportProgress Info "Cache has unresolved links, rebuilding with available dependencies..."
-            -- Cache miss/stale: now we need the source. Resolve archive if any.
-            path <- resolveDataPath sourcePath
-            isFile <- doesFileExist path
-            isDir <- doesDirectoryExist path
-            if not isFile && not isDir
-                then return $ Left $ "Source path does not exist: " <> T.pack sourcePath
-                else do
-                    format <- detectDirectoryFormat path
-                    case format of
-                        FormatCSV -> narrowToDataFile format path >>= either (pure . Left) loadCSV
-                        -- A workbook names one file, like a CSV export, but the
-                        -- parsing itself is Loader's business.
-                        FormatExcel -> narrowToDataFile format path >>= either (pure . Left) loadStructured
-                        FormatUnknown ->
-                            return $
-                                Left $
-                                    "No supported database files found in: "
-                                        <> T.pack path
-                                        <> ". Supported formats: "
-                                        <> supportedSourceFormats
-                        FormatSpold -> loadStructured path
-                        FormatXML -> loadStructured path
-                        FormatILCD -> loadStructured path
+        Stale -> do
+            reportProgress Info "Cache has unresolved links, rebuilding with available dependencies..."
+            rebuildFromSource
+        Absent -> rebuildFromSource
   where
+    -- Cache miss or stale: now we need the source. Resolve the archive if any.
+    rebuildFromSource :: IO (Either Text (Database, Bool))
+    rebuildFromSource = do
+        path <- resolveDataPath rlSourcePath
+        isFile <- doesFileExist path
+        isDir <- doesDirectoryExist path
+        if not isFile && not isDir
+            then return $ Left $ "Source path does not exist: " <> T.pack rlSourcePath
+            else do
+                format <- detectDirectoryFormat path
+                case format of
+                    FormatCSV -> narrowToDataFile format path >>= either (pure . Left) loadCSV
+                    -- A workbook names one file, like a CSV export, but the
+                    -- parsing itself is Loader's business.
+                    FormatExcel -> narrowToDataFile format path >>= either (pure . Left) loadStructured
+                    FormatUnknown ->
+                        return $
+                            Left $
+                                "No supported database files found in: "
+                                    <> T.pack path
+                                    <> ". Supported formats: "
+                                    <> supportedSourceFormats
+                    FormatSpold -> loadStructured path
+                    FormatXML -> loadStructured path
+                    FormatILCD -> loadStructured path
+
+    loadCSV :: FilePath -> IO (Either Text (Database, Bool))
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-        loaded <- Loader.loadSimaProCSV unitConfig csvFile
+        loaded <- Loader.loadSimaProCSV rlUnitConfig csvFile
         case loaded of
             Left err -> return $ Left err
             Right linkedDb -> do
@@ -1896,20 +1923,21 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
-                        unless noCache $
-                            Loader.saveCachedDatabaseWithMatrices dbName sourcePath db
+                        unless rlNoCache $
+                            Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath db
                         Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
                         return $ Right (db, False)
 
+    loadStructured :: FilePath -> IO (Either Text (Database, Bool))
     loadStructured path = do
         loadResult <-
             Loader.loadDatabaseWithCrossDBLinking
-                locationAliases
-                otherIndexes
-                synonymDB
-                unitConfig
-                locationHier
-                policy
+                rlLocationAliases
+                rlOtherIndexes
+                rlSynonymDB
+                rlUnitConfig
+                rlLocationHierarchy
+                rlGeographyPolicy
                 path
         case loadResult of
             Left err -> return $ Left err
@@ -1933,12 +1961,12 @@ loadDatabaseRawWithCrossDB dbName locationAliases sourcePath noCache synonymDB u
                                     , dbDependsOn = depDbs
                                     , dbLinkingStats = stats
                                     }
-                        unless noCache $
-                            Loader.saveCachedDatabaseWithMatrices dbName sourcePath dbWithLinks
+                        unless rlNoCache $
+                            Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath dbWithLinks
                         return $ Right (dbWithLinks, False)
 
     inputs :: BuildInputs
-    inputs = BuildInputs unitConfig locationAliases
+    inputs = BuildInputs rlUnitConfig rlLocationAliases
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -1958,8 +1986,32 @@ loadDatabaseSingle manager dbName = do
                 loadDatabaseSingleFromConfig manager dbName
         Nothing -> loadDatabaseSingleFromConfig manager dbName
 
+{- | How a database that has just been loaded got here. The three are what the
+work after the load turns on, and the fourth combination the two booleans they
+replace could spell - read from a cache and replayed over - does not exist: a
+cache hit already holds its edits.
+-}
+data LoadOrigin
+    = CacheHit
+    | Parsed
+    | Replayed
+    deriving (Eq)
+
+{- | On a fresh parse 'loadDatabaseRawWithCrossDB' already ran linking against
+the current indexes, so a follow-up relink is guaranteed no-op work. A cache
+hit carries links computed against a previous dependency set, possibly stale
+versions of the same names, so it needs one to converge; and a replay clears
+the cross-database links exactly as an edit does, so it needs the same.
+-}
+needsSelfRelink :: LoadOrigin -> Bool
+needsSelfRelink origin = case origin of
+    CacheHit -> True
+    Parsed -> False
+    Replayed -> True
+
 -- | Load a database from config (not staged)
-loadDatabaseSingleFromConfig :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
+loadDatabaseSingleFromConfig ::
+    DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
 loadDatabaseSingleFromConfig manager dbName = do
     -- Check if already loaded
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
@@ -1997,12 +2049,13 @@ loadDatabaseSingleFromConfig manager dbName = do
                         -- A cache hit already holds the edits (its stamp says
                         -- so); a fresh parse holds only what the author
                         -- uploaded, and the journal is the rest.
-                        Right (Right (loaded, fromCache))
-                            | fromCache -> pure (Right (loaded, fromCache, False))
-                            | otherwise -> fmap (\(l, replayed) -> (l, fromCache, replayed)) <$> replayEdits manager dbConfig loaded
+                        Right (Right (loaded, True)) -> pure (Right (loaded, CacheHit))
+                        Right (Right (loaded, False)) ->
+                            fmap (\(l, replayed) -> (l, if replayed then Replayed else Parsed))
+                                <$> replayEdits manager dbConfig loaded
                     case replayResult of
                         Left err -> return (Left err)
-                        Right (loaded, fromCache, replayed) -> do
+                        Right (loaded, origin) -> do
                             let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
                             atomically $ do
                                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
@@ -2017,18 +2070,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                                 dbName
                                 ("Auto-extracted from " <> dcDisplayName dbConfig)
                                 pairs
-                            -- Self-relink only on cache hits. On a fresh
-                            -- parse, 'loadDatabaseRawWithCrossDB' already ran
-                            -- linking against the current 'otherIndexes' via
-                            -- 'loadStructured' / 'loadCSV', so a follow-up
-                            -- relink is guaranteed no-op work. On a cache
-                            -- hit the cached DB carries links computed
-                            -- against a previous dep set — possibly stale
-                            -- versions of the same dep names — so a relink
-                            -- is required to converge.
-                            -- A replay clears the cross-database links, exactly
-                            -- as an edit does, so it needs the same relink.
-                            when (fromCache || replayed) $ do
+                            when (needsSelfRelink origin) $ do
                                 result <- relinkDatabase manager dbName
                                 case result of
                                     Right _ -> return ()
@@ -2040,7 +2082,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                             -- does not replay it, and stamp the cache with the
                             -- journal it holds. The stamp goes last: a cache
                             -- that is not stamped is read again from source.
-                            when replayed $ recordReplayedCache manager dbConfig
+                            when (origin == Replayed) $ recordReplayedCache manager dbConfig
                             return $ Right loaded
 
 {- | Where a database keeps its edits, or 'Nothing' for one the engine only
@@ -3320,128 +3362,135 @@ removeDependencyFromStaged manager dbName depName = do
             persistUploadDepends manager dbName newDeps
             first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
 
+{- | A database ready to be made live, and whether this finalize introduced
+something the matrix cache on disk does not hold yet.
+-}
+data FinalizedBuild = FinalizedBuild
+    { fbDatabase :: !Database
+    , fbNeedsSave :: !Bool
+    }
+
 -- | Finalize a staged database (build matrices and make it ready for queries)
 finalizeDatabase :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
 finalizeDatabase manager dbName = withLogScope dbName $ do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
-
     case M.lookup dbName stagedDbs of
+        Nothing -> finalizeLoaded
+        Just staged -> runExceptT (finalizeStaged staged)
+  where
+    {- Not staged: an already-loaded database finalizes as a no-op, but only
+    through the same readiness gate the setup page reports. A partial import
+    bulk-loaded from config must not get a success where the setup says not
+    ready. -}
+    finalizeLoaded :: IO (Either Text LoadedDatabase)
+    finalizeLoaded = do
+        loadedDbs <- readTVarIO (dmLoadedDbs manager)
+        pure $ case M.lookup dbName loadedDbs of
+            Nothing -> Left $ "Staged database not found: " <> dbName
+            Just loaded -> case notReadyReason (loadedLinkCounts (ldDatabase loaded)) of
+                Just reason -> Left ("Cannot finalize: " <> reason)
+                Nothing -> Right loaded
+
+    finalizeStaged :: StagedDatabase -> ExceptT Text IO LoadedDatabase
+    finalizeStaged staged = do
+        maybe (pure ()) (throwE . ("Cannot finalize: " <>)) (notReadyReason (stagedLinkCounts staged))
+        liftIO $ reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
+        synonymDB <- liftIO (getMergedSynonymDB manager)
+        build <- buildFinal staged synonymDB
+        liftIO (publish staged synonymDB build)
+
+    -- Use the pre-built database from the cache, or build the matrices.
+    buildFinal :: StagedDatabase -> SynonymDB -> ExceptT Text IO FinalizedBuild
+    buildFinal staged synonymDB = case sdCachedDB staged of
+        {- The on-disk cache is cachedDb. Carrying the (possibly edited) staged
+        pin onto the loaded database is what makes the pin authoritative, and a
+        re-save is due when either half of it diverges from what is on disk. -}
+        Just cachedDb ->
+            pure
+                FinalizedBuild
+                    { fbDatabase = readyToServe synonymDB (withStagedPin staged cachedDb)
+                    , fbNeedsSave =
+                        not (sameSet (dbDependsOn cachedDb) (sdSelectedDeps staged))
+                            || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
+                    }
         Nothing -> do
-            -- Not staged — an already-loaded database finalizes as a no-op,
-            -- but only through the same readiness gate the setup page reports:
-            -- a partial import bulk-loaded from config must not get a success
-            -- where the setup says not ready.
-            loadedDbs <- readTVarIO (dmLoadedDbs manager)
-            case M.lookup dbName loadedDbs of
-                Just loaded ->
-                    return $ case notReadyReason (loadedLinkCounts (ldDatabase loaded)) of
-                        Just reason -> Left ("Cannot finalize: " <> reason)
-                        Nothing -> Right loaded
-                Nothing -> return $ Left $ "Staged database not found: " <> dbName
-        Just staged ->
-            case notReadyReason (stagedLinkCounts staged) of
-                Just reason -> return $ Left ("Cannot finalize: " <> reason)
-                Nothing -> do
-                    reportProgress Info $ "[STARTING] Finalizing database: " <> T.unpack dbName
+            db <-
+                ExceptT $
+                    buildDatabaseWithMatrices
+                        (sdBuiltWith staged)
+                        (sdbActivities (sdSimpleDB staged))
+                        (sdbTechFlows (sdSimpleDB staged))
+                        (sdbBioFlows (sdSimpleDB staged))
+                        (sdbWasteFlows (sdSimpleDB staged))
+                        (sdbUnits (sdSimpleDB staged))
+            -- Freshly built matrices: always persist.
+            pure
+                FinalizedBuild
+                    { fbDatabase = readyToServe synonymDB (withStagedPin staged db)
+                    , fbNeedsSave = True
+                    }
 
-                    synonymDB <- getMergedSynonymDB manager
+    -- The staged pin and the links recomputed under it win over whatever the
+    -- built or cached database carries.
+    withStagedPin :: StagedDatabase -> Database -> Database
+    withStagedPin staged db =
+        db
+            { dbCrossDBLinks = sdCrossDBLinks staged
+            , dbDependsOn = sdSelectedDeps staged
+            , dbLinkingStats = sdLinkingStats staged
+            }
 
-                    -- Use pre-built database from cache, or build matrices from scratch
-                    buildResult <- case sdCachedDB staged of
-                        Just cachedDb -> do
-                            -- The on-disk cache == cachedDb. Carry the
-                            -- (possibly edited) staged dependency pin and
-                            -- its recomputed links onto the loaded DB so
-                            -- the pin is authoritative; flag a re-save
-                            -- when either diverges from what's on disk.
-                            let pinned =
-                                    cachedDb
-                                        { dbCrossDBLinks = sdCrossDBLinks staged
-                                        , dbDependsOn = sdSelectedDeps staged
-                                        , dbLinkingStats = sdLinkingStats staged
-                                        }
-                                needsSave =
-                                    not (sameSet (dbDependsOn cachedDb) (sdSelectedDeps staged))
-                                        || not (sameSet (dbCrossDBLinks cachedDb) (sdCrossDBLinks staged))
-                            return $ Right (BM25.addBM25Index (initializeRuntimeFields pinned synonymDB), needsSave)
-                        Nothing -> do
-                            dbResult <-
-                                buildDatabaseWithMatrices
-                                    (sdBuiltWith staged)
-                                    (sdbActivities (sdSimpleDB staged))
-                                    (sdbTechFlows (sdSimpleDB staged))
-                                    (sdbBioFlows (sdSimpleDB staged))
-                                    (sdbWasteFlows (sdSimpleDB staged))
-                                    (sdbUnits (sdSimpleDB staged))
-                            case dbResult of
-                                Left err -> return $ Left err
-                                Right db -> do
-                                    let dbWithLinks =
-                                            db
-                                                { dbCrossDBLinks = sdCrossDBLinks staged
-                                                , dbDependsOn = sdSelectedDeps staged
-                                                , dbLinkingStats = sdLinkingStats staged
-                                                }
-                                    -- Freshly built matrices: always persist.
-                                    return $ Right (BM25.addBM25Index (initializeRuntimeFields dbWithLinks synonymDB), True)
+    readyToServe :: SynonymDB -> Database -> Database
+    readyToServe synonymDB db = BM25.addBM25Index (initializeRuntimeFields db synonymDB)
 
-                    case buildResult of
-                        Left err -> return $ Left err
-                        Right (dbWithRuntime, needsSave) -> do
-                            -- Create shared solver with lazy factorization (deferred to first query)
-                            let techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples dbWithRuntime)]
-                                activityCountInt = fromIntegral $ dbActivityCount dbWithRuntime
-                            sharedSolver <- createSharedSolver dbName techTriplesInt activityCountInt
+    publish :: StagedDatabase -> SynonymDB -> FinalizedBuild -> IO LoadedDatabase
+    publish staged synonymDB FinalizedBuild{..} = do
+        -- Create shared solver with lazy factorization (deferred to first query)
+        let techTriplesInt =
+                [ (fromIntegral i, fromIntegral j, v)
+                | SparseTriple i j v <- U.toList (dbTechnosphereTriples fbDatabase)
+                ]
+        sharedSolver <-
+            createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount fbDatabase))
+        let loaded =
+                LoadedDatabase
+                    { ldDatabase = fbDatabase
+                    , ldSharedSolver = sharedSolver
+                    , ldConfig = sdConfig staged
+                    }
+            indexedDb = buildIndexedDatabaseFromDB dbName synonymDB fbDatabase
+        -- Move from staged to loaded
+        atomically $ do
+            modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+            modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+            modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+        clearMethodMappingCacheForDb manager dbName
+        -- Finalizing is the moment the dependency pin becomes the database's
+        -- own; record it where a restart reads.
+        persistUploadDepends manager dbName (sdSelectedDeps staged)
 
-                            let loaded =
-                                    LoadedDatabase
-                                        { ldDatabase = dbWithRuntime
-                                        , ldSharedSolver = sharedSolver
-                                        , ldConfig = sdConfig staged
-                                        }
+        {- Self-relink first against the current dep set: a cached or staged
+        build can carry cross-DB links that do not match the deps now in
+        'dmIndexedDbs'. 'relinkDatabase' rewrites both the in-memory state and
+        (when the links changed) the matrix cache. -}
+        linksChangedAfter <-
+            relinkDatabase manager dbName >>= either relinkFailed (pure . rresLinksChanged)
 
-                            -- Move from staged to loaded
-                            let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB dbWithRuntime
-                            atomically $ do
-                                modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-                                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                                modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
-                            clearMethodMappingCacheForDb manager dbName
-                            -- Finalizing is the moment the dependency pin becomes
-                            -- the database's own; record it where a restart reads.
-                            persistUploadDepends manager dbName (sdSelectedDeps staged)
+        {- Persist when this finalize introduced a change (fresh build, or an
+        edited pin on a cache hit) that the relink did not already write: relink
+        owns the save whenever it actually changed the in-memory links. -}
+        when (fbNeedsSave && not linksChangedAfter) $
+            Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) fbDatabase
 
-                            -- Self-relink first against the current
-                            -- dep set: a cached or staged build can
-                            -- carry cross-DB links that don't match
-                            -- the deps now in 'dmIndexedDbs'.
-                            -- 'relinkDatabase' rewrites both the
-                            -- in-memory state and (when 'linksChanged'
-                            -- is True) the matrix cache.
-                            relinkOutcome <- relinkDatabase manager dbName
+        reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
+        pure loaded
 
-                            -- 'needsSave' marks a finalize that changed
-                            -- something on disk (fresh build, or an
-                            -- edited dependency pin on a cache hit). The
-                            -- 'Left' fallback treats a failed relink as
-                            -- "no relink write happened", so the explicit
-                            -- save below still fires when needed.
-                            linksChangedAfter <- case relinkOutcome of
-                                Right rr -> return (rresLinksChanged rr)
-                                Left err -> do
-                                    reportProgress Warning $
-                                        "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-                                    return False
-                            -- Persist when this finalize introduced a
-                            -- change (fresh build, or an edited pin on a
-                            -- cache hit) that the relink didn't already
-                            -- write. relink owns the save whenever it
-                            -- actually changed the in-memory links.
-                            when (needsSave && not linksChangedAfter) $
-                                Loader.saveCachedDatabaseWithMatrices dbName (dcPath (sdConfig staged)) dbWithRuntime
-
-                            reportProgress Info $ "  [OK] Finalized: " <> T.unpack dbName
-                            return $ Right loaded
+    -- A failed relink wrote nothing, so the explicit save above must still fire.
+    relinkFailed :: Text -> IO Bool
+    relinkFailed err = do
+        reportProgress Warning $
+            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
+        pure False
 
 --------------------------------------------------------------------------------
 -- Method Collection Management
