@@ -5,7 +5,7 @@
 
 module Service where
 
-import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), RootDb (..), SearchResults (..), Substitution (..), SubstitutionScope (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), apiFlowOfKind, parseSubRef, subAnchorRef, unresolvedFlowName)
+import API.Types (ActivityForAPI (..), ActivityInfo (..), ActivityLinks (..), ActivityMetadata (..), ActivityStats (..), ActivitySummary (..), ApiFlow (..), ClassificationSystem (..), ConsumerResult (..), ConsumersResponse (..), CutoffWasteFlow (..), EdgeType (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), FlowDetail (..), FlowInfo (..), FlowRole (..), FlowSearchResult (..), FlowSummary (..), GraphEdge (..), GraphExport (..), GraphNode (..), InventoryExport (..), InventoryFlowDetail (..), InventoryMetadata (..), InventoryStatistics (..), NodeType (..), Perturbation (..), ProducerFilter (..), RootDb (..), SearchResults (..), Substitution (..), SubstitutionScope (..), SupplyChainEdge (..), SupplyChainEntry (..), SupplyChainResponse (..), ThisDb (..), TreeEdge (..), TreeExport (..), TreeMetadata (..), apiFlowOfKind, parseSubRef, subAnchorRef, unresolvedFlowName)
 import CLI.Types (DebugMatricesOptions (..))
 import Control.Applicative ((<|>))
 import Control.Concurrent.Async (mapConcurrently)
@@ -800,8 +800,8 @@ table sorted by name must stay alphabetical.
 Shared by the REST and MCP/CLI search paths, which differ only in how they
 paginate.
 -}
-flowSearchResults :: UnitDB -> FlowFilter -> [FlowKind] -> [FlowSearchResult]
-flowSearchResults units FlowFilter{ffQuery = query, ffKind = kindParam, ffSort = sortParam, ffOrder = orderParam} =
+flowSearchResults :: UnitDB -> (FlowKind -> Maybe Int) -> FlowFilter -> [FlowKind] -> [FlowSearchResult]
+flowSearchResults units producersOfFlow FlowFilter{ffQuery = query, ffKind = kindParam, ffSort = sortParam, ffOrder = orderParam} =
     L.sortBy (direction (\a b -> compare (sortKey a) (sortKey b))) . map toResult . filter askedFor
   where
     askedFor flow = maybe True (== kindOfFlow flow) kindParam
@@ -826,6 +826,10 @@ flowSearchResults units FlowFilter{ffQuery = query, ffKind = kindParam, ffSort =
             , fsrCompartment = flowKindCompartmentSub flow
             , fsrUnitName = flowKindUnitName units flow
             , fsrSynonyms = M.map S.toList (flowKindSynonyms flow)
+            , -- Left unforced on purpose: the caller sorts and paginates these
+              -- rows, so counting the producers of a flow that never reaches a
+              -- page costs nothing.
+              fsrProducerCount = producersOfFlow flow
             }
 
 {- | Search flows (returns same format as API). The query is required by the
@@ -836,7 +840,7 @@ searchFlows db ff@FlowFilter{ffQuery = query, ffLimit = limitParam, ffOffset = o
     startTime <- getCurrentTime
     let limit = maybe 50 (min 1000) limitParam
         offset = maybe 0 (max 0) offsetParam
-        allResults = flowSearchResults (dbUnits db) ff (findFlowsBySynonym db query)
+        allResults = flowSearchResults (dbUnits db) (producerCount db) ff (findFlowsBySynonym db query)
         total = length allResults
         taken = take (limit + 1) (drop offset allResults)
         hasMore = length taken > limit
@@ -1357,10 +1361,59 @@ getActivityReferenceProductDetail db activity = do
     let uName = getUnitNameForTechFlow (dbUnits db) flow
     return $ FlowDetail (ApiTechFlow flow) uName usageCount
 
--- | Get activities that use a specific flow as ActivitySummary list.
-getActivitiesUsingFlow :: Database -> UUID -> [ActivitySummary]
-getActivitiesUsingFlow db flowUUID =
+{- | The activities on one side of a flow: those that make it, those that use
+it, or both.
+
+'EitherSide' is what this answered before the side could be asked, so the
+route's default is unchanged.
+-}
+getActivitiesUsingFlow :: Database -> ProducerFilter -> UUID -> [ActivitySummary]
+getActivitiesUsingFlow db side flowUUID =
     [ mkActivitySummary db pid act
+    | (pid, act) <- activitiesTouching db flowUUID
+    , any (onSide side flowUUID) (exchanges act)
+    ]
+
+{- | Whether one exchange puts its activity on the asked side of the flow.
+
+Producing is stated by the exchange's role, not by its sign: a waste treatment
+activity's reference is an input, and a coproduct is an output that is not the
+reference. 'exchangeIsProductOutput' is the one place that judgement lives.
+-}
+onSide :: ProducerFilter -> UUID -> Exchange -> Bool
+onSide side flowUUID ex =
+    exchangeFlowId ex == flowUUID && case side of
+        ProducersOnly -> exchangeIsProductOutput ex
+        ConsumersOnly -> exchangeIsInput ex
+        EitherSide -> True
+
+{- | How many activities make this flow.
+
+'Nothing' where the question does not apply, never 0: a zero would assert that
+nothing produces the flow, which is a different statement from "this kind of
+flow has no producers".
+
+ponytail: counted by reading every activity the flow index names, which on
+ecoinvent is up to 2506 for one product. Fine for a page of results; index the
+producing side if a caller ever asks for the whole database at once.
+-}
+producerCount :: Database -> FlowKind -> Maybe Int
+producerCount db flow = case flow of
+    TechKind tf -> Just (length (producersOf (tfId tf)))
+    BioKind _ -> Nothing
+    WasteKind _ -> Nothing
+  where
+    producersOf :: UUID -> [(ProcessId, Activity)]
+    producersOf fid =
+        [ pair
+        | pair@(_, act) <- activitiesTouching db fid
+        , any (onSide ProducersOnly fid) (exchanges act)
+        ]
+
+-- | The activities the flow index names for one flow, each with its id, once.
+activitiesTouching :: Database -> UUID -> [(ProcessId, Activity)]
+activitiesTouching db flowUUID =
+    [ (pid, act)
     | pid <- maybe [] (S.toList . S.fromList) (M.lookup flowUUID (idxByFlow (dbIndexes db)))
     , Just act <- [getActivity db pid]
     ]
@@ -1464,13 +1517,13 @@ getFlowInfo db flowIdText = do
 {- | Get activities that use a specific flow as JSON (for CLI). Resolves
 against either flow side so biosphere flow IDs work too.
 -}
-getFlowActivities :: Database -> Text -> Either ServiceError Value
-getFlowActivities db flowIdText = do
+getFlowActivities :: Database -> ProducerFilter -> Text -> Either ServiceError Value
+getFlowActivities db side flowIdText = do
     case UUID.fromText flowIdText of
         Nothing -> Left $ InvalidUUID $ "Invalid flow UUID: " <> flowIdText
         Just fId
             | M.member fId (dbTechFlows db) || M.member fId (dbBioFlows db) ->
-                Right $ toJSON (getActivitiesUsingFlow db fId)
+                Right $ toJSON (getActivitiesUsingFlow db side fId)
             | otherwise -> Left $ FlowNotFound flowIdText
 
 {- | Compute the supply chain for an activity using the scaling vector.

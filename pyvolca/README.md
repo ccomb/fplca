@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.11.0** speaks wire formats **2 to 15** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.11.0** speaks wire formats **2 to 16** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1848,6 +1848,12 @@ that is where "taken from nature" and "released to nature" are told apart.
 ``synonyms`` maps language code → list of synonym strings (empty when the
 database carries no synonym index).
 
+``producer_count`` is how many activities make this flow, which is the
+number of ways a database offers to produce it. It is ``None`` on a flow
+no activity can produce (biosphere, waste) and against an engine older
+than wire revision 16; a zero would be the different statement that
+nothing makes it.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `id` | `str` | _required_ |
@@ -1857,6 +1863,7 @@ database carries no synonym index).
 | `kind` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
 | `synonyms` | `dict[str, list[str]]` | dict() |
+| `producer_count` | `int \| None` | None |
 
 ### `FlowContribution`
 

@@ -238,6 +238,7 @@ data FlowSearchResult = FlowSearchResult
     , fsrCompartment :: Maybe Text -- Sub-compartment (e.g. "agricultural")
     , fsrUnitName :: Text
     , fsrSynonyms :: M.Map Text [Text] -- Synonyms by language (converted from Set to List for JSON)
+    , fsrProducerCount :: Maybe Int -- How many activities make this flow; Nothing on a flow no activity can produce (biosphere, waste), never 0 as a stand-in for "not asked"
     }
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowSearchResult)
@@ -394,6 +395,28 @@ data FlowSummary = FlowSummary
 data FlowRole = InputFlow | OutputFlow | ReferenceProductFlow
     deriving (Show, Generic)
     deriving anyclass (ToSchema)
+
+{- | Which side of a flow the caller is asking about: the activities that make
+it, the ones that use it, or both.
+
+The two questions have different answers and only one of them is "how is this
+product made". 'EitherSide' is what the route answered before it could be
+asked, and stays its default.
+-}
+data ProducerFilter = ProducersOnly | ConsumersOnly | EitherSide
+    deriving (Eq, Show)
+
+{- | Read the @role@ query parameter. An absent parameter is 'EitherSide'; an
+unrecognised one is 'Nothing', so the route can refuse it rather than quietly
+answer a different question.
+-}
+parseProducerFilter :: Maybe Text -> Maybe ProducerFilter
+parseProducerFilter mRole = case mRole of
+    Nothing -> Just EitherSide
+    Just "producer" -> Just ProducersOnly
+    Just "consumer" -> Just ConsumersOnly
+    Just "any" -> Just EitherSide
+    Just _ -> Nothing
 
 -- Synonym types removed - synonyms are now included directly in flow responses
 
