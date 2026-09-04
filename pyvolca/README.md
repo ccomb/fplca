@@ -1263,7 +1263,7 @@ processes. ``allocation_formula`` carries the raw symbolic formula when
 the source expressed the share as an expression rather than a number,
 else ``None``.
 
-``mass_percent`` is the share the same product would carry if the key
+``mass_allocation_percent`` is the share the same product would carry if the key
 were its mass rather than what the source declared, so the two read
 side by side: the cheese above is declared 51.4 % of its block where its
 mass is 11.7 %, and a kilo of it therefore carries 4.4 times more under
@@ -1281,7 +1281,7 @@ engine older than wire revision 15.
 | `product_unit` | `str` | _required_ |
 | `allocation_percent` | `float \| None` | None |
 | `allocation_formula` | `str \| None` | None |
-| `mass_percent` | `float \| None` | None |
+| `mass_allocation_percent` | `float \| None` | None |
 
 ### `ActivityContribution`
 

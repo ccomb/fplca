@@ -1301,7 +1301,7 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 15: the @massPercent@ a product of a multi-output block carries
+(revision 15: the @massAllocationPercent@ a product of a multi-output block carries
 beside its declared share, saying what the mass would allocate;
 revision 14: the @AvoidedProduct@ role a technosphere exchange can report,
 which a client decoding the role enumeration has to know, the @unallocated@

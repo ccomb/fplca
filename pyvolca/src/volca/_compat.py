@@ -34,7 +34,7 @@ before sending anything."""
 
 KNOWN_WIRE = 15
 """The newest wire revision this pyvolca understands (revision 15 adds
-``mass_percent`` on a product of a multi-output block, the share it would
+``mass_allocation_percent`` on a product of a multi-output block, the share it would
 carry if the allocation key were its mass; revision 14 added the
 ``AvoidedProduct`` exchange role, the ``unallocated`` quality check and the
 ``share`` and ``classification`` fields of a technosphere exchange; revision

@@ -57,7 +57,7 @@ product_ unitName amount declared =
         , prsProductUnit = unitName
         , prsAllocationPercent = declared
         , prsAllocationFormula = Nothing
-        , prsMassPercent = Nothing
+        , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
         }
 
@@ -178,23 +178,23 @@ spec = do
             massShares massUnits (NE.fromList [kg 1.0, kg 0.0]) `shouldBe` Left (NonPositiveMass 0.0)
             massShares massUnits (NE.fromList [kg (-1.0)]) `shouldBe` Left (NonPositiveMass (-1.0))
 
-    describe "withMassPercent" $ do
+    describe "withMassAllocationPercent" $ do
         it "fills a block whose source states a share on every product" $
-            map prsMassPercent (Service.withMassPercent massUnits [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)])
+            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)])
                 `shouldBe` [Just 25, Just 75]
 
         it "leaves a lone product alone, there being nothing to compare it against" $
-            map prsMassPercent (Service.withMassPercent massUnits [product_ "kg" 1 (Just 100)])
+            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 100)])
                 `shouldBe` [Nothing]
 
         it "leaves a block whose datasets arrived already allocated alone" $
             -- Each is normalised to one of its own product and states no
             -- share, so the amounts are not one run's joint outputs.
-            map prsMassPercent (Service.withMassPercent massUnits [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing])
+            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing])
                 `shouldBe` [Nothing, Nothing]
 
         it "leaves a block whose products are not all a mass alone" $
-            map prsMassPercent (Service.withMassPercent massUnits [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)])
+            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)])
                 `shouldBe` [Nothing, Nothing]
 
     describe "the matrix" $ do

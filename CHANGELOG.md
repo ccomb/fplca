@@ -31,7 +31,7 @@
 
 ### Added
 - The products of a multi-output block now each report what their share
-  would be if the allocation key were their mass (`massPercent`), beside
+  would be if the allocation key were their mass (`massAllocationPercent`), beside
   the share the source declared. Nothing is split and nothing is scored
   differently: it is a second column to read against the first, and the
   impact per kilo under one key over the other is the quotient of the two

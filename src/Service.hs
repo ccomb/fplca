@@ -290,7 +290,7 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                         , prsProductUnit = prodUnit
                         , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                         , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
-                        , prsMassPercent = Nothing
+                        , prsMassAllocationPercent = Nothing
                         , prsNativeType = activityNativeType rootActivity
                         }
                 , imTotalFlows = length flowDetails
@@ -1268,7 +1268,7 @@ mkActivitySummary db processId activity =
             , prsProductUnit = prodUnit
             , prsAllocationPercent = dsPercent <$> activityReferenceShare activity
             , prsAllocationFormula = dsFormula =<< activityReferenceShare activity
-            , prsMassPercent = Nothing
+            , prsMassAllocationPercent = Nothing
             , prsNativeType = activityNativeType activity
             }
 
@@ -1287,7 +1287,7 @@ unknownActivitySummary db pid =
         , prsProductUnit = ""
         , prsAllocationPercent = Nothing
         , prsAllocationFormula = Nothing
-        , prsMassPercent = Nothing
+        , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
         }
 
@@ -1300,7 +1300,7 @@ getAllProductsForActivity db groupKey =
     case M.lookup groupKey (dbActivityProductsIndex db) of
         Nothing -> []
         Just processIds ->
-            withMassPercent (biUnitConfig (dbBuiltWith db)) $
+            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) $
                 [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)
                 | pid <- processIds
                 ]
@@ -1318,8 +1318,8 @@ nothing to be compared against.
 Left as it is again when the mass cannot serve as a key. The comparison is one
 extra column, so a block whose products are not all stated in a mass has none.
 -}
-withMassPercent :: UnitConfig -> [ActivitySummary] -> [ActivitySummary]
-withMassPercent unitCfg summaries
+withMassAllocationPercent :: UnitConfig -> [ActivitySummary] -> [ActivitySummary]
+withMassAllocationPercent unitCfg summaries
     | length summaries < 2 = summaries
     | not (all (isJust . prsAllocationPercent) summaries) = summaries
     | otherwise = maybe summaries attachAll (NE.nonEmpty summaries)
@@ -1335,7 +1335,7 @@ withMassPercent unitCfg summaries
     stated s = StatedAmount{saUnit = prsProductUnit s, saAmount = prsProductAmount s}
 
     attach :: ActivitySummary -> Double -> ActivitySummary
-    attach s percent = s{prsMassPercent = Just percent}
+    attach s percent = s{prsMassAllocationPercent = Just percent}
 
 -- | Get target activity for technosphere navigation.
 getTargetActivity :: Database -> Exchange -> Maybe ActivitySummary
@@ -1388,7 +1388,7 @@ crossDBLinkToSummary link =
         , prsProductUnit = cdlExchangeUnit link
         , prsAllocationPercent = Nothing
         , prsAllocationFormula = Nothing
-        , prsMassPercent = Nothing
+        , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
         }
 
@@ -1777,7 +1777,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
-                , prsMassPercent = Nothing
+                , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
                 }
      in SupplyChainResponse
@@ -1840,7 +1840,7 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                 , prsProductUnit = activityUnit rootActivity
                 , prsAllocationPercent = dsPercent <$> activityReferenceShare rootActivity
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
-                , prsMassPercent = Nothing
+                , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
                 }
     eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf includeEdges 1 S.empty
