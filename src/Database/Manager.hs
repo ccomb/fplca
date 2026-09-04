@@ -108,9 +108,6 @@ module Database.Manager (
     mapMethodSetToTablesCached,
     mapMethodToIndexCached,
 
-    -- * Internal (for Main.hs to load database)
-    loadDatabaseFromConfig,
-
     -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
     loadDatabaseRawWithCrossDB,
 
@@ -282,8 +279,6 @@ data StagedDatabase = StagedDatabase
     -- ^ Parsed data (activities, flows, units)
     , sdConfig :: !DatabaseConfig
     -- ^ Configuration
-    , sdUnlinkedCount :: !Int
-    -- ^ Total unlinked exchanges
     , sdMissingProducts :: ![(Text, Int, LinkBlocker)]
     -- ^ (product name, count, reason)
     , sdSelectedDeps :: ![Text]
@@ -1548,15 +1543,6 @@ listDatabases manager = do
                 , dsDependsOn = dcDepends config
                 }
 
-{- | Load a database from its configuration (without cross-DB linking)
-This is the original function, kept for backward compatibility
--}
-loadDatabaseFromConfig :: DatabaseConfig -> SynonymDB -> Bool -> IO (Either Text LoadedDatabase)
-loadDatabaseFromConfig dbConfig synonymDB noCache =
-    fmap
-        (fmap fst)
-        (loadDatabaseFromConfigWithCrossDB dbConfig synonymDB UnitConversion.defaultUnitConfig noCache [] M.empty)
-
 -- | File extensions 'resolveDataPath' knows how to extract as archives.
 archiveExtensions :: [String]
 archiveExtensions = [".zip", ".7z", ".gz", ".xz"]
@@ -2474,7 +2460,6 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                     StagedDatabase
                         { sdSimpleDB = toSimpleDatabase cachedDb
                         , sdConfig = dbConfig
-                        , sdUnlinkedCount = 0 -- was finalized successfully
                         , sdMissingProducts = []
                         , sdSelectedDeps = dbDependsOn cachedDb
                         , sdCrossDBLinks = dbCrossDBLinks cachedDb
@@ -2552,7 +2537,6 @@ stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
                             StagedDatabase
                                 { sdSimpleDB = finalDB
                                 , sdConfig = dbConfig
-                                , sdUnlinkedCount = Loader.unresolvedCount finalStats
                                 , sdMissingProducts = stagedMissingProducts finalDB finalStats
                                 , sdSelectedDeps = minimalDeps
                                 , sdCrossDBLinks = Loader.cdlLinks finalStats
@@ -3150,7 +3134,6 @@ restageLoadedDatabase manager dbName ld = do
             StagedDatabase
                 { sdSimpleDB = toSimpleDatabase db
                 , sdConfig = ldConfig ld
-                , sdUnlinkedCount = unresolvedCount stats
                 , sdMissingProducts = stagedMissingProducts (toSimpleDatabase db) stats
                 , sdSelectedDeps = dbDependsOn db
                 , sdCrossDBLinks = dbCrossDBLinks db
