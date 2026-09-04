@@ -85,6 +85,7 @@ from .types import (
     MethodFactor,
     PathResult,
     Preset,
+    SearchCounts,
     SearchResults,
     SensitivityResult,
     ServerVersion,
@@ -1560,6 +1561,22 @@ class Client:
 
         raw = fetch(wire_offset, wire_limit)
         return SearchResults.from_raw(raw, parse=Flow.from_json, fetch=fetch)
+
+    def count_search_matches(self, query: str) -> SearchCounts:
+        """How many processes, products and flows a query matches.
+
+        One call rather than three searches, for a search box that labels its
+        tabs with counts. The three are disjoint and together cover the
+        database.
+
+        Args:
+            query: The search term. Required: an empty box has nothing to
+                count, and the engine refuses a blank one rather than
+                answering three zeros, which would read as "this database has
+                nothing".
+        """
+        self._require_wire(16, "count_search_matches", engine_hint="0.12.1")
+        return SearchCounts.from_json(self._call("count_search_matches", q=query))
 
     def list_classifications(self) -> list[ClassificationSystem]:
         """List classification systems and their values for the current database.

@@ -80,6 +80,7 @@ knownDivergences =
     , ("compute_sensitivity", "method_id")
     , ("compute_sensitivity", "perturbations")
     , ("compute_sensitivity", "process_id")
+    , ("count_search_matches", "database")
     , ("edit_exchanges", "add_biosphere")
     , ("edit_exchanges", "add_inputs")
     , ("edit_exchanges", "add_waste_outputs")

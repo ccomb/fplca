@@ -457,6 +457,20 @@ Returns the engine's ``ActivateResponse`` dict
 (``{"success", "message", "database"?}``). Raises VoLCAError if the
 engine reports ``success=false``.
 
+##### `Client.count_search_matches(query: str) -> SearchCounts`
+
+How many processes, products and flows a query matches.
+
+One call rather than three searches, for a search box that labels its
+tabs with counts. The three are disjoint and together cover the
+database.
+
+Args:
+    query: The search term. Required: an empty box has nothing to
+        count, and the engine refuses a blank one rather than
+        answering three zeros, which would read as "this database has
+        nothing".
+
 ##### `Client.create_activities(activities: list[ActivityInput] | ActivityInput, db_name: str | None = None) -> dict`
 
 Write new activities into a database that can hold them.
@@ -2245,6 +2259,23 @@ from, or as a last resort the raw variable key.
 |-------|------|---------|
 | `category` | `str` | _required_ |
 | `value` | `float` | _required_ |
+
+### `SearchCounts`
+
+How many processes, products and flows one query matches.
+
+The three are disjoint and together cover the database, so they partition
+what a query found. Use them to tell which of the three a term is really
+about before listing any of them: a term matching 2 processes and 300
+flows is a substance name, not a product.
+
+Needs engine wire revision 16.
+
+| Field | Type | Default |
+|-------|------|---------|
+| `processes` | `int` | _required_ |
+| `products` | `int` | _required_ |
+| `flows` | `int` | _required_ |
 
 ### `SearchResults`
 

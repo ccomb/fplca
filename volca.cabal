@@ -252,6 +252,7 @@ test-suite lca-tests
                      , TreeSpec
                      , CoproductTargetSpec
                      , ServiceSpec
+                     , SearchCountsSpec
                      , CrossLinkingSpec
                      , CrossDBActivityLinkSpec
                      , MinimalCoverSpec

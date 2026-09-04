@@ -230,6 +230,18 @@ data ConsumersResponse = ConsumersResponse
 'fsrKind' is what tells a product apart from a substance. Without it the two
 are told apart only by an empty 'fsrCategory', which a waste flow has as well.
 -}
+
+{- | How many of each thing one query finds, for the three tabs of a search
+box. Disjoint, and together they cover the database.
+-}
+data SearchCountsAPI = SearchCountsAPI
+    { scaProcesses :: Int -- Activity rows, what you search, get and score
+    , scaProducts :: Int -- Technosphere flows: what one activity makes and another consumes
+    , scaFlows :: Int -- Biosphere and waste flows: what is exchanged with nature or discarded
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SearchCountsAPI)
+
 data FlowSearchResult = FlowSearchResult
     { fsrId :: UUID
     , fsrName :: Text

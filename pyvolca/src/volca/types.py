@@ -604,6 +604,23 @@ class Flow(FromJson):
 
 
 @dataclass
+class SearchCounts(FromJson):
+    """How many processes, products and flows one query matches.
+
+    The three are disjoint and together cover the database, so they partition
+    what a query found. Use them to tell which of the three a term is really
+    about before listing any of them: a term matching 2 processes and 300
+    flows is a substance name, not a product.
+
+    Needs engine wire revision 16.
+    """
+
+    processes: int
+    products: int
+    flows: int
+
+
+@dataclass
 class ConsumerResult(FromJson):
     """Activity that consumes a given supplier, with BFS depth."""
     process_id: str

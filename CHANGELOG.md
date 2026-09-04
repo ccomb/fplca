@@ -47,6 +47,14 @@
   format also allows a matrix allocating one exchange to another product, and
   a dataset written that way is still refused rather than split on a number
   that meant something else.
+- A new route and MCP tool answer how many processes, products and flows one
+  query matches, in a single call (`db/{dbName}/search-counts?q=`,
+  `count_search_matches`). The three are disjoint and together cover the
+  database, so the counts partition what a query found: a term matching 2
+  processes and 300 flows is a substance name, not a product. A search box
+  that labels three tabs with counts no longer costs three searches per
+  keystroke. A blank query is refused rather than answered with three zeros,
+  which would read as "this database has nothing". Wire revision 16.
 - The products of a multi-output block now each report what their share
   would be if the allocation key were their mass (`massAllocationPercent`), beside
   the share the source declared. Nothing is split and nothing is scored
