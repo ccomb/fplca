@@ -340,12 +340,19 @@ data ProcState = ProcState
     , psExAmount :: !Double
     , psExLocation :: !Text
     , psExComment :: !(Maybe (Text, Text))
-    , psExAllocations :: ![(Int, Double)] -- (internalReferenceToCoProduct, allocatedFraction) read so far on this exchange
-    , psAllocRef :: !(Maybe Int) -- the attributes of one <allocation> arrive separately, so they are paired at its close
-    , psAllocFraction :: !(Maybe Double)
     {- ^ (xml:lang, comment text) for the open `<exchange>`. English wins;
     otherwise first non-empty. Reset on each `<exchange>` open.
     -}
+    , psExAllocations :: ![(Int, Double)]
+    {- ^ Every (internalReferenceToCoProduct, allocatedFraction) of the open
+    `<exchange>`. All of them, because how many there are is what says
+    which of the format's two meanings the file is using.
+    -}
+    , psAllocRef :: !(Maybe Int)
+    {- ^ The attributes of one `<allocation>` arrive separately, so they are
+    paired at its close.
+    -}
+    , psAllocFraction :: !(Maybe Double)
     , psPendingCommentLang :: !Text
     {- ^ xml:lang on the currently-open `<common:generalComment>`. Reset
     on every comment open.
@@ -514,10 +521,29 @@ parseProcessXML bytes =
                         , ierAmount = psExAmount s
                         , ierLocation = psExLocation s
                         , ierComment = snd <$> psExComment s
-                        , ierShare = lookup (psExInternalId s) (psExAllocations s)
+                        , ierShare = soleSelfAllocation (psExInternalId s) (psExAllocations s)
                         }
              in s{psInExchange = False, psExchanges = ex : psExchanges s, psTextAccum = []}
         | otherwise = s{psTextAccum = []}
+
+    -- \| The share an exchange declares for itself, and only when it is the
+    --    only thing that exchange allocates.
+    --
+    --    The attribute carries two different meanings in ILCD. One entry pointing
+    --    at the exchange itself is the ordinary form: "this product takes this
+    --    share of the process". Several entries are the general form, where the
+    --    exchange is distributed across the co-products and the entry pointing at
+    --    itself is its own share of itself, which is 100 and says nothing about
+    --    allocation. Reading that as a declared share would give every product
+    --    100 % and hand each one the whole inventory.
+    --
+    --    So several entries yield no share at all, and the allocation gate refuses
+    --    the dataset. Refused is the right answer for a form we cannot represent.
+    --
+    soleSelfAllocation :: Int -> [(Int, Double)] -> Maybe Double
+    soleSelfAllocation ownId allocations = case allocations of
+        [(ref, fraction)] | ref == ownId -> Just fraction
+        _ -> Nothing
 
     cdata = txt
     accum s = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum s)
@@ -618,8 +644,17 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
     --    refuses it, which is the honest outcome: better refused than split on a
     --    number that meant something else.
     --
-    declaredShareOf :: ILCDExchangeRaw -> Maybe DeclaredShare
-    declaredShareOf raw = flip DeclaredShare Nothing <$> ierShare raw
+    declaredShareOf :: TechRole -> ILCDExchangeRaw -> Maybe DeclaredShare
+    declaredShareOf role raw = case role of
+        ReferenceProduct -> shareOf raw
+        Coproduct -> shareOf raw
+        ReferenceInput -> Nothing
+        Input -> Nothing
+        AvoidedProduct -> Nothing
+
+    -- \| The number itself, once the role says a share belongs on the exchange.
+    shareOf :: ILCDExchangeRaw -> Maybe DeclaredShare
+    shareOf raw = flip DeclaredShare Nothing <$> ierShare raw
 
     -- Look up the reference exchange's flow unit. Reference exchange is typically
     -- a technosphere product, but for waste-treatment processes it may be a
@@ -683,7 +718,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
                         , techPedigree = Nothing
-                        , techShare = declaredShareOf raw
+                        , techShare = declaredShareOf techRoleFor raw
                         , techClassification = M.empty
                         }
 
