@@ -168,6 +168,7 @@ import Method.Mapping (
     MethodSetTables,
     MethodTables,
     ProxyTargets (..),
+    RefusalReason,
     RegionalActivityWeights (..),
     SeaWaterCFs (..),
     buildMethodIndex,
@@ -213,6 +214,7 @@ import qualified SharedSolver
 import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), SubstanceEdge, casBindingsFromEdges, normalizeCAS, parseSubstanceEdges)
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
+    ActivityMap,
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
@@ -733,15 +735,7 @@ buildMethodTablesFor manager dbName collection db method = do
     cmap <- getMergedCompartmentMap manager
     let dirExcluded =
             directionExcludedCFs cmap (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
-    unless (null dirExcluded) $
-        reportProgress Warning $
-            "[LCIA "
-                <> T.unpack (methodName method)
-                <> "] "
-                <> show (length dirExcluded)
-                <> " CF(s) match a synonym bridge only outside their flow direction "
-                <> "(direction metadata may be missing from the method). Samples: "
-                <> show (take 3 (map mcfFlowName dirExcluded))
+    mapM_ (reportProgress Warning) (directionWarning dirExcluded)
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager
@@ -762,19 +756,7 @@ buildMethodTablesFor manager dbName collection db method = do
         -- Precompute per-activity weights for regionalized methods so subsequent
         -- scoring is a dot product instead of one biosphere-triple walk per pid.
         !tables = fillRegionalActivityWeights unitConfig mUnits mFlows db hier withBroadcast
-    case mtRegionalActivityWeights tables of
-        Nothing -> pure ()
-        Just raw' ->
-            unless (null (rawMissingPairs raw')) $
-                reportProgress Warning $
-                    "[LCIA "
-                        <> T.unpack (methodName method)
-                        <> "] "
-                        <> show (length (rawMissingPairs raw'))
-                        <> " regionalized (flow, location) pair(s) without CF coverage "
-                        <> "(after walking parent regions and universal broadcast). "
-                        <> "Samples: "
-                        <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- rawMissingPairs raw'])
+    mapM_ (reportProgress Warning) (regionalGapWarning (mtRegionalActivityWeights tables))
     -- Which side of the sea-water gate this method landed on, said out loud.
     -- A method with no sea-water factor of its own has its medium-level factor
     -- applied to sea emissions, and that is only right when the method had
@@ -783,39 +765,94 @@ buildMethodTablesFor manager dbName collection db method = do
     -- the two cases are indistinguishable from the outside. Report the regime
     -- so a method author can tell them apart; only for a method that writes
     -- water factors at all, since the others have no stake in it.
-    let waterCFs =
-            length [() | (_, Medium "water", _) <- M.keys (mtExactCF raw0)]
-                + length [() | (_, Medium "water") <- M.keys (mtFallbackCF raw0)]
-    case mtSeaWaterCFs raw0 of
-        MethodDeclaresSeaWater -> pure ()
-        MethodSilentOnSeaWater ->
-            when (waterCFs > 0) $
-                reportProgress Warning $
-                    "[LCIA "
-                        <> T.unpack (methodName method)
-                        <> "] no sea-water factor among "
-                        <> show waterCFs
-                        <> " water factor(s): the medium-level factor will be applied to sea "
-                        <> "emissions. Right when the method draws no distinction there, wrong "
-                        <> "when its sea lines were lost on import."
+    mapM_ (reportProgress Warning) (seaWaterWarning raw0)
     -- A CF that matched (broadcast or regionalized) but cannot be
     -- unit-converted scores an (intentional) 0 — refusing wrong-dimension data
     -- is right, hiding the refusal is not: unreported, it reads exactly like an
     -- uncharacterized flow and the method silently undercounts. One
     -- deduplicated WARN per (db, method), same channel as the regionalized
     -- coverage gaps above.
-    let zeroed = zeroedMatchedCFs unitConfig mUnits mFlows withBroadcast
-        flowUnitOf f = maybe "<unknown unit>" (T.unpack . unitName) (M.lookup (bfUnitId f) mUnits)
-    unless (null zeroed) $
-        reportProgress Warning $
-            "[LCIA "
-                <> T.unpack (methodName method)
-                <> "] "
-                <> show (length zeroed)
+    mapM_
+        (reportProgress Warning)
+        (zeroedWarning mUnits (zeroedMatchedCFs unitConfig mUnits mFlows withBroadcast))
+    pure tables
+  where
+    -- One "[LCIA <method>] ..." line per warning, or nothing when there is
+    -- nothing to say. Each stays at the point in the build where its evidence
+    -- becomes available: this function runs concurrently under
+    -- 'warmMethodTables', and grouping the lines would reorder the log.
+    lcia :: String -> String
+    lcia body = "[LCIA " <> T.unpack (methodName method) <> "] " <> body
+
+    -- A CF matchable through the union synonym tables but not through its own
+    -- direction's view was excluded by the direction restriction alone - the
+    -- usual cause is a method whose parser defaulted the direction (no
+    -- metadata). Warn so the loss is distinguishable from a genuinely
+    -- uncharacterized flow.
+    directionWarning :: [MethodCF] -> Maybe String
+    directionWarning [] = Nothing
+    directionWarning excluded =
+        Just . lcia $
+            show (length excluded)
+                <> " CF(s) match a synonym bridge only outside their flow direction "
+                <> "(direction metadata may be missing from the method). Samples: "
+                <> show (take 3 (map mcfFlowName excluded))
+
+    regionalGapWarning :: Maybe RegionalActivityWeights -> Maybe String
+    regionalGapWarning Nothing = Nothing
+    regionalGapWarning (Just weights) = case rawMissingPairs weights of
+        [] -> Nothing
+        missing ->
+            Just . lcia $
+                show (length missing)
+                    <> " regionalized (flow, location) pair(s) without CF coverage "
+                    <> "(after walking parent regions and universal broadcast). "
+                    <> "Samples: "
+                    <> show (take 3 [(show fid, T.unpack loc) | (fid, Location loc) <- missing])
+
+    -- Which side of the sea-water gate this method landed on, said out loud.
+    -- A method with no sea-water factor of its own has its medium-level factor
+    -- applied to sea emissions, and that is only right when the method had
+    -- nothing different to say there. When its sea lines were instead lost on
+    -- import, the same silence overstates every sea emission it covers - and
+    -- the two cases are indistinguishable from the outside. Report the regime
+    -- so a method author can tell them apart; only for a method that writes
+    -- water factors at all, since the others have no stake in it.
+    seaWaterWarning :: MethodTables -> Maybe String
+    seaWaterWarning tables = case mtSeaWaterCFs tables of
+        MethodDeclaresSeaWater -> Nothing
+        MethodSilentOnSeaWater
+            | waterCFs == 0 -> Nothing
+            | otherwise ->
+                Just . lcia $
+                    "no sea-water factor among "
+                        <> show waterCFs
+                        <> " water factor(s): the medium-level factor will be applied to sea "
+                        <> "emissions. Right when the method draws no distinction there, wrong "
+                        <> "when its sea lines were lost on import."
+      where
+        waterCFs :: Int
+        waterCFs =
+            length [() | (_, Medium "water", _) <- M.keys (mtExactCF tables)]
+                + length [() | (_, Medium "water") <- M.keys (mtFallbackCF tables)]
+
+    -- A CF that matched (broadcast or regionalized) but cannot be
+    -- unit-converted scores an (intentional) 0 - refusing wrong-dimension data
+    -- is right, hiding the refusal is not: unreported, it reads exactly like an
+    -- uncharacterized flow and the method silently undercounts. One
+    -- deduplicated WARN per (db, method), same channel as the regionalized
+    -- coverage gaps above.
+    zeroedWarning :: UnitDB -> [(BiosphereFlow, CF, RefusalReason)] -> Maybe String
+    zeroedWarning _ [] = Nothing
+    zeroedWarning units zeroed =
+        Just . lcia $
+            show (length zeroed)
                 <> " flow(s) matched a CF that cannot be converted from the flow's unit "
                 <> "(no unit-conversion path); their contributions score 0. Samples: "
                 <> show (take 3 [(T.unpack (bfName f), flowUnitOf f, T.unpack u, show reason) | (f, CF _ (CFUnit u), reason) <- zeroed])
-    pure tables
+      where
+        flowUnitOf :: BiosphereFlow -> String
+        flowUnitOf f = maybe "<unknown unit>" (T.unpack . unitName) (M.lookup (bfUnitId f) units)
 
 {- | Run @build@ at most once per @key@ across concurrent callers. The first
 caller installs a slot and runs the build; others block on the same result
@@ -1708,8 +1745,8 @@ detectDirectoryFormat path = do
             , (FormatXML, hasTopLevelExtension ".xml")
             ]
 
-    -- One listing per probe rather than one shared listing: only the last two
-    -- probes reach here, and both are cheap next to the recursive walks above.
+    -- One listing per probe rather than one shared listing: the two that reach
+    -- here are the last two, and both are cheap next to the recursive walks above.
     hasTopLevelExtension :: String -> IO Bool
     hasTopLevelExtension ext =
         elem ext . map (map toLower . takeExtension) <$> listDirectory path
@@ -2119,6 +2156,95 @@ only the element order differs.
 sameSet :: (Ord a) => [a] -> [a] -> Bool
 sameSet xs ys = S.fromList xs == S.fromList ys
 
+{- | Everything a relink reads. Gathered because the caller has already pulled
+all of it out of TVars, and the computation itself touches none.
+-}
+data RelinkInputs = RelinkInputs
+    { riDbName :: !Text
+    , riDatabase :: !Database
+    , riContext :: !LinkingContext
+    , riPersistedDeps :: !(Maybe [Text])
+    -- ^ The dependency set the matrix cache on disk records, when it is known.
+    }
+
+{- | What a relink produced: the rewritten database, the report for the caller,
+and whether the matrix cache on disk is now behind. Whether the links
+themselves changed is 'rresLinksChanged' inside the report, not repeated here.
+-}
+data RelinkOutcome = RelinkOutcome
+    { roDatabase :: !Database
+    , roResult :: !RelinkResult
+    , roCacheChanged :: !Bool
+    }
+
+{- | Recompute a loaded database's cross-database links. Pure, and its caller
+forces the outcome before opening its STM transaction: none of this work may
+land inside a transaction that can be retried.
+-}
+relinkPlan :: RelinkInputs -> RelinkOutcome
+relinkPlan RelinkInputs{..} =
+    RelinkOutcome
+        { roDatabase = db'
+        , roResult =
+            RelinkResult
+                { rresDbName = riDbName
+                , rresUnresolvedBefore = unresolvedCount (dbLinkingStats riDatabase)
+                , rresUnresolvedAfter = unresolvedCount newStats
+                , rresCrossDBLinks = length newLinks
+                , rresDepsLoaded = newDeps
+                , rresLinksChanged = linksChanged
+                }
+        , roCacheChanged = linksChanged || depsChanged
+        }
+  where
+    activityMap :: ActivityMap
+    activityMap =
+        M.fromList
+            [ (dbProcessIdTable riDatabase V.! i, dbActivities riDatabase V.! i)
+            | i <- [0 .. V.length (dbActivities riDatabase) - 1]
+            ]
+
+    newStats :: CrossDBLinkingStats
+    newStats =
+        ( Loader.findAllCrossDBLinks
+            riContext
+            (dbTechFlows riDatabase)
+            (dbWasteFlows riDatabase)
+            (dbUnits riDatabase)
+            activityMap
+        )
+            { cdlTotalInputs = Loader.countTotalTechInputs (toSimpleDatabase riDatabase)
+            }
+
+    newLinks :: [CrossDBLink]
+    newLinks = cdlLinks newStats
+
+    -- Strict pin: the dependency set is the user's selection, unchanged by
+    -- relinking. Only the links within it are refreshed.
+    newDeps :: [Text]
+    newDeps = dbDependsOn riDatabase
+
+    db' :: Database
+    db' =
+        riDatabase
+            { dbCrossDBLinks = newLinks
+            , dbDependsOn = newDeps
+            , dbLinkingStats = newStats
+            }
+
+    -- The pin is invariant under relink (newDeps is the set already recorded),
+    -- so a change can only be in the links. Compare as sets: link order is not
+    -- significant and must not trigger a redundant cache write.
+    linksChanged :: Bool
+    linksChanged = not (sameSet newLinks (dbCrossDBLinks riDatabase))
+
+    -- A caller may have pinned a new dependency in-memory before this call.
+    -- The cache is the only durable store of 'dbDependsOn', so if the live pin
+    -- diverges from what is on disk the cache must be rewritten even when no
+    -- new links were discovered.
+    depsChanged :: Bool
+    depsChanged = maybe False (not . sameSet newDeps) riPersistedDeps
+
 {- | Re-run cross-DB linking for an already-loaded DB against its pinned
 dependency set ('dbDependsOn'), not the full set of loaded DBs. Updates
 'dbCrossDBLinks' and 'dbLinkingStats' in place in the LoadedDatabase record;
@@ -2273,56 +2399,29 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
                 otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
             synonymDB <- getMergedSynonymDB manager
             unitConfig <- getMergedUnitConfig manager
-            let db = ldDatabase loaded
-                beforeUnresolved = unresolvedCount (dbLinkingStats db)
-                beforeLinks = dbCrossDBLinks db
-                beforeDeps = dbDependsOn db
-                activityMap =
-                    M.fromList
-                        [ (dbProcessIdTable db V.! i, dbActivities db V.! i)
-                        | i <- [0 .. V.length (dbActivities db) - 1]
-                        ]
-                ctx =
-                    LinkingContext
-                        { lcIndexedDatabases = otherIndexes
-                        , lcSynonymDB = synonymDB
-                        , lcUnitConfig = unitConfig
-                        , lcThreshold = defaultLinkingThreshold
-                        , lcLocationHierarchy = dmLocationHierarchy manager
-                        , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
-                        , lcSupplierAliases = aliases
-                        }
-                !totalInputs = Loader.countTotalTechInputs (toSimpleDatabase db)
-                rawStats =
-                    Loader.findAllCrossDBLinks
-                        ctx
-                        (dbTechFlows db)
-                        (dbWasteFlows db)
-                        (dbUnits db)
-                        activityMap
-                newStats = rawStats{cdlTotalInputs = totalInputs}
-                newLinks = cdlLinks newStats
-                -- Strict pin: the dependency set is the user's selection,
-                -- unchanged by relinking. Only the links within it are refreshed.
-                newDeps = beforeDeps
-                !db' =
-                    db
-                        { dbCrossDBLinks = newLinks
-                        , dbDependsOn = newDeps
-                        , dbLinkingStats = newStats
-                        }
-                !loaded' = loaded{ldDatabase = db'}
-                afterUnresolved = unresolvedCount newStats
-                -- The pin is invariant under relink (newDeps == beforeDeps), so a
-                -- change can only be in the links. Compare as sets: link order is
-                -- not significant and must not trigger a redundant cache write.
-                linksChanged = not (sameSet newLinks beforeLinks)
-                -- A caller may have pinned a new dependency in-memory before this
-                -- call. The cache is the only durable store of 'dbDependsOn', so
-                -- if the live pin diverges from what is on disk the cache must be
-                -- rewritten even when no new links were discovered.
-                depsChanged = maybe False (not . sameSet newDeps) persistedDeps
-                cacheChanged = linksChanged || depsChanged
+            -- Forced here on purpose: the whole link computation must be done
+            -- before the transaction below opens, never inside it.
+            let !outcome =
+                    relinkPlan
+                        RelinkInputs
+                            { riDbName = dbName
+                            , riDatabase = ldDatabase loaded
+                            , riContext =
+                                LinkingContext
+                                    { lcIndexedDatabases = otherIndexes
+                                    , lcSynonymDB = synonymDB
+                                    , lcUnitConfig = unitConfig
+                                    , lcThreshold = defaultLinkingThreshold
+                                    , lcLocationHierarchy = dmLocationHierarchy manager
+                                    , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
+                                    , lcSupplierAliases = aliases
+                                    }
+                            , riPersistedDeps = persistedDeps
+                            }
+                db' = roDatabase outcome
+                result = roResult outcome
+                cacheChanged = roCacheChanged outcome
+                loaded' = loaded{ldDatabase = db'}
             atomically $ do
                 modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
                 modifyTVar'
@@ -2346,22 +2445,13 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
                     "Re-linked "
                         <> T.unpack dbName
                         <> ": "
-                        <> show beforeUnresolved
+                        <> show (rresUnresolvedBefore result)
                         <> " \8594 "
-                        <> show afterUnresolved
+                        <> show (rresUnresolvedAfter result)
                         <> " unresolved products ("
-                        <> show (length newLinks)
+                        <> show (rresCrossDBLinks result)
                         <> " cross-DB links)"
-            return $
-                Right
-                    RelinkResult
-                        { rresDbName = dbName
-                        , rresUnresolvedBefore = beforeUnresolved
-                        , rresUnresolvedAfter = afterUnresolved
-                        , rresCrossDBLinks = length newLinks
-                        , rresDepsLoaded = newDeps
-                        , rresLinksChanged = linksChanged
-                        }
+            return (Right result)
 
 {- | After a DB loads (or reloads), re-link every already-loaded DB that
 declares it as a dependency. This makes cross-DB linking converge
