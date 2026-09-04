@@ -123,6 +123,8 @@ import Control.Exception (SomeException, try)
 import qualified Control.Exception
 import Control.Lens ((&), (?~))
 import Control.Monad (filterM, forM, forM_, unless, void, when)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE, withExceptT)
 import Data.Aeson (FromJSON (..), ToJSON (..), (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import Data.Bifunctor (first)
@@ -1554,25 +1556,17 @@ Plain files/directories pass through unchanged.
 resolveDataPath :: FilePath -> IO FilePath
 resolveDataPath path = do
     isDir <- doesDirectoryExist path
-    if isDir
+    isFile <- doesFileExist path
+    -- A directory, a missing path, or a plain file goes through unchanged, and
+    -- the caller reports whatever is wrong with it.
+    if isDir || not isFile || map toLower (takeExtension path) `notElem` archiveExtensions
         then return path
-        else do
-            isFile <- doesFileExist path
-            if not isFile
-                then return path -- missing: let caller handle
-                else
-                    let ext = map toLower (takeExtension path)
-                     in if ext `elem` archiveExtensions
-                            then extractAndFind path
-                            else return path
+        else extractAndFind path
   where
+    extractAndFind :: FilePath -> IO FilePath
     extractAndFind archive = do
         let extractDir = archive ++ ".d"
-        dirExists <- doesDirectoryExist extractDir
-        alreadyExtracted <-
-            if dirExists
-                then not . null <$> listDirectory extractDir
-                else return False
+        alreadyExtracted <- hasContent extractDir
         if alreadyExtracted
             then do
                 reportProgress Info $ "Using cached extraction: " <> extractDir
@@ -1588,6 +1582,12 @@ resolveDataPath path = do
                     Right () -> do
                         reportProgress Info "Extraction complete"
                         Upload.findDataDirectory extractDir
+
+    -- \| A directory that exists and holds at least one entry.
+    hasContent :: FilePath -> IO Bool
+    hasContent dir = do
+        exists <- doesDirectoryExist dir
+        if exists then not . null <$> listDirectory dir else return False
 
 -- | Load a database from its configuration with cross-database linking support
 loadDatabaseFromConfigWithCrossDB ::
@@ -1672,59 +1672,52 @@ supportedSourceFormats =
 -- | Detect the format of files in a directory
 detectDirectoryFormat :: FilePath -> IO DirectoryFormat
 detectDirectoryFormat path = do
-    isDir <- doesDirectoryExist path
     isFile <- doesFileExist path
     if isFile
-        then do
-            -- Direct file: check extension
-            let ext = map toLower (takeExtension path)
-            return $ case ext of
-                ".csv" -> FormatCSV
-                ".xlsx" -> FormatExcel
-                ".spold" -> FormatSpold
-                ".xml" -> FormatXML
-                _ -> FormatUnknown
-        else
-            if isDir
-                then do
-                    -- Check for ILCD format first (has processes/ subdirectory)
-                    hasProcesses <- doesDirectoryExist (path </> "processes")
-                    if hasProcesses
-                        then return FormatILCD
-                        else do
-                            -- EcoSpold packages keep their datasets in a
-                            -- subdirectory (e.g. ecoinvent's datasets/*.spold),
-                            -- so probe for .spold recursively. Otherwise a
-                            -- sibling FilenameToActivityLookup.csv at the package
-                            -- root masks them and the database misdetects as
-                            -- SimaPro CSV, silently loading zero activities.
-                            hasSpold <- containsExtensionDeep ".spold" path
-                            if hasSpold
-                                then return FormatSpold
-                                else do
-                                    -- A workbook is probed the same way and for
-                                    -- the same reason: zipping a folder puts it
-                                    -- one level down, and a sheet exported
-                                    -- beside it as CSV would otherwise mask it.
-                                    -- Ahead of .csv, which is the order
-                                    -- 'Database.Upload.detectDatabaseFormat'
-                                    -- uses — the two must agree or a source is
-                                    -- announced as one format and parsed as
-                                    -- another.
-                                    hasXlsx <- containsExtensionDeep ".xlsx" path
-                                    if hasXlsx
-                                        then return FormatExcel
-                                        else do
-                                            files <- listDirectory path
-                                            let extensions = map (map toLower . takeExtension) files
-                                            -- Check for remaining formats (in order of preference)
-                                            if ".csv" `elem` extensions
-                                                then return FormatCSV
-                                                else
-                                                    if ".xml" `elem` extensions
-                                                        then return FormatXML
-                                                        else return FormatUnknown
-                else return FormatUnknown
+        then return (fileFormat (map toLower (takeExtension path)))
+        else do
+            isDir <- doesDirectoryExist path
+            if isDir then directoryFormat else return FormatUnknown
+  where
+    fileFormat :: String -> DirectoryFormat
+    fileFormat ext = case ext of
+        ".csv" -> FormatCSV
+        ".xlsx" -> FormatExcel
+        ".spold" -> FormatSpold
+        ".xml" -> FormatXML
+        _ -> FormatUnknown
+
+    directoryFormat :: IO DirectoryFormat
+    directoryFormat =
+        firstMatch
+            [ (FormatILCD, doesDirectoryExist (path </> "processes"))
+            , -- EcoSpold packages keep their datasets in a subdirectory (e.g.
+              -- ecoinvent's datasets/*.spold), so probe for .spold recursively.
+              -- Otherwise a sibling FilenameToActivityLookup.csv at the package
+              -- root masks them and the database misdetects as SimaPro CSV,
+              -- silently loading zero activities.
+              (FormatSpold, containsExtensionDeep ".spold" path)
+            , -- A workbook is probed the same way and for the same reason:
+              -- zipping a folder puts it one level down, and a sheet exported
+              -- beside it as CSV would otherwise mask it. Ahead of .csv, which
+              -- is the order 'Database.Upload.detectDatabaseFormat' uses - the
+              -- two must agree or a source is announced as one format and
+              -- parsed as another.
+              (FormatExcel, containsExtensionDeep ".xlsx" path)
+            , (FormatCSV, hasTopLevelExtension ".csv")
+            , (FormatXML, hasTopLevelExtension ".xml")
+            ]
+
+    -- One listing per probe rather than one shared listing: only the last two
+    -- probes reach here, and both are cheap next to the recursive walks above.
+    hasTopLevelExtension :: String -> IO Bool
+    hasTopLevelExtension ext =
+        elem ext . map (map toLower . takeExtension) <$> listDirectory path
+
+    -- No fallback guess: a directory matching no probe stays FormatUnknown.
+    firstMatch :: [(DirectoryFormat, IO Bool)] -> IO DirectoryFormat
+    firstMatch [] = return FormatUnknown
+    firstMatch ((fmt, probe) : rest) = probe >>= \b -> if b then return fmt else firstMatch rest
 
 {- | Recursively test whether the directory tree rooted at @path@ contains at
 least one file with the given (lowercased) extension. Lets dataset files in a
@@ -2556,40 +2549,47 @@ dependency — unloading would leave the dependent's cross-DB links dangling.
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 unloadDatabase manager dbName = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
+    case unloadRefusal dbName loadedDbs of
+        Just refusal -> return (Left refusal)
+        Nothing -> do
+            -- Remove from loaded databases and IndexedDatabases (for cross-DB linking)
+            atomically $ do
+                modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
+                modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
 
-    case M.lookup dbName loadedDbs of
-        Nothing -> return $ Left $ "Database not loaded: " <> dbName
-        Just _ -> do
-            let dependents =
-                    [ name
-                    | (name, ld) <- M.toList loadedDbs
-                    , name /= dbName
-                    , dbName `elem` dbDependsOn (ldDatabase ld)
-                    ]
-            if not (null dependents)
-                then
-                    return $
-                        Left $
-                            "Cannot unload "
-                                <> dbName
-                                <> ": still required by "
-                                <> T.intercalate ", " dependents
-                                <> ". Unload dependents first."
-                else do
-                    -- Remove from loaded databases and IndexedDatabases (for cross-DB linking)
-                    atomically $ do
-                        modifyTVar' (dmLoadedDbs manager) (M.delete dbName)
-                        modifyTVar' (dmIndexedDbs manager) (M.delete dbName)
+            -- Clear cached solvers and flow mappings
+            clearCachedSolver dbName
+            clearMethodMappingCacheForDb manager dbName
 
-                    -- Clear cached solvers and flow mappings
-                    clearCachedSolver dbName
-                    clearMethodMappingCacheForDb manager dbName
+            -- Force garbage collection to release memory
+            performGC
 
-                    -- Force garbage collection to release memory
-                    performGC
+            reportProgress Info $ "Unloaded database: " <> T.unpack dbName
+            return $ Right ()
 
-                    reportProgress Info $ "Unloaded database: " <> T.unpack dbName
-                    return $ Right ()
+{- | Why an unload cannot go ahead, when it cannot: the database is not loaded,
+or another loaded one still declares it as a dependency and unloading would
+leave that one's cross-database links dangling.
+-}
+unloadRefusal :: Text -> Map Text LoadedDatabase -> Maybe Text
+unloadRefusal dbName loadedDbs
+    | not (M.member dbName loadedDbs) = Just $ "Database not loaded: " <> dbName
+    | not (null dependents) =
+        Just $
+            "Cannot unload "
+                <> dbName
+                <> ": still required by "
+                <> T.intercalate ", " dependents
+                <> ". Unload dependents first."
+    | otherwise = Nothing
+  where
+    dependents :: [Text]
+    dependents =
+        [ name
+        | (name, ld) <- M.toList loadedDbs
+        , name /= dbName
+        , dbName `elem` dbDependsOn (ldDatabase ld)
+        ]
 
 -- | Add a new database config to the manager (without loading)
 addDatabase :: DatabaseManager -> DatabaseConfig -> IO ()
@@ -3037,55 +3037,42 @@ discoverCandidatePaths dbConfig = do
 Validates path, updates config + meta.toml, clears staged DB to force re-stage.
 -}
 setDataPath :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-setDataPath manager dbName newRelPath = do
-    availableDbs <- readTVarIO (dmAvailableDbs manager)
-    case M.lookup dbName availableDbs of
-        Nothing -> return $ Left $ "Database not found: " <> dbName
-        Just dbConfig
-            | not (dcIsUploaded dbConfig) ->
-                return $ Left "Cannot change data path for configured databases"
-            | otherwise -> do
-                -- Resolve full path
-                uploadsDir <- UploadedDB.getDatabaseUploadsDir
-                let uploadRoot = uploadsDir </> T.unpack dbName
-                    newFullPath = uploadRoot </> T.unpack newRelPath
+setDataPath manager dbName newRelPath = runExceptT $ do
+    availableDbs <- liftIO $ readTVarIO (dmAvailableDbs manager)
+    dbConfig <-
+        except $
+            maybe (Left $ "Database not found: " <> dbName) Right (M.lookup dbName availableDbs)
+    unless (dcIsUploaded dbConfig) $ throwE "Cannot change data path for configured databases"
 
-                -- Validate that path exists and has data
-                hasData <- Upload.anyDataFilesIn newFullPath
-                if not hasData
-                    then return $ Left $ "No data files found in: " <> newRelPath
-                    else do
-                        -- Detect format for the new path
-                        newFormat <- Upload.detectDatabaseFormat newFullPath
+    uploadsDir <- liftIO UploadedDB.getDatabaseUploadsDir
+    let uploadRoot = uploadsDir </> T.unpack dbName
+        newFullPath = uploadRoot </> T.unpack newRelPath
 
-                        -- Update config
-                        let updatedConfig =
-                                dbConfig
-                                    { dcPath = newFullPath
-                                    , dcFormat = Just newFormat
-                                    }
-                        atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert dbName updatedConfig)
+    hasData <- liftIO $ Upload.anyDataFilesIn newFullPath
+    unless hasData $ throwE $ "No data files found in: " <> newRelPath
 
-                        -- Update meta.toml
-                        mMeta <- UploadedDB.readUploadMeta uploadRoot
-                        case mMeta of
-                            Just meta ->
-                                UploadedDB.writeUploadMeta
-                                    uploadRoot
-                                    meta
-                                        { UploadedDB.umDataPath = T.unpack newRelPath
-                                        , UploadedDB.umFormat = newFormat
-                                        }
-                            Nothing -> return ()
+    newFormat <- liftIO $ Upload.detectDatabaseFormat newFullPath
+    liftIO $ do
+        atomically $
+            modifyTVar'
+                (dmAvailableDbs manager)
+                (M.insert dbName dbConfig{dcPath = newFullPath, dcFormat = Just newFormat})
 
-                        -- Clear staged DB to force re-staging with new path
-                        atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+        -- meta.toml carries the same two fields, when the upload has one
+        mMeta <- UploadedDB.readUploadMeta uploadRoot
+        forM_ mMeta $ \meta ->
+            UploadedDB.writeUploadMeta
+                uploadRoot
+                meta
+                    { UploadedDB.umDataPath = T.unpack newRelPath
+                    , UploadedDB.umFormat = newFormat
+                    }
 
-                        -- Re-stage and return fresh setup info
-                        result <- getDatabaseSetupInfo manager dbName
-                        case result of
-                            Left err -> return $ Left $ setupErrorMessage err
-                            Right info -> return $ Right info
+        -- Clear staged DB to force re-staging with new path
+        atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+
+    -- Re-stage and return fresh setup info
+    withExceptT setupErrorMessage $ ExceptT (getDatabaseSetupInfo manager dbName)
 
 {- | Build the combined list of dependency choices.
 Excludes the current database, tags each remaining DB as selected,
