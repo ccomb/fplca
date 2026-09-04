@@ -1069,196 +1069,271 @@ dependentsClosure loaded = go S.empty . pure
         , name `elem` dbDependsOn (ldDatabase ld)
         ]
 
+{- | Everything a manager is built out of, gathered by the discovery and
+loading steps of 'initDatabaseManager' before any TVar exists.
+-}
+data ManagerSeed = ManagerSeed
+    { msDatabases :: ![DatabaseConfig]
+    , msMethods :: ![MethodConfig]
+    , msRefData :: !RefDataSources
+    , msNoCache :: !Bool
+    , msGeographies :: !(Map Text (Text, [Text]))
+    , msChemSynonyms :: !ChemSynonyms
+    , msSubstanceEdges :: ![SubstanceEdge]
+    , msCasBindings :: !(Map NormName CASNumber)
+    }
+
+-- | The four kinds of reference data, each configured plus whatever was uploaded.
+data RefDataSources = RefDataSources
+    { rdsFlowSynonyms :: ![RefDataConfig]
+    , rdsCompartmentMaps :: ![RefDataConfig]
+    , rdsUnitDefs :: ![RefDataConfig]
+    , rdsEnergyDensities :: ![RefDataConfig]
+    }
+
 {- | Initialize database manager from config
 Pre-loads databases with load=true at startup
 Also discovers uploaded databases from uploads/ directory
 -}
 initDatabaseManager :: Config -> Bool -> IO DatabaseManager
 initDatabaseManager config noCache = do
-    -- Get configured databases and detect their format
-    configuredDbs <- forM (cfgDatabases config) $ \dbConfig -> do
+    databases <- discoverDatabases config
+    methods <- discoverMethods config
+    refData <- discoverRefDataSources config
+    geographies <- loadGeographies (cfgGeographies config)
+    chemSyns <- loadChemSynonymsOrEmpty (cfgChemSynonyms config)
+    substanceEdges <- loadSubstanceEdges (cfgSubstanceEdges config)
+    casBindings <- bindSubstanceCas substanceEdges
+    manager <-
+        newManager
+            ManagerSeed
+                { msDatabases = databases
+                , msMethods = methods
+                , msRefData = refData
+                , msNoCache = noCache
+                , msGeographies = geographies
+                , msChemSynonyms = chemSyns
+                , msSubstanceEdges = substanceEdges
+                , msCasBindings = casBindings
+                }
+
+    autoLoadRefDataSources manager refData
+
+    totalStart <- getCurrentTime
+    loadAllDatabases manager databases
+    loadConfiguredMethods manager config
+    totalEnd <- getCurrentTime
+    reportProgressWithTiming
+        Info
+        "Total startup loading time"
+        (realToFrac (diffUTCTime totalEnd totalStart) :: Double)
+
+    return manager
+
+-- | Configured databases with their format detected, plus the uploaded ones.
+discoverDatabases :: Config -> IO [DatabaseConfig]
+discoverDatabases config = do
+    configured <- forM (cfgDatabases config) $ \dbConfig -> do
         resolvedPath <- resolveDataPath (dcPath dbConfig)
         format <- Upload.detectDatabaseFormat resolvedPath
         return dbConfig{dcPath = resolvedPath, dcFormat = Just format}
+    -- Uploaded databases are self-describing, through their meta.toml
+    uploaded <- discoverUploadedDatabases
+    return (configured ++ uploaded)
 
-    -- Discover uploaded databases from uploads/ directory (self-describing with meta.toml)
-    uploadedDbs <- discoverUploadedDatabases
+-- | Configured method collections plus the uploaded ones.
+discoverMethods :: Config -> IO [MethodConfig]
+discoverMethods config = (cfgMethods config ++) <$> discoverUploadedMethodConfigs
 
-    -- Merge configured + uploaded
-    let allDbs = configuredDbs ++ uploadedDbs
+-- | Configured reference data plus whatever sits under @uploads/<kind>/@.
+discoverRefDataSources :: Config -> IO RefDataSources
+discoverRefDataSources config =
+    RefDataSources
+        <$> withUploads (cfgFlowSynonyms config) "uploads/flow-synonyms"
+        <*> withUploads (cfgCompartmentMappings config) "uploads/compartment-mappings"
+        <*> withUploads (cfgUnits config) "uploads/units"
+        <*> withUploads (cfgEnergyDensities config) "uploads/energy-densities"
+  where
+    withUploads :: [RefDataConfig] -> FilePath -> IO [RefDataConfig]
+    withUploads configured dir = (configured ++) <$> discoverUploadedRefData dir
 
-    -- Create TVars
+{- | The location hierarchy this run scores against. Falling back to the
+built-in hierarchy when a named file cannot be read would change every
+regionalized score without anyone asking, so a failure leaves no hierarchy.
+-}
+loadGeographies :: Maybe FilePath -> IO (Map Text (Text, [Text]))
+loadGeographies Nothing =
+    -- No file named: the hierarchy the binary carries. It cannot fail to parse
+    -- unless the build did (BuiltinSpec compares it with its file), so a
+    -- failure here is reported as the defect it is.
+    case parseGeographies "the built-in geographies" (BL.toStrict builtinGeographies) of
+        Right geos -> do
+            reportProgress Info $ "Loaded " <> show (M.size geos) <> " built-in geographies"
+            pure geos
+        Left err -> do
+            reportError $
+                "Could not read "
+                    <> T.unpack err
+                    <> ": this binary was built wrong, running with no hierarchy"
+            pure M.empty
+loadGeographies (Just path) =
+    parseGeographiesCSV path >>= \case
+        Right geos -> do
+            reportProgress Info $ "Loaded " <> show (M.size geos) <> " geographies from " <> path
+            pure geos
+        Left err -> do
+            reportProgress Warning $
+                "Could not load geographies from " <> T.unpack err <> " (running with no hierarchy)"
+            pure M.empty
+
+loadChemSynonymsOrEmpty :: Maybe FilePath -> IO ChemSynonyms
+loadChemSynonymsOrEmpty Nothing = pure emptyChemSynonyms
+loadChemSynonymsOrEmpty (Just path) =
+    loadChemSynonyms path >>= \case
+        Right cs -> pure cs
+        Left err -> do
+            putStrLn $ "warning: could not load chem synonyms from " <> path <> ": " <> err
+            pure emptyChemSynonyms
+
+loadSubstanceEdges :: Maybe FilePath -> IO [SubstanceEdge]
+loadSubstanceEdges Nothing = pure []
+loadSubstanceEdges (Just path) = do
+    isFile <- doesFileExist path
+    if not isFile
+        then do
+            putStrLn $ "warning: substance edges file not found: " <> path
+            pure []
+        else do
+            raw <- BL.readFile path
+            case parseSubstanceEdges (KeyNormalizers (NormName . normalizeName) (CASNumber . normalizeCAS)) raw of
+                Right es -> pure es
+                Left err -> do
+                    putStrLn $ "warning: could not load substance edges from " <> path <> ": " <> T.unpack err
+                    pure []
+
+-- | The name-to-CAS bindings the edges imply, announcing every name bound twice.
+bindSubstanceCas :: [SubstanceEdge] -> IO (Map NormName CASNumber)
+bindSubstanceCas edges = do
+    forM_ conflicts $ \(NormName n, (CASNumber kept, CASNumber ignored)) ->
+        putStrLn $
+            "warning: substance_edges.csv binds flow name '"
+                <> T.unpack n
+                <> "' to two CAS ("
+                <> T.unpack kept
+                <> " kept, "
+                <> T.unpack ignored
+                <> " ignored)"
+    pure bindings
+  where
+    bindings :: Map NormName CASNumber
+    conflicts :: [(NormName, (CASNumber, CASNumber))]
+    (bindings, conflicts) = casBindingsFromEdges edges
+
+-- | Every TVar a manager owns, empty, around the values it was seeded with.
+newManager :: ManagerSeed -> IO DatabaseManager
+newManager ManagerSeed{..} = do
     loadedDbsVar <- newTVarIO M.empty
     stagedDbsVar <- newTVarIO M.empty
     stagingDbsVar <- newTVarIO S.empty
     indexedDbsVar <- newTVarIO M.empty
-    availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- allDbs]
-
-    -- Discover uploaded methods
-    uploadedMethodConfigs <- discoverUploadedMethodConfigs
-    let allMethods = cfgMethods config ++ uploadedMethodConfigs
-    availableMethodsVar <- newTVarIO $ M.fromList [(mcName mc, mc) | mc <- allMethods]
+    availableDbsVar <- newTVarIO $ M.fromList [(dcName dc, dc) | dc <- msDatabases]
+    availableMethodsVar <- newTVarIO $ M.fromList [(mcName mc, mc) | mc <- msMethods]
     loadedMethodsVar <- newTVarIO M.empty
-
-    -- Reference data TVars (flow synonyms, compartment mappings, units)
-    -- Discover uploaded reference data from uploads/<type>/ directories
-    uploadedFlowSyns <- discoverUploadedRefData "uploads/flow-synonyms"
-    uploadedCompMaps <- discoverUploadedRefData "uploads/compartment-mappings"
-    uploadedUnitDefs <- discoverUploadedRefData "uploads/units"
-    uploadedEnergyDensities <- discoverUploadedRefData "uploads/energy-densities"
-    let allFlowSyns = cfgFlowSynonyms config ++ uploadedFlowSyns
-        allCompMaps = cfgCompartmentMappings config ++ uploadedCompMaps
-        allUnitDefs = cfgUnits config ++ uploadedUnitDefs
-        allEnergyDensities = cfgEnergyDensities config ++ uploadedEnergyDensities
-    availableFlowSynsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allFlowSyns]
+    availableFlowSynsVar <- byName (rdsFlowSynonyms msRefData)
     loadedFlowSynsVar <- newTVarIO M.empty
-    availableCompMapsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allCompMaps]
+    availableCompMapsVar <- byName (rdsCompartmentMaps msRefData)
     loadedCompMapsVar <- newTVarIO M.empty
-    availableUnitDefsVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allUnitDefs]
+    availableUnitDefsVar <- byName (rdsUnitDefs msRefData)
     loadedUnitDefsVar <- newTVarIO M.empty
-    availableEnergyDensitiesVar <- newTVarIO $ M.fromList [(rdName rd, rd) | rd <- allEnergyDensities]
+    availableEnergyDensitiesVar <- byName (rdsEnergyDensities msRefData)
     loadedEnergyDensitiesVar <- newTVarIO M.empty
-
-    geographies <- case cfgGeographies config of
-        -- No file named: the hierarchy the binary carries. It cannot fail
-        -- to parse unless the build did (BuiltinSpec compares it with its
-        -- file), so a failure here is reported as the defect it is.
-        Nothing -> case parseGeographies "the built-in geographies" (BL.toStrict builtinGeographies) of
-            Right geos -> do
-                reportProgress Info $ "Loaded " <> show (M.size geos) <> " built-in geographies"
-                pure geos
-            Left err -> do
-                reportError $ "Could not read " <> T.unpack err <> ": this binary was built wrong, running with no hierarchy"
-                pure M.empty
-        Just path -> do
-            result <- parseGeographiesCSV path
-            case result of
-                Right geos -> do
-                    reportProgress Info $ "Loaded " <> show (M.size geos) <> " geographies from " <> path
-                    pure geos
-                -- Falling back to the built-in hierarchy silently would change
-                -- every regionalized score without anyone asking for it.
-                Left err -> do
-                    reportProgress Warning $ "Could not load geographies from " <> T.unpack err <> " (running with no hierarchy)"
-                    pure M.empty
-
     methodMappingCacheVar <- newTVarIO M.empty
     methodTablesCacheVar <- newTVarIO M.empty
     methodTablesInflightVar <- newTVarIO M.empty
     methodSetTablesCacheVar <- newTVarIO M.empty
     methodIndexCacheVar <- newTVarIO M.empty
-    chemSyns <- case cfgChemSynonyms config of
-        Nothing -> pure emptyChemSynonyms
-        Just path -> do
-            result <- loadChemSynonyms path
-            case result of
-                Right cs -> pure cs
-                Left err -> do
-                    putStrLn $ "warning: could not load chem synonyms from " <> path <> ": " <> err
-                    pure emptyChemSynonyms
-    substanceEdges <- case cfgSubstanceEdges config of
-        Nothing -> pure []
-        Just path -> do
-            isFile <- doesFileExist path
-            if not isFile
-                then do
-                    putStrLn $ "warning: substance edges file not found: " <> path
-                    pure []
-                else do
-                    raw <- BL.readFile path
-                    case parseSubstanceEdges (KeyNormalizers (NormName . normalizeName) (CASNumber . normalizeCAS)) raw of
-                        Right es -> pure es
-                        Left err -> do
-                            putStrLn $ "warning: could not load substance edges from " <> path <> ": " <> T.unpack err
-                            pure []
-    let (substanceCasBindings, casBindingConflicts) = casBindingsFromEdges substanceEdges
-    forM_ casBindingConflicts $ \(NormName n, (CASNumber c1, CASNumber c2)) ->
-        putStrLn $
-            "warning: substance_edges.csv binds flow name '"
-                <> T.unpack n
-                <> "' to two CAS ("
-                <> T.unpack c1
-                <> " kept, "
-                <> T.unpack c2
-                <> " ignored)"
     mergedFlowMetadataCacheVar <- newTVarIO Nothing
     mergedUnitConfigCacheVar <- newTVarIO Nothing
     flowClosureCacheVar <- newTVarIO M.empty
+    return
+        DatabaseManager
+            { dmLoadedDbs = loadedDbsVar
+            , dmStagedDbs = stagedDbsVar
+            , dmStagingDbs = stagingDbsVar
+            , dmIndexedDbs = indexedDbsVar
+            , dmAvailableDbs = availableDbsVar
+            , dmAvailableMethods = availableMethodsVar
+            , dmLoadedMethods = loadedMethodsVar
+            , dmAvailableFlowSyns = availableFlowSynsVar
+            , dmLoadedFlowSyns = loadedFlowSynsVar
+            , dmAvailableCompMaps = availableCompMapsVar
+            , dmLoadedCompMaps = loadedCompMapsVar
+            , dmAvailableUnitDefs = availableUnitDefsVar
+            , dmLoadedUnitDefs = loadedUnitDefsVar
+            , dmAvailableEnergyDensities = availableEnergyDensitiesVar
+            , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
+            , dmNoCache = msNoCache
+            , dmGeographies = msGeographies
+            , dmLocationHierarchy = hierarchyFromGeographies msGeographies
+            , dmMethodMappingCache = methodMappingCacheVar
+            , dmMethodTablesCache = methodTablesCacheVar
+            , dmMethodTablesInflight = methodTablesInflightVar
+            , dmMethodSetTablesCache = methodSetTablesCacheVar
+            , dmMethodIndexCache = methodIndexCacheVar
+            , dmChemSynonyms = msChemSynonyms
+            , dmSubstanceEdges = msSubstanceEdges
+            , dmCasBindings = msCasBindings
+            , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
+            , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
+            , dmFlowClosureCache = flowClosureCacheVar
+            }
+  where
+    byName :: [RefDataConfig] -> IO (TVar (Map Text RefDataConfig))
+    byName rds = newTVarIO (M.fromList [(rdName rd, rd) | rd <- rds])
 
-    let manager =
-            DatabaseManager
-                { dmLoadedDbs = loadedDbsVar
-                , dmStagedDbs = stagedDbsVar
-                , dmStagingDbs = stagingDbsVar
-                , dmIndexedDbs = indexedDbsVar
-                , dmAvailableDbs = availableDbsVar
-                , dmAvailableMethods = availableMethodsVar
-                , dmLoadedMethods = loadedMethodsVar
-                , dmAvailableFlowSyns = availableFlowSynsVar
-                , dmLoadedFlowSyns = loadedFlowSynsVar
-                , dmAvailableCompMaps = availableCompMapsVar
-                , dmLoadedCompMaps = loadedCompMapsVar
-                , dmAvailableUnitDefs = availableUnitDefsVar
-                , dmLoadedUnitDefs = loadedUnitDefsVar
-                , dmAvailableEnergyDensities = availableEnergyDensitiesVar
-                , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
-                , dmNoCache = noCache
-                , dmGeographies = geographies
-                , dmLocationHierarchy = hierarchyFromGeographies geographies
-                , dmMethodMappingCache = methodMappingCacheVar
-                , dmMethodTablesCache = methodTablesCacheVar
-                , dmMethodTablesInflight = methodTablesInflightVar
-                , dmMethodSetTablesCache = methodSetTablesCacheVar
-                , dmMethodIndexCache = methodIndexCacheVar
-                , dmChemSynonyms = chemSyns
-                , dmSubstanceEdges = substanceEdges
-                , dmCasBindings = substanceCasBindings
-                , dmMergedFlowMetadataCache = mergedFlowMetadataCacheVar
-                , dmMergedUnitConfigCache = mergedUnitConfigCacheVar
-                , dmFlowClosureCache = flowClosureCacheVar
-                }
-
-    -- Auto-load active reference data (flow synonyms, compartment mappings, units)
-    -- Flow synonyms use binary cache for fast loading (161K pairs → <1s vs 15s)
+{- | Load the active reference data into the manager. Flow synonyms go through
+their own binary cache, which is what keeps 161K pairs under a second instead
+of fifteen.
+-}
+autoLoadRefDataSources :: DatabaseManager -> RefDataSources -> IO ()
+autoLoadRefDataSources manager RefDataSources{..} = do
     reportProgress Info $
         "Loading reference data: "
-            ++ show (length allUnitDefs)
+            ++ show (length rdsUnitDefs)
             ++ " unit config(s), paths: "
-            ++ unwords (map (describeSource . rdSource) allUnitDefs)
-    autoLoadFlowSynonyms loadedFlowSynsVar allFlowSyns
-    autoLoadRefData compMapOps loadedCompMapsVar allCompMaps
-    autoLoadRefData unitDefOps loadedUnitDefsVar allUnitDefs
-    autoLoadRefData energyDensityOps loadedEnergyDensitiesVar allEnergyDensities
+            ++ unwords (map (describeSource . rdSource) rdsUnitDefs)
+    autoLoadFlowSynonyms (dmLoadedFlowSyns manager) rdsFlowSynonyms
+    autoLoadRefData compMapOps (dmLoadedCompMaps manager) rdsCompartmentMaps
+    autoLoadRefData unitDefOps (dmLoadedUnitDefs manager) rdsUnitDefs
+    autoLoadRefData energyDensityOps (dmLoadedEnergyDensities manager) rdsEnergyDensities
 
-    totalStart <- getCurrentTime
-
-    -- Load databases with level-based parallelism
-    let allDbConfigs = allDbs
-        configMap = M.fromList [(dcName c, c) | c <- allDbConfigs]
+-- | Load every configured database, one dependency level at a time, in parallel.
+loadAllDatabases :: DatabaseManager -> [DatabaseConfig] -> IO ()
+loadAllDatabases manager allDbConfigs =
     case resolveLoadOrder allDbConfigs of
         Left err -> reportError $ "Dependency resolution failed: " <> T.unpack err
         Right loadOrder -> do
             synonymDB <- getMergedSynonymDB manager
             warnReopenedBridges synonymDB
             unitConfig <- getMergedUnitConfig manager
-            let dbsToLoad = [configMap M.! name | name <- loadOrder, M.member name configMap]
-                levels = computeDepLevels configMap loadOrder
+            let levels = computeDepLevels configMap loadOrder
+                dbsToLoad = configsNamed loadOrder
             reportProgress Info $
                 "Loading "
                     ++ show (length dbsToLoad)
                     ++ " database(s) in "
                     ++ show (length levels)
                     ++ " dependency levels: "
-                    ++ T.unpack (T.intercalate " → " [T.intercalate "," names | names <- levels])
+                    ++ T.unpack (T.intercalate " \8594 " [T.intercalate "," names | names <- levels])
             forM_ (zip [1 :: Int ..] levels) $ \(levelNum, levelNames) -> do
-                let levelConfigs = [configMap M.! name | name <- levelNames, M.member name configMap]
+                let levelConfigs = configsNamed levelNames
                 reportProgress Info $
                     "  Level "
                         ++ show levelNum
                         ++ ": loading "
                         ++ show (length levelConfigs)
                         ++ " database(s) in parallel"
-                currentIndexedDbs <- readTVarIO indexedDbsVar
+                currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
                 let level =
                         LoadLevel
                             { llSynonyms = synonymDB
@@ -1266,17 +1341,26 @@ initDatabaseManager config noCache = do
                             , llOtherIndexes = M.elems currentIndexedDbs
                             }
                 mapConcurrently_ (loadOneDatabase manager level) levelConfigs
-            loadedCount <- atomically $ M.size <$> readTVar loadedDbsVar
+            loadedCount <- M.size <$> readTVarIO (dmLoadedDbs manager)
             reportProgress Info $ "Multi-database mode: " ++ show loadedCount ++ " database(s) loaded"
+  where
+    configMap :: Map Text DatabaseConfig
+    configMap = M.fromList [(dcName c, c) | c <- allDbConfigs]
 
-    -- Load method collections
-    let activeMethods = filter mcActive (cfgMethods config)
-    forM_ activeMethods $ \mc -> do
-        result <- loadMethodCollectionFromConfig mc
-        case result of
+    configsNamed :: [Text] -> [DatabaseConfig]
+    configsNamed names = [c | name <- names, Just c <- [M.lookup name configMap]]
+
+-- | Load the method collections the config marks active.
+loadConfiguredMethods :: DatabaseManager -> Config -> IO ()
+loadConfiguredMethods manager config =
+    forM_ (filter mcActive (cfgMethods config)) $ \mc ->
+        loadMethodCollectionFromConfig mc >>= \case
+            Left err ->
+                reportError $
+                    "  [FAIL] Failed to load method " <> T.unpack (mcName mc) <> ": " <> T.unpack err
             Right (collection0, flowInfo) -> do
                 let (collection, patchStats) = applyMethodConfig mc collection0
-                atomically $ modifyTVar' loadedMethodsVar (M.insert (mcName mc) collection)
+                atomically $ modifyTVar' (dmLoadedMethods manager) (M.insert (mcName mc) collection)
                 reportProgress Info $
                     "  [OK] Loaded method: "
                         <> T.unpack (mcName mc)
@@ -1284,33 +1368,30 @@ initDatabaseManager config noCache = do
                         <> show (length (mcMethods collection))
                         <> " impact categories)"
                 warnZeroTouchPatches (mcName mc) patchStats
-                -- Surface a 'global-methods' entry that matches no loaded method:
-                -- the de-regionalization is keyed by method name, so a typo or a
-                -- renamed method would otherwise be ignored in silence and the
-                -- method would stay regionalized, diverging from the reference.
-                let knownMethodNames = S.fromList (map methodName (mcMethods collection))
-                    unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
-                unless (null unknownGlobals) $
-                    reportProgress Warning $
-                        "  [global-methods] collection "
-                            <> T.unpack (mcName mc)
-                            <> ": no method named "
-                            <> T.unpack (T.intercalate ", " unknownGlobals)
-                            <> " — these stay regionalized; check for a typo."
+                warnUnknownGlobalMethods mc collection
                 let !pairs = extractFromILCDFlows flowInfo
-                autoCreateFlowSynonyms
-                    manager
-                    (mcName mc)
-                    ("Auto-extracted from " <> mcName mc)
-                    pairs
-            Left err ->
-                reportError $ "  [FAIL] Failed to load method " <> T.unpack (mcName mc) <> ": " <> T.unpack err
+                autoCreateFlowSynonyms manager (mcName mc) ("Auto-extracted from " <> mcName mc) pairs
 
-    totalEnd <- getCurrentTime
-    let totalDuration = realToFrac (diffUTCTime totalEnd totalStart) :: Double
-    reportProgressWithTiming Info "Total startup loading time" totalDuration
+{- | Surface a 'global-methods' entry that matches no loaded method: the
+de-regionalization is keyed by method name, so a typo or a renamed method
+would otherwise be ignored in silence and the method would stay regionalized,
+diverging from the reference.
+-}
+warnUnknownGlobalMethods :: MethodConfig -> MethodCollection -> IO ()
+warnUnknownGlobalMethods mc collection =
+    unless (null unknownGlobals) $
+        reportProgress Warning $
+            "  [global-methods] collection "
+                <> T.unpack (mcName mc)
+                <> ": no method named "
+                <> T.unpack (T.intercalate ", " unknownGlobals)
+                <> " \8212 these stay regionalized; check for a typo."
+  where
+    unknownGlobals :: [Text]
+    unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
 
-    return manager
+    knownMethodNames :: S.Set Text
+    knownMethodNames = S.fromList (map methodName (mcMethods collection))
 
 {- | What every database in one dependency level is loaded against. The indexes
 are a snapshot taken when the level started, and deliberately so: reading
