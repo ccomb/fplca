@@ -30,6 +30,16 @@
   unit to restate it in.
 
 ### Added
+- A flow search result now reports how many activities make the flow
+  (`producerCount`), which is the number of ways the database offers to
+  produce it: one on most of a French agricultural database, up to a few
+  thousand on a large industrial one. It is absent on a flow no activity can
+  produce, rather than zero, which would be the different statement that
+  nothing makes it.
+- The activities of a flow can be asked for one side of it: `?role=producer`
+  lists the activities that make it, `?role=consumer` those that use it. The
+  route answered both at once before, which is two questions in one list.
+  Asking with no `role` still answers both. Wire revision 16.
 - The products of a multi-output block now each report what their share
   would be if the allocation key were their mass (`massAllocationPercent`), beside
   the share the source declared. Nothing is split and nothing is scored

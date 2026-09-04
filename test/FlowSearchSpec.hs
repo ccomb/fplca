@@ -211,7 +211,7 @@ compartmentOf r = (fsrCategory r, fsrCompartment r)
 
 -- | No unit database: every flow reports the same unit, so unit never breaks a tie.
 search :: FlowFilter -> [FlowKind] -> [FlowSearchResult]
-search = flowSearchResults M.empty
+search = flowSearchResults M.empty (const Nothing)
 
 sortByName :: FlowFilter
 sortByName =

@@ -585,6 +585,12 @@ class Flow(FromJson):
     that is where "taken from nature" and "released to nature" are told apart.
     ``synonyms`` maps language code → list of synonym strings (empty when the
     database carries no synonym index).
+
+    ``producer_count`` is how many activities make this flow, which is the
+    number of ways a database offers to produce it. It is ``None`` on a flow
+    no activity can produce (biosphere, waste) and against an engine older
+    than wire revision 16; a zero would be the different statement that
+    nothing makes it.
     """
 
     id: str
@@ -594,6 +600,7 @@ class Flow(FromJson):
     kind: str | None = None
     compartment: str | None = None
     synonyms: dict[str, list[str]] = field(default_factory=dict)
+    producer_count: int | None = None
 
 
 @dataclass

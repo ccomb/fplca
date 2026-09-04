@@ -258,7 +258,7 @@ POST   /api/v1/db/{dbName}/impacts/{collection}                          Batch-i
 GET    /api/v1/db/{dbName}/activities?name=&geo=&product=&preset=&classification=&sort=  Search activities
 GET    /api/v1/db/{dbName}/flows?q=&lang=&kind=                          Search flows
 GET    /api/v1/db/{dbName}/flow/{flowId}                                 Flow details
-GET    /api/v1/db/{dbName}/flow/{flowId}/activities                      Activities using a flow
+GET    /api/v1/db/{dbName}/flow/{flowId}/activities?role=                Activities on one side of a flow (producer, consumer, any)
 GET    /api/v1/db/{dbName}/classifications                               Classification systems available in this DB
 GET    /api/v1/db/{dbName}/method/{methodId}/mapping                     Mapping coverage stats
 GET    /api/v1/db/{dbName}/method/{methodId}/flow-mapping                Per-flow mapping detail

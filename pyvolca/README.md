@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.11.0** speaks wire formats **2 to 15** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.11.0** speaks wire formats **2 to 16** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -692,9 +692,22 @@ method unless you pin it.
 
 Detail of one flow: its record, unit, and how many exchanges use it.
 
-##### `Client.get_flow_activities(flow_id: str, db_name: str | None = None) -> list[Activity]`
+##### `Client.get_flow_activities(flow_id: str, db_name: str | None = None, *, role: str | None = None) -> list[Activity]`
 
-Activities that produce or consume a given flow.
+Activities on one side of a flow, or both.
+
+Args:
+    flow_id: The flow to ask about.
+    db_name: Database to ask; the current one by default.
+    role: ``"producer"`` for the activities that make the flow,
+        ``"consumer"`` for those that use it, ``"any"`` or omitted for
+        both. Needs engine wire revision 16; an older engine would
+        ignore the parameter and answer with both sides, so the
+        request is refused rather than sent.
+
+Note that both sides together are narrower than asking for both: an
+avoided product is an exchange on the flow that neither makes it for
+sale nor consumes it, and only the unfiltered call lists it.
 
 ##### `Client.get_flow_mapping(method_id: str) -> FlowMapping`
 
@@ -1848,6 +1861,12 @@ that is where "taken from nature" and "released to nature" are told apart.
 ``synonyms`` maps language code → list of synonym strings (empty when the
 database carries no synonym index).
 
+``producer_count`` is how many activities make this flow, which is the
+number of ways a database offers to produce it. It is ``None`` on a flow
+no activity can produce (biosphere, waste) and against an engine older
+than wire revision 16; a zero would be the different statement that
+nothing makes it.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `id` | `str` | _required_ |
@@ -1857,6 +1876,7 @@ database carries no synonym index).
 | `kind` | `str \| None` | None |
 | `compartment` | `str \| None` | None |
 | `synonyms` | `dict[str, list[str]]` | dict() |
+| `producer_count` | `int \| None` | None |
 
 ### `FlowContribution`
 

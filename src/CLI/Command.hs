@@ -3,7 +3,7 @@
 
 module CLI.Command where
 
-import API.Types (ActivityInput, ActivityWriteRequest (..), toAuthoredActivities, toExchangeEdits)
+import API.Types (ActivityInput, ActivityWriteRequest (..), ProducerFilter (..), toAuthoredActivities, toExchangeEdits)
 import CLI.Client (readJsonFile)
 import CLI.Types (CLIConfig (..), Command (..), DatabaseAction (..), DbActivityArgs (..), DbDeleteArgs (..), DbExportArgs (..), DbRelinkArgs (..), DbWriteArgs (..), DebugMatricesOptions (..), FlowSubCommand (..), GlobalOptions (..), LCIAOptions (..), MappingOptions (..), McExportArgs (..), MethodAction (..), OutputFormat (..), SearchActivitiesOptions (..), SearchFlowsOptions (..), UploadArgs (..))
 import Config (DatabaseConfig (..), MethodConfig (..))
@@ -253,7 +253,7 @@ executeFlowCommand fmt database flowId =
 -- | Execute flow activities command
 executeFlowActivitiesCommand :: OutputFormat -> Database -> T.Text -> IO ()
 executeFlowActivitiesCommand fmt database flowId =
-    case Service.getFlowActivities database flowId of
+    case Service.getFlowActivities database EitherSide flowId of
         Left err -> reportServiceError err
         Right result -> outputResult fmt result
 

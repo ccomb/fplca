@@ -17,7 +17,7 @@ import Data.Text (Text)
 import qualified Data.UUID as UUID
 import Test.Hspec
 
-import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), NodeType (..), TreeEdge (..), TreeExport (..))
+import API.Types (ActivityForAPI (..), ActivitySummary (..), ExchangeDetail (..), ExchangeWithUnit (..), ExportNode (..), NodeType (..), ProducerFilter (..), TreeEdge (..), TreeExport (..))
 import Database (buildDatabaseWithMatrices)
 import qualified Service
 import Tree (buildLoopAwareTree)
@@ -79,11 +79,46 @@ spec = do
             db <- danglingLinkFixture
             map enChildrenCount (rootNodes db) `shouldBe` [1]
 
-    describe "the activities that use a flow" $
+    describe "the activities that use a flow" $ do
         it "lists the row that produces it and the row that consumes it" $ do
             db <- twoCoproductFixture
-            map prsProcessId (Service.getActivitiesUsingFlow db milkId)
+            map prsProcessId (Service.getActivitiesUsingFlow db EitherSide milkId)
                 `shouldBe` [pidText milkId, consumerPid]
+
+        it "asked for producers, leaves the consumer out" $ do
+            db <- twoCoproductFixture
+            map prsProcessId (Service.getActivitiesUsingFlow db ProducersOnly milkId)
+                `shouldBe` [pidText milkId]
+
+        it "asked for consumers, leaves the producer out" $ do
+            db <- twoCoproductFixture
+            map prsProcessId (Service.getActivitiesUsingFlow db ConsumersOnly milkId)
+                `shouldBe` [consumerPid]
+
+        it "counts the producers, not everyone who touches the flow" $ do
+            db <- twoCoproductFixture
+            fmap (Service.producerCount db . TechKind) (M.lookup milkId (dbTechFlows db))
+                `shouldBe` Just (Just 1)
+
+        it "counts a treatment activity among the producers of what it treats" $ do
+            -- A treatment activity's reference is an input, so a producer test
+            -- written on "is this an output" answers no to every one of them
+            -- and reports that nothing makes the flow.
+            db <- treatmentFixture
+            fmap (Service.producerCount db . TechKind) (M.lookup milkId (dbTechFlows db))
+                `shouldBe` Just (Just 1)
+
+        it "lists that treatment activity when asked for producers" $ do
+            db <- treatmentFixture
+            map prsProcessId (Service.getActivitiesUsingFlow db ProducersOnly milkId)
+                `shouldBe` [pidText milkId]
+
+        it "counts no producer for a biosphere flow, rather than none at all" $ do
+            -- A zero would say "nothing makes it"; Nothing says the question
+            -- does not apply to this side of the inventory.
+            db <- twoCoproductFixture
+            map (Service.producerCount db . BioKind) (M.elems (dbBioFlows db))
+                `shouldSatisfy` all (== Nothing)
 
 -- ---------------------------------------------------------------------------
 -- Reading one exchange back
@@ -151,6 +186,23 @@ the one with the lower product UUID.
 -}
 twoCoproductFixture :: IO Database
 twoCoproductFixture = buildFixture (consumerActivity [milkInput] []) supplierRows supplierFlows
+
+{- | A row whose reference exchange is an /input/: the shape of an activity
+that treats what it is given rather than selling what it makes. It still
+produces its reference flow as far as the matrix is concerned.
+-}
+treatmentFixture :: IO Database
+treatmentFixture =
+    buildFixture
+        (consumerActivity [milkInput] [])
+        (M.singleton (supplierActId, milkId) treatmentProcess)
+        (M.singleton milkId (techFlow milkId "milk"))
+
+treatmentProcess :: Activity
+treatmentProcess =
+    bareActivity
+        "milk treatment"
+        [(techExchange milkId 1.0 ReferenceProduct supplierActId){techRole = ReferenceInput}]
 
 {- | The same consumer, its input naming an activity no row in the database
 carries.
