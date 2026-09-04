@@ -2401,14 +2401,10 @@ relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ do
                                 aliases
                                 (sdSimpleDB staged)
                         newLinks = Loader.cdlLinks newStats
-                        updatedStaged =
-                            staged
-                                { sdSelectedDeps = pinnedDeps
-                                , sdCrossDBLinks = newLinks
-                                , sdLinkingStats = newStats
-                                , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
-                                }
-                    atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
+                    atomically $
+                        modifyTVar'
+                            (dmStagedDbs manager)
+                            (M.insert dbName (withRelinkedDeps pinnedDeps newStats staged))
                     return $
                         Right
                             RelinkResult
@@ -3133,6 +3129,19 @@ setupInfoFrom SetupSource{..} =
             FromLoaded -> True
         }
 
+{- | The four fields a relink writes back onto a staged database. One place,
+because the staged relink and the two dependency mutators all write exactly
+these and would otherwise drift apart.
+-}
+withRelinkedDeps :: [Text] -> CrossDBLinkingStats -> StagedDatabase -> StagedDatabase
+withRelinkedDeps newDeps newStats staged =
+    staged
+        { sdSelectedDeps = newDeps
+        , sdCrossDBLinks = Loader.cdlLinks newStats
+        , sdLinkingStats = newStats
+        , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
+        }
+
 -- | Build setup info from a staged database
 buildStagedSetupInfo :: StagedDatabase -> Map Text DatabaseConfig -> Map Text IndexedDatabase -> DatabaseSetupInfo
 buildStagedSetupInfo staged configs indexedDbs =
@@ -3328,39 +3337,18 @@ addDependencyToStaged manager dbName depName = do
         Left err -> return $ Left err
         Right staged -> case M.lookup depName indexedDbs of
             Nothing -> return $ Left $ "Dependency database not loaded: " <> depName
-            Just _depIdx -> do
-                -- Compute new dependency list, then link only against selected deps
-                let newDeps =
-                        if depName `elem` sdSelectedDeps staged
-                            then sdSelectedDeps staged
-                            else depName : sdSelectedDeps staged
-                    selectedIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
-                synonymDB <- getMergedSynonymDB manager
-                unitConfig <- getMergedUnitConfig manager
-                (_, newStats) <-
-                    Loader.fixActivityLinksWithCrossDB
-                        selectedIndexes
-                        synonymDB
-                        unitConfig
-                        (dmLocationHierarchy manager)
-                        (dcGeographyPolicy (sdConfig staged))
-                        (sdSimpleDB staged)
-
-                -- Update staged database with new stats and dependency
-                let updatedStaged =
-                        staged
-                            { sdSelectedDeps = newDeps
-                            , sdCrossDBLinks = Loader.cdlLinks newStats
-                            , sdLinkingStats = newStats
-                            , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
-                            }
-
-                -- Save updated staged database
-                atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
-                persistUploadDepends manager dbName newDeps
-
-                -- Return updated setup info
-                first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
+            Just _depIdx ->
+                applyStagedDeps
+                    manager
+                    dbName
+                    StagedRelink
+                        { srStaged = staged
+                        , srIndexedDbs = indexedDbs
+                        , srNewDeps =
+                            if depName `elem` sdSelectedDeps staged
+                                then sdSelectedDeps staged
+                                else depName : sdSelectedDeps staged
+                        }
 
 -- | Remove a dependency from a staged (or partially-linked loaded) database
 removeDependencyFromStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
@@ -3370,34 +3358,47 @@ removeDependencyFromStaged manager dbName depName = do
     case stagedResult of
         Left err -> return $ Left err
         Right staged -> do
-            let newDeps = filter (/= depName) (sdSelectedDeps staged)
-
-            -- Re-run cross-DB linking without the removed dependency
             indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            let remainingIndexes = [idx | (name, idx) <- M.toList indexedDbs, name `elem` newDeps]
-            synonymDB <- getMergedSynonymDB manager
-            unitConfig <- getMergedUnitConfig manager
-            (_, newStats) <-
-                Loader.fixActivityLinksWithCrossDB
-                    remainingIndexes
-                    synonymDB
-                    unitConfig
-                    (dmLocationHierarchy manager)
-                    (dcGeographyPolicy (sdConfig staged))
-                    (sdSimpleDB staged)
+            applyStagedDeps
+                manager
+                dbName
+                StagedRelink
+                    { srStaged = staged
+                    , srIndexedDbs = indexedDbs
+                    , srNewDeps = filter (/= depName) (sdSelectedDeps staged)
+                    }
 
-            -- Update staged database
-            let updatedStaged =
-                    staged
-                        { sdSelectedDeps = newDeps
-                        , sdCrossDBLinks = Loader.cdlLinks newStats
-                        , sdLinkingStats = newStats
-                        , sdMissingProducts = stagedMissingProducts (sdSimpleDB staged) newStats
-                        }
+{- | A staged database, the dependency pin it should now carry, and the indexes
+available to link within it.
+-}
+data StagedRelink = StagedRelink
+    { srStaged :: !StagedDatabase
+    , srIndexedDbs :: !(Map Text IndexedDatabase)
+    , srNewDeps :: ![Text]
+    }
 
-            atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName updatedStaged)
-            persistUploadDepends manager dbName newDeps
-            first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
+{- | Relink a staged database within a new dependency pin, write both back, and
+report the setup as it now stands. The two mutators above differ only in how
+they compute the pin.
+-}
+applyStagedDeps :: DatabaseManager -> Text -> StagedRelink -> IO (Either Text DatabaseSetupInfo)
+applyStagedDeps manager dbName StagedRelink{..} = do
+    synonymDB <- getMergedSynonymDB manager
+    unitConfig <- getMergedUnitConfig manager
+    (_, newStats) <-
+        Loader.fixActivityLinksWithCrossDB
+            [idx | (name, idx) <- M.toList srIndexedDbs, name `elem` srNewDeps]
+            synonymDB
+            unitConfig
+            (dmLocationHierarchy manager)
+            (dcGeographyPolicy (sdConfig srStaged))
+            (sdSimpleDB srStaged)
+    atomically $
+        modifyTVar'
+            (dmStagedDbs manager)
+            (M.insert dbName (withRelinkedDeps srNewDeps newStats srStaged))
+    persistUploadDepends manager dbName srNewDeps
+    first setupErrorMessage <$> getDatabaseSetupInfo manager dbName
 
 {- | A database ready to be made live, and whether this finalize introduced
 something the matrix cache on disk does not hold yet.
