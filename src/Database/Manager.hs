@@ -702,12 +702,12 @@ effectiveMethodMappings manager dbName collection db method = do
     mappings <- mapMethodToFlowsCached manager dbName collection db method
     closure <- getFlowClosure manager dbName db
     let synDB = fromMaybe emptySynonymDB (dbSynonymDB db)
-        proxyTargets = ProxyTargets (fcByName closure) (fcByCAS closure) (fcByUUID closure)
+        proxyTargets = ProxyTargets (clByName closure) (clByCAS closure) (clByUUID closure)
     pure $
         dropExcludedMappings (filter isExclusionCF (methodFactors method)) $
             expandProxyEdges proxyTargets (dmSubstanceEdges manager) $
-                projectRegionalResourceFlows synDB (fcByUUID closure) $
-                    expandSynonymMappings synDB (fcByName closure) mappings
+                projectRegionalResourceFlows synDB (clByUUID closure) $
+                    expandSynonymMappings synDB (clByName closure) mappings
 
 -- | Cached prepared CF tables: built once per (db, method), reused across inventories.
 mapMethodToTablesCached :: DatabaseManager -> Text -> CollectionName -> Database -> Method -> IO MethodTables
@@ -739,7 +739,7 @@ buildMethodTablesFor manager dbName collection db method = do
     closure <- getFlowClosure manager dbName db
     cmap <- getMergedCompartmentMap manager
     let dirExcluded =
-            directionExcludedCFs cmap (fromMaybe emptySynonymDB (dbSynonymDB db)) (fcByName closure) expanded
+            directionExcludedCFs cmap (fromMaybe emptySynonymDB (dbSynonymDB db)) (clByName closure) expanded
     mapM_ (reportProgress Warning) (directionWarning dirExcluded)
     energyDensities <- getMergedEnergyDensities manager
     unitConfig <- getMergedUnitConfig manager

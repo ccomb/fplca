@@ -1350,14 +1350,19 @@ then loses whatever those bridges would have found, silently, because the
 inventory is right and only the factors are missing.
 -}
 data FlowClosure = FlowClosure
-    { fcByUUID :: !BioFlowDB
-    , fcByName :: !(M.Map Text [BiosphereFlow])
-    , fcByCAS :: !(M.Map Text [BiosphereFlow])
+    { clByUUID :: !BioFlowDB
+    , clByName :: !(M.Map Text [BiosphereFlow])
+    , clByCAS :: !(M.Map Text [BiosphereFlow])
     }
 
 -- | The closure of a database that depends on nothing: its own prebuilt indexes.
 ownFlowClosure :: Database -> FlowClosure
-ownFlowClosure db = FlowClosure (dbBioFlows db) (dbFlowsByName db) (dbFlowsByCAS db)
+ownFlowClosure db =
+    FlowClosure
+        { clByUUID = dbBioFlows db
+        , clByName = dbFlowsByName db
+        , clByCAS = dbFlowsByCAS db
+        }
 
 {- | The closure of a database over its dependencies. The root comes first
 everywhere: a UUID two databases both declare keeps the root's metadata, and a
@@ -1372,9 +1377,10 @@ flowClosure root deps =
     let !depFlows = M.unions (map dbBioFlows deps) `M.difference` dbBioFlows root
         !merged = M.union (dbBioFlows root) depFlows
      in FlowClosure
-            merged
-            (M.unionWith (++) (dbFlowsByName root) (buildFlowNameIndex depFlows))
-            (M.unionWith (++) (dbFlowsByCAS root) (buildFlowCASIndex depFlows))
+            { clByUUID = merged
+            , clByName = M.unionWith (++) (dbFlowsByName root) (buildFlowNameIndex depFlows)
+            , clByCAS = M.unionWith (++) (dbFlowsByCAS root) (buildFlowCASIndex depFlows)
+            }
 
 {- | Fill empty @bfCAS@ from registry name→CAS bindings, then rebuild the CAS
 index so the native CAS bridge fires. Holes only — a CAS the database itself
