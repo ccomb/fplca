@@ -2449,48 +2449,48 @@ page before a database is finalized. @maybeDepDb@ pins a chosen dependency (a
 mapping relink); @aliases@ feeds the supplier-alias map.
 -}
 relinkStaged :: DatabaseManager -> Text -> Maybe Text -> CrossLinking.AliasMap -> IO (Either Text RelinkResult)
-relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ do
-    stagedDbs <- readTVarIO (dmStagedDbs manager)
-    case M.lookup dbName stagedDbs of
-        Nothing -> return $ Left $ "Database not loaded: " <> dbName
-        Just staged -> do
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            case maybeDepDb of
-                Just dep
-                    | not (M.member dep indexedDbs) ->
-                        return $ Left $ "Dependency database not loaded: " <> dep <> " (load it first)"
-                _ -> do
-                    synonymDB <- getMergedSynonymDB manager
-                    unitConfig <- getMergedUnitConfig manager
-                    let pinnedDeps = case maybeDepDb of
-                            Just dep | dep `notElem` sdSelectedDeps staged -> dep : sdSelectedDeps staged
-                            _ -> sdSelectedDeps staged
-                        selectedIndexes = [idx | (n, idx) <- M.toList indexedDbs, n `elem` pinnedDeps]
-                        beforeLinks = sdCrossDBLinks staged
-                        newStats =
-                            Loader.relinkSimpleDatabase
-                                selectedIndexes
-                                synonymDB
-                                unitConfig
-                                (dmLocationHierarchy manager)
-                                (dcGeographyPolicy (sdConfig staged))
-                                aliases
-                                (sdSimpleDB staged)
-                        newLinks = Loader.cdlLinks newStats
-                    atomically $
-                        modifyTVar'
-                            (dmStagedDbs manager)
-                            (M.insert dbName (withRelinkedDeps pinnedDeps newStats staged))
-                    return $
-                        Right
-                            RelinkResult
-                                { rresDbName = dbName
-                                , rresUnresolvedBefore = unresolvedCount (sdLinkingStats staged)
-                                , rresUnresolvedAfter = unresolvedCount newStats
-                                , rresCrossDBLinks = length newLinks
-                                , rresDepsLoaded = pinnedDeps
-                                , rresLinksChanged = not (sameSet newLinks beforeLinks)
-                                }
+relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ runExceptT $ do
+    stagedDbs <- liftIO $ readTVarIO (dmStagedDbs manager)
+    staged <- except $ maybe (Left ("Database not loaded: " <> dbName)) Right (M.lookup dbName stagedDbs)
+    indexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+    forM_ maybeDepDb $ \dep ->
+        unless (M.member dep indexedDbs) $
+            throwE ("Dependency database not loaded: " <> dep <> " (load it first)")
+    synonymDB <- liftIO $ getMergedSynonymDB manager
+    unitConfig <- liftIO $ getMergedUnitConfig manager
+    let pinnedDeps = withChosenDep (sdSelectedDeps staged)
+        newStats =
+            Loader.relinkSimpleDatabase
+                [idx | (n, idx) <- M.toList indexedDbs, n `elem` pinnedDeps]
+                synonymDB
+                unitConfig
+                (dmLocationHierarchy manager)
+                (dcGeographyPolicy (sdConfig staged))
+                aliases
+                (sdSimpleDB staged)
+    liftIO $
+        atomically $
+            modifyTVar'
+                (dmStagedDbs manager)
+                (M.insert dbName (withRelinkedDeps pinnedDeps newStats staged))
+    pure (relinkResult staged pinnedDeps newStats)
+  where
+    -- A mapping relink pins the dependency it retargets, once.
+    withChosenDep :: [Text] -> [Text]
+    withChosenDep selected = case maybeDepDb of
+        Just dep | dep `notElem` selected -> dep : selected
+        _ -> selected
+
+    relinkResult :: StagedDatabase -> [Text] -> Loader.CrossDBLinkingStats -> RelinkResult
+    relinkResult staged pinnedDeps newStats =
+        RelinkResult
+            { rresDbName = dbName
+            , rresUnresolvedBefore = unresolvedCount (sdLinkingStats staged)
+            , rresUnresolvedAfter = unresolvedCount newStats
+            , rresCrossDBLinks = length (Loader.cdlLinks newStats)
+            , rresDepsLoaded = pinnedDeps
+            , rresLinksChanged = not (sameSet (Loader.cdlLinks newStats) (sdCrossDBLinks staged))
+            }
 
 {- | Shared relink core. Candidates are the database's full declared pin
 ('dbDependsOn'); relink recomputes the links within it but never grows or
@@ -2513,70 +2513,67 @@ relinkDatabaseWith ::
     IO (Either Text RelinkResult)
 relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Nothing -> relinkStaged manager dbName Nothing aliases
-        Just loaded -> do
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            -- Strict pin: candidates are restricted to the database's declared
-            -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
-            -- This keeps the user's explicit selection authoritative — relink
-            -- recomputes links *within* the whole pin (so a mapping relink against
-            -- one dependency re-resolves the others unchanged instead of dropping
-            -- them) but never expands or shrinks the set.
-            let pinnedDeps = dbDependsOn (ldDatabase loaded)
-                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
-            synonymDB <- getMergedSynonymDB manager
-            unitConfig <- getMergedUnitConfig manager
-            -- Forced here on purpose: the whole link computation must be done
-            -- before the transaction below opens, never inside it.
-            let !outcome =
-                    relinkPlan
-                        RelinkInputs
-                            { riDbName = dbName
-                            , riDatabase = ldDatabase loaded
-                            , riContext =
-                                LinkingContext
-                                    { lcIndexedDatabases = otherIndexes
-                                    , lcSynonymDB = synonymDB
-                                    , lcUnitConfig = unitConfig
-                                    , lcThreshold = defaultLinkingThreshold
-                                    , lcLocationHierarchy = dmLocationHierarchy manager
-                                    , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
-                                    , lcSupplierAliases = aliases
-                                    }
-                            , riPersistedDeps = persistedDeps
-                            }
-                db' = roDatabase outcome
-                result = roResult outcome
-                cacheChanged = roCacheChanged outcome
-                loaded' = loaded{ldDatabase = db'}
-            atomically $
-                publishLoaded manager dbName loaded' (buildIndexedDatabaseFromDB dbName synonymDB db')
-            clearMethodMappingCacheForDb manager dbName
-            -- Persist the relinked Database back to its matrix cache so the
-            -- next startup doesn't have to re-discover the same links or lose
-            -- the pin.
-            when cacheChanged $
-                Loader.saveCachedDatabaseWithMatrices
-                    dbName
-                    (dcPath (ldConfig loaded'))
-                    db'
-            -- Skip the log when the relink was a verification no-op: links
-            -- and deps already matched the in-memory state. This is the
-            -- common case for warm Loads after the previous commits and
-            -- carries no information worth a log line.
-            when cacheChanged $
-                reportProgress Info $
-                    "Re-linked "
-                        <> T.unpack dbName
-                        <> ": "
-                        <> show (rresUnresolvedBefore result)
-                        <> " → "
-                        <> show (rresUnresolvedAfter result)
-                        <> " unresolved products ("
-                        <> show (rresCrossDBLinks result)
-                        <> " cross-DB links)"
-            return (Right result)
+    maybe (relinkStaged manager dbName Nothing aliases) relinkLoaded (M.lookup dbName loadedDbs)
+  where
+    relinkLoaded :: LoadedDatabase -> IO (Either Text RelinkResult)
+    relinkLoaded loaded = do
+        indexedDbs <- readTVarIO (dmIndexedDbs manager)
+        -- Strict pin: candidates are restricted to the database's declared
+        -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
+        -- This keeps the user's explicit selection authoritative — relink
+        -- recomputes links *within* the whole pin (so a mapping relink against
+        -- one dependency re-resolves the others unchanged instead of dropping
+        -- them) but never expands or shrinks the set.
+        let pinnedDeps = dbDependsOn (ldDatabase loaded)
+            otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
+        synonymDB <- getMergedSynonymDB manager
+        unitConfig <- getMergedUnitConfig manager
+        -- Forced here on purpose: the whole link computation must be done
+        -- before the transaction below opens, never inside it.
+        let !outcome = relinkPlan (planInputs loaded otherIndexes synonymDB unitConfig)
+            db' = roDatabase outcome
+            loaded' = loaded{ldDatabase = db'}
+        atomically $
+            publishLoaded manager dbName loaded' (buildIndexedDatabaseFromDB dbName synonymDB db')
+        clearMethodMappingCacheForDb manager dbName
+        {- Nothing more to do when the relink was a verification no-op: links
+        and deps already matched the in-memory state, the cache on disk already
+        holds them, and the log line would carry no information. This is the
+        common case for a warm load. -}
+        when (roCacheChanged outcome) $ do
+            Loader.saveCachedDatabaseWithMatrices dbName (dcPath (ldConfig loaded')) db'
+            reportProgress Info (relinkSummary (roResult outcome))
+        return (Right (roResult outcome))
+
+    planInputs :: LoadedDatabase -> [IndexedDatabase] -> SynonymDB -> UnitConversion.UnitConfig -> RelinkInputs
+    planInputs loaded otherIndexes synonymDB unitConfig =
+        RelinkInputs
+            { riDbName = dbName
+            , riDatabase = ldDatabase loaded
+            , riContext =
+                LinkingContext
+                    { lcIndexedDatabases = otherIndexes
+                    , lcSynonymDB = synonymDB
+                    , lcUnitConfig = unitConfig
+                    , lcThreshold = defaultLinkingThreshold
+                    , lcLocationHierarchy = dmLocationHierarchy manager
+                    , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
+                    , lcSupplierAliases = aliases
+                    }
+            , riPersistedDeps = persistedDeps
+            }
+
+    relinkSummary :: RelinkResult -> String
+    relinkSummary result =
+        "Re-linked "
+            <> T.unpack dbName
+            <> ": "
+            <> show (rresUnresolvedBefore result)
+            <> " → "
+            <> show (rresUnresolvedAfter result)
+            <> " unresolved products ("
+            <> show (rresCrossDBLinks result)
+            <> " cross-DB links)"
 
 {- | After a DB loads (or reloads), re-link every already-loaded DB that
 declares it as a dependency. This makes cross-DB linking converge
