@@ -68,22 +68,23 @@ spec = describe "per-exchange comments" $ do
                                       ]
 
     {- The same fixture, read for what those <property> children say rather
-    than for what they must not leak. A property is stated per unit of the
-    exchange, so the board's 614.4 kg/m3 on a line of 1 m3 is 614.4 kg of dry
-    matter; the glue's is 1.0 of a dimensionless quantity on 0.1 kg, and the
-    unit is kept as written so that whoever needs a mass can refuse it rather
-    than read 0.1 kg into it. "carbon content" names no property this engine
-    holds and is dropped rather than guessed at. -}
+    than for what they must not leak. A property is recorded per unit of the
+    exchange, as the file states it: the glue line is 0.1 kg and declares 1.0,
+    so 1.0 is what is recorded and 0.1 would mean the record had been made to
+    depend on the amount beside it. Its unit is kept as written, so whoever
+    needs a mass can refuse a dimensionless quantity rather than read
+    kilograms into it. "carbon content" names no property this engine holds
+    and is dropped rather than guessed at. -}
     describe "properties an exchange states" $ do
-        it "reads the product's dry mass, scaled from per unit to the whole line" $
+        it "reads the dry mass a product declares" $
             withPropertyFixture $ \act ->
                 propertiesOf "22222222-2222-2222-2222-222222222222" act
                     `shouldBe` Just noProperties{epDryMass = Just (StatedAmount "kg" 614.4)}
 
-        it "keeps a property's own unit rather than assuming a mass" $
+        it "records the property per unit of the line, not per line" $
             withPropertyFixture $ \act ->
                 propertiesOf "55555555-5555-5555-5555-555555555555" act
-                    `shouldBe` Just noProperties{epDryMass = Just (StatedAmount "dimensionless" 0.1)}
+                    `shouldBe` Just noProperties{epDryMass = Just (StatedAmount "dimensionless" 1.0)}
 
         it "leaves the exchange amounts exactly as the file states them" $
             withPropertyFixture $ \act ->

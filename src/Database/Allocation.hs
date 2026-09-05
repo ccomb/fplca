@@ -192,19 +192,10 @@ normalise act = promote act{exchanges = filter keep (exchanges act)}
         | exchangeFlowId ex == exchangeFlowId single && exchangeIsProductOutput ex = asReference ex
         | otherwise = ex
 
-{- | Scale an exchange amount by a factor.
-
-A technosphere line's stated properties describe the line as a whole, so they
-are scaled with it: half a line of 2 kg weighs 1 kg, and a property left
-behind at 2 kg would contradict the amount printed beside it.
--}
+-- | Scale an exchange amount by a factor.
 scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex = case ex of
-    TechnosphereExchange{} ->
-        ex
-            { techAmount = techAmount ex * factor
-            , techProperties = scaleProperties factor (techProperties ex)
-            }
+    TechnosphereExchange{} -> ex{techAmount = techAmount ex * factor}
     BiosphereExchange{} -> ex{bioAmount = bioAmount ex * factor}
     WasteExchange{} -> ex{waAmount = waAmount ex * factor}
 

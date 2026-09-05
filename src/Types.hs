@@ -162,12 +162,15 @@ data StatedAmount = StatedAmount
 
 {- | The physical properties of one exchange, as the source states them.
 
-Each is the property of the exchange /as a whole/, not per unit of it: an
-EcoSpold 2 @\<property\>@ states kilograms per unit of the exchange amount and
-is multiplied by that amount when it is read, so 614.4 kg\/m3 on a line of
-2 m3 is recorded as 1228.8 kg. That is what an allocation key needs to sum,
-and it is what 'Database.Allocation.scaleExchange' keeps in step when an
-exchange is scaled.
+Each is stated /per unit of the exchange amount/, which is how EcoSpold 2
+writes them: 614.4 kg of dry matter per m3 of board is recorded as 614.4 kg,
+whether the line is 1 m3 or 2. The mass of the whole line is the product of
+the two, taken where it is needed.
+
+Per unit rather than per line on purpose. A property that referred to the
+amount would have to be recomputed by every operation that touches an amount,
+and the one that forgot would leave a line saying 2 m3 and 614.4 kg. Referring
+to the unit instead, it cannot contradict the amount beside it.
 
 'Nothing' is "the source states none", never a zero standing in for it: a
 product of no mass and a product whose mass is unknown are different answers
@@ -183,22 +186,6 @@ data ExchangeProperties = ExchangeProperties
 -- | An exchange whose source states no property.
 noProperties :: ExchangeProperties
 noProperties = ExchangeProperties{epDryMass = Nothing, epWetMass = Nothing}
-
-{- | Multiply every property an exchange states by a factor.
-
-Two callers, one meaning: the EcoSpold 2 parser turns a property stated per
-unit into the property of the whole line, and 'Database.Allocation.allocate'
-keeps a scaled line's properties in step with its amount.
--}
-scaleProperties :: Double -> ExchangeProperties -> ExchangeProperties
-scaleProperties factor props =
-    ExchangeProperties
-        { epDryMass = scaleStated <$> epDryMass props
-        , epWetMass = scaleStated <$> epWetMass props
-        }
-  where
-    scaleStated :: StatedAmount -> StatedAmount
-    scaleStated stated = stated{saAmount = saAmount stated * factor}
 
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit

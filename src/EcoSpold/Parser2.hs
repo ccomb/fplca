@@ -88,7 +88,7 @@ data IntermediateData = IntermediateData
     , idClassifications :: !(M.Map Text Text) -- per-exchange classifications (e.g. By-product classification → Waste)
     , idVariableName :: !Text -- variableName attribute (referencable from other formulas in the dataset)
     , idMathRel :: !Text -- mathematicalRelation attribute (formula defining the amount)
-    , idProperties :: !ExchangeProperties -- <property> children, per unit of the exchange amount until it closes
+    , idProperties :: !ExchangeProperties -- <property> children, each per unit of the exchange amount
     }
     deriving (Eq)
 
@@ -139,27 +139,30 @@ and are only complete when the element closes.
 data PendingProperty = PendingProperty
     { ppyName :: !Text
     , ppyUnit :: !Text
-    , ppyAmount :: !Double
+    , ppyAmount :: !(Maybe Double)
     }
 
 emptyPendingProperty :: PendingProperty
-emptyPendingProperty = PendingProperty "" "" 0
+emptyPendingProperty = PendingProperty "" "" Nothing
 
 {- | File a closed @\<property\>@ under the exchange property it names, if any.
 
 The name is the one ecoinvent writes; a property this engine has no field for
-is dropped rather than guessed at. The amount is left as the file states it,
-per unit of the exchange, and multiplied by the exchange amount when the
-exchange itself closes.
+is dropped rather than guessed at, and so is one whose @amount@ the file omits
+or writes as something no number can be read from. The schema requires that
+attribute, so a file missing it is malformed, and recording the zero the
+absence would otherwise leave says the line weighs nothing.
+
+The amount stays as the file states it, per unit of the exchange.
 -}
 recordProperty :: PendingProperty -> ExchangeProperties -> ExchangeProperties
-recordProperty pending props = case T.toLower (T.strip (ppyName pending)) of
-    "dry mass" -> props{epDryMass = Just stated}
-    "wet mass" -> props{epWetMass = Just stated}
+recordProperty pending props = case (T.toLower (T.strip (ppyName pending)), ppyAmount pending) of
+    ("dry mass", Just amount) -> props{epDryMass = Just (stated amount)}
+    ("wet mass", Just amount) -> props{epWetMass = Just (stated amount)}
     _ -> props
   where
-    stated :: StatedAmount
-    stated = StatedAmount{saUnit = T.strip (ppyUnit pending), saAmount = ppyAmount pending}
+    stated :: Double -> StatedAmount
+    stated amount = StatedAmount{saUnit = T.strip (ppyUnit pending), saAmount = amount}
 
 -- | One @\<review\>@ of the dataset: who read it, when, and what they said.
 data Review = Review
@@ -678,7 +681,7 @@ parseWithXeno xmlContent processId = do
             -- reader of them.
             onProperty st
                 | isInsideProperty && isElement name "amount" =
-                    st{psPendingProperty = (psPendingProperty st){ppyAmount = bsToDouble value}}
+                    st{psPendingProperty = (psPendingProperty st){ppyAmount = readAmount (bsToText value)}}
                 | otherwise = st
             -- xml:lang on the currently-open <comment>; remembered until closeTag.
             -- Attribute order is not significant for entity ref selection — we
@@ -806,7 +809,7 @@ parseWithXeno xmlContent processId = do
                                 , techPedigree = Nothing
                                 , techShare = Nothing
                                 , techClassification = M.empty
-                                , techProperties = scaleProperties (idAmount idata) (idProperties idata)
+                                , techProperties = idProperties idata
                                 }
                         techFlow = TechnosphereFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
                         wasteExchange =
