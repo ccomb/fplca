@@ -280,6 +280,9 @@ History of manual bumps:
 - 20: the payload records the unit table and location aliases the database
      was built with ('dbBuiltWith'), compared before a cache is trusted. Old
      caches end before the field.
+- 21: a technosphere line carries the physical properties its source states
+     ('techProperties'), the material an allocation key other than the declared
+     one is computed from. Cached exchanges end before the field.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -287,7 +290,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 20
+     in hi `xor` lo `xor` 21
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
