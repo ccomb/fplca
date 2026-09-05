@@ -1415,7 +1415,7 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             llOtherIndexes
             (dmLocationHierarchy manager)
     case result of
-        Right (loaded0, _fromCache) -> do
+        Right (loaded0, _source) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
             -- indexing, so a CAS-less source (e.g. a SimaPro export) still
             -- reaches the native CAS bridge.
@@ -1724,7 +1724,7 @@ loadDatabaseFromConfigWithCrossDB ::
     Bool -> -- noCache
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map Location [Location] -> -- Location hierarchy (empty = use built-in)
-    IO (Either Text (LoadedDatabase, Bool))
+    IO (Either Text (LoadedDatabase, LoadSource))
 loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
@@ -1745,7 +1745,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
 
     case dbResult of
         Left err -> return $ Left err
-        Right (dbRaw, fromCache) -> do
+        Right (dbRaw, source) -> do
             -- Initialize runtime fields (synonym DB and flow name index)
             let database = BM25.addBM25Index (initializeRuntimeFields dbRaw synonymDB)
 
@@ -1763,7 +1763,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
                         , ldSharedSolver = sharedSolver
                         , ldConfig = dbConfig
                         }
-                    , fromCache
+                    , source
                     )
 
 -- | Detected format of a database directory
@@ -1956,11 +1956,7 @@ success.
 -}
 loadDatabaseRawWithCrossDB ::
     RawLoad ->
-    {- | (Database, fromCache): True iff the result came from the matrix cache
-    as-is, i.e. cross-DB linking was NOT freshly run against 'rlOtherIndexes'.
-    Callers use this to decide whether a self-relink is needed.
-    -}
-    IO (Either Text (Database, Bool))
+    IO (Either Text (Database, LoadSource))
 loadDatabaseRawWithCrossDB RawLoad{..} = do
     mCachedDb <-
         if rlNoCache
@@ -1969,14 +1965,14 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
     case cacheVerdict rlOtherIndexes mCachedDb of
         Fresh db -> do
             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-            return $ Right (db, True)
+            return $ Right (db, FromCache)
         Stale -> do
             reportProgress Info "Cache has unresolved links, rebuilding with available dependencies..."
             rebuildFromSource
         Absent -> rebuildFromSource
   where
     -- Cache miss or stale: now we need the source. Resolve the archive if any.
-    rebuildFromSource :: IO (Either Text (Database, Bool))
+    rebuildFromSource :: IO (Either Text (Database, LoadSource))
     rebuildFromSource = do
         path <- resolveDataPath rlSourcePath
         isFile <- doesFileExist path
@@ -2001,7 +1997,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                     FormatXML -> loadStructured path
                     FormatILCD -> loadStructured path
 
-    loadCSV :: FilePath -> IO (Either Text (Database, Bool))
+    loadCSV :: FilePath -> IO (Either Text (Database, LoadSource))
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
         loaded <- Loader.loadSimaProCSV rlUnitConfig csvFile
@@ -2016,9 +2012,9 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                         unless rlNoCache $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath db
                         Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                        return $ Right (db, False)
+                        return $ Right (db, FromSource)
 
-    loadStructured :: FilePath -> IO (Either Text (Database, Bool))
+    loadStructured :: FilePath -> IO (Either Text (Database, LoadSource))
     loadStructured path = do
         loadResult <-
             Loader.loadDatabaseWithCrossDBLinking
@@ -2053,7 +2049,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                                     }
                         unless rlNoCache $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath dbWithLinks
-                        return $ Right (dbWithLinks, False)
+                        return $ Right (dbWithLinks, FromSource)
 
     inputs :: BuildInputs
     inputs = BuildInputs rlUnitConfig rlLocationAliases
@@ -2085,6 +2081,13 @@ data LoadOrigin
     = CacheHit
     | Parsed
     | Replayed
+    deriving (Eq)
+
+{- | Where the raw loader got the database. 'FromCache' means it came out of
+the matrix cache as it stood, so cross-database linking was NOT run against
+the indexes the caller passed; 'FromSource' means it was.
+-}
+data LoadSource = FromCache | FromSource
     deriving (Eq)
 
 {- | On a fresh parse 'loadDatabaseRawWithCrossDB' already ran linking against
@@ -2139,10 +2142,8 @@ loadDatabaseSingleFromConfig manager dbName = do
                         -- A cache hit already holds the edits (its stamp says
                         -- so); a fresh parse holds only what the author
                         -- uploaded, and the journal is the rest.
-                        Right (Right (loaded, True)) -> pure (Right (loaded, CacheHit))
-                        Right (Right (loaded, False)) ->
-                            fmap (\(l, replayed) -> (l, if replayed then Replayed else Parsed))
-                                <$> replayEdits manager dbConfig loaded
+                        Right (Right (loaded, FromCache)) -> pure (Right (loaded, CacheHit))
+                        Right (Right (loaded, FromSource)) -> replayEdits manager dbConfig loaded
                     case replayResult of
                         Left err -> return (Left err)
                         Right (loaded, origin) -> do
@@ -2212,14 +2213,14 @@ disagrees with its own record. The dependencies are the ones the config pins,
 already loaded by 'loadDatabase', because a supplier an edit points at may
 live in one of them.
 -}
-replayEdits :: DatabaseManager -> DatabaseConfig -> LoadedDatabase -> IO (Either Text (LoadedDatabase, Bool))
+replayEdits :: DatabaseManager -> DatabaseConfig -> LoadedDatabase -> IO (Either Text (LoadedDatabase, LoadOrigin))
 replayEdits manager dbConfig loaded =
     editHome dbConfig >>= \case
-        Nothing -> pure (Right (loaded, False))
+        Nothing -> pure (Right (loaded, Parsed))
         Just home ->
             Journal.readJournal home >>= \case
                 Left err -> pure (Left (dcName dbConfig <> ": " <> err))
-                Right [] -> pure (Right (loaded, False))
+                Right [] -> pure (Right (loaded, Parsed))
                 Right events -> do
                     loadedDbs <- readTVarIO (dmLoadedDbs manager)
                     unitConfig <- getMergedUnitConfig manager
@@ -2249,7 +2250,7 @@ replayEdits manager dbConfig loaded =
                                     (dcName dbConfig)
                                     techTriplesInt
                                     (fromIntegral (dbActivityCount withRuntime))
-                            pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, True))
+                            pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, Replayed))
 
 {- | Save the replayed database to its matrix cache and stamp the cache with
 the journal it now holds, so the next load reads it instead of replaying.
