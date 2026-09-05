@@ -231,12 +231,13 @@ import Method.Types (Method (..), MethodCF (..))
 import Types (
     AllocationKey (..),
     BiosphereFlow (..),
+    BlockerReason (..),
     Database (..),
     GeographyPolicy (..),
     ProcessRef (..),
     bfCompartmentName,
     bfCompartmentSub,
-    blockerReasonDetail,
+    blockerReason,
     getUnitNameForBioFlow,
     processRefText,
     unresolvedCount,
@@ -347,13 +348,13 @@ gapReportToAPI mLimit r =
         }
   where
     entryToAPI e =
-        let (reason, detail) = gapReasonDetail (Loader.geReason e)
+        let reason = gapReason (Loader.geReason e)
          in GapEntryAPI
                 { gaeName = Loader.geFlowName e
                 , gaeLocation = Loader.geLocation e
                 , gaeUnit = Loader.geUnit e
-                , gaeReason = reason
-                , gaeDetail = detail
+                , gaeReason = brReason reason
+                , gaeDetail = brDetail reason
                 , gaeEdges = Loader.geEdges e
                 , gaeConsumers = Loader.geConsumers e
                 , gaeDemandSum = Loader.geDemandSum e
@@ -367,10 +368,10 @@ gapReportToAPI mLimit r =
             , gcaLocation = Loader.gcLocation c
             , gcaEdges = Loader.gcEdges c
             }
-    gapReasonDetail gr = case gr of
-        Loader.GapBlocked blocker -> blockerReasonDetail blocker
-        Loader.GapDanglingIdentity -> ("dangling_source_identity", Nothing)
-        Loader.GapWasteInput -> ("unlinked_waste_input", Nothing)
+    gapReason gr = case gr of
+        Loader.GapBlocked blocker -> blockerReason blocker
+        Loader.GapDanglingIdentity -> BlockerReason "dangling_source_identity" Nothing
+        Loader.GapWasteInput -> BlockerReason "unlinked_waste_input" Nothing
 
 {- | Dataset-soundness report for a loaded or staged database: the structural
 defects a score can't reveal. The methodological counterpart of the

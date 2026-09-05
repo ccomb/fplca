@@ -925,7 +925,7 @@ data GapConsumerAPI = GapConsumerAPI
 
 {- | One supplier gap, aggregated per (product name, location, unit) so
 @demandSum@ never mixes units. @reason@ carries the stable blocker code
-('Types.blockerReasonDetail'), plus @dangling_source_identity@ for inputs whose
+('Types.blockerReason'), plus @dangling_source_identity@ for inputs whose
 named source activity no dependency ships, and @unlinked_waste_input@ for
 treatment-side waste inputs with no internal producer.
 -}

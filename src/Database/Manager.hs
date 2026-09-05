@@ -221,6 +221,7 @@ import Types (
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
+    BlockerReason (..),
     BuildInputs (..),
     CrossDBLink (..),
     CrossDBLinkingStats (..),
@@ -237,7 +238,7 @@ import Types (
     UnitDB,
     bfCompartmentName,
     bfCompartmentSub,
-    blockerReasonDetail,
+    blockerReason,
     computeMinimalSelectedDeps,
     crossDBBySource,
     crossDBRedundantSources,
@@ -3159,8 +3160,8 @@ rankMissingProducts blocked dangling =
 -- | Project one ranked missing product onto its wire shape.
 blockerToMissingSupplier :: (Text, Int, LinkBlocker) -> MissingSupplier
 blockerToMissingSupplier (name, cnt, blocker) =
-    let (reason, detail) = blockerReasonDetail blocker
-     in MissingSupplier name cnt Nothing reason detail
+    let reason = blockerReason blocker
+     in MissingSupplier name cnt Nothing (brReason reason) (brDetail reason)
 
 {- | Missing-supplier list for a staged database: rich blockers from the
 linking stats plus dangling background links a partial import leaves behind

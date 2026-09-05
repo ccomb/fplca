@@ -1565,20 +1565,25 @@ never drift apart.
 instance ToJSON LocationKind where
     toJSON = toJSON . locationKindCode
 
-{- | Stable wire (reason code, optional detail) of a 'LinkBlocker' — single
-source of truth shared by the setup page's missing-supplier list and the
-supplier-gap report, so the two surfaces can never name the same blocker
-differently.
+-- | How a 'LinkBlocker' is spelled on the wire: a stable code, and what it was about.
+data BlockerReason = BlockerReason
+    { brReason :: !Text
+    , brDetail :: !(Maybe Text)
+    }
+
+{- | The wire spelling of a 'LinkBlocker' — single source of truth shared by the
+setup page's missing-supplier list and the supplier-gap report, so the two
+surfaces can never name the same blocker differently.
 -}
-blockerReasonDetail :: LinkBlocker -> (Text, Maybe Text)
-blockerReasonDetail blocker = case blocker of
-    NoNameMatch -> ("no_name_match", Nothing)
-    UnitIncompatible q s -> ("unit_incompatible", Just (q <> " vs " <> s))
-    LocationUnavailable loc -> ("location_unavailable", Just loc)
+blockerReason :: LinkBlocker -> BlockerReason
+blockerReason blocker = case blocker of
+    NoNameMatch -> BlockerReason "no_name_match" Nothing
+    UnitIncompatible q s -> BlockerReason "unit_incompatible" (Just (q <> " vs " <> s))
+    LocationUnavailable loc -> BlockerReason "location_unavailable" (Just loc)
     LocationRejectedByPolicy req act kind ->
-        ("location_rejected", Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
+        BlockerReason "location_rejected" (Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
     AliasTargetMissing name mLoc ->
-        ("alias_target_missing", Just (name <> maybe "" (" @ " <>) mLoc))
+        BlockerReason "alias_target_missing" (Just (name <> maybe "" (" @ " <>) mLoc))
 
 instance FromJSON LocationKind where
     parseJSON v = do
