@@ -3,13 +3,13 @@
 {- | Round-trip contract for the EcoSpold1 writer (the inverse of
 "EcoSpold.Parser1"). Three properties:
 
-  (a) idempotence modulo volatile metadata — write, parse, write again,
+  (a) idempotence modulo volatile metadata: write, parse, write again,
       and the two serialisations are byte-identical when the volatile
       @generator@/@timestamp@ attributes are omitted ('canonicalWriterOptions');
-  (b) semantic round-trip — parse(write(D)) reproduces the observable
+  (b) semantic round-trip: parse(write(D)) reproduces the observable
       structure of D (names, amounts, units, roles/directions, compartments,
       CAS, comments), compared order-insensitively;
-  (c) score-equivalence — a sample activity yields the same direct LCIA
+  (c) score-equivalence: a sample activity yields the same direct LCIA
       inventory (biosphere flow amounts, keyed by flow name) after a
       write→parse→build round-trip, within tolerance.
 -}
@@ -204,7 +204,7 @@ soloDb name prodU extra techs bios wastes =
         , sdbUnits = units1
         }
   where
-    ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+    ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
     act = Activity name [] [] M.empty M.empty "GLO" LocationDeclared "kg" (ref : extra) M.empty M.empty Nothing Nothing Nothing
 
 -- | Empty database: no activities, no flows.
@@ -213,7 +213,7 @@ emptyDb = SimpleDatabase M.empty M.empty M.empty M.empty M.empty
 
 {- | Two activities where the consumer's technosphere input is a resolved link
 to the supplier. The link UUID is the supplier's stored activity UUID
-('supplierLink' — the first component of its 'sdbActivities' key), which
+('supplierLink', the first component of its 'sdbActivities' key), which
 'checkEcoSpold1Exportable' / 'supplierNumberIndex' resolve to a dataset number.
 Passing a UUID absent from the database instead models a dangling supplier link.
 -}
@@ -234,10 +234,10 @@ linkedDb link =
     supU = supplierLink
     conU = read "33333333-0000-4000-8000-000000000001"
     mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing
-    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
     supplier = mkAct "aaa supplier" supU []
     -- The consumer's input consumes the supplier's product and links to it.
-    consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing Nothing M.empty]
+    consumer = mkAct "bbb consumer" conU [TechnosphereExchange supU 2.0 kgUnit Input link Nothing "" Nothing Nothing Nothing M.empty noProperties]
 
 {- | A supplier written as two coproduct rows sharing one activity UUID, and a
 consumer whose input names the first of them. Canonical order gives the two
@@ -269,10 +269,10 @@ coproductDb =
     prodBU = read "44444444-0000-4000-8000-00000000000b"
     conU = read "33333333-0000-4000-8000-000000000001"
     mkAct nm prodU exs = Activity nm [] [] M.empty M.empty "GLO" LocationDeclared "kg" (refOf prodU : exs) M.empty M.empty Nothing Nothing Nothing
-    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
-    inputOnA = TechnosphereExchange prodAU 2.0 kgUnit Input supU Nothing "" Nothing Nothing Nothing M.empty
+    refOf prodU = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
+    inputOnA = TechnosphereExchange prodAU 2.0 kgUnit Input supU Nothing "" Nothing Nothing Nothing M.empty noProperties
 
-{- | The supplier's stored activity UUID — the first component of its
+{- | The supplier's stored activity UUID, the first component of its
 'sdbActivities' key, and the value a solver-resolved input carries in
 'techActivityLinkId'. Deliberately a literal in a different namespace from
 'generateActivityUUIDFromActivity' (mirroring a non-EcoSpold1-origin database),
@@ -282,7 +282,7 @@ supplierLink :: UUID
 supplierLink = read "22222222-0000-4000-8000-000000000001"
 
 {- | A non-nil UUID that no exported activity hashes to, so a consumer input
-carrying it has no resolvable dataset number — a dangling link. Distinct from
+carrying it has no resolvable dataset number, a dangling link. Distinct from
 'UUID.nil', which the guard treats as "no link".
 -}
 danglingLink :: UUID
@@ -290,7 +290,7 @@ danglingLink = read "99999999-0000-4000-8000-000000000099"
 
 {- | All supplier-dataset-number values recorded across a parser round-trip of
 @sdb@. 'EcoSpold.Parser1.closeExchange' fills 'psSupplierLinks' (the 7th tuple
-slot) for every technosphere input whose @number@ attribute is non-zero — i.e.
+slot) for every technosphere input whose @number@ attribute is non-zero, i.e.
 the supplier dataset number the writer must re-emit. A surviving link therefore
 shows up here as the supplier's dataset number.
 -}
@@ -413,13 +413,7 @@ writeOk opts sdb =
 buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
     result <-
-        DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (sdbActivities sdb)
-            (sdbTechFlows sdb)
-            (sdbBioFlows sdb)
-            (sdbWasteFlows sdb)
-            (sdbUnits sdb)
+        DB.buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) sdb
     case result of
         Left err -> fail ("buildDatabaseWithMatrices failed: " ++ T.unpack err)
         Right db -> pure db
@@ -547,7 +541,7 @@ spec = do
         it "preserves a linked input semantically across a write→parse round-trip" $
             -- SimpleDatabase carries no supplier link, so a bare re-parse can't
             -- reproduce the raw dataset-number byte-for-byte (the module doc's
-            -- linked-input caveat). What must survive — and does — is the
+            -- linked-input caveat). What must survive, and does, is the
             -- semantic content the loader re-links on: flow name, amount, role,
             -- unit. The idempotence test (a) uses an unlinked fixture, so this is
             -- the only check that exercises a linked input end to end.
@@ -617,7 +611,7 @@ spec = do
             -- would re-parse it as a reference product (input → output flip).
             let prodU = read "77777777-0000-4000-8000-000000000001" :: UUID
                 refInU = read "77777777-0000-4000-8000-0000000000a0" :: UUID
-                refInEx = TechnosphereExchange refInU 1.0 kgUnit ReferenceInput UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+                refInEx = TechnosphereExchange refInU 1.0 kgUnit ReferenceInput UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
                 techs = M.singleton refInU (TechnosphereFlow refInU "waste to treat" kgUnit M.empty Nothing Nothing)
                 sdb = soloDb "treatment process" prodU [refInEx] techs M.empty M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
@@ -668,7 +662,7 @@ spec = do
             -- does not round-trip: the joined text survives, but the parser reads
             -- it back as one element. This pins that documented behaviour.
             let prodU = read "cccc0000-0000-4000-8000-000000000001" :: UUID
-                ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+                ref = TechnosphereExchange prodU 1.0 kgUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
                 act =
                     Activity
                         "documented process"

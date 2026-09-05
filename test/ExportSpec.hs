@@ -44,7 +44,7 @@ spec = describe "Database.Export dispatcher" $ do
         -- VoLCA's own columnar CSV parses "!…" as an exception and must keep it,
         -- or a round-trip loses it and the category counts what it excepted.
         -- SimaPro has no such notion: the row would land as a characterized flow
-        -- named "!Occupation, sea*" — the sea counted at 1, the exception inverted.
+        -- named "!Occupation, sea*": the sea counted at 1, the exception inverted.
         let mc = MT.MethodCollection [landOccupied] [] [] []
             landOccupied =
                 MT.Method
@@ -88,12 +88,14 @@ buildFixture :: Compartment -> IO Database
 buildFixture comp = do
     r <-
         DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (actU, prodU) act)
-            (M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing))
-            (M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp)))
-            M.empty
-            (M.singleton unitU (Unit unitU "kg" "kg" ""))
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = M.singleton (actU, prodU) act
+                , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing)
+                , sdbBioFlows = M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp))
+                , sdbWasteFlows = M.empty
+                , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+                }
     either (fail . ("buildDatabaseWithMatrices: " <>) . T.unpack) pure r
   where
     actU, prodU, co2U, unitU :: UUID
@@ -111,7 +113,7 @@ buildFixture comp = do
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             , BiosphereExchange co2U 0.5 unitU Emission "" Nothing Nothing
             ]
             M.empty

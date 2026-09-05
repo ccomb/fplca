@@ -1198,6 +1198,7 @@ productToExchange unitCfg env role ProductRow{..} =
                 , techPedigree = pedigree
                 , techShare = share
                 , techClassification = M.fromList [("Category", prCategory) | not (T.null prCategory)]
+                , techProperties = noProperties
                 }
         -- A product row states its share of the block; an avoided product row
         -- has the same columns but names a substitution, not a share of anything.
@@ -1299,6 +1300,7 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
                             , techPedigree = pedigree
                             , techShare = Nothing
                             , techClassification = M.empty
+                            , techProperties = noProperties
                             }
         flow =
             TechnosphereFlow

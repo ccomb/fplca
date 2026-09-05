@@ -10,6 +10,7 @@ import qualified Data.UUID as UUID
 import ILCD.Parser (ILCDExchangeRaw (..), ILCDProcessRaw (..), buildSupplierIndex, fixActivityExchanges, parseILCDDirectory, parseProcessXML)
 import Test.Hspec
 import Types
+import UnitConversion (defaultUnitConfig)
 
 classOf :: BS.ByteString -> M.Map Text Text
 classOf = maybe M.empty iprClassifications . parseProcessXML
@@ -48,6 +49,7 @@ activityWithRefExchange fid =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty
@@ -82,6 +84,7 @@ activityWithInputExchange fid =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty
@@ -98,63 +101,63 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "parseILCDDirectory SAMPLE.ilcd" $ do
         it "loads without error" $ do
-            result <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            result <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             case result of
                 Left err -> expectationFailure $ "Expected Right but got: " ++ show err
                 Right _ -> return ()
 
         it "parses exactly two activities" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             M.size (sdbActivities db) `shouldBe` 2
 
         it "activity is named 'Coal extraction'" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let names = map activityName (M.elems (sdbActivities db))
             names `shouldContain` ["Coal extraction"]
 
         it "activity location is GLO" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let Just act = find ((== "Coal extraction") . activityName) (M.elems (sdbActivities db))
             activityLocation act `shouldBe` "GLO"
 
         it "activity has ILCDCategories classification" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let Just act = find ((== "Coal extraction") . activityName) (M.elems (sdbActivities db))
             M.lookup "ILCDCategories" (activityClassification act)
                 `shouldBe` Just "Energy/Hard coal"
 
         it "has two flows (Coal product + CO2 elementary) split across tech and bio" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             (M.size (sdbTechFlows db) + M.size (sdbBioFlows db)) `shouldBe` 2
 
         it "CO2 flow is biosphere" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let co2uuid = read "aaaaaaaa-0000-0000-0000-000000000003"
             M.member co2uuid (sdbBioFlows db) `shouldBe` True
 
         it "Coal flow is technosphere" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let coaluuid = read "aaaaaaaa-0000-0000-0000-000000000004"
             M.member coaluuid (sdbTechFlows db) `shouldBe` True
 
         it "CO2 has CAS number 124-38-9" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let co2uuid = read "aaaaaaaa-0000-0000-0000-000000000003"
             fmap bfCAS (M.lookup co2uuid (sdbBioFlows db)) `shouldBe` Just (Just "124-38-9")
 
         it "activity has two exchanges" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let Just act = find ((== "Coal extraction") . activityName) (M.elems (sdbActivities db))
             length (exchanges act) `shouldBe` 2
 
         it "reference exchange is Coal (Technosphere output)" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let Just act = find ((== "Coal extraction") . activityName) (M.elems (sdbActivities db))
                 refEx = [ex | ex <- exchanges act, exchangeIsReference ex]
             length refEx `shouldBe` 1
 
         it "biosphere exchange amount is 2.5" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let Just act = find ((== "Coal extraction") . activityName) (M.elems (sdbActivities db))
                 bioEx = [ex | ex <- exchanges act, isBiosphereExchange ex]
             case bioEx of
@@ -162,7 +165,7 @@ spec = do
                 _ -> expectationFailure "expected one biosphere exchange"
 
         it "unit group resolves to kg" $ do
-            Right db <- parseILCDDirectory "test-data/SAMPLE.ilcd"
+            Right db <- parseILCDDirectory defaultUnitConfig Declared "test-data/SAMPLE.ilcd"
             let ugUUID = read "aaaaaaaa-0000-0000-0000-000000000001"
             fmap unitName (M.lookup ugUUID (sdbUnits db)) `shouldBe` Just "kg"
 

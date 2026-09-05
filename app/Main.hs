@@ -33,6 +33,7 @@ import CLI.Types
 import Config (Config (..), DatabaseConfig (..), HostingConfig (..), Listen (..), ReadOnly (..), ServerConfig (..), ServerName, clientHost, configKeys, freePortHost, hostingReadOnly, keyPaths, listenOn, loadConfigOrDefault, readDataVersion, readOnlyRefusalFor)
 import Control.Concurrent.STM (readTVarIO)
 import Database.Manager (DatabaseManager (..), initDatabaseManager)
+import qualified Database.Manager as DM
 import Network.HTTP.Client (Manager, defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutNone)
 import Progress
 
@@ -59,7 +60,7 @@ import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings,
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
 
--- _exit(0) bypasses Haskell RTS teardown — necessary on statically-linked
+-- _exit(0) bypasses Haskell RTS teardown, necessary on statically-linked
 -- glibc builds (notably aarch64) where the threaded RTS's shutdown calls
 -- pthread_cancel, which in turn dlopen()'s libgcc_s.so.1 to find the
 -- stack unwinder and SIGILLs when that returns NULL in a static binary.
@@ -90,7 +91,7 @@ main = do
         _ -> die "--config is required"
 
 {- | Load config or die with error message. Without a path the effective
-config is the built-in defaults (no databases) — 'loadConfigOrDefault'
+config is the built-in defaults (no databases): 'loadConfigOrDefault'
 still validates it and honours VOLCA_DATA_DIR.
 -}
 loadConfigOrDie :: Maybe FilePath -> IO Config
@@ -111,11 +112,17 @@ isLocalCommand (DebugMatrices _ _) = True
 isLocalCommand (ExportMatrices _) = True
 isLocalCommand _ = False
 
+-- | What @--no-cache@ asks of every load this run makes.
+cachePolicyOf :: CLIConfig -> DM.CachePolicy
+cachePolicyOf cliConfig
+    | noCache (globalOptions cliConfig) = DM.NoCache
+    | otherwise = DM.UseCache
+
 -- | Run local-only CLI commands through DatabaseManager (loads DBs, matrix solver)
 runCLIWithConfig :: CLIConfig -> Command -> FilePath -> IO ()
 runCLIWithConfig cliConfig cmd cfgFile = do
     config <- loadConfigOrDie (Just cfgFile)
-    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
+    dbManager <- initDatabaseManager config (cachePolicyOf cliConfig)
     executeCommand cliConfig cmd dbManager
 
 {- | HTTP manager for client-mode commands, with the 30 s default response
@@ -141,7 +148,7 @@ runReplMode cliConfig cfgFile = do
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     runRepl mgr rc (globalOptions cliConfig) cfgFile
 
--- | Run stop without config — resolveRemoteConfig falls back to env vars / defaults
+-- | Run stop without config: resolveRemoteConfig falls back to env vars / defaults
 runStopWithoutConfig :: CLIConfig -> IO ()
 runStopWithoutConfig cliConfig = do
     mgr <- newClientManager
@@ -155,7 +162,7 @@ applyLoadOverride serverOpts config = case serverLoadDbs serverOpts of
     Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
 
 {- | Warn for each --load name that matches no configured database: the
-override silently loads nothing for it — guaranteed when running on the
+override silently loads nothing for it, guaranteed when running on the
 built-in defaults, which configure no databases at all.
 -}
 warnUnknownLoadNames :: ServerOptions -> Config -> IO ()
@@ -260,7 +267,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
     config <- applyLoadOverride serverOpts <$> loadConfigOrDie mCfgFile
     warnUnknownLoadNames serverOpts config
     reportProgress Info "Initializing database manager..."
-    dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
+    dbManager <- initDatabaseManager config (cachePolicyOf cliConfig)
     logLoadedDatabases dbManager
     let staticDir = fromMaybe "web/dist" (serverStaticDir serverOpts)
     password <- resolvePassword (globalOptions cliConfig) (cfgServer config)
@@ -304,7 +311,7 @@ runConfigLoadOnly cliConfig cfgFile = do
 
     -- Initialize DatabaseManager (pre-loads databases with load=true)
     reportProgress Info "Loading all databases from config..."
-    _dbManager <- initDatabaseManager config (noCache (globalOptions cliConfig))
+    _dbManager <- initDatabaseManager config (cachePolicyOf cliConfig)
 
     -- Report success
     let loadCount = length $ filter dcLoad (cfgDatabases config)
@@ -404,7 +411,7 @@ createServerApp env staticDir desktopMode serverName markActivity = do
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
-        reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
+        reportProgress Info "Frontend not bundled. MCP responses will omit 'web_url'"
     mcp <- mcpApp (aeDbManager env) (aeClassificationPresets env) hasFrontend (aeHostingConfig env) serverName markActivity
     let apiApp = serve lcaAPI (lcaServer env)
     pure $ \req respond -> do
@@ -513,7 +520,7 @@ shutdownEndpoint mHosting lastRequestRef idleActiveRef app req respond =
 {- | Background thread that exits the server after the idle timeout (seconds).
 
 Two things count as being in use, because one alone would be wrong. An HTTP
-request proves someone is there — reading a process sheet resolves no matrix,
+request proves someone is there: reading a process sheet resolves no matrix,
 and that reader must not lose the server under them. A matrix solve proves
 expensive work is under way, which may well outlast the request that asked for
 it. So the deadline moves on either, and the solve count is read first: a solve

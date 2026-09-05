@@ -4,16 +4,16 @@
 
 The PR these tests guard introduced two related changes:
 
-  1. 'loadDatabaseRawWithCrossDB' returns @(Database, Bool)@ where the
-     'Bool' is True iff the result came straight from the matrix cache
+  1. 'loadDatabaseRawWithCrossDB' returns @(Database, LoadSource)@, which
+     says 'FromCache' iff the result came straight from the matrix cache
      (i.e. cross-DB linking was NOT freshly run against 'otherIndexes').
-  2. 'loadDatabaseSingleFromConfig' uses that flag to skip the no-op
+  2. 'loadDatabaseSingleFromConfig' uses that answer to skip the no-op
      self-relink on fresh parses.
   3. A cache is a hit only when the unit table and the location aliases it
      was built with are the ones in force; with either changed, the source
      is read again, since both shape what the cache holds.
 
-The 'fromCache' flag is the contract these tests pin down. The end-to-end
+The 'LoadSource' answer is the contract these tests pin down. The end-to-end
 dep-set-swap scenario (load consumer with deps A → swap to B → reload
 consumer → links repointed) is still covered by the PR's manual test plan;
 fully automating it requires multi-DB cross-link fixtures and is left to a
@@ -35,9 +35,10 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import Database.Manager (RawLoad (..), loadDatabaseRawWithCrossDB)
+import Database.Loader (LoadOptions (..))
+import Database.Manager (CachePolicy (..), LoadSource (..), RawLoad (..), loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
-import Types (GeographyPolicy (..))
+import Types (AllocationKey (..), GeographyPolicy (..))
 import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
 
 {- | Copy regular files from one directory into another (non-recursive,
@@ -53,21 +54,25 @@ copyDirContents src dst = do
 test cares about. Cross-DB linking is not exercised; we only need the
 cache-hit detection.
 -}
-runRaw :: FilePath -> IO (Either T.Text Bool)
+runRaw :: FilePath -> IO (Either T.Text LoadSource)
 runRaw = runRawWith defaultUnitConfig M.empty
 
 -- | The same, under a chosen unit table and location aliases.
-runRawWith :: UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text Bool)
+runRawWith :: UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text LoadSource)
 runRawWith unitConfig locationAliases dstDir = do
     result <-
         loadDatabaseRawWithCrossDB
             RawLoad
                 { rlDbName = "test"
-                , rlLocationAliases = locationAliases
+                , rlLoadOptions =
+                    LoadOptions
+                        { loUnitConfig = unitConfig
+                        , loLocationAliases = locationAliases
+                        , loAllocation = Declared
+                        }
                 , rlSourcePath = dstDir
-                , rlNoCache = False -- cache must be written/read
+                , rlCachePolicy = UseCache -- cache must be written/read
                 , rlSynonymDB = emptySynonymDB
-                , rlUnitConfig = unitConfig
                 , rlOtherIndexes = []
                 , rlLocationHierarchy = M.empty
                 , rlGeographyPolicy = GeoGlobal
@@ -84,8 +89,8 @@ withGram =
 
 spec :: Spec
 spec = do
-    describe "loadDatabaseRawWithCrossDB cache-hit flag" $ do
-        it "returns fromCache=False on a fresh parse and writes the cache" $
+    describe "loadDatabaseRawWithCrossDB cache-hit answer" $ do
+        it "answers FromSource on a fresh parse and writes the cache" $
             withSystemTempDirectory "volca-relink" $ \tmp -> do
                 let dstDir = tmp </> "sample"
                 copyDirContents "test-data/SAMPLE.min1" dstDir
@@ -96,11 +101,11 @@ spec = do
                 doesFileExist cacheFile `shouldReturn` False
 
                 r1 <- runRaw dstDir
-                r1 `shouldBe` Right False
+                r1 `shouldBe` Right FromSource
 
                 doesFileExist cacheFile `shouldReturn` True
 
-        it "returns fromCache=True on a second load against the same path" $
+        it "answers FromCache on a second load against the same path" $
             withSystemTempDirectory "volca-relink" $ \tmp -> do
                 let dstDir = tmp </> "sample"
                 copyDirContents "test-data/SAMPLE.min1" dstDir
@@ -110,7 +115,7 @@ spec = do
 
                 -- Second call: must come back from the cache.
                 r2 <- runRaw dstDir
-                r2 `shouldBe` Right True
+                r2 `shouldBe` Right FromCache
 
         it "reports an unextractable archive rather than an unrecognised format" $
             withSystemTempDirectory "volca-relink" $ \tmp -> do
@@ -131,9 +136,9 @@ spec = do
                 copyDirContents "test-data/SAMPLE.min1" dstDir
 
                 _ <- runRaw dstDir
-                runRawWith withGram M.empty dstDir `shouldReturn` Right False
+                runRawWith withGram M.empty dstDir `shouldReturn` Right FromSource
                 -- The rebuilt cache records the new table and is trusted again.
-                runRawWith withGram M.empty dstDir `shouldReturn` Right True
+                runRawWith withGram M.empty dstDir `shouldReturn` Right FromCache
 
         it "reads the source again when the cache was built with other location aliases" $
             withSystemTempDirectory "volca-relink" $ \tmp -> do
@@ -141,4 +146,4 @@ spec = do
                 copyDirContents "test-data/SAMPLE.min1" dstDir
 
                 _ <- runRaw dstDir
-                runRawWith defaultUnitConfig (M.fromList [("CH", "GLO")]) dstDir `shouldReturn` Right False
+                runRawWith defaultUnitConfig (M.fromList [("CH", "GLO")]) dstDir `shouldReturn` Right FromSource

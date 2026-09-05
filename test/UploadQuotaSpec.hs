@@ -4,7 +4,7 @@
 
 Two separate budgets: how many databases of their own a user may keep
 ('uploadRefusal'), and how many of those may sit in memory at once
-('memoryRefusal'). Both count only the user's own databases — the ones a tier
+('memoryRefusal'). Both count only the user's own databases, the ones a tier
 preloads are what an uploaded inventory links against, so counting them would
 make the quota forbid the very thing uploading is for. 'loadRefusal' and
 'copyRefusal' are the exact policies the handlers apply, so a budget wired to
@@ -21,9 +21,9 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Manager (DatabaseManager (..), initDatabaseManager)
+import Database.Manager (CachePolicy (..), DatabaseManager (..), initDatabaseManager)
 import Test.Hspec
-import Types (GeographyPolicy (..))
+import Types (AllocationKey (..), GeographyPolicy (..))
 
 -- | A plan allowing @stored@ databases and @loaded@ of them in memory.
 plan :: Int -> Int -> HostingConfig
@@ -56,6 +56,7 @@ uploadedEntry name =
         , dcIsUploaded = True
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 spec :: Spec
@@ -115,7 +116,7 @@ spec = describe "hosting database quotas" $ do
 
     describe "the MCP door" $
         it "refuses load_database by the same budget as REST" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert "mine" (uploadedEntry "mine"))
             resp <-
                 callTool manager [] (Just (plan 1 0)) Nothing Null "load_database" $

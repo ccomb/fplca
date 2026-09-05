@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Loader (getReferenceProductUUID, loadSimaProCSV)
+import Database.Loader (defaultLoadOptions, getReferenceProductUUID, loadSimaProCSV)
 import Expr (evaluate, isExpression, normalizeExpr)
 import SimaPro.Parser (
     BioExchangeRow (..),
@@ -322,7 +322,7 @@ loadParamCSV :: IO SimpleDatabase
 loadParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
     BS.hPut handle paramTestCSV
     hClose handle
-    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
+    either (fail . T.unpack) pure =<< loadSimaProCSV (defaultLoadOptions defaultUnitConfig) path
 
 parseParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseParamCSV = withSystemTempFile "param-test.csv" $ \path handle -> do
@@ -1851,7 +1851,7 @@ loadMultiCoproductCSV :: IO SimpleDatabase
 loadMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do
     BS.hPut handle multiCoproductCSV
     hClose handle
-    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
+    either (fail . T.unpack) pure =<< loadSimaProCSV (defaultLoadOptions defaultUnitConfig) path
 
 parseMultiCoproductCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseMultiCoproductCSV = withSystemTempFile "multi-coproduct.csv" $ \path handle -> do

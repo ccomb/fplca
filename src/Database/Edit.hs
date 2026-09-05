@@ -18,7 +18,7 @@ let the two registry entries share a factorization cache, so the copy gets
 its own.
 
 What an edit does to the activity set itself is pure and lives in
-"Database.Rebuild"; this module is the effectful half around it — which
+"Database.Rebuild"; this module is the effectful half around it, which
 database, under what reservation, written where, swapped into the registry
 how.
 
@@ -56,7 +56,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as U
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, makeAbsolute)
 import System.FilePath ((</>))
 
@@ -89,7 +88,9 @@ import Database.Manager (
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
+    publishLoaded,
     relinkDatabase,
+    solverFor,
     withReservedName,
  )
 import Database.Rebuild (processKey, renderKey, resolveProcess)
@@ -98,11 +99,9 @@ import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
 import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
-import SharedSolver (createSharedSolver)
 import Types (
     Database (..),
     ProcessId,
-    SparseTriple (..),
     findProcessIdByActivityUUID,
     getActivity,
     initializeRuntimeFields,
@@ -114,7 +113,7 @@ import Types (
 @newName@.
 
 Looks up the loaded source, builds an independent 'LoadedDatabase' (renamed
-config + fresh solver — 'Database' is immutable, so the value itself is shared
+config + fresh solver: 'Database' is immutable, so the value itself is shared
 safely) and inserts it into the loaded / available / indexed maps.
 
 @newName@ is slugified to the same charset as uploaded databases: the copy is
@@ -124,7 +123,7 @@ deleted by name via 'removeDirectoryRecursive', so an unsanitised name (e.g.
 
 Fails (Left) when the source is not loaded, when @newName@ slugifies to empty,
 or when the name already designates a loaded, configured, or in-flight
-database — a copy must never silently overwrite an existing entry. The name is
+database: a copy must never silently overwrite an existing entry. The name is
 reserved atomically (in 'dmStagingDbs') across the slow solver build, so two
 concurrent copies of the same name cannot both pass the existence check.
 -}
@@ -155,7 +154,7 @@ copyDatabase manager srcName newName = do
 The home is written before anything is registered: a copy that cannot be
 recorded on disk would work until the restart and then be gone, which is the
 kind of quiet loss this ordering exists to refuse. Nothing after the write can
-fail into an inconsistent state — the registry swap is a pure STM commit.
+fail into an inconsistent state: the registry swap is a pure STM commit.
 -}
 registerCopy :: DatabaseManager -> Text -> LoadedDatabase -> IO (Either Text ())
 registerCopy manager slug src =
@@ -164,16 +163,8 @@ registerCopy manager slug src =
         Right () -> do
             let copiedDb = ldDatabase src
                 newConfig = renameConfig slug (ldConfig src)
-                -- Fresh solver: a distinct name keys a distinct factorization cache.
-                techTriplesInt =
-                    [ (fromIntegral i, fromIntegral j, v)
-                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
-                    ]
-            solver <-
-                createSharedSolver
-                    slug
-                    techTriplesInt
-                    (fromIntegral (dbActivityCount copiedDb))
+            -- Fresh solver: a distinct name keys a distinct factorization cache.
+            solver <- solverFor slug copiedDb
             synonymDB <- getMergedSynonymDB manager
             let copied =
                     LoadedDatabase
@@ -183,9 +174,8 @@ registerCopy manager slug src =
                         }
                 indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
             atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
+                publishLoaded manager slug copied indexedDb
                 modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
-                modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
             clearMethodMappingCacheForDb manager slug
             pure (Right ())
 
@@ -359,7 +349,7 @@ data EditReport = EditReport
 {- | Change the inventory of one activity a loaded database already holds.
 
 The sibling of 'writeActivities', and refused for the same reasons in the same
-order — but not a third 'WriteVerb': a write states a whole activity, an edit
+order, but not a third 'WriteVerb': a write states a whole activity, an edit
 states changes to one, and folding them into one verb would mean a payload
 that is half ignored either way.
 
@@ -609,19 +599,13 @@ commitMutation ::
 commitMutation manager dbName loaded edited home = do
     synonymDB <- getMergedSynonymDB manager
     let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
-        techTriplesInt =
-            [ (fromIntegral i, fromIntegral j, v)
-            | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
-            ]
     -- The solver cached under this name has the pre-edit dimensions; drain and
     -- destroy it before installing the rebuilt one, as the delete path does.
     clearCachedSolver dbName
-    solver <- createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount withRuntime))
+    solver <- solverFor dbName withRuntime
     let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver}
         indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
-    atomically $ do
-        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
-        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+    atomically $ publishLoaded manager dbName loaded' indexedDb
     clearMethodMappingCacheForDb manager dbName
     warnings <- case home of
         -- The transient path must not relink: 'relinkDatabase' saves the
@@ -669,7 +653,7 @@ data DeleteSelection = DeleteSelection
 
 {- | Final delete set = (filtered ∪ extra) \\ keep. Deduplicated; @keep@ wins
 over both @filtered@ and @extra@ so an unticked checkbox always spares a row.
-Order is not significant — the result is consumed as a set by
+Order is not significant: the result is consumed as a set by
 'deleteActivities'.
 -}
 resolveDeleteSelection :: DeleteSelection -> [ProcessId]
@@ -684,7 +668,7 @@ resolveDeleteSelection sel =
 {- | Resolve a filter to the full set of matching 'ProcessId's, ignoring
 pagination. Mirrors the set 'Service.searchActivities' displays so that the
 UI's "delete the whole filtered set" button removes exactly the rows the user
-saw — no more, no fewer.
+saw: no more, no fewer.
 
 A non-exact name filter therefore takes the BM25 OR-over-tokens retrieval
 (via 'bm25Retrieve') followed by the structured filters, exactly as
@@ -694,7 +678,7 @@ multi-word @--name@: it returns a subset of the displayed set, so the count
 would be reported too low. We fall back to the structured field lookup only
 when there is no name filter, the match is exact, or the query tokenizes to
 nothing (in which case 'bm25Retrieve' yields 'Nothing' and there is no
-displayed BM25 set to honour). Order is irrelevant — the result is consumed
+displayed BM25 set to honour). Order is irrelevant: the result is consumed
 as a set.
 -}
 filteredProcessIds ::
@@ -720,7 +704,7 @@ filteredProcessIds db nameP geoP prodP classFilters exactMatch =
 
 {- | One delete-by-selection request against a loaded database. Two exclusive
 selection modes: the filter fields select the whole matching set (@drIds =
-Nothing@), or @drIds@ names the set exactly — every filter field must then be
+Nothing@), or @drIds@ names the set exactly: every filter field must then be
 absent, so a request can never silently mean two things. @drKeep@ spares and
 @drExtra@ adds explicit process ids in both modes.
 -}
@@ -771,7 +755,7 @@ deleteActivitiesInDB manager dbName DeleteRequest{drName = nameP, drLocation = g
             let db = ldDatabase loaded
                 -- The two selection modes are exclusive: ids name the set
                 -- verbatim, filters compute it. A request carrying both is
-                -- ambiguous, so it is refused rather than guessed at — exact
+                -- ambiguous, so it is refused rather than guessed at: exact
                 -- included, since it only modifies name/classification matching.
                 hasFilter =
                     any isJust [nameP, geoP, prodP] || not (null classFilters) || exactMatch

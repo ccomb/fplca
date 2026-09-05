@@ -3,7 +3,7 @@
 
 {- | Tests for the HTTP export handler's error mapping. A failed export must
 surface as the right HTTP status (400 bad format / unexportable data, 404 not
-loaded), never as a 200 body carrying a success flag — the response type (raw
+loaded), never as a 200 body carrying a success flag: the response type (raw
 bytes) cannot represent the latter.
 
 The cheapest fixture that still drives the @Servant.runHandler@ boundary is an
@@ -17,7 +17,7 @@ import API.Types (BinaryContent, ExportRequest (..))
 import App.Env (AppEnv (..), runApp)
 import Config (defaultConfig)
 import Data.Text (Text)
-import Database.Manager (initDatabaseManager)
+import Database.Manager (CachePolicy (..), initDatabaseManager)
 import Servant (Header, Headers, ServerError, errHTTPCode, runHandler)
 import Test.Hspec
 
@@ -27,7 +27,7 @@ pattern never forces it.
 -}
 runExport :: Text -> Text -> IO (Either ServerError (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent))
 runExport dbName fmt = do
-    dbm <- initDatabaseManager defaultConfig True
+    dbm <- initDatabaseManager defaultConfig NoCache
     let env =
             AppEnv
                 { aeDbManager = dbm

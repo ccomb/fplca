@@ -12,6 +12,7 @@ import Test.Hspec
 import Config (DatabaseConfig (..), defaultConfig)
 import Database (buildDatabaseWithMatrices)
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     DatabaseSetupInfo (..),
     LoadedDatabase (..),
@@ -83,6 +84,7 @@ refExchange fid =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 -- | A technosphere input for @prodId@ linked to producer activity @actId@.
@@ -100,6 +102,7 @@ linkedInput actId prodId =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 {- | A loaded database has no UI picker; only its name/path matter to the setup
@@ -120,18 +123,21 @@ stubConfig =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildDb :: [((UUID.UUID, UUID.UUID), Activity)] -> [(UUID.UUID, Text)] -> IO Database
 buildDb acts flows = do
     res <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (M.fromList acts)
-            (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
-            M.empty
-            M.empty
-            M.empty
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = M.fromList acts
+                , sdbTechFlows = M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows]
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = M.empty
+                }
     case res of
         Left err -> error ("buildDatabaseWithMatrices failed: " <> show err)
         Right db -> pure db
@@ -157,7 +163,7 @@ installLoaded manager name db = do
 -- | A fresh manager with @db@ installed as a loaded database named "test".
 managerWithLoaded :: Database -> IO DatabaseManager
 managerWithLoaded db = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     installLoaded manager "test" db
     pure manager
 
@@ -196,7 +202,7 @@ spec = do
     -- activityLinkId to a background activity it doesn't ship. The matrix
     -- builder drops that input, so a loaded database (which bypasses the
     -- finalize gate) must report as not-ready with 0% completeness and name the
-    -- missing background product — never a green "ready" badge over a silently
+    -- missing background product, never a green "ready" badge over a silently
     -- zero score.
     describe "buildLoadedSetupInfo (partial EcoSpold2 import)" $ do
         it "reports a dangling background link as not ready / 0% / named" $ do
@@ -236,8 +242,8 @@ spec = do
 
     -- The dangling-import shape, but its matching background is loaded as a
     -- dependency: the input resolves cross-DB by activityLinkId, recorded in
-    -- 'dbCrossDBLinks'. Readiness must follow the matrix — ready at 100% with no
-    -- gaps — not keep reporting the now-supplied product as missing.
+    -- 'dbCrossDBLinks'. Readiness must follow the matrix (ready at 100% with no
+    -- gaps) not keep reporting the now-supplied product as missing.
     describe "buildLoadedSetupInfo (partial import + loaded background)" $ do
         it "reports a cross-DB-supplied background link as ready / 100% / no gaps" $ do
             let consumer =
@@ -294,7 +300,7 @@ spec = do
                 Right loaded -> dcName (ldConfig loaded) `shouldBe` "test"
 
         it "answers not-loaded for a configured database that was never loaded" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             let config = stubConfig{dcName = "cfg", dcDisplayName = "cfg"}
             atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert "cfg" config)
             result <- getDatabaseSetupInfo manager "cfg"

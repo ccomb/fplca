@@ -9,15 +9,15 @@ so the write→parse cycle has a fair fixed point to land on.
 
 Three properties are pinned, exactly as for the SimaPro/Brightway writers:
 
-  (a) idempotence modulo volatile metadata — @write(D)@ then
+  (a) idempotence modulo volatile metadata: @write(D)@ then
       @write(parse(write(D)))@ produce byte-identical output. The only volatile
       fields (export timestamp, generator string) are /omitted/ by
       'defaultWriteOptions', so this holds without any normalization;
 
-  (b) semantic round-trip — @parse(write(D))@ is structurally equal to @D@,
+  (b) semantic round-trip: @parse(write(D))@ is structurally equal to @D@,
       order-insensitively, over activities, exchanges and the flow catalog;
 
-  (c) score-equivalence — @parse(write(D))@ yields the same biosphere inventory
+  (c) score-equivalence: @parse(write(D))@ yields the same biosphere inventory
       (the LCIA-precursor vector; an LCIA score is linear in it) as @D@ within
       tolerance, via the engine's 'computeInventoryMatrix'.
 -}
@@ -61,7 +61,7 @@ fixtureDir = "test-data/SAMPLE.ilcd"
 -- | Parse the fixture into a 'SimpleDatabase' (fails the test on Left).
 loadFixture :: IO SimpleDatabase
 loadFixture = do
-    r <- parseILCDDirectory fixtureDir
+    r <- parseILCDDirectory defaultUnitConfig Declared fixtureDir
     case r of
         Left err -> error ("fixture parse failed: " <> T.unpack err)
         Right db -> pure db
@@ -74,7 +74,7 @@ roundTrip :: SimpleDatabase -> IO SimpleDatabase
 roundTrip db = withSystemTempDirectory "ilcd-writer-spec" $ \dir -> do
     writeILCDDatabase defaultWriteOptions dir db
         >>= either (\e -> error ("ILCD write failed: " <> T.unpack e)) pure
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -91,7 +91,7 @@ This is the byte stream 'Database.Export' ships to clients.
 archiveRoundTrip :: SimpleDatabase -> IO SimpleDatabase
 archiveRoundTrip db = withSystemTempDirectory "ilcd-archive-spec" $ \dir -> do
     extractFilesFromArchive [OptDestination dir] (toArchive (archiveOrFail defaultWriteOptions db))
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("archive round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -200,13 +200,7 @@ named activity, keyed by biosphere flow name.
 inventoryByName :: SimpleDatabase -> Text -> IO (M.Map Text Double)
 inventoryByName db target = do
     built <-
-        buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (sdbActivities db)
-            (sdbTechFlows db)
-            (sdbBioFlows db)
-            (sdbWasteFlows db)
-            (sdbUnits db)
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) db
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right d -> do
@@ -257,7 +251,7 @@ spec = describe "ILCD.Writer round-trip" $ do
         let sdb =
                 oneActivityDb
                     (M.singleton fEmitU fEmission)
-                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
                     , BiosphereExchange fEmitU 3.3e-20 fUnitU Emission "" Nothing Nothing
                     ]
         db' <- roundTrip sdb
@@ -427,7 +421,7 @@ spec = describe "ILCD.Writer round-trip" $ do
 
         it "accepts and canonicalises the SimaPro \"resource\" medium to \"natural resource\"" $ do
             -- SimaPro labels natural-resource flows "resource"; the writer maps it
-            -- to ILCD's "natural resource", which the parser reads back — so the
+            -- to ILCD's "natural resource", which the parser reads back, so the
             -- flow is representable rather than rejected.
             checkILCDExportable (bioMediumDb "resource") `shouldBe` Right ()
             db' <- roundTrip (bioMediumDb "resource")
@@ -490,7 +484,7 @@ moProdA = read "aaaaaaaa-0000-4000-8000-0000000000a1"
 moProdB = read "aaaaaaaa-0000-4000-8000-0000000000b2"
 moUnitU = read "11111111-0000-4000-8000-000000000001"
 
-{- | A database where one activity UUID exposes two reference products — the
+{- | A database where one activity UUID exposes two reference products, the
 shape an ES2/SimaPro multi-output activity takes internally, and the shape a
 truncated SimaPro process name gives two unrelated blocks. Each product exports
 as its own ILCD process dataset, under the UUID 'ilcdProcessUUID' derives for
@@ -527,7 +521,7 @@ multiOutputDb =
             "GLO"
             LocationDeclared
             "kg"
-            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty]
+            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties]
             M.empty
             M.empty
             Nothing
@@ -607,7 +601,7 @@ oneActivityDb bios exs =
             }
 
 refProductEx :: Exchange
-refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 {- | The reference product sits at index 2, after an air emission with a
 subcompartment and a natural-resource input. One exchange carries a non-empty
@@ -625,8 +619,8 @@ richDb =
 
 {- | One activity with a single biosphere emission under the given medium.
 A non-canonical medium ("fresh water", …) is what 'checkILCDExportable' must
-reject; a canonical one — or an alias the writer canonicalises, like
-"resource" → "natural resource" — passes.
+reject; a canonical one (or an alias the writer canonicalises, like
+"resource" → "natural resource") passes.
 -}
 bioMediumDb :: Text -> SimpleDatabase
 bioMediumDb medium =

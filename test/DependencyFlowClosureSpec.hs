@@ -7,7 +7,7 @@ An activity whose inventory comes from a dependency database carries that
 dependency's biosphere flows: scoring reads the merged inventory of the whole
 cross-database solve. The mapping cascade, though, used to be built on the root
 database's own flows alone, so a dependency's flow reached only the rungs that
-need no flow to point at — never the synonym bridge, the proxy edges or the
+need no flow to point at: never the synonym bridge, the proxy edges or the
 regional projection. The inventory was right, the factors were missing, and
 nothing said so.
 -}
@@ -118,6 +118,7 @@ dbConfigFor name =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 -- | Install a database in the manager's loaded set, solver and config included.
@@ -147,7 +148,7 @@ the dependency; the dependency owns 'riverWater'.
 -}
 setup :: [BiosphereFlow] -> IO (DM.DatabaseManager, Database)
 setup rootFlows = do
-    manager <- DM.initDatabaseManager defaultConfig True
+    manager <- DM.initDatabaseManager defaultConfig DM.NoCache
     let dep = withOwnFlows [riverWater] (mkDB 1 ["FR"] [])
         root =
             (withOwnFlows rootFlows (mkDB 100 ["FR"] []))
@@ -183,8 +184,8 @@ spec = do
 
         it "binds a name both databases declare to the root's own flow" $ do
             -- pickByCompartment reads its candidates in order, so a name index
-            -- rebuilt over the merged map hands the homonym that sorts first —
-            -- the dependency's — a factor the root used to resolve itself. The
+            -- rebuilt over the merged map hands the homonym that sorts first (
+            -- the dependency's), a factor the root used to resolve itself. The
             -- synonym fan-out downstream reaches both, which is its job; what
             -- the cascade picks here is the root's.
             (manager, root) <- setup [rootRiverWater]

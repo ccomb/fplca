@@ -5,7 +5,7 @@
 One server can be reached by many unrelated callers. Loading, unloading,
 uploading and deleting all act on process-wide state, so any one caller doing
 them acts on behalf of all the others. These specs pin the refusal on both
-surfaces that reach that state — the REST handlers and the MCP tools — and
+surfaces that reach that state, the REST handlers and the MCP tools, and
 check that analysis is left alone.
 
 The middleware guarding @/api/v1/shutdown@ and @/api/v1/idle-timeout@ lives in
@@ -57,7 +57,7 @@ import API.Types (
  )
 import App.Env (AppEnv (..), runApp)
 import Config (HostingConfig (..), ReadOnly (..), defaultConfig, hostingReadOnly, readOnlyRefusal, readOnlyRefusalFor)
-import Database.Manager (initDatabaseManager)
+import Database.Manager (CachePolicy (..), initDatabaseManager)
 import Servant (ServerError (..), runHandler)
 import Servant.Types.SourceT (source)
 
@@ -79,7 +79,7 @@ hosting ro =
 -- | Build an environment whose only interesting knob is the hosting stance.
 envWith :: Maybe HostingConfig -> IO AppEnv
 envWith hc = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     pure
         AppEnv
             { aeDbManager = manager
@@ -226,7 +226,7 @@ spec = do
 
     describe "MCP tools under read_only" $ do
         it "refuse the state-changing tools" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             let call name =
                     callTool manager [] (Just (hosting True)) Nothing Null name $
                         KM.singleton "database" (String "nope")
@@ -236,7 +236,7 @@ spec = do
             isToolError unloadResp `shouldBe` True
 
         it "refuse with the operator's words when configured" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             resp <-
                 callTool manager [] (Just ((hosting True){hcReadOnlyMessage = "Ask the operator."})) Nothing Null "load_database" $
                     KM.singleton "database" (String "nope")
@@ -244,7 +244,7 @@ spec = do
             toolText resp `shouldBe` Just "Ask the operator."
 
         it "still answer a read-only tool" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             listed <- callTool manager [] (Just (hosting True)) Nothing Null "list_databases" KM.empty
             isToolError listed `shouldBe` False
 

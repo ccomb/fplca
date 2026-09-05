@@ -65,6 +65,7 @@ module Database.Manager (
 
     -- * Reference Data Operations
     autoCreateFlowSynonyms,
+    SynonymOrigin (..),
     listFlowSynonyms,
     loadFlowSynonyms,
     unloadFlowSynonyms,
@@ -97,8 +98,10 @@ module Database.Manager (
     databaseCoverageReport,
     explainFlowFactor,
     addDependencyToStaged,
+    DependencyEdit (..),
     removeDependencyFromStaged,
     setDataPath,
+    RelativeDataPath (..),
     finalizeDatabase,
 
     -- * Cached flow mapping
@@ -109,12 +112,18 @@ module Database.Manager (
     mapMethodSetToTablesCached,
     mapMethodToIndexCached,
 
-    -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
+    -- * Internal (for tests: lowest-level loader, says where the load came from)
     loadDatabaseRawWithCrossDB,
     RawLoad (..),
+    LoadSource (..),
+    CachePolicy (..),
 
     -- * Internal (for tests: pure dependency-list builder)
     buildDependencyChoices,
+
+    -- * Installing a database the caller built itself
+    solverFor,
+    publishLoaded,
 ) where
 
 import API.JsonOptions (Stripped (..))
@@ -217,6 +226,7 @@ import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), Su
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
     ActivityMap,
+    AllocationKey (..),
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
@@ -402,7 +412,7 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -}
     , dsiAttributeFallbacks :: ![AttributeFallback]
     {- ^ Source-identity inputs (non-nil 'activityLinkId') matched by attributes
-    because no loaded dependency shipped the exact activity — a likely
+    because no loaded dependency shipped the exact activity, a likely
     cross-version stitch the consumer should verify against the source release.
     -}
     , dsiDataPath :: !Text
@@ -549,7 +559,7 @@ data DatabaseManager = DatabaseManager
     , -- Reference data: energy densities (mass/volume → energy for energy-denominated CFs)
       dmAvailableEnergyDensities :: !(TVar (Map Text RefDataConfig))
     , dmLoadedEnergyDensities :: !(TVar (Map Text EnergyDensityMap))
-    , dmNoCache :: !Bool -- Caching disabled flag
+    , dmCachePolicy :: !CachePolicy
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
     , dmLocationHierarchy :: !(Map Location [Location])
     {- ^ 'dmGeographies' in the shape the regionalized scoring path and the
@@ -571,7 +581,7 @@ data DatabaseManager = DatabaseManager
     , dmMethodTablesInflight :: !(TVar (Map (Text, CollectionName, UUID) (TMVar (Either SomeException MethodTables))))
     {- ^ Single-flight slots guarding 'dmMethodTablesCache' builds. The first
     caller for a key installs an empty 'TMVar' and runs the (expensive) build;
-    concurrent callers — including the load-time warm-up — await that slot
+    concurrent callers, including the load-time warm-up, await that slot
     instead of each rebuilding the same tables. The slot is removed when the
     build finishes, so a failed build is retried rather than cached.
     -}
@@ -592,7 +602,7 @@ data DatabaseManager = DatabaseManager
     , dmChemSynonyms :: !ChemSynonyms
     {- ^ Vendored PubChem snapshot loaded once at startup. Drives the
     suggester's synonym-expansion signal. Empty when no path is configured
-    or when the file is missing — suggester degrades to plain Jaccard.
+    or when the file is missing: suggester degrades to plain Jaccard.
     -}
     , dmSubstanceEdges :: ![SubstanceEdge]
     {- ^ Typed flow-correspondence edges loaded once at startup from
@@ -629,7 +639,10 @@ dependency cycle terminates instead of looping.
 dependencyClosure :: Map Text LoadedDatabase -> Text -> [Database]
 dependencyClosure loaded root = go (S.singleton root) (depsOf root)
   where
+    depsOf :: Text -> [Text]
     depsOf name = maybe [] (dbDependsOn . ldDatabase) (M.lookup name loaded)
+
+    go :: S.Set Text -> [Text] -> [Database]
     go _ [] = []
     go seen (name : rest)
         | S.member name seen = go seen rest
@@ -641,8 +654,8 @@ dependencyClosure loaded root = go (S.singleton root) (depsOf root)
 
 Scoring reads the merged inventory of the whole cross-database solve, so a
 mapping cascade built on the root's own flows alone leaves every dependency
-flow to the coarse rungs — no synonym bridge, no proxy edge, no regional
-projection — and the score changes without anything reporting a gap.
+flow to the coarse rungs (no synonym bridge, no proxy edge, no regional
+projection) and the score changes without anything reporting a gap.
 -}
 getFlowClosure :: DatabaseManager -> Text -> Database -> IO FlowClosure
 getFlowClosure manager dbName db = atomically $ do
@@ -744,8 +757,8 @@ buildMethodTablesFor manager dbName collection db method = do
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager
     -- A method listed in its collection's 'global-methods' is scored without
-    -- regionalization: drop its located CFs so the broadcast (global) path — the
-    -- method's own unlocated default CF — is the single answer, matching a
+    -- regionalization: drop its located CFs so the broadcast (global) path, the
+    -- method's own unlocated default CF, is the single answer, matching a
     -- reference distribution that flattened the spatial factors to a global value.
     -- This assumes the method carries such an unlocated default for the flows in
     -- question; a method whose CFs are all region-tagged would be left with none.
@@ -850,7 +863,7 @@ buildMethodTablesFor manager dbName collection db method = do
 caller installs a slot and runs the build; others block on the same result
 rather than duplicating the work. @onSuccess@ runs in the slot-clearing
 transaction, so a built value lands in its cache atomically with the release. A
-failed build clears the slot — the next caller retries — and re-throws.
+failed build clears the slot (the next caller retries) and re-throws.
 
 A cache purge that ran while the build was in flight takes the slot away. The
 value was computed from the state that purge invalidated, so the owner returns
@@ -890,11 +903,11 @@ against @dbName@, so the expensive (regional) build is paid once at load time
 rather than on the first user score. Single-flighting means a request arriving
 mid-warm joins the in-flight build instead of starting a second one.
 
-Methods are built one at a time in a single background thread — deliberately
+Methods are built one at a time in a single background thread, deliberately
 sequential rather than 'mapMethodSetToTablesCached''s concurrent fan-out: the
 heavy regional builds (e.g. AWARE water use) thrash the GC when run in parallel,
 so serial warming is both lower-peak-memory and faster wall-clock here. A
-failure is logged, not fatal — the on-demand path rebuilds and surfaces it.
+failure is logged, not fatal: the on-demand path rebuilds and surfaces it.
 -}
 warmMethodTables :: DatabaseManager -> Text -> Database -> IO ()
 warmMethodTables manager dbName db = void $ forkIO $ withLogScope dbName $ do
@@ -957,7 +970,7 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
 
 {- | Cached method index (CF tokens, by-medium, by-CAS): built once per
 (db, method), reused by the post-scoring suggester. Doesn't depend on the
-'Database' itself — only on the method's CF list — but keyed by (dbName,
+'Database' itself, only on the method's CF list, but keyed by (dbName,
 methodId) to share lifetime semantics with the tables cache.
 -}
 mapMethodToIndexCached :: DatabaseManager -> Text -> CollectionName -> Method -> IO MethodIndex
@@ -975,7 +988,7 @@ mapMethodToIndexCached manager dbName collection method = do
 action, and release it whether the action returns or throws.
 
 @decide@ runs in the same transaction as the claim, so a caller refuses for
-its own reasons — a name already taken, an edit already running — with no
+its own reasons (a name already taken, an edit already running) with no
 window between finding the name free and taking it. That window is the whole
 reason this is one function: two copies of it, written apart, are two chances
 to widen it.
@@ -986,7 +999,7 @@ they contend with each other and not only with their own kind.
 
 'getDatabaseSetupInfo' does not come through here on purpose: it waits for
 whoever holds the name (STM @retry@) instead of refusing, and it has a third
-answer — already staged, nothing to reserve — that this shape has no room for.
+answer (already staged, nothing to reserve) that this shape has no room for.
 -}
 withReservedName ::
     DatabaseManager ->
@@ -1010,7 +1023,7 @@ withReservedName manager dbName decide act = do
                 (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
 
 {- | Clear all cached flow mappings (call when databases, methods, or synonyms change).
-Also drops the merged flow/unit snapshots — both caches depend on the loaded-DB set.
+Also drops the merged flow/unit snapshots: both caches depend on the loaded-DB set.
 -}
 clearMethodMappingCache :: DatabaseManager -> IO ()
 clearMethodMappingCache manager = atomically $ do
@@ -1050,10 +1063,13 @@ transitively. The seen set is what makes a dependency cycle terminate.
 dependentsClosure :: Map Text LoadedDatabase -> Text -> S.Set Text
 dependentsClosure loaded = go S.empty . pure
   where
+    go :: S.Set Text -> [Text] -> S.Set Text
     go seen [] = seen
     go seen (name : rest)
         | S.member name seen = go seen rest
         | otherwise = go (S.insert name seen) (rest ++ directDependents name)
+
+    directDependents :: Text -> [Text]
     directDependents name =
         [ other
         | (other, ld) <- M.toList loaded
@@ -1067,7 +1083,7 @@ data ManagerSeed = ManagerSeed
     { msDatabases :: ![DatabaseConfig]
     , msMethods :: ![MethodConfig]
     , msRefData :: !RefDataSources
-    , msNoCache :: !Bool
+    , msCachePolicy :: !CachePolicy
     , msGeographies :: !(Map Text (Text, [Text]))
     , msChemSynonyms :: !ChemSynonyms
     , msSubstanceEdges :: ![SubstanceEdge]
@@ -1086,8 +1102,8 @@ data RefDataSources = RefDataSources
 Pre-loads databases with load=true at startup
 Also discovers uploaded databases from uploads/ directory
 -}
-initDatabaseManager :: Config -> Bool -> IO DatabaseManager
-initDatabaseManager config noCache = do
+initDatabaseManager :: Config -> CachePolicy -> IO DatabaseManager
+initDatabaseManager config cachePolicy = do
     databases <- discoverDatabases config
     methods <- discoverMethods config
     refData <- discoverRefDataSources config
@@ -1101,7 +1117,7 @@ initDatabaseManager config noCache = do
                 { msDatabases = databases
                 , msMethods = methods
                 , msRefData = refData
-                , msNoCache = noCache
+                , msCachePolicy = cachePolicy
                 , msGeographies = geographies
                 , msChemSynonyms = chemSyns
                 , msSubstanceEdges = substanceEdges
@@ -1296,7 +1312,7 @@ newManager ManagerSeed{..} = do
             , dmLoadedUnitDefs = loadedUnitDefsVar
             , dmAvailableEnergyDensities = availableEnergyDensitiesVar
             , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
-            , dmNoCache = msNoCache
+            , dmCachePolicy = msCachePolicy
             , dmGeographies = msGeographies
             , dmLocationHierarchy = hierarchyFromGeographies msGeographies
             , dmMethodMappingCache = methodMappingCacheVar
@@ -1394,7 +1410,7 @@ loadConfiguredMethods manager config =
                 warnZeroTouchPatches (mcName mc) patchStats
                 warnUnknownGlobalMethods mc collection
                 let !pairs = extractFromILCDFlows flowInfo
-                autoCreateFlowSynonyms manager (mcName mc) ("Auto-extracted from " <> mcName mc) pairs
+                autoCreateFlowSynonyms manager (mcName mc) (SynonymOrigin ("Auto-extracted from " <> mcName mc)) pairs
 
 {- | Surface a 'global-methods' entry that matches no loaded method: the
 de-regionalization is keyed by method name, so a typo or a renamed method
@@ -1409,7 +1425,7 @@ warnUnknownGlobalMethods mc collection =
                 <> T.unpack (mcName mc)
                 <> ": no method named "
                 <> T.unpack (T.intercalate ", " unknownGlobals)
-                <> " — these stay regionalized; check for a typo."
+                <> ". These stay regionalized; check for a typo."
   where
     unknownGlobals :: [Text]
     unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
@@ -1438,69 +1454,66 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             dbConfig
             llSynonyms
             llUnitConfig
-            (dmNoCache manager)
+            (dmCachePolicy manager)
             llOtherIndexes
             (dmLocationHierarchy manager)
     case result of
-        Right (loaded0, _fromCache) -> do
+        Right (loaded0, _source) -> do
             -- Backfill empty bfCAS from the registry's name↔CAS edges before
             -- indexing, so a CAS-less source (e.g. a SimaPro export) still
             -- reaches the native CAS bridge.
             let loaded = loaded0{ldDatabase = enrichBioFlowCAS (dmCasBindings manager) (ldDatabase loaded0)}
                 indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) llSynonyms (ldDatabase loaded)
-            atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert (dcName dbConfig) loaded)
-                modifyTVar' (dmIndexedDbs manager) (M.insert (dcName dbConfig) indexedDb)
+            atomically $ publishLoaded manager (dcName dbConfig) loaded indexedDb
             dbEnd <- getCurrentTime
             let !dbDuration = realToFrac (diffUTCTime dbEnd dbStart) :: Double
             reportProgressWithTiming Info ("  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)) dbDuration
             -- Auto-extract synonyms from biosphere flows
-            let db = ldDatabase loaded
-                bioFlowDb = dbBioFlows db
+            let bioFlowDb = dbBioFlows (ldDatabase loaded)
                 !pairs = extractFromEcoSpold2 bioFlowDb
-                !bioFlowsWithSyns =
-                    length
-                        [ ()
-                        | f <- M.elems bioFlowDb
-                        , not (M.null (bfSynonyms f))
-                        ]
-            reportProgress Info $
-                "  [EXTRACT] "
-                    <> T.unpack (dcName dbConfig)
-                    <> ": "
-                    <> show (M.size bioFlowDb)
-                    <> " bio flows, "
-                    <> show bioFlowsWithSyns
-                    <> " with synonyms, "
-                    <> show (length pairs)
-                    <> " pairs"
-            -- A biosphere flow whose name carries a "/unit" suffix that
-            -- 'normalizeName' does not strip silently misses its CF (the SimaPro
-            -- unit-in-name convention; e.g. a "/MJ" absent from 'unitSuffixes').
-            -- Surface it so the fix — add the unit to 'unitSuffixes' — is visible.
-            let uncoveredUnits =
+            reportProgress Info (extractSummary bioFlowDb pairs)
+            {- A biosphere flow whose name carries a "/unit" suffix that
+            'normalizeName' does not strip silently misses its CF (the SimaPro
+            unit-in-name convention; e.g. a "/MJ" absent from 'unitSuffixes').
+            Surface it so the fix, adding the unit to 'unitSuffixes', is
+            visible. -}
+            mapM_ (reportProgress Warning . unstrippedSuffixWarning) $
+                M.toList $
                     uncoveredUnitSuffixes
                         (UnitConversion.isKnownUnit llUnitConfig)
                         (map bfName (M.elems bioFlowDb))
-            forM_ (M.toList uncoveredUnits) $ \(unit, egs) ->
-                reportProgress Warning $
-                    "  [UNIT] "
-                        <> T.unpack (dcName dbConfig)
-                        <> ": flow-name suffix /"
-                        <> T.unpack unit
-                        <> " not stripped on "
-                        <> show (length egs)
-                        <> " flows (add \"/"
-                        <> T.unpack (T.toLower unit)
-                        <> "\" to unitSuffixes); e.g. "
-                        <> T.unpack (T.intercalate ", " (take 3 egs))
             autoCreateFlowSynonyms
                 manager
                 (dcName dbConfig)
-                ("Auto-extracted from " <> dcDisplayName dbConfig)
+                (SynonymOrigin ("Auto-extracted from " <> dcDisplayName dbConfig))
                 pairs
         Left err ->
             reportError $ "  [FAIL] Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
+  where
+    extractSummary :: BioFlowDB -> [(Text, Text)] -> String
+    extractSummary bioFlowDb pairs =
+        "  [EXTRACT] "
+            <> T.unpack (dcName dbConfig)
+            <> ": "
+            <> show (M.size bioFlowDb)
+            <> " bio flows, "
+            <> show (length [() | f <- M.elems bioFlowDb, not (M.null (bfSynonyms f))])
+            <> " with synonyms, "
+            <> show (length pairs)
+            <> " pairs"
+
+    unstrippedSuffixWarning :: (Text, [Text]) -> String
+    unstrippedSuffixWarning (unit, egs) =
+        "  [UNIT] "
+            <> T.unpack (dcName dbConfig)
+            <> ": flow-name suffix /"
+            <> T.unpack unit
+            <> " not stripped on "
+            <> show (length egs)
+            <> " flows (add \"/"
+            <> T.unpack (T.toLower unit)
+            <> "\" to unitSuffixes); e.g. "
+            <> T.unpack (T.intercalate ", " (take 3 egs))
 
 {- | Compute dependency levels from topo-sorted load order for parallel loading.
   Level 0 = no deps, level N = depends only on levels 0..N-1.
@@ -1554,13 +1567,14 @@ uploadMetaToConfig slug dirPath meta =
         , dcIsUploaded = True -- Discovered from uploads/ directory
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal -- Uploads can't yet express policy; default to permissive
+        , dcAllocation = Declared
         }
 
 {- | Record an uploaded database's dependency pin where a restart can find it.
 
 The pin otherwise lives in the staging registry and inside the binary matrix
 cache, so a restart between choosing a dependency and finalizing the database
-used to lose it without saying so — the database came back linked to nothing.
+used to lose it without saying so: the database came back linked to nothing.
 Writes 'UploadedDB.umDepends' and keeps the in-memory config in step.
 
 A configured (TOML) database has no meta.toml to write and owns its
@@ -1611,7 +1625,7 @@ configToScoringSet ssc =
 
 {- | Fold a 'MethodConfig's post-parse adjustments into a freshly parsed
 collection: inject the configured scoring sets, then apply the declarative
-CF patches ('Config.mcPatches'). Pure — reapplying the same config to the
+CF patches ('Config.mcPatches'). Pure: reapplying the same config to the
 same source file always yields the same result, so a reload never
 compounds a patch. Also returns, per patch, how many CFs it touched (for
 the zero-touch warning at the call site).
@@ -1634,7 +1648,7 @@ warnZeroTouchPatches collName stats =
                 <> T.unpack collName
                 <> ": \""
                 <> T.unpack (Method.Patch.describePatch patch)
-                <> "\" touched 0 characterization factors — check the selector."
+                <> "\" touched 0 characterization factors. Check the selector."
 
 discoverUploadedMethodConfigs :: IO [MethodConfig]
 discoverUploadedMethodConfigs = do
@@ -1757,11 +1771,11 @@ loadDatabaseFromConfigWithCrossDB ::
     DatabaseConfig ->
     SynonymDB ->
     UnitConversion.UnitConfig ->
-    Bool -> -- noCache
+    CachePolicy ->
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map Location [Location] -> -- Location hierarchy (empty = use built-in)
-    IO (Either Text (LoadedDatabase, Bool))
-loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
+    IO (Either Text (LoadedDatabase, LoadSource))
+loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig cachePolicy otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
     reportProgress Info $ "Loading database from: " <> sourcePath
@@ -1769,11 +1783,15 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
         loadDatabaseRawWithCrossDB
             RawLoad
                 { rlDbName = dcName dbConfig
-                , rlLocationAliases = locationAliases
+                , rlLoadOptions =
+                    Loader.LoadOptions
+                        { Loader.loUnitConfig = unitConfig
+                        , Loader.loLocationAliases = locationAliases
+                        , Loader.loAllocation = dcAllocation dbConfig
+                        }
                 , rlSourcePath = sourcePath
-                , rlNoCache = noCache
+                , rlCachePolicy = cachePolicy
                 , rlSynonymDB = synonymDB
-                , rlUnitConfig = unitConfig
                 , rlOtherIndexes = otherIndexes
                 , rlLocationHierarchy = locationHier
                 , rlGeographyPolicy = dcGeographyPolicy dbConfig
@@ -1781,16 +1799,10 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
 
     case dbResult of
         Left err -> return $ Left err
-        Right (dbRaw, fromCache) -> do
+        Right (dbRaw, source) -> do
             -- Initialize runtime fields (synonym DB and flow name index)
             let database = BM25.addBM25Index (initializeRuntimeFields dbRaw synonymDB)
-
-                -- Create shared solver with lazy factorization (deferred to first query)
-                techTriples = dbTechnosphereTriples database
-                activityCount = dbActivityCount database
-                techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                activityCountInt = fromIntegral activityCount
-            sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
+            sharedSolver <- solverFor (dcName dbConfig) database
 
             return $
                 Right
@@ -1799,7 +1811,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
                         , ldSharedSolver = sharedSolver
                         , ldConfig = dbConfig
                         }
-                    , fromCache
+                    , source
                     )
 
 -- | Detected format of a database directory
@@ -1836,6 +1848,7 @@ supportedSourceFormats :: Text
 supportedSourceFormats =
     T.intercalate ", " (mapMaybe label [minBound .. maxBound])
   where
+    label :: DirectoryFormat -> Maybe Text
     label f = case f of
         FormatSpold -> Just "EcoSpold v2 (.spold)"
         FormatXML -> Just "EcoSpold v1 (.xml)"
@@ -1951,12 +1964,12 @@ needed a comment per parameter to be readable at all.
 -}
 data RawLoad = RawLoad
     { rlDbName :: !Text
-    , rlLocationAliases :: !(M.Map Text Text)
+    , rlLoadOptions :: !Loader.LoadOptions
+    -- ^ The unit table, the location aliases and the allocation key it reads under.
     , rlSourcePath :: !FilePath
     -- ^ Unresolved: the matrix cache is co-located with it.
-    , rlNoCache :: !Bool
+    , rlCachePolicy :: !CachePolicy
     , rlSynonymDB :: !SynonymDB
-    , rlUnitConfig :: !UnitConversion.UnitConfig
     , rlOtherIndexes :: ![IndexedDatabase]
     -- ^ Pre-built indexes of the databases this one may link against.
     , rlLocationHierarchy :: !(M.Map Location [Location])
@@ -1991,30 +2004,25 @@ success.
 -}
 loadDatabaseRawWithCrossDB ::
     RawLoad ->
-    {- | (Database, fromCache): True iff the result came from the matrix cache
-    as-is, i.e. cross-DB linking was NOT freshly run against 'rlOtherIndexes'.
-    Callers use this to decide whether a self-relink is needed.
-    -}
-    IO (Either Text (Database, Bool))
+    IO (Either Text (Database, LoadSource))
 loadDatabaseRawWithCrossDB RawLoad{..} = do
-    mCachedDb <-
-        if rlNoCache
-            then return Nothing
-            else Loader.loadCachedDatabaseWithMatrices rlDbName rlSourcePath inputs
+    mCachedDb <- case rlCachePolicy of
+        NoCache -> return Nothing
+        UseCache -> Loader.loadCachedDatabaseWithMatrices rlDbName rlSourcePath inputs
     case cacheVerdict rlOtherIndexes mCachedDb of
         Fresh db -> do
             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-            return $ Right (db, True)
+            return $ Right (db, FromCache)
         Stale -> do
             reportProgress Info "Cache has unresolved links, rebuilding with available dependencies..."
             rebuildFromSource
         Absent -> rebuildFromSource
   where
     -- Cache miss or stale: now we need the source. Resolve the archive if any.
-    rebuildFromSource :: IO (Either Text (Database, Bool))
+    rebuildFromSource :: IO (Either Text (Database, LoadSource))
     rebuildFromSource = resolveDataPath rlSourcePath >>= either (pure . Left) fromPath
 
-    fromPath :: FilePath -> IO (Either Text (Database, Bool))
+    fromPath :: FilePath -> IO (Either Text (Database, LoadSource))
     fromPath path = do
         isFile <- doesFileExist path
         isDir <- doesDirectoryExist path
@@ -2038,31 +2046,33 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                     FormatXML -> loadStructured path
                     FormatILCD -> loadStructured path
 
-    loadCSV :: FilePath -> IO (Either Text (Database, Bool))
+    loadCSV :: FilePath -> IO (Either Text (Database, LoadSource))
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-        loaded <- Loader.loadSimaProCSV rlUnitConfig csvFile
+        loaded <- Loader.loadSimaProCSV rlLoadOptions csvFile
+        -- This path reaches the parser directly, so the load's own report of
+        -- what the allocation key refused has to be asked for here.
+        either (const (pure ())) (Loader.reportKeyRefusals rlLoadOptions) loaded
         case loaded of
             Left err -> return $ Left err
             Right linkedDb -> do
                 reportProgress Info $ "Building database from " <> show (M.size (sdbActivities linkedDb)) <> " activities"
-                dbResult <- buildDatabaseWithMatrices inputs (sdbActivities linkedDb) (sdbTechFlows linkedDb) (sdbBioFlows linkedDb) (sdbWasteFlows linkedDb) (sdbUnits linkedDb)
+                dbResult <- buildDatabaseWithMatrices inputs linkedDb
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
-                        unless rlNoCache $
+                        when (rlCachePolicy == UseCache) $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath db
                         Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
-                        return $ Right (db, False)
+                        return $ Right (db, FromSource)
 
-    loadStructured :: FilePath -> IO (Either Text (Database, Bool))
+    loadStructured :: FilePath -> IO (Either Text (Database, LoadSource))
     loadStructured path = do
         loadResult <-
             Loader.loadDatabaseWithCrossDBLinking
-                rlLocationAliases
+                rlLoadOptions
                 rlOtherIndexes
                 rlSynonymDB
-                rlUnitConfig
                 rlLocationHierarchy
                 rlGeographyPolicy
                 path
@@ -2070,13 +2080,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
             Left err -> return $ Left err
             Right (simpleDb, stats) -> do
                 dbResult <-
-                    buildDatabaseWithMatrices
-                        inputs
-                        (sdbActivities simpleDb)
-                        (sdbTechFlows simpleDb)
-                        (sdbBioFlows simpleDb)
-                        (sdbWasteFlows simpleDb)
-                        (sdbUnits simpleDb)
+                    buildDatabaseWithMatrices inputs simpleDb
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -2088,12 +2092,16 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                                     , dbDependsOn = depDbs
                                     , dbLinkingStats = stats
                                     }
-                        unless rlNoCache $
+                        when (rlCachePolicy == UseCache) $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath dbWithLinks
-                        return $ Right (dbWithLinks, False)
+                        return $ Right (dbWithLinks, FromSource)
 
     inputs :: BuildInputs
-    inputs = BuildInputs rlUnitConfig rlLocationAliases
+    inputs =
+        BuildInputs
+            (Loader.loUnitConfig rlLoadOptions)
+            (Loader.loLocationAliases rlLoadOptions)
+            (Loader.loAllocation rlLoadOptions)
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -2114,15 +2122,29 @@ loadDatabaseSingle manager dbName = do
         Nothing -> loadDatabaseSingleFromConfig manager dbName
 
 {- | How a database that has just been loaded got here. The three are what the
-work after the load turns on, and the fourth combination the two booleans they
-replace could spell - read from a cache and replayed over - does not exist: a
-cache hit already holds its edits.
+work after the load turns on, and the fourth combination a cache-hit flag and a
+replayed flag could spell together - read from a cache and replayed over - does
+not exist: a cache hit already holds its edits.
 -}
 data LoadOrigin
     = CacheHit
     | Parsed
     | Replayed
     deriving (Eq)
+
+{- | Where the raw loader got the database. 'FromCache' means it came out of
+the matrix cache as it stood, so cross-database linking was NOT run against
+the indexes the caller passed; 'FromSource' means it was.
+-}
+data LoadSource = FromCache | FromSource
+    deriving (Eq, Show)
+
+{- | Whether a load may read and write the matrix cache. 'NoCache' is what
+@--no-cache@ asks for, and what a database whose journal runs ahead of its
+cache gets whatever the flag says.
+-}
+data CachePolicy = UseCache | NoCache
+    deriving (Eq, Show)
 
 {- | On a fresh parse 'loadDatabaseRawWithCrossDB' already ran linking against
 the current indexes, so a follow-up relink is guaranteed no-op work. A cache
@@ -2140,77 +2162,74 @@ needsSelfRelink origin = case origin of
 loadDatabaseSingleFromConfig ::
     DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
 loadDatabaseSingleFromConfig manager dbName = do
-    -- Check if already loaded
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Just loaded -> return $ Right loaded
-        Nothing -> do
-            -- Check if it's configured
-            availableDbs <- readTVarIO (dmAvailableDbs manager)
-            case M.lookup dbName availableDbs of
-                Nothing -> return $ Left $ "Database not found: " <> dbName
-                Just dbConfig -> do
-                    reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-                    -- Get currently loaded IndexedDatabases for cross-DB linking
-                    currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
-                    let otherIndexes = M.elems currentIndexedDbs
-                    synonymDB <- getMergedSynonymDB manager
-                    warnReopenedBridges synonymDB
-                    unitConfig <- getMergedUnitConfig manager
-                    -- A cache saved before the last edit was journalled would
-                    -- come back without it. Read the sources again in that
-                    -- case, so the journal below is replayed over them.
-                    journalAhead <- journalAheadOfCache dbConfig
-                    eitherResult <-
-                        try $
-                            loadDatabaseFromConfigWithCrossDB
-                                dbConfig
-                                synonymDB
-                                unitConfig
-                                (dmNoCache manager || journalAhead)
-                                otherIndexes
-                                (dmLocationHierarchy manager)
-                    replayResult <- case eitherResult of
-                        Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
-                        Right (Left err) -> pure (Left err)
-                        -- A cache hit already holds the edits (its stamp says
-                        -- so); a fresh parse holds only what the author
-                        -- uploaded, and the journal is the rest.
-                        Right (Right (loaded, True)) -> pure (Right (loaded, CacheHit))
-                        Right (Right (loaded, False)) ->
-                            fmap (\(l, replayed) -> (l, if replayed then Replayed else Parsed))
-                                <$> replayEdits manager dbConfig loaded
-                    case replayResult of
-                        Left err -> return (Left err)
-                        Right (loaded, origin) -> do
-                            let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
-                            atomically $ do
-                                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                                modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
-                            clearMethodMappingCacheForDb manager dbName
-                            reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
-                            -- Auto-extract synonyms from biosphere flows
-                            let db = ldDatabase loaded
-                                pairs = extractFromEcoSpold2 (dbBioFlows db)
-                            autoCreateFlowSynonyms
-                                manager
-                                dbName
-                                ("Auto-extracted from " <> dcDisplayName dbConfig)
-                                pairs
-                            when (needsSelfRelink origin) $ do
-                                result <- relinkDatabase manager dbName
-                                case result of
-                                    Right _ -> return ()
-                                    Left err ->
-                                        reportProgress Warning $
-                                            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-                            relinkDependents manager dbName
-                            -- Cache what the journal produced, so the next load
-                            -- does not replay it, and stamp the cache with the
-                            -- journal it holds. The stamp goes last: a cache
-                            -- that is not stamped is read again from source.
-                            when (origin == Replayed) $ recordReplayedCache manager dbConfig
-                            return $ Right loaded
+    -- Already loaded is a success, not work to do.
+    maybe (runExceptT loadFromConfig) (pure . Right) (M.lookup dbName loadedDbs)
+  where
+    loadFromConfig :: ExceptT Text IO LoadedDatabase
+    loadFromConfig = do
+        availableDbs <- liftIO $ readTVarIO (dmAvailableDbs manager)
+        dbConfig <-
+            except $ maybe (Left ("Database not found: " <> dbName)) Right (M.lookup dbName availableDbs)
+        liftIO $ reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
+        synonymDB <- liftIO $ getMergedSynonymDB manager
+        liftIO $ warnReopenedBridges synonymDB
+        (loaded, origin) <- parseOrReplay dbConfig synonymDB
+        liftIO $ publish dbConfig synonymDB loaded origin
+        pure loaded
+
+    {- A cache saved before the last edit was journalled would come back
+    without it, so that case reads the sources again and the journal is
+    replayed over them. A cache hit already holds the edits (its stamp says
+    so); a fresh parse holds only what the author uploaded. -}
+    parseOrReplay :: DatabaseConfig -> SynonymDB -> ExceptT Text IO (LoadedDatabase, LoadOrigin)
+    parseOrReplay dbConfig synonymDB = do
+        currentIndexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+        unitConfig <- liftIO $ getMergedUnitConfig manager
+        journalAhead <- liftIO $ journalAheadOfCache dbConfig
+        eitherResult <-
+            liftIO $
+                try $
+                    loadDatabaseFromConfigWithCrossDB
+                        dbConfig
+                        synonymDB
+                        unitConfig
+                        (if journalAhead then NoCache else dmCachePolicy manager)
+                        (M.elems currentIndexedDbs)
+                        (dmLocationHierarchy manager)
+        ExceptT $ case eitherResult of
+            Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
+            Right (Left err) -> pure (Left err)
+            Right (Right (loaded, FromCache)) -> pure (Right (loaded, CacheHit))
+            Right (Right (loaded, FromSource)) -> replayEdits manager dbConfig loaded
+
+    publish :: DatabaseConfig -> SynonymDB -> LoadedDatabase -> LoadOrigin -> IO ()
+    publish dbConfig synonymDB loaded origin = do
+        atomically $
+            publishLoaded manager dbName loaded (buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded))
+        clearMethodMappingCacheForDb manager dbName
+        reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
+        -- Auto-extract synonyms from biosphere flows
+        autoCreateFlowSynonyms
+            manager
+            dbName
+            (SynonymOrigin ("Auto-extracted from " <> dcDisplayName dbConfig))
+            (extractFromEcoSpold2 (dbBioFlows (ldDatabase loaded)))
+        when (needsSelfRelink origin) $
+            relinkDatabase manager dbName >>= either (warnSelfRelinkFailed dbName) (const (pure ()))
+        relinkDependents manager dbName
+        {- Cache what the journal produced, so the next load does not replay
+        it, and stamp the cache with the journal it holds. The stamp goes
+        last: a cache that is not stamped is read again from source. -}
+        when (origin == Replayed) $ recordReplayedCache manager dbConfig
+
+{- | A self-relink that failed wrote nothing, and the caller carries on: what
+was loaded is usable, its cross-database links are just not converged.
+-}
+warnSelfRelinkFailed :: Text -> Text -> IO ()
+warnSelfRelinkFailed dbName err =
+    reportProgress Warning $
+        "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
 
 {- | Where a database keeps its edits, or 'Nothing' for one the engine only
 reads from its configuration and never writes.
@@ -2251,14 +2270,14 @@ disagrees with its own record. The dependencies are the ones the config pins,
 already loaded by 'loadDatabase', because a supplier an edit points at may
 live in one of them.
 -}
-replayEdits :: DatabaseManager -> DatabaseConfig -> LoadedDatabase -> IO (Either Text (LoadedDatabase, Bool))
+replayEdits :: DatabaseManager -> DatabaseConfig -> LoadedDatabase -> IO (Either Text (LoadedDatabase, LoadOrigin))
 replayEdits manager dbConfig loaded =
     editHome dbConfig >>= \case
-        Nothing -> pure (Right (loaded, False))
+        Nothing -> pure (Right (loaded, Parsed))
         Just home ->
             Journal.readJournal home >>= \case
                 Left err -> pure (Left (dcName dbConfig <> ": " <> err))
-                Right [] -> pure (Right (loaded, False))
+                Right [] -> pure (Right (loaded, Parsed))
                 Right events -> do
                     loadedDbs <- readTVarIO (dmLoadedDbs manager)
                     unitConfig <- getMergedUnitConfig manager
@@ -2278,17 +2297,9 @@ replayEdits manager dbConfig loaded =
                             -- The rebuild resets the runtime indexes and moves
                             -- every matrix row, so both are made again here.
                             let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
-                                techTriplesInt =
-                                    [ (fromIntegral i, fromIntegral j, v)
-                                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
-                                    ]
                             clearCachedSolver (dcName dbConfig)
-                            solver <-
-                                createSharedSolver
-                                    (dcName dbConfig)
-                                    techTriplesInt
-                                    (fromIntegral (dbActivityCount withRuntime))
-                            pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, True))
+                            solver <- solverFor (dcName dbConfig) withRuntime
+                            pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, Replayed))
 
 {- | Save the replayed database to its matrix cache and stamp the cache with
 the journal it now holds, so the next load reads it instead of replaying.
@@ -2312,7 +2323,7 @@ data RelinkResult = RelinkResult
     , rresLinksChanged :: !Bool
     {- ^ True iff the relink actually changed 'dbCrossDBLinks' (as a set)
     versus the in-memory state before the call. Callers use this to skip
-    redundant work — e.g. the explicit cache write in 'finalizeDatabase'
+    redundant work, e.g. the explicit cache write in 'finalizeDatabase'
     is suppressed when the relink already saved.
     -}
     }
@@ -2417,9 +2428,9 @@ relinkPlan RelinkInputs{..} =
 {- | Re-run cross-DB linking for an already-loaded DB against its pinned
 dependency set ('dbDependsOn'), not the full set of loaded DBs. Updates
 'dbCrossDBLinks' and 'dbLinkingStats' in place in the LoadedDatabase record;
-the dependency set itself is left untouched (strict pin — it changes only via
+the dependency set itself is left untouched (strict pin: it changes only via
 explicit add/remove-dependency). Does NOT rebuild the technosphere matrix or
-invalidate the MUMPS factorization — cross-DB links are consumed only at
+invalidate the MUMPS factorization: cross-DB links are consumed only at
 solve time.
 
 Side-effect: persists the updated 'Database' back to its matrix-cache file
@@ -2437,7 +2448,7 @@ curated supplier-alias map. The aliases let a consumer's input flow name that
 only matches a target supplier (typically in @depDb@) under the mapping still
 link; links to the other pinned dependencies are re-resolved unchanged rather
 than dropped. If @depDb@ is loaded but not yet in the database's declared
-dependency set, it is pinned in-memory first — so an in-memory pipeline
+dependency set, it is pinned in-memory first, so an in-memory pipeline
 (copy → delete → relink) composes without restaging (which would unload the
 live database). Same persistence/no-op semantics as 'relinkDatabase'. Errors
 (DB or dep not loaded) surface as 'Left'.
@@ -2461,7 +2472,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = withLogScope dbName $ d
             | otherwise -> do
                 -- Declare the dependency in-memory if it isn't already pinned, so an
                 -- in-memory pipeline (copy → delete → relink) composes in one pass
-                -- without restaging — which would unload the live database. The pin
+                -- without restaging, which would unload the live database. The pin
                 -- set on disk is the current one *before* this in-memory addition;
                 -- pass it so 'relinkDatabaseWith' persists the cache when the pin
                 -- diverges from disk even if no new links are discovered.
@@ -2473,6 +2484,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = withLogScope dbName $ d
   where
     -- Idempotent: a concurrent relink may have pinned the dep between the
     -- snapshot above and this transaction, so never prepend a duplicate.
+    addPinnedDep :: Text -> LoadedDatabase -> LoadedDatabase
     addPinnedDep dep ld =
         let db = ldDatabase ld
          in if dep `elem` dbDependsOn db
@@ -2486,52 +2498,52 @@ page before a database is finalized. @maybeDepDb@ pins a chosen dependency (a
 mapping relink); @aliases@ feeds the supplier-alias map.
 -}
 relinkStaged :: DatabaseManager -> Text -> Maybe Text -> CrossLinking.AliasMap -> IO (Either Text RelinkResult)
-relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ do
-    stagedDbs <- readTVarIO (dmStagedDbs manager)
-    case M.lookup dbName stagedDbs of
-        Nothing -> return $ Left $ "Database not loaded: " <> dbName
-        Just staged -> do
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            case maybeDepDb of
-                Just dep
-                    | not (M.member dep indexedDbs) ->
-                        return $ Left $ "Dependency database not loaded: " <> dep <> " (load it first)"
-                _ -> do
-                    synonymDB <- getMergedSynonymDB manager
-                    unitConfig <- getMergedUnitConfig manager
-                    let pinnedDeps = case maybeDepDb of
-                            Just dep | dep `notElem` sdSelectedDeps staged -> dep : sdSelectedDeps staged
-                            _ -> sdSelectedDeps staged
-                        selectedIndexes = [idx | (n, idx) <- M.toList indexedDbs, n `elem` pinnedDeps]
-                        beforeLinks = sdCrossDBLinks staged
-                        newStats =
-                            Loader.relinkSimpleDatabase
-                                selectedIndexes
-                                synonymDB
-                                unitConfig
-                                (dmLocationHierarchy manager)
-                                (dcGeographyPolicy (sdConfig staged))
-                                aliases
-                                (sdSimpleDB staged)
-                        newLinks = Loader.cdlLinks newStats
-                    atomically $
-                        modifyTVar'
-                            (dmStagedDbs manager)
-                            (M.insert dbName (withRelinkedDeps pinnedDeps newStats staged))
-                    return $
-                        Right
-                            RelinkResult
-                                { rresDbName = dbName
-                                , rresUnresolvedBefore = unresolvedCount (sdLinkingStats staged)
-                                , rresUnresolvedAfter = unresolvedCount newStats
-                                , rresCrossDBLinks = length newLinks
-                                , rresDepsLoaded = pinnedDeps
-                                , rresLinksChanged = not (sameSet newLinks beforeLinks)
-                                }
+relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ runExceptT $ do
+    stagedDbs <- liftIO $ readTVarIO (dmStagedDbs manager)
+    staged <- except $ maybe (Left ("Database not loaded: " <> dbName)) Right (M.lookup dbName stagedDbs)
+    indexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+    forM_ maybeDepDb $ \dep ->
+        unless (M.member dep indexedDbs) $
+            throwE ("Dependency database not loaded: " <> dep <> " (load it first)")
+    synonymDB <- liftIO $ getMergedSynonymDB manager
+    unitConfig <- liftIO $ getMergedUnitConfig manager
+    let pinnedDeps = withChosenDep (sdSelectedDeps staged)
+        newStats =
+            Loader.relinkSimpleDatabase
+                [idx | (n, idx) <- M.toList indexedDbs, n `elem` pinnedDeps]
+                synonymDB
+                unitConfig
+                (dmLocationHierarchy manager)
+                (dcGeographyPolicy (sdConfig staged))
+                aliases
+                (sdSimpleDB staged)
+    liftIO $
+        atomically $
+            modifyTVar'
+                (dmStagedDbs manager)
+                (M.insert dbName (withRelinkedDeps pinnedDeps newStats staged))
+    pure (relinkResult staged pinnedDeps newStats)
+  where
+    -- A mapping relink pins the dependency it retargets, once.
+    withChosenDep :: [Text] -> [Text]
+    withChosenDep selected = case maybeDepDb of
+        Just dep | dep `notElem` selected -> dep : selected
+        _ -> selected
+
+    relinkResult :: StagedDatabase -> [Text] -> Loader.CrossDBLinkingStats -> RelinkResult
+    relinkResult staged pinnedDeps newStats =
+        RelinkResult
+            { rresDbName = dbName
+            , rresUnresolvedBefore = unresolvedCount (sdLinkingStats staged)
+            , rresUnresolvedAfter = unresolvedCount newStats
+            , rresCrossDBLinks = length (Loader.cdlLinks newStats)
+            , rresDepsLoaded = pinnedDeps
+            , rresLinksChanged = not (sameSet (Loader.cdlLinks newStats) (sdCrossDBLinks staged))
+            }
 
 {- | Shared relink core. Candidates are the database's full declared pin
 ('dbDependsOn'); relink recomputes the links within it but never grows or
-shrinks the set. @aliases@ feeds 'lcSupplierAliases' — a mapping relink passes
+shrinks the set. @aliases@ feeds 'lcSupplierAliases', a mapping relink passes
 the user's curated map (which retargets a chosen dependency without dropping
 links to the others), a plain relink passes 'emptyAliasMap'. The dependency
 set stored on the database is never mutated here.
@@ -2550,73 +2562,67 @@ relinkDatabaseWith ::
     IO (Either Text RelinkResult)
 relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ do
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Nothing -> relinkStaged manager dbName Nothing aliases
-        Just loaded -> do
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            -- Strict pin: candidates are restricted to the database's declared
-            -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
-            -- This keeps the user's explicit selection authoritative — relink
-            -- recomputes links *within* the whole pin (so a mapping relink against
-            -- one dependency re-resolves the others unchanged instead of dropping
-            -- them) but never expands or shrinks the set.
-            let pinnedDeps = dbDependsOn (ldDatabase loaded)
-                otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
-            synonymDB <- getMergedSynonymDB manager
-            unitConfig <- getMergedUnitConfig manager
-            -- Forced here on purpose: the whole link computation must be done
-            -- before the transaction below opens, never inside it.
-            let !outcome =
-                    relinkPlan
-                        RelinkInputs
-                            { riDbName = dbName
-                            , riDatabase = ldDatabase loaded
-                            , riContext =
-                                LinkingContext
-                                    { lcIndexedDatabases = otherIndexes
-                                    , lcSynonymDB = synonymDB
-                                    , lcUnitConfig = unitConfig
-                                    , lcThreshold = defaultLinkingThreshold
-                                    , lcLocationHierarchy = dmLocationHierarchy manager
-                                    , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
-                                    , lcSupplierAliases = aliases
-                                    }
-                            , riPersistedDeps = persistedDeps
-                            }
-                db' = roDatabase outcome
-                result = roResult outcome
-                cacheChanged = roCacheChanged outcome
-                loaded' = loaded{ldDatabase = db'}
-            atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
-                modifyTVar'
-                    (dmIndexedDbs manager)
-                    (M.insert dbName (buildIndexedDatabaseFromDB dbName synonymDB db'))
-            clearMethodMappingCacheForDb manager dbName
-            -- Persist the relinked Database back to its matrix cache so the
-            -- next startup doesn't have to re-discover the same links or lose
-            -- the pin.
-            when cacheChanged $
-                Loader.saveCachedDatabaseWithMatrices
-                    dbName
-                    (dcPath (ldConfig loaded'))
-                    db'
-            -- Skip the log when the relink was a verification no-op: links
-            -- and deps already matched the in-memory state. This is the
-            -- common case for warm Loads after the previous commits and
-            -- carries no information worth a log line.
-            when cacheChanged $
-                reportProgress Info $
-                    "Re-linked "
-                        <> T.unpack dbName
-                        <> ": "
-                        <> show (rresUnresolvedBefore result)
-                        <> " → "
-                        <> show (rresUnresolvedAfter result)
-                        <> " unresolved products ("
-                        <> show (rresCrossDBLinks result)
-                        <> " cross-DB links)"
-            return (Right result)
+    maybe (relinkStaged manager dbName Nothing aliases) relinkLoaded (M.lookup dbName loadedDbs)
+  where
+    relinkLoaded :: LoadedDatabase -> IO (Either Text RelinkResult)
+    relinkLoaded loaded = do
+        indexedDbs <- readTVarIO (dmIndexedDbs manager)
+        -- Strict pin: candidates are restricted to the database's declared
+        -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
+        -- This keeps the user's explicit selection authoritative: relink
+        -- recomputes links *within* the whole pin (so a mapping relink against
+        -- one dependency re-resolves the others unchanged instead of dropping
+        -- them) but never expands or shrinks the set.
+        let pinnedDeps = dbDependsOn (ldDatabase loaded)
+            otherIndexes = [idb | (n, idb) <- M.toList indexedDbs, n /= dbName, n `elem` pinnedDeps]
+        synonymDB <- getMergedSynonymDB manager
+        unitConfig <- getMergedUnitConfig manager
+        -- Forced here on purpose: the whole link computation must be done
+        -- before the transaction below opens, never inside it.
+        let !outcome = relinkPlan (planInputs loaded otherIndexes synonymDB unitConfig)
+            db' = roDatabase outcome
+            loaded' = loaded{ldDatabase = db'}
+        atomically $
+            publishLoaded manager dbName loaded' (buildIndexedDatabaseFromDB dbName synonymDB db')
+        clearMethodMappingCacheForDb manager dbName
+        {- Nothing more to do when the relink was a verification no-op: links
+        and deps already matched the in-memory state, the cache on disk already
+        holds them, and the log line would carry no information. This is the
+        common case for a warm load. -}
+        when (roCacheChanged outcome) $ do
+            Loader.saveCachedDatabaseWithMatrices dbName (dcPath (ldConfig loaded')) db'
+            reportProgress Info (relinkSummary (roResult outcome))
+        return (Right (roResult outcome))
+
+    planInputs :: LoadedDatabase -> [IndexedDatabase] -> SynonymDB -> UnitConversion.UnitConfig -> RelinkInputs
+    planInputs loaded otherIndexes synonymDB unitConfig =
+        RelinkInputs
+            { riDbName = dbName
+            , riDatabase = ldDatabase loaded
+            , riContext =
+                LinkingContext
+                    { lcIndexedDatabases = otherIndexes
+                    , lcSynonymDB = synonymDB
+                    , lcUnitConfig = unitConfig
+                    , lcThreshold = defaultLinkingThreshold
+                    , lcLocationHierarchy = dmLocationHierarchy manager
+                    , lcGeographyPolicy = dcGeographyPolicy (ldConfig loaded)
+                    , lcSupplierAliases = aliases
+                    }
+            , riPersistedDeps = persistedDeps
+            }
+
+    relinkSummary :: RelinkResult -> String
+    relinkSummary result =
+        "Re-linked "
+            <> T.unpack dbName
+            <> ": "
+            <> show (rresUnresolvedBefore result)
+            <> " → "
+            <> show (rresUnresolvedAfter result)
+            <> " unresolved products ("
+            <> show (rresCrossDBLinks result)
+            <> " cross-DB links)"
 
 {- | After a DB loads (or reloads), re-link every already-loaded DB that
 declares it as a dependency. This makes cross-DB linking converge
@@ -2692,114 +2698,120 @@ When a valid cache exists, reconstructs staged state from the cached Database
 without re-parsing, turning a ~90s operation into ~7s.
 -}
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
-stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
-    let dbName = dcName dbConfig
-    reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
-
+stageUploadedDatabase manager dbConfig = withLogScope dbName $ runExceptT $ do
+    liftIO $ reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
     -- Try cache first: if valid, reconstruct StagedDatabase without re-parsing
-    inputs <- currentBuildInputs manager dbConfig
-    mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig) inputs
+    inputs <- liftIO $ currentBuildInputs manager dbConfig
+    mCachedDb <- liftIO $ Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig) inputs
+    maybe (parseAndLink inputs) fromCache mCachedDb
+  where
+    dbName :: Text
+    dbName = dcName dbConfig
 
-    case mCachedDb of
-        Just cachedDb -> do
-            -- Cache hit: auto-load dependencies so cross-DB solving works
-            _ <- autoLoadDeps manager (dbDependsOn cachedDb)
-            let staged =
-                    StagedDatabase
-                        { sdSimpleDB = toSimpleDatabase cachedDb
-                        , sdConfig = dbConfig
-                        , sdMissingProducts = []
-                        , sdSelectedDeps = dbDependsOn cachedDb
-                        , sdCrossDBLinks = dbCrossDBLinks cachedDb
-                        , sdLinkingStats = dbLinkingStats cachedDb
-                        , sdBuiltWith = dbBuiltWith cachedDb
-                        , sdCachedDB = Just cachedDb
-                        }
-            atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
-            reportProgress Info $ "  [OK] Staged from cache: " <> T.unpack (dcDisplayName dbConfig)
-            return $ Right ()
-        Nothing -> do
-            -- Cache miss: parse and cross-DB link as before
-            let locationAliases = dcLocationAliases dbConfig
+    fromCache :: Database -> ExceptT Text IO ()
+    fromCache cachedDb = liftIO $ do
+        -- Cache hit: auto-load dependencies so cross-DB solving works
+        _ <- autoLoadDeps manager (dbDependsOn cachedDb)
+        stage "  [OK] Staged from cache: " $
+            StagedDatabase
+                { sdSimpleDB = toSimpleDatabase cachedDb
+                , sdConfig = dbConfig
+                , sdMissingProducts = []
+                , sdSelectedDeps = dbDependsOn cachedDb
+                , sdCrossDBLinks = dbCrossDBLinks cachedDb
+                , sdLinkingStats = dbLinkingStats cachedDb
+                , sdBuiltWith = dbBuiltWith cachedDb
+                , sdCachedDB = Just cachedDb
+                }
 
-            -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
-            path <- Upload.findDataDirectory (dcPath dbConfig)
-
-            -- Look up indexes for cross-DB linking
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            let otherIndexes = M.elems indexedDbs
-
-            -- A CSV export or a workbook names one file; the loader is handed
-            -- that rather than the directory holding it.
-            format <- detectDirectoryFormat path
-            -- Either way the loader gets a path: a source that holds no file of
-            -- its own format is left to produce the error it produces anyway.
-            loadPath <- fromRight path <$> narrowToDataFile format path
-
-            -- Parse and run cross-DB linking (but don't build matrices)
-            synonymDB <- getMergedSynonymDB manager
-            let unitConfig = biUnitConfig inputs
-            loadResult <-
+    parseAndLink :: BuildInputs -> ExceptT Text IO ()
+    parseAndLink inputs = do
+        -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
+        path <- liftIO $ Upload.findDataDirectory (dcPath dbConfig)
+        indexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+        {- A CSV export or a workbook names one file; the loader is handed that
+        rather than the directory holding it. Either way the loader gets a
+        path: a source that holds no file of its own format is left to produce
+        the error it produces anyway. -}
+        format <- liftIO $ detectDirectoryFormat path
+        loadPath <- liftIO $ fromRight path <$> narrowToDataFile format path
+        synonymDB <- liftIO $ getMergedSynonymDB manager
+        let unitConfig = biUnitConfig inputs
+        -- Parse and run cross-DB linking (but don't build matrices)
+        (simpleDb, stats) <-
+            ExceptT $
                 Loader.loadDatabaseWithCrossDBLinking
-                    locationAliases
-                    otherIndexes
+                    Loader.LoadOptions
+                        { Loader.loUnitConfig = unitConfig
+                        , Loader.loLocationAliases = dcLocationAliases dbConfig
+                        , Loader.loAllocation = dcAllocation dbConfig
+                        }
+                    (M.elems indexedDbs)
+                    synonymDB
+                    (dmLocationHierarchy manager)
+                    (dcGeographyPolicy dbConfig)
+                    loadPath
+        let minimalDeps = computeMinimalSelectedDeps (Loader.cdlLinks stats)
+        (finalStats, finalDB) <-
+            liftIO $ minimalCover indexedDbs synonymDB unitConfig minimalDeps simpleDb stats
+        liftIO $
+            stage "  [OK] Staged: " $
+                StagedDatabase
+                    { sdSimpleDB = finalDB
+                    , sdConfig = dbConfig
+                    , sdMissingProducts = stagedMissingProducts finalDB finalStats
+                    , sdSelectedDeps = minimalDeps
+                    , sdCrossDBLinks = Loader.cdlLinks finalStats
+                    , sdLinkingStats = finalStats
+                    , sdBuiltWith = inputs
+                    , sdCachedDB = Nothing
+                    }
+
+    {- Drop the dependencies whose links are all substitutable by another at
+    the same score. If that shrinks the set, linking runs again restricted to
+    the chosen ones, so 'sdCrossDBLinks' stays consistent with 'sdSelectedDeps'
+    and finalize sees no dangling supplier UUID. -}
+    minimalCover ::
+        Map Text IndexedDatabase ->
+        SynonymDB ->
+        UnitConversion.UnitConfig ->
+        -- the dependencies the cover kept
+        [Text] ->
+        SimpleDatabase ->
+        Loader.CrossDBLinkingStats ->
+        IO (Loader.CrossDBLinkingStats, SimpleDatabase)
+    minimalCover indexedDbs synonymDB unitConfig minimalDeps simpleDb stats
+        | selectedSet == S.fromList contributingDeps = return (stats, simpleDb)
+        | otherwise = do
+            reportProgress Info $
+                "  Minimal cover: dropping redundant deps "
+                    <> show (S.toList (S.fromList contributingDeps `S.difference` selectedSet))
+                    <> ", re-linking against "
+                    <> show minimalDeps
+            (simpleDb', stats') <-
+                Loader.fixActivityLinksWithCrossDB
+                    [idx | (n, idx) <- M.toList indexedDbs, S.member n selectedSet]
                     synonymDB
                     unitConfig
                     (dmLocationHierarchy manager)
                     (dcGeographyPolicy dbConfig)
-                    loadPath
+                    simpleDb
+            return (stats', simpleDb')
+      where
+        selectedSet :: S.Set Text
+        selectedSet = S.fromList minimalDeps
 
-            case loadResult of
-                Left err -> return $ Left err
-                Right (simpleDb, stats) -> do
-                    -- Minimal-cover pre-selection: drop DBs whose links are all
-                    -- substitutable by another DB at the same score. If that
-                    -- shrinks the dependency set, re-run linking restricted to
-                    -- the chosen DBs so sdCrossDBLinks stays consistent with
-                    -- sdSelectedDeps (no dangling supplier UUIDs at finalize).
-                    let minimalDeps = computeMinimalSelectedDeps (Loader.cdlLinks stats)
-                        contributingDeps = M.keys (Loader.crossDBBySource stats)
-                    (finalStats, finalDB) <-
-                        if S.fromList minimalDeps == S.fromList contributingDeps
-                            then return (stats, simpleDb)
-                            else do
-                                let selectedSet = S.fromList minimalDeps
-                                    restrictedIndexes =
-                                        [idx | (n, idx) <- M.toList indexedDbs, S.member n selectedSet]
-                                reportProgress Info $
-                                    "  Minimal cover: dropping redundant deps "
-                                        <> show (S.toList (S.fromList contributingDeps `S.difference` selectedSet))
-                                        <> ", re-linking against "
-                                        <> show minimalDeps
-                                (simpleDb', stats') <-
-                                    Loader.fixActivityLinksWithCrossDB
-                                        restrictedIndexes
-                                        synonymDB
-                                        unitConfig
-                                        (dmLocationHierarchy manager)
-                                        (dcGeographyPolicy dbConfig)
-                                        simpleDb
-                                return (stats', simpleDb')
+        contributingDeps :: [Text]
+        contributingDeps = M.keys (Loader.crossDBBySource stats)
 
-                    let staged =
-                            StagedDatabase
-                                { sdSimpleDB = finalDB
-                                , sdConfig = dbConfig
-                                , sdMissingProducts = stagedMissingProducts finalDB finalStats
-                                , sdSelectedDeps = minimalDeps
-                                , sdCrossDBLinks = Loader.cdlLinks finalStats
-                                , sdLinkingStats = finalStats
-                                , sdBuiltWith = inputs
-                                , sdCachedDB = Nothing
-                                }
-
-                    atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
-                    reportProgress Info $ "  [OK] Staged: " <> T.unpack (dcDisplayName dbConfig)
-                    return $ Right ()
+    stage :: String -> StagedDatabase -> IO ()
+    stage what staged = do
+        atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
+        reportProgress Info $ what <> T.unpack (dcDisplayName dbConfig)
 
 {- | Unload a database from memory (keeps config for reloading).
 Refuses to unload if any currently-loaded database declares this one as a
-dependency — unloading would leave the dependent's cross-DB links dangling.
+dependency: unloading would leave the dependent's cross-DB links dangling.
 -}
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 unloadDatabase manager dbName = withLogScope dbName $ do
@@ -2886,9 +2898,11 @@ removeDatabase manager dbName = do
     tryIO :: IO a -> IO (Either SomeException a)
     tryIO = Control.Exception.try
     -- The databases copied from this one, which still read its files.
+    copiesOf :: Text -> IO [Text]
     copiesOf name = do
         uploads <- UploadedDB.discoverUploadedDatabases
         pure [slug | (slug, _, meta) <- uploads, UploadedDB.umSource meta == Just name]
+    deleteUpload :: DatabaseConfig -> IO (Either Text ())
     deleteUpload dbConfig = do
         uploadsDir <- UploadedDB.getDatabaseUploadsDir
         let uploadDir = uploadsDir </> T.unpack dbName
@@ -2905,6 +2919,7 @@ removeDatabase manager dbName = do
                 -- Directory already missing, just remove from memory
                 reportProgress Info $ "Directory already missing: " <> uploadDir
                 removeFromMemory manager dbName
+    deleteCacheFile :: Text -> FilePath -> IO ()
     deleteCacheFile name sourcePath = do
         cacheFile <- Loader.generateMatrixCacheFilename name sourcePath
         let zstdFile = cacheFile ++ ".zst"
@@ -2912,6 +2927,27 @@ removeDatabase manager dbName = do
         when cacheExists $ do
             removeFile zstdFile
             reportProgress Info $ "Deleted cache: " ++ zstdFile
+
+{- | The solver for a database, over the technosphere triples it holds.
+Factorization is lazy, so this costs nothing until the first query.
+-}
+solverFor :: Text -> Database -> IO SharedSolver
+solverFor dbName db =
+    createSharedSolver
+        dbName
+        [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples db)]
+        (fromIntegral (dbActivityCount db))
+
+{- | Install a loaded database and the index built from it under one name.
+
+The two maps move together or not at all: a reader that finds the database
+without its index gets one that cross-database linking cannot see into, and
+nothing would report the gap.
+-}
+publishLoaded :: DatabaseManager -> Text -> LoadedDatabase -> IndexedDatabase -> STM ()
+publishLoaded manager dbName loaded indexedDb = do
+    modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+    modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
 
 -- | Helper to remove database from in-memory maps only
 removeFromMemory :: DatabaseManager -> Text -> IO (Either Text ())
@@ -2933,7 +2969,7 @@ getStagedDatabase manager dbName = do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     return $ M.lookup dbName stagedDbs
 
-{- | Supplier-gap report for a loaded or staged database — what is still
+{- | Supplier-gap report for a loaded or staged database: what is still
 missing to fully supply its demands from the pinned dependencies, aggregated
 per (product, location, unit) with the consumers that demand it.
 -}
@@ -2947,7 +2983,7 @@ databaseGapReport manager dbName = do
             Right (Loader.gapReportForStaged dbName (sdSimpleDB staged) (sdLinkingStats staged))
         (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
 
-{- | Dataset-soundness report for a loaded or staged database — the structural
+{- | Dataset-soundness report for a loaded or staged database: the structural
 defects a score can't reveal. Both phases reduce to the same pure scan, so a
 maker gets the same answer before and after building the matrices.
 -}
@@ -2966,7 +3002,7 @@ would score as zero. One entry per loaded collection when @mCollection@ is
 'Nothing'; a single named collection otherwise (an error if it isn't loaded).
 
 Needs a built database (the coverage probe reads the method tables), so unlike
-the quality report it is loaded-only — no staged answer. Computed per request
+the quality report it is loaded-only: no staged answer. Computed per request
 on top of the per-method table and mapping caches; if it proves slow at
 ecoinvent scale, the upgrade path is a @(db, collection)@-keyed cache beside
 'mapMethodToTablesCached'.
@@ -3010,11 +3046,13 @@ databaseCoverageReport manager dbName mCollection = do
                     pure (Right (Coverage.CoverageReport dbName bridges))
   where
     -- The named collection (must be loaded) or every loaded one, by name.
+    collectionsToReport :: Maybe Text -> Map Text MethodCollection -> Either Text [(Text, MethodCollection)]
     collectionsToReport sel loaded = case sel of
         Just name -> case M.lookup name loaded of
             Just mc -> Right [(name, mc)]
             Nothing -> Left ("Method collection not loaded: " <> name)
         Nothing -> Right (M.toList loaded)
+    collectionBridgesFor :: Database -> (Text, MethodCollection) -> IO Coverage.CollectionBridges
     collectionBridgesFor db (collName, mc) = do
         let methods = mcMethods mc
         tables <- mapM (mapMethodToTablesCached manager dbName (CollectionName collName) db) methods
@@ -3035,29 +3073,7 @@ Uses STM to prevent concurrent staging of the same database
 -}
 getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
 getDatabaseSetupInfo manager dbName = do
-    -- Atomic decision: already staged? already staging? need to stage?
-    action <- atomically $ do
-        stagedDbs <- readTVar (dmStagedDbs manager)
-        loadedDbs <- readTVar (dmLoadedDbs manager)
-        stagingDbs <- readTVar (dmStagingDbs manager)
-        case M.lookup dbName stagedDbs of
-            Just _ -> return $ Right AlreadyDone
-            Nothing -> case M.lookup dbName loadedDbs of
-                Just _ -> return $ Right AlreadyDone
-                Nothing ->
-                    if S.member dbName stagingDbs
-                        then retry -- another thread is staging; STM blocks until done
-                        else do
-                            availableDbs <- readTVar (dmAvailableDbs manager)
-                            case M.lookup dbName availableDbs of
-                                Nothing -> return $ Left $ SetupNotFound $ "Database not found: " <> dbName
-                                Just dbConfig
-                                    | dcIsUploaded dbConfig -> do
-                                        modifyTVar' (dmStagingDbs manager) (S.insert dbName)
-                                        return $ Right (NeedToStage dbConfig)
-                                    | otherwise ->
-                                        return $ Left $ SetupNotLoaded dbName
-
+    action <- atomically decide
     case action of
         Left err -> return $ Left err
         Right AlreadyDone -> buildSetupResult manager dbName
@@ -3072,6 +3088,35 @@ getDatabaseSetupInfo manager dbName = do
                     reportProgress Error $ "Setup staging failed for " <> T.unpack dbName <> ": " <> T.unpack err
                     return $ Left $ SetupFailed err
                 Right () -> buildSetupResult manager dbName
+  where
+    {- Already staged? already staging? need to stage? One transaction, so the
+    answer cannot go stale between the reads, and the name is reserved in the
+    same breath as the decision to stage it. -}
+    decide :: STM (Either SetupError StageAction)
+    decide = do
+        stagedDbs <- readTVar (dmStagedDbs manager)
+        loadedDbs <- readTVar (dmLoadedDbs manager)
+        if M.member dbName stagedDbs || M.member dbName loadedDbs
+            then pure (Right AlreadyDone)
+            else do
+                stagingDbs <- readTVar (dmStagingDbs manager)
+                -- Another thread holds the name: block until it is done, then
+                -- read again and find the database staged.
+                when (S.member dbName stagingDbs) retry
+                availableDbs <- readTVar (dmAvailableDbs manager)
+                maybe notFound reserve (M.lookup dbName availableDbs)
+
+    notFound :: STM (Either SetupError StageAction)
+    notFound = pure (Left (SetupNotFound ("Database not found: " <> dbName)))
+
+    -- Only an upload is staged on demand; a configured database is loaded or
+    -- it is nothing.
+    reserve :: DatabaseConfig -> STM (Either SetupError StageAction)
+    reserve dbConfig
+        | not (dcIsUploaded dbConfig) = pure (Left (SetupNotLoaded dbName))
+        | otherwise = do
+            modifyTVar' (dmStagingDbs manager) (S.insert dbName)
+            pure (Right (NeedToStage dbConfig))
 
 -- | Read current state and build setup info for a database
 buildSetupResult :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
@@ -3123,6 +3168,7 @@ stagedLinkCounts staged =
         , lcCrossDBLinks = Loader.crossDBLinksCount (sdLinkingStats staged)
         }
   where
+    sdb :: SimpleDatabase
     sdb = sdSimpleDB staged
 
 {- | Tally for a loaded database. Counts are recomputed from the activity set
@@ -3155,7 +3201,7 @@ lcCompleteness lc
         min 100.0 $ 100.0 * fromIntegral (lcInternalLinks lc + lcCrossDBLinks lc) / fromIntegral (lcTotalInputs lc)
     | otherwise = 100.0
 
-{- | Why a database cannot be finalized — 'Nothing' means ready. The setup
+{- | Why a database cannot be finalized: 'Nothing' means ready. The setup
 page's 'dsiIsReady' is the 'isNothing' of this, so the ready badge and the
 finalize gate always agree.
 -}
@@ -3198,7 +3244,7 @@ stagedMissingProducts sdb stats =
         (cdlUnresolvedProducts stats)
         (Loader.collectStagedDanglingProductNames sdb (cdlLinks stats))
 
-{- | Assemble the wire record from the shared tally — the single place the
+{- | Assemble the wire record from the shared tally, the single place the
 completeness, readiness, and linking-stats fields are filled, for both the
 staged and the loaded builder. availablePaths is filled in by
 'buildSetupResult' for uploaded databases (requires IO).
@@ -3318,17 +3364,24 @@ discoverCandidatePaths dbConfig = do
         return PathCandidate{pcPath = T.pack rel, pcFormat = label, pcFileCount = count}
   where
     -- Simple relative path: strip upload root prefix
+    makeRelativePath :: FilePath -> FilePath -> FilePath
     makeRelativePath base path
         | base `isPrefixOf` path =
             let r = drop (length base + 1) path
              in if null r then "." else r
         | otherwise = path
 
+{- | Where an upload's data sits under its own directory. Its own type
+because the only other argument it travels with is a database name, and
+'Text' cannot tell a caller which way round they go.
+-}
+newtype RelativeDataPath = RelativeDataPath {unRelativeDataPath :: Text}
+
 {- | Change the data path for an uploaded (staged) database.
 Validates path, updates config + meta.toml, clears staged DB to force re-stage.
 -}
-setDataPath :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-setDataPath manager dbName newRelPath = runExceptT $ do
+setDataPath :: DatabaseManager -> Text -> RelativeDataPath -> IO (Either Text DatabaseSetupInfo)
+setDataPath manager dbName (RelativeDataPath newRelPath) = runExceptT $ do
     availableDbs <- liftIO $ readTVarIO (dmAvailableDbs manager)
     dbConfig <-
         except $
@@ -3453,11 +3506,20 @@ getOrStageDatabase manager dbName = do
                 Just ld -> Right <$> restageLoadedDatabase manager dbName ld
                 Nothing -> return $ Left $ "Database not found: " <> dbName
 
+{- | Which database's dependency set is being changed, and which name is
+being added to or removed from it. Both are database names, so no type can
+tell them apart: only the field names can.
+-}
+data DependencyEdit = DependencyEdit
+    { deDatabase :: !Text
+    , deDependency :: !Text
+    }
+
 {- | Add a dependency to a staged (or partially-linked loaded) database
 Runs cross-DB linking against the new dependency
 -}
-addDependencyToStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-addDependencyToStaged manager dbName depName = do
+addDependencyToStaged :: DatabaseManager -> DependencyEdit -> IO (Either Text DatabaseSetupInfo)
+addDependencyToStaged manager DependencyEdit{deDatabase = dbName, deDependency = depName} = do
     stagedResult <- getOrStageDatabase manager dbName
     {- Read after staging, as the removal path does. Staging is the slow step
     here, and a snapshot taken before it judges whether the dependency is
@@ -3482,8 +3544,8 @@ addDependencyToStaged manager dbName depName = do
                         }
 
 -- | Remove a dependency from a staged (or partially-linked loaded) database
-removeDependencyFromStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-removeDependencyFromStaged manager dbName depName = do
+removeDependencyFromStaged :: DatabaseManager -> DependencyEdit -> IO (Either Text DatabaseSetupInfo)
+removeDependencyFromStaged manager DependencyEdit{deDatabase = dbName, deDependency = depName} = do
     stagedResult <- getOrStageDatabase manager dbName
 
     case stagedResult of
@@ -3587,11 +3649,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
                 ExceptT $
                     buildDatabaseWithMatrices
                         (sdBuiltWith staged)
-                        (sdbActivities (sdSimpleDB staged))
-                        (sdbTechFlows (sdSimpleDB staged))
-                        (sdbBioFlows (sdSimpleDB staged))
-                        (sdbWasteFlows (sdSimpleDB staged))
-                        (sdbUnits (sdSimpleDB staged))
+                        (sdSimpleDB staged)
             -- Freshly built matrices: always persist.
             pure
                 FinalizedBuild
@@ -3614,13 +3672,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
 
     publish :: StagedDatabase -> SynonymDB -> FinalizedBuild -> IO LoadedDatabase
     publish staged synonymDB FinalizedBuild{..} = do
-        -- Create shared solver with lazy factorization (deferred to first query)
-        let techTriplesInt =
-                [ (fromIntegral i, fromIntegral j, v)
-                | SparseTriple i j v <- U.toList (dbTechnosphereTriples fbDatabase)
-                ]
-        sharedSolver <-
-            createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount fbDatabase))
+        sharedSolver <- solverFor dbName fbDatabase
         let loaded =
                 LoadedDatabase
                     { ldDatabase = fbDatabase
@@ -3631,8 +3683,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
         -- Move from staged to loaded
         atomically $ do
             modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-            modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-            modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+            publishLoaded manager dbName loaded indexedDb
         clearMethodMappingCacheForDb manager dbName
         -- Finalizing is the moment the dependency pin becomes the database's
         -- own; record it where a restart reads.
@@ -3656,136 +3707,214 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
 
     -- A failed relink wrote nothing, so the explicit save above must still fire.
     relinkFailed :: Text -> IO Bool
-    relinkFailed err = do
-        reportProgress Warning $
-            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-        pure False
+    relinkFailed err = warnSelfRelinkFailed dbName err >> pure False
 
 --------------------------------------------------------------------------------
 -- Method Collection Management
 --------------------------------------------------------------------------------
+
+{- | What a method path turned out to hold: one file carrying its own
+factors, or a directory to scan. The two are read differently and only the
+directory has flow definitions beside it.
+-}
+data MethodSource
+    = BareMethodFile FilePath
+    | MethodDirectory FilePath
+
+{- | The method files found under one directory, split by what parses them.
+Three lists of paths, so they are named rather than positional.
+-}
+data MethodFiles = MethodFiles
+    { mfDirectory :: !FilePath
+    , mfXml :: ![FilePath]
+    , mfCsv :: ![FilePath]
+    , mfJson :: ![FilePath]
+    }
+
+-- | What came back from parsing them, before the collection is assembled.
+data ParsedMethodFiles = ParsedMethodFiles
+    { pmfXmlMethods :: ![Method]
+    , pmfCsvCollections :: ![MethodCollection]
+    -- ^ SimaPro method exports, which are whole collections
+    , pmfCsvMethods :: ![Method]
+    -- ^ tabular CSVs, which are loose methods
+    , pmfCsvFileCount :: !Int
+    , pmfJsonMethods :: ![Method]
+    , pmfErrors :: ![String]
+    }
 
 {- | Load methods from a MethodConfig path (directory or archive).
 Handles ZIP/7z archives via resolveDataPath, finds method XMLs,
 and enriches CFs from ILCD flow XMLs when available.
 -}
 loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text (MethodCollection, M.Map UUID ILCDFlowInfo))
-loadMethodCollectionFromConfig mc = do
-    -- Resolve archives (ZIP → extracted directory). Single .json (openLCA
-    -- JSON-LD ImpactCategory) and .csv (SimaPro method export) files are
-    -- accepted directly without a wrapping directory or archive.
-    resolved <- resolveDataPath (mcPath mc)
-    -- A failed extraction leaves the archive path, which reaches the refusal
-    -- below and carries its own reason there.
-    let resolvedPath = fromRight (mcPath mc) resolved
-    isDir <- doesDirectoryExist resolvedPath
-    isFile <- doesFileExist resolvedPath
-    let ext = map toLower (takeExtension resolvedPath)
-        isSingleJson = isFile && ext == ".json"
-        isSingleCsv = isFile && ext == ".csv"
-        isBareFile = isSingleJson || isSingleCsv
-    if not isDir && not isBareFile
-        then return . Left $ case resolved of
-            Left err -> err
-            Right _
-                | not isFile -> "Method path not found: " <> T.pack (mcPath mc)
-                | otherwise ->
-                    "Unsupported method file type (expected a directory, archive, .csv, or .json): "
-                        <> T.pack (mcPath mc)
-        else do
-            (dir, xmlFiles, csvFiles, jsonFiles) <-
-                if isBareFile
-                    then
-                        return
-                            ( takeDirectory resolvedPath
-                            , []
-                            , [takeFileName resolvedPath | isSingleCsv]
-                            , [takeFileName resolvedPath | isSingleJson]
-                            )
-                    else do
-                        -- Find method directory (handles nested ILCD structures)
-                        d <- findMethodDirectory resolvedPath
-                        -- listDirectory order is filesystem-dependent; sort so a
-                        -- collection loads its methods in the same order on every
-                        -- machine (and a re-export of it is byte-stable).
-                        fs <- sort <$> listDirectory d
-                        let xs = filter (\f -> map toLower (takeExtension f) == ".xml") fs
-                            cs = filter (\f -> map toLower (takeExtension f) == ".csv") fs
-                            js = filter (\f -> map toLower (takeExtension f) == ".json") fs
-                        return (d, xs, cs, js)
-            if null xmlFiles && null csvFiles && null jsonFiles
-                then return $ Left $ "No method files (.xml/.csv/.json) found in: " <> T.pack dir
-                else do
-                    -- A bare method file (.csv/.json) carries its own CFs and has no
-                    -- ILCD flows/ sibling; only a real ILCD directory does. Scanning a
-                    -- coincidental neighbouring flows/ would parse unrelated flow XMLs
-                    -- and register foreign synonyms under this collection's name.
-                    mFlowsDir <-
-                        if isBareFile
-                            then return Nothing
-                            else FlowResolver.resolveFlowDirectory dir
-                    flowInfo <- case mFlowsDir of
-                        Nothing -> do
-                            reportProgress Info "  No flows/ directory found, using shortDescription fallback"
-                            return M.empty
-                        Just flowsDir -> do
-                            reportProgress Info $ "  Loading ILCD flow XMLs from: " <> flowsDir
-                            info <- FlowResolver.parseFlowDirectory flowsDir
-                            reportProgress Info $ "  Loaded " <> show (M.size info) <> " flow definitions"
-                            return info
-                    -- Parse method files with flow enrichment
-                    xmlResults <- forM xmlFiles $ \f ->
-                        Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
-                    -- Split CSV files into SimaPro method exports and tabular CSVs
-                    csvParsed <- forM csvFiles $ \f -> do
-                        bytes <- stripBOM <$> BS.readFile (dir </> f)
-                        if isSimaProMethodCSV bytes
-                            then return $ fmap Left (parseSimaProMethodCSVBytes bytes)
-                            else return $ fmap Right (parseMethodCSVBytes bytes)
-                    -- openLCA JSON-LD ImpactCategory files (carries optional regionalized CFs).
-                    -- Only files that actually carry @type=ImpactCategory are parsed; others
-                    -- are skipped silently since arbitrary .json files can sit alongside
-                    -- method data (e.g. metadata or other openLCA entity types).
-                    jsonResults <- forM jsonFiles $ \f -> do
-                        bytes <- BS.readFile (dir </> f)
-                        if OlcaSchema.isOlcaImpactCategoryJson bytes
-                            then return $ Just $ OlcaSchema.parseOlcaImpactCategoryBytes bytes
-                            else return Nothing
-                    let (xmlErrs, xmlMethods) = partitionEithers xmlResults
-                        (csvErrs, csvOks) = partitionEithers csvParsed
-                        (jsonErrs, jsonMethods) = partitionEithers (catMaybes jsonResults)
-                        -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method]
-                        spCollections = lefts csvOks
-                        tabularMethods = concat (rights csvOks)
-                        allMethods =
-                            xmlMethods
-                                ++ tabularMethods
-                                ++ jsonMethods
-                                ++ concatMap mcMethods spCollections
-                        -- Merge NW data from all SimaPro CSV sources
-                        allDamageCats = concatMap mcDamageCategories spCollections
-                        allNWSets = concatMap mcNormWeightSets spCollections
-                        collection = MethodCollection allMethods allDamageCats allNWSets []
-                        errs = xmlErrs ++ csvErrs ++ jsonErrs
-                    case (null allMethods, errs) of
-                        (True, firstErr : _) ->
-                            return $ Left $ "All method files failed to parse: " <> T.pack firstErr
-                        _ -> do
-                            let xmlOk = length xmlMethods
-                                csvOk = length csvOks
-                                jsonOk = length jsonMethods
-                            reportProgress Info $ "  Parsed " <> show xmlOk <> " XML, " <> show csvOk <> " CSV, " <> show jsonOk <> " JSON file(s)"
-                            unless (null allDamageCats) $
-                                reportProgress Info $
-                                    "  "
-                                        <> show (length allDamageCats)
-                                        <> " damage categories, "
-                                        <> show (length allNWSets)
-                                        <> " normalization-weighting set(s)"
-                            unless (null errs) $
-                                reportProgress Warning $
-                                    "  " <> show (length errs) <> " method file(s) failed to parse"
-                            return $ Right (collection, flowInfo)
+loadMethodCollectionFromConfig mc = runExceptT $ do
+    {- Resolve archives (ZIP to extracted directory). Single .json (openLCA
+    JSON-LD ImpactCategory) and .csv (SimaPro method export) files are accepted
+    directly without a wrapping directory or archive. -}
+    resolvedPath <- ExceptT (resolveDataPath (mcPath mc))
+    source <- ExceptT $ methodSourceAt resolvedPath
+    files <- liftIO $ methodFilesOf source
+    when (noMethodFiles files) $
+        throwE ("No method files (.xml/.csv/.json) found in: " <> T.pack (mfDirectory files))
+    flowInfo <- liftIO $ flowDefinitionsFor source (mfDirectory files)
+    parsed <- liftIO $ parseMethodFiles flowInfo files
+    collection <- except (collectionOf parsed)
+    liftIO $ reportProgress Info (parseCounts parsed)
+    liftIO $ mapM_ (reportProgress Info) (nwCounts collection)
+    liftIO $ mapM_ (reportProgress Warning) (parseFailures parsed)
+    pure (collection, flowInfo)
+  where
+    {- What the path turned out to hold. A bare method file carries its own CFs
+    and has no ILCD flows/ sibling; only a real directory does. -}
+    methodSourceAt :: FilePath -> IO (Either Text MethodSource)
+    methodSourceAt resolvedPath = do
+        isDir <- doesDirectoryExist resolvedPath
+        isFile <- doesFileExist resolvedPath
+        let ext = map toLower (takeExtension resolvedPath)
+        pure $ case (isDir, isFile, ext) of
+            (True, _, _) -> Right (MethodDirectory resolvedPath)
+            (_, True, ".json") -> Right (BareMethodFile resolvedPath)
+            (_, True, ".csv") -> Right (BareMethodFile resolvedPath)
+            _ -> Left (unusableMethodPath isFile)
+
+    {- An archive that would not extract never reaches here: 'resolveDataPath'
+    refuses it with the reason, rather than handing back the archive path for
+    this to guess at from the extension. -}
+    unusableMethodPath :: Bool -> Text
+    unusableMethodPath isFile
+        | not isFile = "Method path not found: " <> T.pack (mcPath mc)
+        | otherwise =
+            "Unsupported method file type (expected a directory, archive, .csv, or .json): "
+                <> T.pack (mcPath mc)
+
+    methodFilesOf :: MethodSource -> IO MethodFiles
+    methodFilesOf (BareMethodFile file) =
+        pure
+            MethodFiles
+                { mfDirectory = takeDirectory file
+                , mfXml = []
+                , mfCsv = [takeFileName file | isExt ".csv" file]
+                , mfJson = [takeFileName file | isExt ".json" file]
+                }
+    methodFilesOf (MethodDirectory root) = do
+        -- Find method directory (handles nested ILCD structures)
+        dir <- findMethodDirectory root
+        {- listDirectory order is filesystem-dependent; sort so a collection
+        loads its methods in the same order on every machine (and a re-export
+        of it is byte-stable). -}
+        entries <- sort <$> listDirectory dir
+        pure
+            MethodFiles
+                { mfDirectory = dir
+                , mfXml = filter (isExt ".xml") entries
+                , mfCsv = filter (isExt ".csv") entries
+                , mfJson = filter (isExt ".json") entries
+                }
+
+    isExt :: String -> FilePath -> Bool
+    isExt ext f = map toLower (takeExtension f) == ext
+
+    noMethodFiles :: MethodFiles -> Bool
+    noMethodFiles files = null (mfXml files) && null (mfCsv files) && null (mfJson files)
+
+    {- Scanning a coincidental neighbouring flows/ would parse unrelated flow
+    XMLs and register foreign synonyms under this collection's name, so only a
+    real ILCD directory is looked at. -}
+    flowDefinitionsFor :: MethodSource -> FilePath -> IO (M.Map UUID ILCDFlowInfo)
+    flowDefinitionsFor (BareMethodFile _) _ = pure M.empty
+    flowDefinitionsFor (MethodDirectory _) dir =
+        FlowResolver.resolveFlowDirectory dir >>= \case
+            Nothing -> do
+                reportProgress Info "  No flows/ directory found, using shortDescription fallback"
+                pure M.empty
+            Just flowsDir -> do
+                reportProgress Info $ "  Loading ILCD flow XMLs from: " <> flowsDir
+                info <- FlowResolver.parseFlowDirectory flowsDir
+                reportProgress Info $ "  Loaded " <> show (M.size info) <> " flow definitions"
+                pure info
+
+    parseMethodFiles :: M.Map UUID ILCDFlowInfo -> MethodFiles -> IO ParsedMethodFiles
+    parseMethodFiles flowInfo files = do
+        let dir = mfDirectory files
+        -- Parse method files with flow enrichment
+        xmlResults <- forM (mfXml files) $ \f ->
+            Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
+        -- Split CSV files into SimaPro method exports and tabular CSVs
+        csvResults <- forM (mfCsv files) $ \f -> do
+            bytes <- stripBOM <$> BS.readFile (dir </> f)
+            pure $
+                if isSimaProMethodCSV bytes
+                    then fmap Left (parseSimaProMethodCSVBytes bytes)
+                    else fmap Right (parseMethodCSVBytes bytes)
+        {- openLCA JSON-LD ImpactCategory files (carries optional regionalized
+        CFs). Only files that actually carry @type=ImpactCategory are parsed;
+        others are skipped silently since arbitrary .json files can sit
+        alongside method data (e.g. metadata or other openLCA entity types). -}
+        jsonResults <- forM (mfJson files) $ \f -> do
+            bytes <- BS.readFile (dir </> f)
+            pure $
+                if OlcaSchema.isOlcaImpactCategoryJson bytes
+                    then Just (OlcaSchema.parseOlcaImpactCategoryBytes bytes)
+                    else Nothing
+        let (xmlErrs, xmlMethods) = partitionEithers xmlResults
+            (csvErrs, csvOks) = partitionEithers csvResults
+            (jsonErrs, jsonMethods) = partitionEithers (catMaybes jsonResults)
+        pure
+            ParsedMethodFiles
+                { pmfXmlMethods = xmlMethods
+                , pmfCsvCollections = lefts csvOks
+                , pmfCsvMethods = concat (rights csvOks)
+                , pmfCsvFileCount = length csvOks
+                , pmfJsonMethods = jsonMethods
+                , pmfErrors = xmlErrs ++ csvErrs ++ jsonErrs
+                }
+
+    -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method].
+    collectionOf :: ParsedMethodFiles -> Either Text MethodCollection
+    collectionOf parsed = case (allMethods, pmfErrors parsed) of
+        ([], firstErr : _) -> Left ("All method files failed to parse: " <> T.pack firstErr)
+        _ ->
+            Right $
+                MethodCollection
+                    allMethods
+                    -- Merge NW data from all SimaPro CSV sources
+                    (concatMap mcDamageCategories (pmfCsvCollections parsed))
+                    (concatMap mcNormWeightSets (pmfCsvCollections parsed))
+                    []
+      where
+        allMethods :: [Method]
+        allMethods =
+            pmfXmlMethods parsed
+                ++ pmfCsvMethods parsed
+                ++ pmfJsonMethods parsed
+                ++ concatMap mcMethods (pmfCsvCollections parsed)
+
+    parseCounts :: ParsedMethodFiles -> String
+    parseCounts parsed =
+        "  Parsed "
+            <> show (length (pmfXmlMethods parsed))
+            <> " XML, "
+            <> show (pmfCsvFileCount parsed)
+            <> " CSV, "
+            <> show (length (pmfJsonMethods parsed))
+            <> " JSON file(s)"
+
+    nwCounts :: MethodCollection -> Maybe String
+    nwCounts collection
+        | null (mcDamageCategories collection) = Nothing
+        | otherwise =
+            Just $
+                "  "
+                    <> show (length (mcDamageCategories collection))
+                    <> " damage categories, "
+                    <> show (length (mcNormWeightSets collection))
+                    <> " normalization-weighting set(s)"
+
+    parseFailures :: ParsedMethodFiles -> Maybe String
+    parseFailures parsed
+        | null (pmfErrors parsed) = Nothing
+        | otherwise = Just ("  " <> show (length (pmfErrors parsed)) <> " method file(s) failed to parse")
 
 -- | List all method collections with their status
 listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]
@@ -3850,7 +3979,7 @@ loadMethodCollection manager name = do
                             autoCreateFlowSynonyms
                                 manager
                                 name
-                                ("Auto-extracted from " <> name)
+                                (SynonymOrigin ("Auto-extracted from " <> name))
                                 pairs
                             return $ Right ()
 
@@ -3929,7 +4058,7 @@ getMergedSynonymDB manager = do
             else mergeSynonymDBs (M.elems loaded)
 
 {- | Surface one-way synonym bridges whose direction constraint is void in the
-(merged) set — re-linked in the opposite view by an untyped transitive chain or
+(merged) set, re-linked in the opposite view by an untyped transitive chain or
 a contradictory row ('reopenedBridges'). 'demoteDuplicates' only drops the exact
 duplicate pair, so this residue would otherwise silently widen a curated
 one-way bridge back to both directions. Called where the merged set is about to
@@ -3948,6 +4077,7 @@ warnReopenedBridges synDB =
                 <> dirLabel (seDir e)
                 <> ") is re-linked in the opposite direction's view by other rows; its direction restriction is void"
   where
+    dirLabel :: BridgeDirection -> String
     dirLabel BridgeBoth = "both"
     dirLabel BridgeInput = "input"
     dirLabel BridgeOutput = "output"
@@ -3990,7 +4120,7 @@ cache is trusted only if it records the same pair.
 currentBuildInputs :: DatabaseManager -> DatabaseConfig -> IO BuildInputs
 currentBuildInputs manager dbConfig = do
     unitConfig <- getMergedUnitConfig manager
-    pure (BuildInputs unitConfig (dcLocationAliases dbConfig))
+    pure (BuildInputs unitConfig (dcLocationAliases dbConfig) (dcAllocation dbConfig))
 
 {- | Snapshot of flow + unit metadata across every currently-loaded DB.
 Used to characterize or display a cross-DB-merged 'Inventory', whose
@@ -4051,7 +4181,10 @@ getMergedFlowMetadata manager = do
             atomically $ writeTVar (dmMergedFlowMetadataCache manager) (Just snap)
             pure snap
   where
+    bioFingerprint :: BiosphereFlow -> (Text, Text, Maybe Text)
     bioFingerprint f = (bfName f, bfCompartmentName f, bfCompartmentSub f)
+
+    unitFingerprint :: Unit -> Text
     unitFingerprint = unitName
 
     collisions :: (Ord fp) => (v -> fp) -> [Map UUID v] -> [UUID]
@@ -4100,7 +4233,7 @@ instance FromJSON RefDataStatus where
 -- Generic ref-data operations (shared by flow synonyms, compartment maps, units)
 --------------------------------------------------------------------------------
 
--- | Operations for a ref-data kind — everything that varies between the three.
+-- | Operations for a ref-data kind: everything that varies between the three.
 data RefDataOps a = RefDataOps
     { rdoAvailableVar :: !(DatabaseManager -> TVar (Map Text RefDataConfig))
     , rdoLoadedVar :: !(DatabaseManager -> TVar (Map Text a))
@@ -4210,7 +4343,7 @@ unloadRefDataG ops manager name = do
             return $ Right ()
         else return $ Left $ T.pack (rdoLabel ops) <> " not loaded: " <> name
 
-{- | Drop the merged-ref-data caches. Conservatively clears both — the
+{- | Drop the merged-ref-data caches. Conservatively clears both: the
 flow-metadata and unit-config snapshots are cheap to rebuild lazily, and
 ref-data changes (units, flow synonyms, compartment maps) are rare enough
 that per-kind dispatch adds no observable value.
@@ -4375,11 +4508,13 @@ parseGeographies label bytes = do
         then Right (M.fromList parsed)
         else Left (label <> ": duplicate codes: " <> T.intercalate ", " dups)
   where
+    meaningful :: Text -> Bool
     meaningful line =
         let stripped = T.strip line
          in not (T.null stripped)
                 && not ("#" `T.isPrefixOf` stripped)
                 && not ("code," `T.isPrefixOf` stripped)
+    entry :: (Text, Text, Text) -> (Text, (Text, [Text]))
     entry (codeRaw, displayRaw, parentsRaw) =
         let code = T.strip codeRaw
             display = T.strip displayRaw
@@ -4448,8 +4583,11 @@ removeUploadedRefData baseDir name = do
             Right () ->
                 reportProgress Info $ "Deleted: " <> uploadDir
 
+-- | The sentence a candidate synonym set carries about where it came from.
+newtype SynonymOrigin = SynonymOrigin Text
+
 {- | A synonym carried by more distinct flows than this is a classification label
-or stop-word (e.g. @"organic"@), not a true synonym — 'excludeOverFrequentSynonyms'
+or stop-word (e.g. @"organic"@), not a true synonym: 'excludeOverFrequentSynonyms'
 drops it. The bound sits in the gap between the class-label hubs (≥187 flows in
 EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
 -}
@@ -4460,13 +4598,13 @@ maxSynonymFlowFrequency = 25
 Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv and registers it
 inactive. The pairs never enter the matching: flow matching trusts only the
 curated registry (data/flows.csv) plus sources the user explicitly activates
-(activation lasts for the session and only reaches databases loaded after it) —
+(activation lasts for the session and only reaches databases loaded after it);
 DB-embedded synonyms are a bootstrap input for offline curation, not a runtime
 one. To regenerate a stale candidate, remove the source and reload.
 -}
-autoCreateFlowSynonyms :: DatabaseManager -> Text -> Text -> [(Text, Text)] -> IO ()
+autoCreateFlowSynonyms :: DatabaseManager -> Text -> SynonymOrigin -> [(Text, Text)] -> IO ()
 autoCreateFlowSynonyms _ _ _ [] = return ()
-autoCreateFlowSynonyms manager sourceName description pairs = do
+autoCreateFlowSynonyms manager sourceName (SynonymOrigin description) pairs = do
     let slug = "auto-" <> sourceName
     -- Skip if already registered (persisted candidate from a previous run,
     -- discovered at startup, or extracted earlier this session)
@@ -4512,7 +4650,7 @@ autoCreateFlowSynonyms manager sourceName description pairs = do
             addFlowSynonyms manager rd
             -- Close the candidate set only to audit its quality: an oversized
             -- class means the transitive closure fused unrelated substances
-            -- through an ambiguous bridge (a junk hub) — surface it so the
+            -- through an ambiguous bridge (a junk hub): surface it so the
             -- curator sees it before ever activating the source.
             forM_ (oversizedClasses 100 keptPairs) $ \cls ->
                 reportProgress Warning $

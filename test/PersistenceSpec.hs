@@ -47,6 +47,7 @@ import Database.Edit (
  )
 import Database.Journal (JournalOp (..), journalPath, readJournal)
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     LoadedDatabase (..),
     addDatabase,
@@ -61,6 +62,7 @@ import Database.UploadedDatabase (UploadMeta (..), readUploadMeta)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -69,11 +71,13 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -161,7 +165,7 @@ spec = describe "persisting an edit" $ do
     describe "a database the engine only reads" $ do
         it "says the edit is not saved, and is given no home" $
             withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "configured" db (configuredConfig "configured")
                 r <- mutateUploadedDatabase manager "configured" dropSecond
@@ -176,7 +180,7 @@ spec = describe "persisting an edit" $ do
     describe "refusals that protect the value" $ do
         it "refuses a second edit while one is in progress" $
             withDataDir $ \_ -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "busy" db (configuredConfig "busy")
                 atomically $ modifyTVar' (dmStagingDbs manager) (Set.insert "busy")
@@ -185,7 +189,7 @@ spec = describe "persisting an edit" $ do
 
         it "refuses while another loaded database depends on this one" $
             withDataDir $ \_ -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "background" db (configuredConfig "background")
                 install manager "foreground" db{dbDependsOn = ["background"]} (configuredConfig "foreground")
@@ -223,7 +227,7 @@ withEcoSpold1Database act =
         createDirectoryIfMissing True dataDir
         TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 101)) <> ".xml") (dataset 1 "electricity production, wind")
         TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 102)) <> ".xml") (dataset 2 "electricity production, solar")
-        manager <- initDatabaseManager defaultConfig False
+        manager <- initDatabaseManager defaultConfig UseCache
         addDatabase manager (uploadedConfig "bafu-like" dataDir)
         loaded <- loadDatabase manager "bafu-like"
         case loaded of
@@ -330,6 +334,7 @@ baseConfig name =
         , dcIsUploaded = False
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 uploadedConfig :: Text -> FilePath -> DatabaseConfig
@@ -355,12 +360,14 @@ buildFrom :: M.Map (UUID, UUID) Activity -> IO Database
 buildFrom activities = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            activities
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = activities
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID
@@ -426,6 +433,7 @@ milkActivity name =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

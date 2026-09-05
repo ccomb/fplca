@@ -147,6 +147,46 @@ data DeclaredShare = DeclaredShare
     deriving (Eq, Show, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeclaredShare)
 
+{- | An amount together with the unit it is stated in.
+
+Kept as written rather than converted: the conversion needs the unit table,
+which the parsers do not carry, and a number whose unit has been forgotten
+cannot be checked against the file it came from.
+-}
+data StatedAmount = StatedAmount
+    { saUnit :: !Text
+    , saAmount :: !Double
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped StatedAmount)
+
+{- | The physical properties of one exchange, as the source states them.
+
+Each is stated /per unit of the exchange amount/, which is how EcoSpold 2
+writes them: 614.4 kg of dry matter per m3 of board is recorded as 614.4 kg,
+whether the line is 1 m3 or 2. The mass of the whole line is the product of
+the two, taken where it is needed.
+
+Per unit rather than per line on purpose. A property that referred to the
+amount would have to be recomputed by every operation that touches an amount,
+and the one that forgot would leave a line saying 2 m3 and 614.4 kg. Referring
+to the unit instead, it cannot contradict the amount beside it.
+
+'Nothing' is "the source states none", never a zero standing in for it: a
+product of no mass and a product whose mass is unknown are different answers
+to whether the mass can serve as a key.
+-}
+data ExchangeProperties = ExchangeProperties
+    { epDryMass :: !(Maybe StatedAmount)
+    , epWetMass :: !(Maybe StatedAmount)
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeProperties)
+
+-- | An exchange whose source states no property.
+noProperties :: ExchangeProperties
+noProperties = ExchangeProperties{epDryMass = Nothing, epWetMass = Nothing}
+
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
     { unitId :: !UUID -- Unique unit identifier
@@ -265,6 +305,7 @@ data Exchange
         , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         , techShare :: !(Maybe DeclaredShare) -- The share a product output was declared with; Nothing on inputs and where the source states none
         , techClassification :: !(M.Map Text Text) -- What the source says of this product row (SimaPro "Category"); carried onto the process split for it
+        , techProperties :: !ExchangeProperties -- Physical properties the source states of this line, the material an allocation key other than the declared one is computed from
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged
@@ -352,6 +393,12 @@ exchangeDeclaredShare :: Exchange -> Maybe DeclaredShare
 exchangeDeclaredShare TechnosphereExchange{techShare = share} = share
 exchangeDeclaredShare BiosphereExchange{} = Nothing
 exchangeDeclaredShare WasteExchange{} = Nothing
+
+-- | The physical properties the source states of a row; none on the other axes.
+exchangeProperties :: Exchange -> ExchangeProperties
+exchangeProperties TechnosphereExchange{techProperties = props} = props
+exchangeProperties BiosphereExchange{} = noProperties
+exchangeProperties WasteExchange{} = noProperties
 
 {- | The share each product output was declared with, in source order;
 'Nothing' where the source states none. One entry on a process split from
@@ -986,6 +1033,7 @@ database at the next start.
 data BuildInputs = BuildInputs
     { biUnitConfig :: !UnitConfig
     , biLocationAliases :: !(M.Map Text Text)
+    , biAllocation :: !AllocationKey
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
@@ -1457,6 +1505,33 @@ data LinkBlocker
       designation must fail loudly, never fall back to the generic cascade.
       -}
       AliasTargetMissing !Text !(Maybe Text)
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | A physical property of a product, which shares can be divided on.
+
+Each names one measurable quantity and nothing else. There is no plain @Mass@:
+EcoSpold 2 states dry and wet mass separately, and the Abondance cheese block
+divides 51 % on dry matter where its wet mass would give 12 %, so a key that
+did not say which one it meant would be a key nobody could check.
+-}
+data AllocationProperty
+    = DryMass
+    | WetMass
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | How the shares of a multi-output activity are decided. Maps to TOML field
+@allocation@ on a database entry.
+
+* 'Declared'   — the shares the source states, a number or an evaluated formula.
+* 'ByProperty' — recomputed from a physical property of the products.
+
+A database is loaded under one key, and the same source loaded twice under two
+keys is two databases: the choice belongs to the load, because it decides the
+inventory of every process the load produces.
+-}
+data AllocationKey
+    = Declared
+    | ByProperty !AllocationProperty
     deriving (Show, Eq, Generic, NFData, Store)
 
 {- | Per-database knob controlling how aggressively geography may be widened when

@@ -7,7 +7,7 @@ Before the fix, relink re-discovered cross-DB links against *every* loaded
 database and reset 'dbDependsOn' to whatever produced a link. A database
 opened from cache could therefore never have its dependency set reduced:
 each relink re-expanded it (and rewrote the cache). This was the GINKO
-symptom — pinning a consumer to a single Agribalyse version was impossible
+symptom: pinning a consumer to a single Agribalyse version was impossible
 while other versions stayed loaded.
 
 The fix makes 'dbDependsOn' authoritative: relink restricts its candidate
@@ -31,6 +31,7 @@ import qualified Data.Vector.Unboxed as U
 import Database (buildDatabaseWithMatrices)
 import Database.CrossLinking (AliasKey (..), AliasMap (..), AliasTarget (..), buildIndexedDatabaseFromDB)
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     LoadedDatabase (..),
     initDatabaseManager,
@@ -43,17 +44,20 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     CrossDBLink (..),
     Database (..),
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -66,10 +70,10 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             betaDb <- buildOrFail (supplierDB 200 ["p1", "p2"])
             -- consumer needs both p1 and p2.
             consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
-            -- Pin the consumer to alpha only, with no links yet — relink populates them.
+            -- Pin the consumer to alpha only, with no links yet, relink populates them.
             let consumerDb = consumerDb0{dbDependsOn = ["alpha"], dbCrossDBLinks = []}
 
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             solver <- mkSolver "consumer" consumerDb
             let consumerLoaded =
                     LoadedDatabase
@@ -90,7 +94,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             let relinked = ldDatabase (loaded M.! "consumer")
                 linkSources = S.fromList (map cdlSourceDatabase (dbCrossDBLinks relinked))
 
-            -- The pin is preserved exactly — beta is NOT added even though it is
+            -- The pin is preserved exactly: beta is NOT added even though it is
             -- loaded and is the only supplier of p2.
             dbDependsOn relinked `shouldBe` ["alpha"]
             -- Every resolved link points into the pinned DB; beta never leaks in.
@@ -106,7 +110,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
             let consumerDb = consumerDb0{dbDependsOn = ["alpha", "beta"], dbCrossDBLinks = []}
 
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             consumerSolver <- mkSolver "consumer" consumerDb
             alphaSolver <- mkSolver "alpha" alphaDb
             betaSolver <- mkSolver "beta" betaDb
@@ -160,7 +164,16 @@ supplierLoadedConfig name =
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) acts flows M.empty M.empty units
+    r <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = acts
+                , sdbTechFlows = flows
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = units
+                }
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)
@@ -185,6 +198,7 @@ consumerConfig path =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 -- ---------------------------------------------------------------------------
@@ -240,6 +254,7 @@ supplierDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity
@@ -292,6 +307,7 @@ consumerDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   unlinkedInput =
                     TechnosphereExchange
@@ -306,6 +322,7 @@ consumerDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity

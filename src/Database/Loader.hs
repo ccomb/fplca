@@ -30,7 +30,10 @@ The cache keeps day-to-day execution fast while preserving reproducibility.
 module Database.Loader (
     -- * Main Loading Functions
     loadDatabase,
+    LoadOptions (..),
+    defaultLoadOptions,
     loadDatabaseWithLocationAliases,
+    reportKeyRefusals,
     loadSimaProCSV,
     loadDatabaseWithCrossDBLinking,
     findFilesByExtRecursive,
@@ -123,7 +126,14 @@ import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
-import Database.Allocation (AllocationKey (..), allocate, allocateAll)
+import Database.Allocation (
+    Allocating (..),
+    PropertyRefusal,
+    allocate,
+    allocateAll,
+    describePropertyRefusal,
+    propertyKeyRefusals,
+ )
 import Database.CrossLinking (
     AliasMap,
     CrossDBLinkResult (..),
@@ -280,6 +290,12 @@ History of manual bumps:
 - 20: the payload records the unit table and location aliases the database
      was built with ('dbBuiltWith'), compared before a cache is trusted. Old
      caches end before the field.
+- 21: a technosphere line carries the physical properties its source states
+     ('techProperties'), the material an allocation key other than the declared
+     one is computed from. Cached exchanges end before the field.
+- 22: the payload records the allocation key the database was divided under
+     ('dbBuiltWith'), so a cache of one key is not served to a load asking for
+     another. Old caches end before the field.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -287,7 +303,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 20
+     in hi `xor` lo `xor` 22
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -721,7 +737,7 @@ Performance characteristics:
 Used when no cache exists or caching is disabled.
 -}
 loadDatabase :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadDatabase unitConfig = loadDatabaseWithLocationAliases unitConfig M.empty
+loadDatabase unitConfig = loadDatabaseWithLocationAliases (defaultLoadOptions unitConfig)
 
 {- | Load all EcoSpold files with location aliases
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
@@ -729,26 +745,84 @@ Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO
 The 'UnitConfig' is passed down to parsers so reference-product amounts can be
 normalized to the canonical base unit of their dimension at ingest time.
 -}
-loadDatabaseWithLocationAliases :: UC.UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadDatabaseWithLocationAliases unitConfig locationAliases path = do
+loadDatabaseWithLocationAliases :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadDatabaseWithLocationAliases opts path = do
+    loaded <- readSourceUnder opts path
+    either (pure . Left) (\db -> Right db <$ reportKeyRefusals opts db) loaded
+
+-- | The load itself, before anything is said about what the key refused.
+readSourceUnder :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+readSourceUnder opts path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
     isFile <- doesFileExist path
     isDir <- doesDirectoryExist path
 
     if isFile
         then case map toLower (takeExtension path) of
-            ".csv" -> loadSimaProCSV unitConfig path
-            ".xml" -> loadSingleEcoSpold1File locationAliases path
-            ".xlsx" -> loadBrightwayExcel unitConfig path
+            ".csv" -> loadSimaProCSV opts path
+            ".xml" -> loadSingleEcoSpold1File opts path
+            ".xlsx" -> loadBrightwayExcel opts path
             _ -> return $ Left $ T.pack $ "Unsupported file type: " ++ path
         else
             if isDir
                 then do
                     hasProcesses <- doesDirectoryExist (path </> "processes")
                     if hasProcesses
-                        then ILCD.parseILCDDirectory path
-                        else loadEcoSpoldDirectory locationAliases path
+                        then ILCD.parseILCDDirectory (loUnitConfig opts) (loAllocation opts) path
+                        else loadEcoSpoldDirectory opts path
                 else return $ Left $ T.pack $ "Path does not exist: " ++ path
+
+{- | What a load reads besides the files themselves.
+
+Gathered rather than passed one by one: every format loader needs all three,
+and three positional arguments of which two are maps invite a caller to swap
+them.
+-}
+data LoadOptions = LoadOptions
+    { loUnitConfig :: !UC.UnitConfig -- The merged unit table amounts are converted through
+    , loLocationAliases :: !(M.Map T.Text T.Text) -- Wrong location -> correct location
+    , loAllocation :: !AllocationKey -- How a multi-output block is divided
+    }
+
+{- | Say what the key this load asked for could not divide.
+
+Loud rather than silent: such a block keeps every share its source declared
+and still loses its column, and nothing else in the run says which key refused
+it or why. The first ten are named, and a count says how many there were.
+-}
+reportKeyRefusals :: LoadOptions -> SimpleDatabase -> IO ()
+reportKeyRefusals opts db = case loAllocation opts of
+    Declared -> pure ()
+    ByProperty prop -> unless (null refusals) $ do
+        reportProgress Warning $
+            show (length refusals) <> " blocks were not divided: the key names a property they do not carry"
+        mapM_ (warn prop) (take 10 refusals)
+  where
+    refusals :: [(T.Text, PropertyRefusal)]
+    refusals = propertyKeyRefusals (allocating opts (sdbUnits db)) (M.elems (sdbActivities db))
+
+    warn :: AllocationProperty -> (T.Text, PropertyRefusal) -> IO ()
+    warn prop (name, reason) =
+        reportProgress Warning . T.unpack $
+            name <> " has no column -- " <> describePropertyRefusal prop reason
+
+-- | What 'allocate' reads, for a load of these options over these units.
+allocating :: LoadOptions -> UnitDB -> Allocating
+allocating opts unitDB =
+    Allocating
+        { alKey = loAllocation opts
+        , alUnitConfig = loUnitConfig opts
+        , alUnitDB = unitDB
+        }
+
+-- | The options a load with nothing configured runs under.
+defaultLoadOptions :: UC.UnitConfig -> LoadOptions
+defaultLoadOptions unitConfig =
+    LoadOptions
+        { loUnitConfig = unitConfig
+        , loLocationAliases = M.empty
+        , loAllocation = Declared
+        }
 
 -- | Everything one EcoSpold dataset parses to, before it is keyed.
 type ParsedDataset = (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int)
@@ -757,15 +831,16 @@ type ParsedDataset = (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow]
 'allocate' splits it into, each carrying the file's flows and units, so the
 entry is then keyed on its own reference product.
 -}
-allocateParsed :: ParsedDataset -> [ParsedDataset]
-allocateParsed (act, techs, bios, wastes, units, dsNum, links) =
+allocateParsed :: LoadOptions -> ParsedDataset -> [ParsedDataset]
+allocateParsed opts (act, techs, bios, wastes, units, dsNum, links) =
     [ (act', techs, bios, wastes, units, dsNum, links)
-    | act' <- NE.toList (allocate Declared (M.fromList [(unitId u, u) | u <- units]) act)
+    | act' <- NE.toList (allocate (allocating opts (M.fromList [(unitId u, u) | u <- units])) act)
     ]
 
 -- | Load SimaPro CSV file
-loadSimaProCSV :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadSimaProCSV unitConfig csvPath = do
+loadSimaProCSV :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadSimaProCSV opts csvPath = do
+    let unitConfig = loUnitConfig opts
     parsed <- SimaPro.parseSimaProCSV unitConfig csvPath
     case parsed of
         Left err -> return (Left err)
@@ -775,7 +850,7 @@ loadSimaProCSV unitConfig csvPath = do
                 else do
                     -- Build ActivityMap with generated ProcessIds
                     -- For SimaPro: use the same UUID for both activity and product (like EcoSpold1)
-                    let (procMap, collisions) = indexActivities (allocateAll Declared unitDB activities)
+                    let (procMap, collisions) = indexActivities (allocateAll (allocating opts unitDB) activities)
                     forM_ collisions $ reportProgress Warning . T.unpack
 
                     -- Build initial database
@@ -792,15 +867,16 @@ references are resolved by the shared name-based pass. Cross-database links to a
 background database (e.g. ecoinvent) are resolved later by
 'fixActivityLinksWithCrossDB', exactly as for SimaPro and EcoSpold.
 -}
-loadBrightwayExcel :: UC.UnitConfig -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadBrightwayExcel unitConfig xlsxPath = do
+loadBrightwayExcel :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadBrightwayExcel opts xlsxPath = do
+    let unitConfig = loUnitConfig opts
     parsed <- BrightwayExcel.parseBrightwayExcel unitConfig xlsxPath
     case parsed of
         Left err -> return $ Left err
         Right (activities, techFlowDB, bioFlowDB, wasteFlowDB, unitDB)
             | null activities -> return $ Left "No activities found in Brightway Excel file."
             | otherwise -> do
-                let (procMap, collisions) = indexActivities (allocateAll Declared unitDB activities)
+                let (procMap, collisions) = indexActivities (allocateAll (allocating opts unitDB) activities)
                     simpleDb = SimpleDatabase procMap techFlowDB bioFlowDB wasteFlowDB unitDB
                 forM_ collisions $ reportProgress Warning . T.unpack
                 Right <$> fixSimaProActivityLinks unitConfig simpleDb
@@ -910,8 +986,8 @@ findFilesByExtRecursive ext =
     fmap (filter ((== ext) . map toLower . takeExtension)) . listDirectoryRecursive
 
 -- | Load EcoSpold files from directory
-loadEcoSpoldDirectory :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadEcoSpoldDirectory locationAliases dir = do
+loadEcoSpoldDirectory :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadEcoSpoldDirectory opts dir = do
     reportProgress Info "Scanning directory for EcoSpold files"
     files <- listDirectory dir
     -- .spold datasets may live in a subdirectory (e.g. ecoinvent's datasets/),
@@ -926,7 +1002,7 @@ loadEcoSpoldDirectory locationAliases dir = do
         ([], [singleXml]) -> do
             -- Single XML file: likely a multi-dataset EcoSpold1 file
             reportProgress Info $ "Found single EcoSpold1 file: " ++ singleXml
-            loadSingleEcoSpold1File locationAliases singleXml
+            loadSingleEcoSpold1File opts singleXml
         ([], xs) -> do
             reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold1 (.XML) files for processing"
             loadWithWorkerParallelism xs True
@@ -937,6 +1013,8 @@ loadEcoSpoldDirectory locationAliases dir = do
             reportProgress Info $ "Found " ++ show (length xs) ++ " EcoSpold2 (.spold) files for processing"
             loadWithWorkerParallelism xs False -- Prefer EcoSpold2 if both present
   where
+    locationAliases :: MS.Map T.Text T.Text
+    locationAliases = loLocationAliases opts
     -- Worker-based parallelism: divide files among N workers, all process in parallel
     loadWithWorkerParallelism :: [FilePath] -> Bool -> IO (Either T.Text SimpleDatabase)
     loadWithWorkerParallelism allFiles isEcoSpold1 = do
@@ -1023,7 +1101,7 @@ loadEcoSpoldDirectory locationAliases dir = do
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
-        let (okFiles, okResults) = unzip [(f, r') | (f, r) <- oks, r' <- allocateParsed r]
+        let (okFiles, okResults) = unzip [(f, r') | (f, r) <- oks, r' <- allocateParsed opts r]
         let procs = [a | (a, _, _, _, _, _, _) <- okResults]
             techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
             bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
@@ -1095,12 +1173,13 @@ A file holding exactly one dataset is keyed like the per-file directory
 path: the identifier its file name carries wins over the minted UUID.
 Several datasets share one file name, so none of them can claim it.
 -}
-loadSingleEcoSpold1File :: M.Map T.Text T.Text -> FilePath -> IO (Either T.Text SimpleDatabase)
-loadSingleEcoSpold1File locationAliases filepath = do
+loadSingleEcoSpold1File :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+loadSingleEcoSpold1File opts filepath = do
+    let locationAliases = loLocationAliases opts
     reportProgress Info "Parsing multi-dataset EcoSpold1 file..."
     parsed <- streamParseAllDatasetsFromFile1 filepath
     reportProgress Info $ "Parsed " ++ show (length parsed) ++ " datasets from file"
-    let results = concatMap allocateParsed parsed
+    let results = concatMap (allocateParsed opts) parsed
 
     -- Build activity map from all parsed activities
     let fileUUID = case results of
@@ -1204,6 +1283,7 @@ builtWithDifference cached current =
     intercalate " and " $
         ["unit table" | biUnitConfig cached /= biUnitConfig current]
             ++ ["location aliases" | biLocationAliases cached /= biLocationAliases current]
+            ++ ["allocation key" | biAllocation cached /= biAllocation current]
 
 -- | Load compressed (.bin.zst) cache file with header validation
 loadCompressedCacheFile :: FilePath -> IO (Maybe Database)
@@ -1319,14 +1399,12 @@ The loading sequence:
 5. Report linking summary with cross-DB statistics
 -}
 loadDatabaseWithCrossDBLinking ::
-    -- | Location aliases (wrongLocation → correctLocation)
-    M.Map T.Text T.Text ->
+    -- | What this database is read under: units, aliases, allocation key
+    LoadOptions ->
     -- | Pre-built indexes from other databases
     [IndexedDatabase] ->
     -- | Synonym database for name matching
     SynonymDB ->
-    -- | Unit configuration for compatibility checking
-    UC.UnitConfig ->
     -- | Location hierarchy (empty = use built-in)
     M.Map Location [Location] ->
     -- | Geography policy for this database
@@ -1334,8 +1412,9 @@ loadDatabaseWithCrossDBLinking ::
     -- | Path to load from
     FilePath ->
     IO (Either T.Text (SimpleDatabase, CrossDBLinkingStats))
-loadDatabaseWithCrossDBLinking locationAliases otherIndexes synonymDB unitConfig locationHier policy path = do
-    result <- loadDatabaseWithLocationAliases unitConfig locationAliases path
+loadDatabaseWithCrossDBLinking opts otherIndexes synonymDB locationHier policy path = do
+    let unitConfig = loUnitConfig opts
+    result <- loadDatabaseWithLocationAliases opts path
     case result of
         Left err -> return $ Left err
         Right simpleDb -> do

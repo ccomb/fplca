@@ -12,8 +12,8 @@ silently reuses the wrong CF table.
 
 This test drives 'mapMethodToTablesCached' directly with one in-memory database
 and two same-UUID methods that differ only in their UUID-matched CF value. It
-asserts the built 'MethodTables' (specifically 'mtUuidCF') differ per collection
-— which can only hold when the collection is part of the cache key. Without the
+asserts the built 'MethodTables' (specifically 'mtUuidCF') differ per collection,
+which can only hold when the collection is part of the cache key. Without the
 key change, the second lookup returns the first collection's cached tables and
 the assertion fails.
 -}
@@ -30,7 +30,7 @@ import Types (UUID)
 
 import CrossDBRegionalLCIAFixture (flowUUID, mkDB, mkUUID)
 
-{- | Shared method UUID — same in both collections, mirroring the UUIDv5-of-name
+{- | Shared method UUID, same in both collections, mirroring the UUIDv5-of-name
 collision the cache must disambiguate by collection.
 -}
 sharedMethodId :: UUID
@@ -82,7 +82,7 @@ spec :: Spec
 spec = do
     describe "mapMethodToTablesCached (collection-scoped cache)" $ do
         it "returns per-collection CF tables for same-UUID methods (A then B)" $ do
-            mgr <- DM.initDatabaseManager defaultConfig False
+            mgr <- DM.initDatabaseManager defaultConfig DM.UseCache
             let db = mkDB 0 ["FR"] []
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
@@ -90,7 +90,7 @@ spec = do
             fmap teCF (M.lookup flowUUID (mtUuidCF tablesB)) `shouldBe` Just (CF cfB (CFUnit "MJ"))
 
         it "returns per-collection CF tables for same-UUID methods (B then A)" $ do
-            mgr <- DM.initDatabaseManager defaultConfig False
+            mgr <- DM.initDatabaseManager defaultConfig DM.UseCache
             let db = mkDB 0 ["FR"] []
             tablesB <- DM.mapMethodToTablesCached mgr "db" collectionB db (mkFossilsMethod cfB)
             tablesA <- DM.mapMethodToTablesCached mgr "db" collectionA db (mkFossilsMethod cfA)
