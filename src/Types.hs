@@ -680,6 +680,46 @@ identifier fall back to grouping by activity UUID, as before.
 activityGroupKey :: UUID -> Activity -> (UUID, Maybe NativeProcessId)
 activityGroupKey actUUID act = (actUUID, activityNativeId act)
 
+{- | The source block one process came out of, as a listing needs to know it.
+
+'sbName' is for comparing, never for reading: every process of one block
+carries the same one and nothing else does. It renders 'activityGroupKey', so
+it tells apart the SimaPro blocks that share a process name where the activity
+UUID alone hashes them together.
+
+'sbProducts' is how many products the block holds, and it is the second field
+rather than something a reader could count for itself: a page showing the last
+row of a block has no other way to know the block goes on.
+-}
+data SourceBlock = SourceBlock
+    { sbName :: !Text
+    , sbProducts :: !Int
+    }
+    deriving (Show, Eq)
+
+{- | The block a process belongs to, read off the database that holds it.
+
+A process no longer in the table is its own block of one, named the way
+'processIdToText' names it: it is not grouped with anything, which is the
+truth about a row nothing resolves.
+-}
+sourceBlockOf :: Database -> ProcessId -> Activity -> SourceBlock
+sourceBlockOf db pid act = maybe orphan blockOfRef (processIdToRef db pid)
+  where
+    orphan :: SourceBlock
+    orphan = SourceBlock{sbName = processIdToText db pid, sbProducts = 1}
+
+    blockOfRef :: ProcessRef -> SourceBlock
+    blockOfRef ref =
+        let key = activityGroupKey (prActivity ref) act
+         in SourceBlock
+                { -- The UUID is 36 characters whatever it holds, so the
+                  -- separator cannot be read as part of either half and two
+                  -- different keys cannot spell one name.
+                  sbName = UUID.toText (fst key) <> "/" <> foldMap (\(NativeProcessId native) -> native) (snd key)
+                , sbProducts = max 1 (length (M.findWithDefault [] key (dbActivityProductsIndex db)))
+                }
+
 {- | Is this dataset filed in its source's obsolete category?
 
 The tool that writes SimaPro CSV files keeps a retired process in the export,

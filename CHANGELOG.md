@@ -64,6 +64,13 @@
   The key a database was divided under, and the source whose files it reads,
   now travel with its status, so a column of shares can say whether the source
   stated them or a property recomputed them. Wire revision 20.
+- An activity summary now names the source block the process came out of, and
+  says how many products that block holds. A listing showing the five
+  coproducts of one dairy block had no way to gather them: the process id
+  names the product, and the activity UUID alone hashes together the SimaPro
+  blocks that share a truncated process name. The block name is for comparing
+  and never for reading, and the count is what lets a page say it is showing
+  only part of a block rather than the whole of it. Wire revision 20.
 - A flow search can name several kinds at once: `kind=biosphere,waste` keeps
   what is exchanged with nature or discarded and nothing else, in one listing.
   `search-counts` already answers that pair as a single number, and there was
