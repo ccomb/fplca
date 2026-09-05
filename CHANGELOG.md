@@ -40,6 +40,13 @@
   lists the activities that make it, `?role=consumer` those that use it. The
   route answered both at once before, which is two questions in one list.
   Asking with no `role` still answers both. Wire revision 16.
+- An ILCD dataset that states an allocation key is now read with it. The
+  format carries a fraction per product output, which the parser dropped, so
+  a multi-output ILCD dataset had no shares to split on and was refused as
+  unallocated. Only the fraction a product allocates to itself is read: the
+  format also allows a matrix allocating one exchange to another product, and
+  a dataset written that way is still refused rather than split on a number
+  that meant something else.
 - The products of a multi-output block now each report what their share
   would be if the allocation key were their mass (`massAllocationPercent`), beside
   the share the source declared. Nothing is split and nothing is scored

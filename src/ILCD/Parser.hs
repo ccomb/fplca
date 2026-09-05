@@ -72,6 +72,7 @@ data ILCDExchangeRaw = ILCDExchangeRaw
     , ierAmount :: !Double
     , ierLocation :: !Text
     , ierComment :: !(Maybe Text) -- per-exchange <common:generalComment>
+    , ierShare :: !(Maybe Double) -- <allocation allocatedFraction>, in percent, when the exchange allocates to itself
     }
 
 {- | Parse an ILCD directory into a SimpleDatabase.
@@ -342,6 +343,16 @@ data ProcState = ProcState
     {- ^ (xml:lang, comment text) for the open `<exchange>`. English wins;
     otherwise first non-empty. Reset on each `<exchange>` open.
     -}
+    , psExAllocations :: ![(Int, Double)]
+    {- ^ Every (internalReferenceToCoProduct, allocatedFraction) of the open
+    `<exchange>`. All of them, because how many there are is what says
+    which of the format's two meanings the file is using.
+    -}
+    , psAllocRef :: !(Maybe Int)
+    {- ^ The attributes of one `<allocation>` arrive separately, so they are
+    paired at its close.
+    -}
+    , psAllocFraction :: !(Maybe Double)
     , psPendingCommentLang :: !Text
     {- ^ xml:lang on the currently-open `<common:generalComment>`. Reset
     on every comment open.
@@ -376,6 +387,9 @@ parseProcessXML bytes =
             , psExAmount = 0
             , psExLocation = ""
             , psExComment = Nothing
+            , psExAllocations = []
+            , psAllocRef = Nothing
+            , psAllocFraction = Nothing
             , psPendingCommentLang = ""
             , psTextAccum = []
             , psInName = False
@@ -400,6 +414,9 @@ parseProcessXML bytes =
                 , psExAmount = 0
                 , psExLocation = ""
                 , psExComment = Nothing
+                , psExAllocations = []
+                , psAllocRef = Nothing
+                , psAllocFraction = Nothing
                 }
         | isElement tag "generalComment" =
             s{psPendingCommentLang = "", psTextAccum = []}
@@ -416,6 +433,12 @@ parseProcessXML bytes =
                 Left _ -> s
         | isElement name "refObjectId" && psInExchange s && T.null (psExFlowRef s) =
             s{psExFlowRef = bsToText value}
+        | isElement name "internalReferenceToCoProduct" && psInExchange s =
+            case TR.decimal (bsToText value) of
+                Right (n, _) -> s{psAllocRef = Just n}
+                Left _ -> s
+        | isElement name "allocatedFraction" && psInExchange s =
+            s{psAllocFraction = readAmount (bsToText value)}
         | isElement name "location" && not (psInExchange s) && T.null (psLocation s) =
             s{psLocation = bsToText value}
         | isElement name "name" && not (psInExchange s) && not (psInName s) =
@@ -481,6 +504,14 @@ parseProcessXML bytes =
             -- Guard psInExchange just in case a future ILCD revision reuses the tag name
             -- elsewhere; first occurrence wins to be deterministic.
             s{psProcessType = accum s, psTextAccum = []}
+        | isElement tag "allocation" && psInExchange s =
+            let paired = (,) <$> psAllocRef s <*> psAllocFraction s
+             in s
+                    { psExAllocations = maybe (psExAllocations s) (: psExAllocations s) paired
+                    , psAllocRef = Nothing
+                    , psAllocFraction = Nothing
+                    , psTextAccum = []
+                    }
         | isElement tag "exchange" =
             let ex =
                     ILCDExchangeRaw
@@ -490,9 +521,29 @@ parseProcessXML bytes =
                         , ierAmount = psExAmount s
                         , ierLocation = psExLocation s
                         , ierComment = snd <$> psExComment s
+                        , ierShare = soleSelfAllocation (psExInternalId s) (psExAllocations s)
                         }
              in s{psInExchange = False, psExchanges = ex : psExchanges s, psTextAccum = []}
         | otherwise = s{psTextAccum = []}
+
+    -- \| The share an exchange declares for itself, and only when it is the
+    --    only thing that exchange allocates.
+    --
+    --    The attribute carries two different meanings in ILCD. One entry pointing
+    --    at the exchange itself is the ordinary form: "this product takes this
+    --    share of the process". Several entries are the general form, where the
+    --    exchange is distributed across the co-products and the entry pointing at
+    --    itself is its own share of itself, which is 100 and says nothing about
+    --    allocation. Reading that as a declared share would give every product
+    --    100 % and hand each one the whole inventory.
+    --
+    --    So several entries yield no share at all, and the allocation gate refuses
+    --    the dataset. Refused is the right answer for a form we cannot represent.
+    --
+    soleSelfAllocation :: Int -> [(Int, Double)] -> Maybe Double
+    soleSelfAllocation ownId allocations = case allocations of
+        [(ref, fraction)] | ref == ownId -> Just fraction
+        _ -> Nothing
 
     cdata = txt
     accum s = T.strip $ T.concat $ reverse $ map bsToText (psTextAccum s)
@@ -582,6 +633,29 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
         , activityFormulaCheck = Nothing
         }
   where
+    -- \| The share the source declared for one product output, read from its
+    --    own @<allocation allocatedFraction>@.
+    --
+    --    ILCD lets an exchange allocate to any co-product by internal id, which
+    --    would be a matrix of shares. Only the entry pointing at the exchange
+    --    itself is read, because that is the one that says "this product's share
+    --    of the process" and the only one 'DeclaredShare' can hold. A dataset
+    --    using the general form keeps no share here and the allocation gate
+    --    refuses it, which is the honest outcome: better refused than split on a
+    --    number that meant something else.
+    --
+    declaredShareOf :: TechRole -> ILCDExchangeRaw -> Maybe DeclaredShare
+    declaredShareOf role raw = case role of
+        ReferenceProduct -> shareOf raw
+        Coproduct -> shareOf raw
+        ReferenceInput -> Nothing
+        Input -> Nothing
+        AvoidedProduct -> Nothing
+
+    -- \| The number itself, once the role says a share belongs on the exchange.
+    shareOf :: ILCDExchangeRaw -> Maybe DeclaredShare
+    shareOf raw = flip DeclaredShare Nothing <$> ierShare raw
+
     -- Look up the reference exchange's flow unit. Reference exchange is typically
     -- a technosphere product, but for waste-treatment processes it may be a
     -- biosphere input — try both maps before falling back to "kg".
@@ -644,7 +718,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
                         , techPedigree = Nothing
-                        , techShare = Nothing
+                        , techShare = declaredShareOf techRoleFor raw
                         , techClassification = M.empty
                         }
 
