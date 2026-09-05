@@ -47,7 +47,7 @@ import qualified GHC.Stats
 import qualified Impact
 import Matrix (Inventory, Vector)
 import qualified Method.Explain as Explain
-import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupEntryForFlow, strategyToText)
+import Method.Mapping (BuildProvenance (..), CF (..), LCIAOutcome (..), LongTermMode (..), MappingStats (..), MethodTables (..), TableEntry (..), applyLongTermMode, characterizedFlowIds, computeLCIAScoreFromTables, computeLCIAScoreSetFromTables, computeMappingStats, inventoryContributions, longTermModeFromExclude, lookupEntryForFlow, provenanceStrategyText, strategyToText)
 import qualified Method.Mapping
 import Method.Types (DamageCategory (..), Method (..), MethodCF (..), MethodCollection (..), NormWeightSet (..), ScoringEvaluation (..), ScoringSet (..), computeFormulaScores)
 import qualified Method.Types as MT
@@ -1222,7 +1222,7 @@ buildFlowEntry db tables uuid =
             , fceFlowCategory = maybe "" bfCompartmentName mFlow
             , fceCfValue = cfValue . teCF . snd <$> mServed
             , fceCfFlowName = mcfFlowName . bpSource <$> provenance
-            , fceMatchStrategy = strategyToText . bpStrategy <$> provenance
+            , fceMatchStrategy = provenanceStrategyText <$> provenance
             }
 
 matchesQuery :: Maybe Text -> Text -> Text -> Bool

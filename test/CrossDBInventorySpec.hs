@@ -169,7 +169,7 @@ spec = do
             uuidEntry fid name v =
                 Mapping.TableEntry (CF v (CFUnit "kg CO2 eq")) $
                     Mapping.BuildProvenance
-                        Mapping.ByUUID
+                        (Just Mapping.ByUUID)
                         MethodCF
                             { mcfFlowRef = fid
                             , mcfFlowName = name

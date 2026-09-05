@@ -82,8 +82,7 @@ data Reach = Exact | Bridged
 
 {- | An exact-name match is what an exact-string consumer also sees; every other
 strategy is a bridge it would miss. Total on 'MatchStrategy' so a new variant
-forces a decision here. ('NoMatch' cannot occur on a resolved tuple, but the
-match must stay exhaustive.)
+forces a decision here.
 -}
 strategyReach :: MatchStrategy -> Reach
 strategyReach ByName = Exact
@@ -91,7 +90,6 @@ strategyReach ByUUID = Exact
 strategyReach ByCAS = Bridged
 strategyReach BySynonym = Bridged
 strategyReach ByProxy = Bridged
-strategyReach NoMatch = Bridged
 
 {- | Fold a collection's effective per-method mappings into its bridge groups.
 'total' and 'characterized' are the caller's honest counts (from

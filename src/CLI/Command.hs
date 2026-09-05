@@ -38,7 +38,7 @@ import Database.RelinkMapping (relinkWithMappingFile)
 import Database.Upload (UploadData (..), UploadResult (..), findMethodDirectory, handleUpload)
 import qualified Database.Upload
 import qualified Database.UploadedDatabase as UploadedDB
-import Method.Mapping (MappingStats (..), MatchStrategy (..), computeMappingStats, mapMethodToFlows)
+import Method.Mapping (MappingStats (..), computeMappingStats, mapMethodToFlows, strategyToText)
 import Method.Types (MethodCF (..))
 import qualified Method.Types
 import Progress
@@ -790,7 +790,7 @@ executeFlowMappingCommand fmt database manager opts = do
                                     ( \(cf, f, strat) ->
                                         putStrLn $
                                             "  ["
-                                                ++ T.unpack (strategyText strat)
+                                                ++ T.unpack (strategyToText strat)
                                                 ++ "] "
                                                 ++ T.unpack (mcfFlowName cf)
                                                 ++ " → "
@@ -843,7 +843,7 @@ executeFlowMappingCommand fmt database manager opts = do
                                                         [ object
                                                             [ "cfName" .= mcfFlowName cf
                                                             , "dbFlowName" .= Types.bfName f
-                                                            , "strategy" .= strategyText strat
+                                                            , "strategy" .= strategyToText strat
                                                             , "cfUUID" .= mcfFlowRef cf
                                                             , "dbFlowUUID" .= Types.bfId f
                                                             ]
@@ -872,14 +872,6 @@ executeFlowMappingCommand fmt database manager opts = do
 
     when True action = action
     when False _ = pure ()
-
-strategyText :: MatchStrategy -> Text
-strategyText ByUUID = "uuid"
-strategyText ByCAS = "cas"
-strategyText ByName = "name"
-strategyText BySynonym = "synonym"
-strategyText ByProxy = "proxy"
-strategyText NoMatch = "none"
 
 -- | Get names of biosphere flows not matched by any CF
 uncharacterizedFlowNames :: Types.Database -> S.Set UUID.UUID -> [Text]

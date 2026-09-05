@@ -299,15 +299,15 @@ direct match, where the rung sentence already says it.
 -}
 provenanceSentence :: BuildProvenance -> Text
 provenanceSentence provenance = case bpStrategy provenance of
-    ByUUID -> ""
-    ByName -> ""
-    BySynonym ->
+    Just ByUUID -> ""
+    Just ByName -> ""
+    Just BySynonym ->
         "That line was tied to this flow's name through a known synonym when the method was loaded."
-    ByCAS ->
+    Just ByCAS ->
         "That line was tied to this flow by CAS number when the method was loaded."
-    ByProxy ->
+    Just ByProxy ->
         "That line stands in for a related substance, and its factor was scaled by a curated conversion factor."
-    NoMatch ->
+    Nothing ->
         "No database flow claimed that line when the method was loaded; it is filed under the name the method itself uses."
 
 {- | The factor as applied, so the sentence stands on its own. The bridge says
