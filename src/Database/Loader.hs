@@ -2078,13 +2078,23 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                             (cdlrTiedDatabases result)
                             flowUnitName
                     locFallbacks =
-                        [ LocationFallback (cdlrProductName result) req actLoc kind
+                        [ LocationFallback
+                            { lfProduct = cdlrProductName result
+                            , lfRequested = req
+                            , lfActual = actLoc
+                            , lfKind = kind
+                            }
                         | UpperLocationUsed req actLoc kind <- cdlrWarnings result
                         ]
                     -- Non-nil input matched only by attributes: its named source
                     -- activity was in no dependency — flag the cross-version risk.
                     attrFallbacks =
-                        [ AttributeFallback (tfName flow) loc (cdlrLocation result) (cdlrDatabaseName result)
+                        [ AttributeFallback
+                            { afProduct = tfName flow
+                            , afRequested = loc
+                            , afMatched = cdlrLocation result
+                            , afSourceDatabase = cdlrDatabaseName result
+                            }
                         | linkId /= UUID.nil
                         ]
                  in mempty
@@ -2101,12 +2111,18 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
         let unresolved = case blocker of
                 LocationRejectedByPolicy req actLoc kind ->
                     [ LocationUnresolved
-                        (tfName flow)
-                        req
-                        ("policy rejected " <> locationKindCode kind <> " candidate " <> actLoc)
+                        { luProduct = tfName flow
+                        , luRequested = req
+                        , luReason = "policy rejected " <> locationKindCode kind <> " candidate " <> actLoc
+                        }
                     ]
                 LocationUnavailable req ->
-                    [LocationUnresolved (tfName flow) req "no candidate above link threshold"]
+                    [ LocationUnresolved
+                        { luProduct = tfName flow
+                        , luRequested = req
+                        , luReason = "no candidate above link threshold"
+                        }
+                    ]
                 NoNameMatch -> []
                 UnitIncompatible _ _ -> []
                 AliasTargetMissing _ _ -> []
