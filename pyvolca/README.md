@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.11.0** speaks wire formats **2 to 16** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.11.0** speaks wire formats **2 to 17** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -2269,7 +2269,7 @@ what a query found. Use them to tell which of the three a term is really
 about before listing any of them: a term matching 2 processes and 300
 flows is a substance name, not a product.
 
-Needs engine wire revision 16.
+Needs engine wire revision 17.
 
 | Field | Type | Default |
 |-------|------|---------|

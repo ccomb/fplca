@@ -1575,7 +1575,7 @@ class Client:
                 answering three zeros, which would read as "this database has
                 nothing".
         """
-        self._require_wire(16, "count_search_matches", engine_hint="0.12.1")
+        self._require_wire(17, "count_search_matches", engine_hint="0.12.1")
         return SearchCounts.from_json(self._call("count_search_matches", q=query))
 
     def list_classifications(self) -> list[ClassificationSystem]:

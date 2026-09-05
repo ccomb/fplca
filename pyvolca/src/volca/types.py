@@ -612,7 +612,7 @@ class SearchCounts(FromJson):
     about before listing any of them: a term matching 2 processes and 300
     flows is a substance name, not a product.
 
-    Needs engine wire revision 16.
+    Needs engine wire revision 17.
     """
 
     processes: int
