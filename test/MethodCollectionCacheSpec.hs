@@ -20,7 +20,6 @@ the assertion fails.
 module MethodCollectionCacheSpec (spec) where
 
 import qualified Data.Map.Strict as M
-import Data.Text (Text)
 import Test.Hspec
 
 import Config (defaultConfig)
@@ -66,11 +65,11 @@ fossilsCF cfValue =
         , mcfConsumerLocation = Nothing
         }
 
-collectionA :: Text
-collectionA = "Environmental Footprint 3.1 (adapted) 1.0"
+collectionA :: DM.CollectionName
+collectionA = DM.CollectionName "Environmental Footprint 3.1 (adapted) 1.0"
 
-collectionB :: Text
-collectionB = "Environmental Footprint 3.1 (adapted) 1.03"
+collectionB :: DM.CollectionName
+collectionB = DM.CollectionName "Environmental Footprint 3.1 (adapted) 1.03"
 
 {- | CF value distinguishing the two collections (analogous to the missing
 "Oil, crude, 43.4 MJ per kg" CF that only the 1.03 collection defines).

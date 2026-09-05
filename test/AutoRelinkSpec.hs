@@ -34,7 +34,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import Database.Manager (loadDatabaseRawWithCrossDB)
+import Database.Manager (RawLoad (..), loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
 import Types (GeographyPolicy (..))
 import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
@@ -60,15 +60,17 @@ runRawWith :: UnitConfig -> M.Map T.Text T.Text -> FilePath -> IO (Either T.Text
 runRawWith unitConfig locationAliases dstDir = do
     result <-
         loadDatabaseRawWithCrossDB
-            "test"
-            locationAliases
-            dstDir
-            False -- noCache disabled: cache must be written/read
-            emptySynonymDB
-            unitConfig
-            []
-            M.empty
-            GeoGlobal
+            RawLoad
+                { rlDbName = "test"
+                , rlLocationAliases = locationAliases
+                , rlSourcePath = dstDir
+                , rlNoCache = False -- cache must be written/read
+                , rlSynonymDB = emptySynonymDB
+                , rlUnitConfig = unitConfig
+                , rlOtherIndexes = []
+                , rlLocationHierarchy = M.empty
+                , rlGeographyPolicy = GeoGlobal
+                }
     return (fmap snd result)
 
 -- | The default unit table plus one unit, so the table differs in content.

@@ -1252,7 +1252,7 @@ callGetImpacts dbManager mBaseUrl rid args =
                     <> irRefProductName ir
             contribs = irContribs ir
             topFlows = take topN contribs
-            webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
+            webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (DM.unCollectionName (lrCollection req)) <> "/" <> lrMethodIdText req)
             hasNeg = any (\(_, _, c) -> c < 0) contribs
             unknownUuids = irUnknownUuids ir
         liftIO $
@@ -1341,7 +1341,7 @@ callComputeSensitivity dbManager mBaseUrl rid args =
         baselineScore <- case scoreOf baselineX of
             Right s -> pure s
             Left e -> throwE ("baseline scoring failed: " <> e)
-        let webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
+        let webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/sensitivity/" <> encodeSegment (DM.unCollectionName (lrCollection req)) <> "/" <> lrMethodIdText req)
             pertEntry (p, eitherX) =
                 let base =
                         [ "perturbation"
@@ -1671,7 +1671,7 @@ process-scoped view turns out to be insufficient in practice.
 buildUnmatchedDbFlows ::
     DatabaseManager ->
     Text ->
-    Text ->
+    DM.CollectionName ->
     Database ->
     Method ->
     KeyMap Value ->
@@ -1792,8 +1792,7 @@ mkMcpCrossDBEntry ::
     Text ->
     -- | base URL (Nothing when no frontend is bundled)
     Maybe Text ->
-    -- | method collection name
-    Text ->
+    DM.CollectionName ->
     -- | method UUID text
     Text ->
     UnitDB ->
@@ -1824,7 +1823,7 @@ mkMcpCrossDBEntry dbManager rootDbName mBaseUrl colName methodIdText unitDB scor
                     <> "/activity/"
                     <> pidText
                     <> "/contributing-activities/"
-                    <> encodeSegment colName
+                    <> encodeSegment (DM.unCollectionName colName)
                     <> "/"
                     <> methodIdText
                 )
@@ -1880,11 +1879,13 @@ selectMethod mCollection uuid loaded =
 {- | Resolve a method UUID (raw text) to its collection name and 'Method',
 optionally pinned to a collection. Thin IO edge over 'selectMethod'.
 -}
-resolveMethod :: DatabaseManager -> Maybe Text -> Text -> IO (Either Text (Text, Method))
+resolveMethod :: DatabaseManager -> Maybe Text -> Text -> IO (Either Text (DM.CollectionName, Method))
 resolveMethod dbManager mCollection methodIdText =
     case UUID.fromText methodIdText of
         Nothing -> return $ Left "Invalid method UUID format"
-        Just uuid -> selectMethod mCollection uuid <$> DM.getLoadedMethods dbManager
+        Just uuid ->
+            fmap (first DM.CollectionName) . selectMethod mCollection uuid
+                <$> DM.getLoadedMethods dbManager
 
 {- | Raw text + its parsed 'ProcessId' + the looked-up 'Activity'. Bundled so
 the three entities (which must always agree) cannot drift apart: the only
@@ -1906,7 +1907,7 @@ data LcaRequest = LcaRequest
     , lrLoaded :: !LoadedDatabase
     , lrResolved :: !ResolvedActivity
     , lrMethodIdText :: !Text
-    , lrCollection :: !Text
+    , lrCollection :: !DM.CollectionName
     , lrMethod :: !Method
     }
 
@@ -1965,7 +1966,7 @@ callGetContributingFlows dbManager mBaseUrl rid args =
             collection = lrCollection req
             ra = lrResolved req
             lim = fromMaybe 20 (intArg "limit" args)
-            webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (lrCollection req) <> "/" <> lrMethodIdText req)
+            webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/contributing-flows/" <> encodeSegment (DM.unCollectionName (lrCollection req)) <> "/" <> lrMethodIdText req)
         except $ ensureLinked dbName "computing contributions" db
         unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
         (mFlows, mUnits) <- liftIO $ DM.getMergedFlowMetadata dbManager
