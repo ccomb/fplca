@@ -112,7 +112,7 @@ module Database.Manager (
     mapMethodSetToTablesCached,
     mapMethodToIndexCached,
 
-    -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
+    -- * Internal (for tests: lowest-level loader, says where the load came from)
     loadDatabaseRawWithCrossDB,
     RawLoad (..),
     LoadSource (..),
@@ -2065,9 +2065,9 @@ loadDatabaseSingle manager dbName = do
         Nothing -> loadDatabaseSingleFromConfig manager dbName
 
 {- | How a database that has just been loaded got here. The three are what the
-work after the load turns on, and the fourth combination the two booleans they
-replace could spell - read from a cache and replayed over - does not exist: a
-cache hit already holds its edits.
+work after the load turns on, and the fourth combination a cache-hit flag and a
+replayed flag could spell together - read from a cache and replayed over - does
+not exist: a cache hit already holds its edits.
 -}
 data LoadOrigin
     = CacheHit
@@ -2512,7 +2512,7 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
         indexedDbs <- readTVarIO (dmIndexedDbs manager)
         -- Strict pin: candidates are restricted to the database's declared
         -- dependency set ('dbDependsOn'), never the full set of loaded DBs.
-        -- This keeps the user's explicit selection authoritative — relink
+        -- This keeps the user's explicit selection authoritative: relink
         -- recomputes links *within* the whole pin (so a mapping relink against
         -- one dependency re-resolves the others unchanged instead of dropping
         -- them) but never expands or shrinks the set.
@@ -2715,7 +2715,7 @@ stageUploadedDatabase manager dbConfig = withLogScope dbName $ runExceptT $ do
         Map Text IndexedDatabase ->
         SynonymDB ->
         UnitConversion.UnitConfig ->
-        -- \| the dependencies the cover kept
+        -- the dependencies the cover kept
         [Text] ->
         SimpleDatabase ->
         Loader.CrossDBLinkingStats ->
