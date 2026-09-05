@@ -61,7 +61,7 @@ fixtureDir = "test-data/SAMPLE.ilcd"
 -- | Parse the fixture into a 'SimpleDatabase' (fails the test on Left).
 loadFixture :: IO SimpleDatabase
 loadFixture = do
-    r <- parseILCDDirectory fixtureDir
+    r <- parseILCDDirectory defaultUnitConfig Declared fixtureDir
     case r of
         Left err -> error ("fixture parse failed: " <> T.unpack err)
         Right db -> pure db
@@ -74,7 +74,7 @@ roundTrip :: SimpleDatabase -> IO SimpleDatabase
 roundTrip db = withSystemTempDirectory "ilcd-writer-spec" $ \dir -> do
     writeILCDDatabase defaultWriteOptions dir db
         >>= either (\e -> error ("ILCD write failed: " <> T.unpack e)) pure
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -91,7 +91,7 @@ This is the byte stream 'Database.Export' ships to clients.
 archiveRoundTrip :: SimpleDatabase -> IO SimpleDatabase
 archiveRoundTrip db = withSystemTempDirectory "ilcd-archive-spec" $ \dir -> do
     extractFilesFromArchive [OptDestination dir] (toArchive (archiveOrFail defaultWriteOptions db))
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("archive round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -200,7 +200,7 @@ named activity, keyed by biosphere flow name.
 inventoryByName :: SimpleDatabase -> Text -> IO (M.Map Text Double)
 inventoryByName db target = do
     built <-
-        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) db
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) db
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right d -> do
@@ -251,7 +251,7 @@ spec = describe "ILCD.Writer round-trip" $ do
         let sdb =
                 oneActivityDb
                     (M.singleton fEmitU fEmission)
-                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+                    [ TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
                     , BiosphereExchange fEmitU 3.3e-20 fUnitU Emission "" Nothing Nothing
                     ]
         db' <- roundTrip sdb
@@ -521,7 +521,7 @@ multiOutputDb =
             "GLO"
             LocationDeclared
             "kg"
-            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty]
+            [TechnosphereExchange prod 1.0 moUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties]
             M.empty
             M.empty
             Nothing
@@ -601,7 +601,7 @@ oneActivityDb bios exs =
             }
 
 refProductEx :: Exchange
-refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+refProductEx = TechnosphereExchange fProdU 1.0 fUnitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 {- | The reference product sits at index 2, after an air emission with a
 subcompartment and a natural-resource input. One exchange carries a non-empty

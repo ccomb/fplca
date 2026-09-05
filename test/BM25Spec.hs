@@ -54,6 +54,7 @@ mkRefOutput fid =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 mkFlow :: UUID -> Text -> TechnosphereFlow

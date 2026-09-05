@@ -43,6 +43,7 @@ import SharedSolver (
 import TestHelpers (withScratchDataDir)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     Database (..),
     Exchange (..),
@@ -54,6 +55,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -215,13 +217,14 @@ mkConfig name =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig M.empty)
+            (BuildInputs defaultUnitConfig M.empty Declared)
             SimpleDatabase
                 { sdbActivities = acts
                 , sdbTechFlows = flows
@@ -284,6 +287,7 @@ supplierDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity

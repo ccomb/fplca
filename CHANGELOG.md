@@ -30,6 +30,47 @@
   unit to restate it in.
 
 ### Added
+- A database can be divided on the mass of its products instead of on the
+  shares its source declares. A database entry names the key it is read
+  under: `allocation = "declared"` (the default, unchanged), `"dry mass"` or
+  `"wet mass"`. The Abondance cheese block, whose source divides it on dry
+  matter, gives 51 % to the cheese under its own key and 12 % under its wet
+  mass: the two are different questions, and the key says which one is being
+  answered.
+
+  A line the source states a property for is believed. Where it states none, a
+  line already written in a mass unit is its own wet mass, which is what makes
+  the key computable on the formats that carry no property table at all
+  (SimaPro, ILCD, EcoSpold 1). A dry mass is never read from an amount:
+  nothing in a wet kilogram says how much of it is water. A block the key
+  cannot weigh is not divided at all and has no column in the matrix, the same
+  refusal a block stating no share gets: asking for a key a database cannot
+  provide costs those blocks rather than inventing numbers for them.
+
+  A process with a single product output is left as its source wrote it. There
+  is nothing there to divide, and its declared share is the only statement in
+  existence about the outputs the file does not carry.
+
+  A product its source declares at 0 % stays at 0 %, and the key divides what
+  is left among the others. That zero is a modelling decision, usually a
+  residue its author took out of the block, and recomputing it into a share
+  would undo the decision without saying so.
+
+  The key belongs to the load, so the same source under two keys is two
+  databases: configure the same path twice, under two names, to compare them
+  side by side. A cache records the key it was built under and is not served
+  to a load asking for another.
+- A technosphere exchange now reports the physical properties its source
+  states of that line, the dry and wet mass (`properties`). EcoSpold 2 writes
+  them per unit of the line, so a board of 1 m3 declaring 614.4 kg of dry
+  matter per m3 is reported as 614.4 kg; a property stated in something that
+  is not a mass keeps its own unit rather than being read as kilograms, and a
+  property this engine has no field for is dropped rather than guessed at.
+  This is the material an allocation key other than the one the source
+  declares is computed from. Wire revision 18.
+
+  Every database cache is rebuilt once on the first load after this release:
+  the cached exchanges say less than the loader now reads.
 - A flow search result now reports how many activities make the flow
   (`producerCount`), which is the number of ways the database offers to
   produce it: one on most of a French agricultural database, up to a few

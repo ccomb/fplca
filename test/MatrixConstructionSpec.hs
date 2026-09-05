@@ -147,6 +147,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 bioExchange =
                     BiosphereExchange
@@ -186,7 +187,7 @@ spec = do
 
             result <-
                 buildDatabaseWithMatrices
-                    (BuildInputs defaultUnitConfig mempty)
+                    (BuildInputs defaultUnitConfig mempty Declared)
                     SimpleDatabase
                         { sdbActivities = activityMap
                         , sdbTechFlows = techFlowDB
@@ -231,6 +232,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 zeroBio =
                     BiosphereExchange
@@ -270,7 +272,7 @@ spec = do
 
             result <-
                 buildDatabaseWithMatrices
-                    (BuildInputs defaultUnitConfig mempty)
+                    (BuildInputs defaultUnitConfig mempty Declared)
                     SimpleDatabase
                         { sdbActivities = activityMap
                         , sdbTechFlows = techFlowDB
@@ -310,6 +312,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 tCO2 =
                     BiosphereExchange
@@ -351,6 +354,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 pWaste =
                     WasteExchange
@@ -393,7 +397,7 @@ spec = do
 
             result <-
                 buildDatabaseWithMatrices
-                    (BuildInputs defaultUnitConfig mempty)
+                    (BuildInputs defaultUnitConfig mempty Declared)
                     SimpleDatabase
                         { sdbActivities = activityMap
                         , sdbTechFlows = techFlowDB

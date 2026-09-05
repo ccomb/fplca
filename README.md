@@ -133,6 +133,11 @@ load = true
 default = false                # preselected database in the UI
 deletable = false              # allow deletion via the API
 geography_policy = "global"    # CF regionalization: exact | parent | global
+allocation = "declared"        # how a multi-output block is divided:
+                               # declared | dry mass | wet mass. Naming a mass
+                               # recomputes the shares from it instead of
+                               # reading the ones the source states; to have
+                               # both, configure the same path twice.
 # locationAliases = { "FR" = "France" }   # per-database location renames
 
 [[methods]]

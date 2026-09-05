@@ -88,7 +88,7 @@ buildFixture :: Compartment -> IO Database
 buildFixture comp = do
     r <-
         DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = M.singleton (actU, prodU) act
                 , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing)
@@ -113,7 +113,7 @@ buildFixture comp = do
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             , BiosphereExchange co2U 0.5 unitU Emission "" Nothing Nothing
             ]
             M.empty

@@ -44,6 +44,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     CrossDBLink (..),
     Database (..),
@@ -56,6 +57,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -164,7 +166,7 @@ buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = acts
                 , sdbTechFlows = flows
@@ -196,6 +198,7 @@ consumerConfig path =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 -- ---------------------------------------------------------------------------
@@ -251,6 +254,7 @@ supplierDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity
@@ -303,6 +307,7 @@ consumerDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   unlinkedInput =
                     TechnosphereExchange
@@ -317,6 +322,7 @@ consumerDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity

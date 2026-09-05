@@ -226,6 +226,7 @@ import SubstanceRegistry (CASNumber (..), KeyNormalizers (..), NormName (..), Su
 import SynonymDB (BridgeDirection (..), SynEdge (..), SynonymDB (..), buildFromCSV, emptySynonymDB, excludeJunkSynonyms, excludeOverFrequentSynonyms, loadFromCSVFileWithCache, mergeSynonymDBs, normalizeName, oversizedClasses, reopenedBridges, synonymCount, uncoveredUnitSuffixes)
 import Types (
     ActivityMap,
+    AllocationKey (..),
     AttributeFallback (..),
     BioFlowDB,
     BiosphereFlow (..),
@@ -1533,6 +1534,7 @@ uploadMetaToConfig slug dirPath meta =
         , dcIsUploaded = True -- Discovered from uploads/ directory
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal -- Uploads can't yet express policy; default to permissive
+        , dcAllocation = Declared
         }
 
 {- | Record an uploaded database's dependency pin where a restart can find it.
@@ -1742,11 +1744,15 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig cachePolicy othe
         loadDatabaseRawWithCrossDB
             RawLoad
                 { rlDbName = dcName dbConfig
-                , rlLocationAliases = locationAliases
+                , rlLoadOptions =
+                    Loader.LoadOptions
+                        { Loader.loUnitConfig = unitConfig
+                        , Loader.loLocationAliases = locationAliases
+                        , Loader.loAllocation = dcAllocation dbConfig
+                        }
                 , rlSourcePath = sourcePath
                 , rlCachePolicy = cachePolicy
                 , rlSynonymDB = synonymDB
-                , rlUnitConfig = unitConfig
                 , rlOtherIndexes = otherIndexes
                 , rlLocationHierarchy = locationHier
                 , rlGeographyPolicy = dcGeographyPolicy dbConfig
@@ -1919,12 +1925,12 @@ needed a comment per parameter to be readable at all.
 -}
 data RawLoad = RawLoad
     { rlDbName :: !Text
-    , rlLocationAliases :: !(M.Map Text Text)
+    , rlLoadOptions :: !Loader.LoadOptions
+    -- ^ The unit table, the location aliases and the allocation key it reads under.
     , rlSourcePath :: !FilePath
     -- ^ Unresolved: the matrix cache is co-located with it.
     , rlCachePolicy :: !CachePolicy
     , rlSynonymDB :: !SynonymDB
-    , rlUnitConfig :: !UnitConversion.UnitConfig
     , rlOtherIndexes :: ![IndexedDatabase]
     -- ^ Pre-built indexes of the databases this one may link against.
     , rlLocationHierarchy :: !(M.Map Location [Location])
@@ -2002,7 +2008,10 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
     loadCSV :: FilePath -> IO (Either Text (Database, LoadSource))
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
-        loaded <- Loader.loadSimaProCSV rlUnitConfig csvFile
+        loaded <- Loader.loadSimaProCSV rlLoadOptions csvFile
+        -- This path reaches the parser directly, so the load's own report of
+        -- what the allocation key refused has to be asked for here.
+        either (const (pure ())) (Loader.reportKeyRefusals rlLoadOptions) loaded
         case loaded of
             Left err -> return $ Left err
             Right linkedDb -> do
@@ -2020,10 +2029,9 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
     loadStructured path = do
         loadResult <-
             Loader.loadDatabaseWithCrossDBLinking
-                rlLocationAliases
+                rlLoadOptions
                 rlOtherIndexes
                 rlSynonymDB
-                rlUnitConfig
                 rlLocationHierarchy
                 rlGeographyPolicy
                 path
@@ -2048,7 +2056,11 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                         return $ Right (dbWithLinks, FromSource)
 
     inputs :: BuildInputs
-    inputs = BuildInputs rlUnitConfig rlLocationAliases
+    inputs =
+        BuildInputs
+            (Loader.loUnitConfig rlLoadOptions)
+            (Loader.loLocationAliases rlLoadOptions)
+            (Loader.loAllocation rlLoadOptions)
 
 -- | Load a single database without auto-loading dependencies
 loadDatabaseSingle :: DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
@@ -2688,10 +2700,13 @@ stageUploadedDatabase manager dbConfig = withLogScope dbName $ runExceptT $ do
         (simpleDb, stats) <-
             ExceptT $
                 Loader.loadDatabaseWithCrossDBLinking
-                    (dcLocationAliases dbConfig)
+                    Loader.LoadOptions
+                        { Loader.loUnitConfig = unitConfig
+                        , Loader.loLocationAliases = dcLocationAliases dbConfig
+                        , Loader.loAllocation = dcAllocation dbConfig
+                        }
                     (M.elems indexedDbs)
                     synonymDB
-                    unitConfig
                     (dmLocationHierarchy manager)
                     (dcGeographyPolicy dbConfig)
                     loadPath
@@ -4047,7 +4062,7 @@ cache is trusted only if it records the same pair.
 currentBuildInputs :: DatabaseManager -> DatabaseConfig -> IO BuildInputs
 currentBuildInputs manager dbConfig = do
     unitConfig <- getMergedUnitConfig manager
-    pure (BuildInputs unitConfig (dcLocationAliases dbConfig))
+    pure (BuildInputs unitConfig (dcLocationAliases dbConfig) (dcAllocation dbConfig))
 
 {- | Snapshot of flow + unit metadata across every currently-loaded DB.
 Used to characterize or display a cross-DB-merged 'Inventory', whose

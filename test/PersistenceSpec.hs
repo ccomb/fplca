@@ -62,6 +62,7 @@ import Database.UploadedDatabase (UploadMeta (..), readUploadMeta)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -76,6 +77,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -332,6 +334,7 @@ baseConfig name =
         , dcIsUploaded = False
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 uploadedConfig :: Text -> FilePath -> DatabaseConfig
@@ -357,7 +360,7 @@ buildFrom :: M.Map (UUID, UUID) Activity -> IO Database
 buildFrom activities = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = activities
                 , sdbTechFlows = M.singleton supplierProdId milkFlow
@@ -430,6 +433,7 @@ milkActivity name =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

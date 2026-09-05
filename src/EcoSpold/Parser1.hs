@@ -624,6 +624,7 @@ buildExchange activityLoc edata
             , techPedigree = Nothing
             , techShare = Nothing
             , techClassification = M.empty
+            , techProperties = noProperties
             }
 
 {- | One bibliographic line for a @\<source\>@. ecoinvent files put the

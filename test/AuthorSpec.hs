@@ -41,6 +41,7 @@ import Database.Rebuild (deleteActivities, insertActivities, replaceActivities)
 import Service (convertActivityForAPI)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -63,6 +64,7 @@ import Types (
     findProcessId,
     getActivity,
     isTechnosphereExchange,
+    noProperties,
     processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
@@ -732,6 +734,7 @@ importedActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , TechnosphereExchange
                 { techFlowId = coproductId
@@ -745,6 +748,7 @@ importedActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , TechnosphereExchange
                 { techFlowId = supplierProdId
@@ -758,6 +762,7 @@ importedActivity =
                 , techPedigree = Just milkPedigree
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id
@@ -821,7 +826,7 @@ buildFixtureAt :: UUID -> UUID -> IO Database
 buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities =
                     M.fromList
@@ -847,7 +852,7 @@ buildTwoProductTreatment :: IO Database
 buildTwoProductTreatment = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities =
                     M.fromList
@@ -876,7 +881,7 @@ buildBareFixture = do
         noBio = act{exchanges = filter isTechnosphereExchange (exchanges act)}
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = M.singleton (supplierActId, supplierProdId) noBio
                 , sdbTechFlows = M.singleton supplierProdId (milkFlowAt supplierProdId)
@@ -994,6 +999,7 @@ treatmentWithHeat =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                    ]
         }
@@ -1025,6 +1031,7 @@ treatmentActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty
@@ -1058,6 +1065,7 @@ supplierActivityAt actId prodId =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

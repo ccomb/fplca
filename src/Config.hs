@@ -85,7 +85,7 @@ import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, normalise, takeDirectory, takeFileName, (</>))
 import TOML (DecodeTOML (..), Decoder, TOMLError, Table, Value (..), decode, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
-import Types (GeographyPolicy (..))
+import Types (AllocationKey (..), AllocationProperty (..), GeographyPolicy (..))
 
 -- | A single classification filter entry (system + value)
 data ClassificationEntry = ClassificationEntry
@@ -225,6 +225,7 @@ data DatabaseConfig = DatabaseConfig
     , dcIsUploaded :: !Bool -- True for uploaded databases (vs. configured in TOML)
     , dcDeletable :: !Bool -- May the UI delete this entry? Defaults to dcIsUploaded.
     , dcGeographyPolicy :: !GeographyPolicy -- How aggressively to widen geography when linking suppliers
+    , dcAllocation :: !AllocationKey -- How a multi-output block is divided; the same source under two keys is two databases
     }
     deriving (Show, Eq, Generic)
 
@@ -524,7 +525,24 @@ instance DecodeTOML DatabaseConfig where
         let dcIsUploaded = False -- Databases from TOML are not uploaded
         dcDeletable <- fromMaybe dcIsUploaded <$> getFieldOpt "deletable"
         dcGeographyPolicy <- fromMaybe GeoGlobal <$> getFieldOptWith geographyPolicyDecoder "geography_policy"
+        dcAllocation <- fromMaybe Declared <$> getFieldOptWith allocationKeyDecoder "allocation"
         pure DatabaseConfig{..}
+
+{- | @allocation@ on a database entry: how its multi-output blocks are divided.
+
+Naming a property here loads the source under that key instead of the one it
+declares. To have both, configure the same path twice under two names: the key
+decides the inventory of every process the load produces, so one database
+carries one key.
+-}
+allocationKeyDecoder :: Decoder AllocationKey
+allocationKeyDecoder = do
+    raw <- tomlDecoder :: Decoder Text
+    case T.toLower raw of
+        "declared" -> pure Declared
+        "dry mass" -> pure (ByProperty DryMass)
+        "wet mass" -> pure (ByProperty WetMass)
+        other -> fail $ "allocation: expected one of declared|dry mass|wet mass, got: " <> T.unpack other
 
 geographyPolicyDecoder :: Decoder GeographyPolicy
 geographyPolicyDecoder = do
@@ -724,7 +742,7 @@ configKeys =
         ,
             ( "databases"
             , keys $
-                map plain ["name", "displayName", "path", "description", "load", "default", "depends", "deletable", "geography_policy"]
+                map plain ["name", "displayName", "path", "description", "load", "default", "depends", "deletable", "geography_policy", "allocation"]
                     <> [("locationAliases", AcceptsAnything)]
             )
         ,

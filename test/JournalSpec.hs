@@ -45,6 +45,7 @@ import Database.Journal (
 import Database.Rebuild (renderKey)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -57,6 +58,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -385,7 +387,7 @@ buildDepFixture :: IO Database
 buildDepFixture = do
     built <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = M.singleton (depActId, depProdId) depActivity
                 , sdbTechFlows = M.singleton depProdId wheatFlow
@@ -399,7 +401,7 @@ buildFixture :: IO Database
 buildFixture = do
     built <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = M.singleton (supplierActId, supplierProdId) supplierActivity
                 , sdbTechFlows = M.singleton supplierProdId milkFlow
@@ -453,6 +455,7 @@ depActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         }
@@ -508,6 +511,7 @@ supplierActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

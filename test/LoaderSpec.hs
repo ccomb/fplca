@@ -75,6 +75,7 @@ refExchange fid =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 inputExchange :: UUID.UUID -> Text -> Exchange
@@ -91,6 +92,7 @@ inputExchange fid loc =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 actUUID2, missingActUUID :: UUID.UUID
@@ -671,6 +673,7 @@ spec = do
                     , techPedigree = Nothing
                     , techShare = Nothing
                     , techClassification = M.empty
+                    , techProperties = noProperties
                     }
         it "returns the reference output amount for a normal producer" $ do
             let act = minimalActivity "producer" "GLO" [withRole ReferenceProduct 3.0 prodUUID]

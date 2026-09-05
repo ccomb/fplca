@@ -87,6 +87,7 @@ techEx flow amt role link =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 co2Emission :: Double -> Exchange
@@ -151,7 +152,7 @@ techFlowDB =
 buildDB :: T.Text -> M.Map (UUID, UUID) Activity -> IO Database
 buildDB name acts =
     buildDatabaseWithMatrices
-        (BuildInputs defaultUnitConfig mempty)
+        (BuildInputs defaultUnitConfig mempty Declared)
         SimpleDatabase
             { sdbActivities = acts
             , sdbTechFlows = techFlowDB

@@ -84,6 +84,7 @@ refExchange fid =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 -- | A technosphere input for @prodId@ linked to producer activity @actId@.
@@ -101,6 +102,7 @@ linkedInput actId prodId =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 {- | A loaded database has no UI picker; only its name/path matter to the setup
@@ -121,13 +123,14 @@ stubConfig =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildDb :: [((UUID.UUID, UUID.UUID), Activity)] -> [(UUID.UUID, Text)] -> IO Database
 buildDb acts flows = do
     res <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             SimpleDatabase
                 { sdbActivities = M.fromList acts
                 , sdbTechFlows = M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows]

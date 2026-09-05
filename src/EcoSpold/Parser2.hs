@@ -88,6 +88,7 @@ data IntermediateData = IntermediateData
     , idClassifications :: !(M.Map Text Text) -- per-exchange classifications (e.g. By-product classification → Waste)
     , idVariableName :: !Text -- variableName attribute (referencable from other formulas in the dataset)
     , idMathRel :: !Text -- mathematicalRelation attribute (formula defining the amount)
+    , idProperties :: !ExchangeProperties -- <property> children, each per unit of the exchange amount
     }
     deriving (Eq)
 
@@ -130,6 +131,38 @@ data PendingParam = PendingParam
 
 emptyPendingParam :: PendingParam
 emptyPendingParam = PendingParam "" Nothing ""
+
+{- | The @\<property\>@ currently open, assembled from its @amount@ attribute
+and its @\<name\>@ and @\<unitName\>@ children, which arrive in no fixed order
+and are only complete when the element closes.
+-}
+data PendingProperty = PendingProperty
+    { ppyName :: !Text
+    , ppyUnit :: !Text
+    , ppyAmount :: !(Maybe Double)
+    }
+
+emptyPendingProperty :: PendingProperty
+emptyPendingProperty = PendingProperty "" "" Nothing
+
+{- | File a closed @\<property\>@ under the exchange property it names, if any.
+
+The name is the one ecoinvent writes; a property this engine has no field for
+is dropped rather than guessed at, and so is one whose @amount@ the file omits
+or writes as something no number can be read from. The schema requires that
+attribute, so a file missing it is malformed, and recording the zero the
+absence would otherwise leave says the line weighs nothing.
+
+The amount stays as the file states it, per unit of the exchange.
+-}
+recordProperty :: PendingProperty -> ExchangeProperties -> ExchangeProperties
+recordProperty pending props = case (T.toLower (T.strip (ppyName pending)), ppyAmount pending) of
+    ("dry mass", Just amount) -> props{epDryMass = Just (stated amount)}
+    ("wet mass", Just amount) -> props{epWetMass = Just (stated amount)}
+    _ -> props
+  where
+    stated :: Double -> StatedAmount
+    stated amount = StatedAmount{saUnit = T.strip (ppyUnit pending), saAmount = amount}
 
 -- | One @\<review\>@ of the dataset: who read it, when, and what they said.
 data Review = Review
@@ -207,6 +240,7 @@ data ParseState = ParseState
     , psParams :: !(M.Map Text Double) -- <parameter> variableName → amount (amounts are pre-evaluated in the source)
     , psParamExprs :: !(M.Map Text Text) -- <parameter> variableName → mathematicalRelation (raw formula, for inspection)
     , psPendingParam :: !PendingParam -- attribute accumulator for the open <parameter>
+    , psPendingProperty :: !PendingProperty -- attribute and child accumulator for the open <property>
     , psDocs :: !DatasetDocs -- Provenance the dataset states about itself
     }
 
@@ -237,6 +271,7 @@ initialParseState =
         , psParams = M.empty
         , psParamExprs = M.empty
         , psPendingParam = emptyPendingParam
+        , psPendingProperty = emptyPendingProperty
         , psDocs = emptyDatasetDocs
         }
 
@@ -304,6 +339,12 @@ popPath st = st{psPath = drop 1 (psPath st)}
 -- | The common close-tag epilogue: pop the path and discard accumulated text.
 popText :: ParseState -> ParseState
 popText st = (popPath st){psTextAccum = []}
+
+{- | Transform the open @\<property\>@ accumulator and close the child that
+carried the text, whichever child it was.
+-}
+onPendingProperty :: (PendingProperty -> PendingProperty) -> ParseState -> ParseState
+onPendingProperty f st = (popText st){psPendingProperty = f (psPendingProperty st)}
 
 -- | Is the element at the given depth (0 = currently-open tag) named @name@?
 pathAt :: Int -> BS.ByteString -> ParseState -> Bool
@@ -607,12 +648,14 @@ parseWithXeno xmlContent processId = do
                     state{psPendingCommentLang = ""}
                 | isElement tagName "parameter" =
                     state{psPendingParam = emptyPendingParam}
+                | isElement tagName "property" =
+                    state{psPendingProperty = emptyPendingProperty}
                 | otherwise = state
             newContext
                 | isElement tagName "activityName" = InActivityName
                 | isElement tagName "shortname" && any (isElement "geography") (psPath cleanState) = InGeographyShortname
                 | isElement tagName "intermediateExchange" =
-                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing M.empty "" "")
+                    InIntermediateExchange (IntermediateData "" 0.0 "" "" "" "" "" "" M.empty Nothing M.empty "" "" noProperties)
                 | isElement tagName "elementaryExchange" =
                     InElementaryExchange (ElementaryData "" 0.0 "" "" "" "" "" [] [] M.empty Nothing Nothing "" "")
                 | isElement tagName "text" && any (isElement "generalComment") (psPath cleanState) = InGeneralCommentText 0
@@ -633,6 +676,13 @@ parseWithXeno xmlContent processId = do
     -- Attribute handler - extract attributes
     attribute state name value =
         let isInsideProperty = pathAt 0 "property" state
+            -- The amount and unit an open <property> states. The exchange arms
+            -- above refuse both under the same guard, so this is the only
+            -- reader of them.
+            onProperty st
+                | isInsideProperty && isElement name "amount" =
+                    st{psPendingProperty = (psPendingProperty st){ppyAmount = readAmount (bsToText value)}}
+                | otherwise = st
             -- xml:lang on the currently-open <comment>; remembered until closeTag.
             -- Attribute order is not significant for entity ref selection — we
             -- only need the lang at close-time.
@@ -651,7 +701,7 @@ parseWithXeno xmlContent processId = do
                             | isElement name "variableName" && not isInsideProperty = idata{idVariableName = bsToText value}
                             | isElement name "mathematicalRelation" && not isInsideProperty = idata{idMathRel = bsToText value}
                             | otherwise = idata
-                     in withLang state{psContext = InIntermediateExchange updated}
+                     in onProperty (withLang state{psContext = InIntermediateExchange updated})
                 InElementaryExchange edata ->
                     let updated
                             | isElement name "elementaryExchangeId" = edata{edFlowId = bsToText value}
@@ -663,7 +713,7 @@ parseWithXeno xmlContent processId = do
                             | isElement name "variableName" && not isInsideProperty = edata{edVariableName = bsToText value}
                             | isElement name "mathematicalRelation" && not isInsideProperty = edata{edMathRel = bsToText value}
                             | otherwise = edata
-                     in withLang state{psContext = InElementaryExchange updated}
+                     in onProperty (withLang state{psContext = InElementaryExchange updated})
                 InGeneralCommentText _ ->
                     let idx = if isElement name "index" then bsToInt value else 0
                      in withLang state{psContext = InGeneralCommentText idx}
@@ -687,7 +737,7 @@ parseWithXeno xmlContent processId = do
                             | onParameter && isElement name "mathematicalRelation" =
                                 state{psPendingParam = pending{ppMathRel = bsToText value}}
                             | otherwise = docAttr name value state
-                     in withLang captured
+                     in onProperty (withLang captured)
 
     -- End of opening tag - no action needed for SAX
     endOpen state _tagName = state
@@ -759,6 +809,7 @@ parseWithXeno xmlContent processId = do
                                 , techPedigree = Nothing
                                 , techShare = Nothing
                                 , techClassification = M.empty
+                                , techProperties = idProperties idata
                                 }
                         techFlow = TechnosphereFlow flowUUID resolvedFlowName unitUUID (idSynonyms idata) Nothing Nothing
                         wasteExchange =
@@ -876,13 +927,23 @@ parseWithXeno xmlContent processId = do
         | isElement tagName "name" =
             let txt = accumText state
              in if pathAt 1 "property" state
-                    then popText state
+                    then onPendingProperty (\pending -> pending{ppyName = txt}) state
                     else onExchange (\d -> d{idFlowName = txt}) (\d -> d{edFlowName = txt}) state
         | isElement tagName "unitName" =
             let txt = accumText state
              in if pathAt 1 "property" state
-                    then popText state
+                    then onPendingProperty (\pending -> pending{ppyUnit = txt}) state
                     else onExchange (\d -> d{idUnitName = txt}) (\d -> d{edUnitName = txt}) state
+        | isElement tagName "property" =
+            let filed = case psContext state of
+                    InIntermediateExchange idata ->
+                        state{psContext = InIntermediateExchange idata{idProperties = recordProperty (psPendingProperty state) (idProperties idata)}}
+                    InElementaryExchange _ -> state
+                    InActivityName -> state
+                    InGeographyShortname -> state
+                    InGeneralCommentText _ -> state
+                    Other -> state
+             in (popText filed){psPendingProperty = emptyPendingProperty}
         | isElement tagName "synonym" =
             let txt = T.strip (accumText state)
                 ins m = if T.null txt then m else M.insertWith S.union "en" (S.singleton txt) m
