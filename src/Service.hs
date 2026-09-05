@@ -636,13 +636,10 @@ silently dropped.
 -}
 mkGraphEdgeFromTriple ::
     Database ->
-    V.Vector Activity ->
-    UnitDB ->
-    TechFlowDB ->
     M.Map ProcessId Int ->
     SparseTriple ->
     Maybe GraphEdge
-mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col value)
+mkGraphEdgeFromTriple db nodeIdMap (SparseTriple row col value)
     | value == 0.0 = Nothing
     | otherwise = do
         let sourcePid = fromIntegral row :: ProcessId
@@ -650,11 +647,11 @@ mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col 
         src <- M.lookup sourcePid nodeIdMap
         tgt <- M.lookup targetPid nodeIdMap
         let matchingExchange = do
-                srcAct <- activities V.!? fromIntegral row
+                srcAct <- dbActivities db V.!? fromIntegral row
                 targetUUID <- prActivity <$> processIdToRef db targetPid
                 L.find (isInputLinkTo targetUUID) (exchanges srcAct)
-            flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
-            uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
+            flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) (dbTechFlows db)
+            uName = maybe "<unresolved unit>" (getUnitNameForTechFlow (dbUnits db)) flowInfo
             flowName = case (flowInfo, matchingExchange) of
                 (Just f, _) -> tfName f
                 (Nothing, Just ex) -> unresolvedFlowName (exchangeFlowId ex)
@@ -665,10 +662,10 @@ mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col 
 sentinel node rather than crashing — preserves the project's "no silent
 errors, no silent successes" stance.
 -}
-mkGraphNode :: Database -> V.Vector Activity -> Int -> (ProcessId, Double) -> GraphNode
-mkGraphNode db activities nodeId (pid, cumulativeVal) =
+mkGraphNode :: Database -> Int -> (ProcessId, Double) -> GraphNode
+mkGraphNode db nodeId (pid, cumulativeVal) =
     let processIdText = processIdToText db pid
-     in case activities V.!? fromIntegral pid of
+     in case dbActivities db V.!? fromIntegral pid of
             Just activity ->
                 GraphNode
                     { gnNodeId = nodeId
@@ -701,12 +698,11 @@ buildActivityGraph db sharedSolver queryText cutoffPercent =
                 threshold = sum (map abs supplyList) * (cutoffPercent / 100.0)
                 significantActivities = selectSignificantActivities threshold processId supplyList
                 nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0 ..] significantActivities]
-                activities = dbActivities db
                 edges =
                     mapMaybe
-                        (mkGraphEdgeFromTriple db activities (dbUnits db) (dbTechFlows db) nodeIdMap)
+                        (mkGraphEdgeFromTriple db nodeIdMap)
                         (U.toList (dbTechnosphereTriples db))
-                nodes = zipWith (mkGraphNode db activities) [0 ..] significantActivities
+                nodes = zipWith (mkGraphNode db) [0 ..] significantActivities
                 unitGroups = buildUnitGroups (map gnUnit nodes)
             pure $ Right $ GraphExport nodes edges unitGroups
 
@@ -2756,8 +2752,8 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                         ]
                 Right $ GlobalRankOneUpdate [(fromIntegral fromPid, 1.0)] v links
 
-    virtualLinkTo cPid toRef =
-        mkVirtualLink thisDb cPid (drDb toRef) (drDbName toRef) (drUUIDs toRef) (drPid toRef)
+    virtualLinkTo :: ProcessId -> DepRef -> Double -> CrossDBLink
+    virtualLinkTo = mkVirtualLink thisDb
 
     requireTech sub cPid fromPid =
         maybe (Left $ noTechLink sub cPid) Right $
@@ -2842,22 +2838,15 @@ mkVirtualLink ::
     Database ->
     -- | consumer's root ProcessId
     ProcessId ->
-    -- | dep DB (supplier side)
-    Database ->
-    -- | dep DB name
-    Text ->
-    -- | supplier's (actUUID, prodUUID) in dep DB
-    (UUID, UUID) ->
-    -- | supplier's dep-DB ProcessId
-    ProcessId ->
+    -- | the supplier, in its own dependency database
+    DepRef ->
     -- | raw exchange coefficient (pre-normalization)
     Double ->
     CrossDBLink
-mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
+mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drUUIDs = (supActU, supProdU)} coef =
     let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
         supAct = dbActivities depDb V.! fromIntegral supPid
         refUnit = maybe "" (getUnitNameForExchange (dbUnits depDb)) (L.find isReferenceOutput (exchanges supAct))
-        (supActU, supProdU) = supUUIDs
      in CrossDBLink
             { cdlConsumerActUUID = cActU
             , cdlConsumerProdUUID = cProdU
