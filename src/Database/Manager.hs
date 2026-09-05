@@ -112,6 +112,7 @@ module Database.Manager (
     -- * Internal (for tests: lowest-level loader, exposes the cache-hit flag)
     loadDatabaseRawWithCrossDB,
     RawLoad (..),
+    LoadSource (..),
 
     -- * Internal (for tests: pure dependency-list builder)
     buildDependencyChoices,
@@ -2082,7 +2083,7 @@ the matrix cache as it stood, so cross-database linking was NOT run against
 the indexes the caller passed; 'FromSource' means it was.
 -}
 data LoadSource = FromCache | FromSource
-    deriving (Eq)
+    deriving (Eq, Show)
 
 {- | On a fresh parse 'loadDatabaseRawWithCrossDB' already ran linking against
 the current indexes, so a follow-up relink is guaranteed no-op work. A cache
