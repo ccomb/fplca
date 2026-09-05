@@ -2100,73 +2100,74 @@ needsSelfRelink origin = case origin of
 loadDatabaseSingleFromConfig ::
     DatabaseManager -> Text -> IO (Either Text LoadedDatabase)
 loadDatabaseSingleFromConfig manager dbName = do
-    -- Check if already loaded
     loadedDbs <- readTVarIO (dmLoadedDbs manager)
-    case M.lookup dbName loadedDbs of
-        Just loaded -> return $ Right loaded
-        Nothing -> do
-            -- Check if it's configured
-            availableDbs <- readTVarIO (dmAvailableDbs manager)
-            case M.lookup dbName availableDbs of
-                Nothing -> return $ Left $ "Database not found: " <> dbName
-                Just dbConfig -> do
-                    reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
-                    -- Get currently loaded IndexedDatabases for cross-DB linking
-                    currentIndexedDbs <- readTVarIO (dmIndexedDbs manager)
-                    let otherIndexes = M.elems currentIndexedDbs
-                    synonymDB <- getMergedSynonymDB manager
-                    warnReopenedBridges synonymDB
-                    unitConfig <- getMergedUnitConfig manager
-                    -- A cache saved before the last edit was journalled would
-                    -- come back without it. Read the sources again in that
-                    -- case, so the journal below is replayed over them.
-                    journalAhead <- journalAheadOfCache dbConfig
-                    eitherResult <-
-                        try $
-                            loadDatabaseFromConfigWithCrossDB
-                                dbConfig
-                                synonymDB
-                                unitConfig
-                                (dmNoCache manager || journalAhead)
-                                otherIndexes
-                                (dmLocationHierarchy manager)
-                    replayResult <- case eitherResult of
-                        Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
-                        Right (Left err) -> pure (Left err)
-                        -- A cache hit already holds the edits (its stamp says
-                        -- so); a fresh parse holds only what the author
-                        -- uploaded, and the journal is the rest.
-                        Right (Right (loaded, FromCache)) -> pure (Right (loaded, CacheHit))
-                        Right (Right (loaded, FromSource)) -> replayEdits manager dbConfig loaded
-                    case replayResult of
-                        Left err -> return (Left err)
-                        Right (loaded, origin) -> do
-                            let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
-                            atomically $ publishLoaded manager dbName loaded indexedDb
-                            clearMethodMappingCacheForDb manager dbName
-                            reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
-                            -- Auto-extract synonyms from biosphere flows
-                            let db = ldDatabase loaded
-                                pairs = extractFromEcoSpold2 (dbBioFlows db)
-                            autoCreateFlowSynonyms
-                                manager
-                                dbName
-                                ("Auto-extracted from " <> dcDisplayName dbConfig)
-                                pairs
-                            when (needsSelfRelink origin) $ do
-                                result <- relinkDatabase manager dbName
-                                case result of
-                                    Right _ -> return ()
-                                    Left err ->
-                                        reportProgress Warning $
-                                            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-                            relinkDependents manager dbName
-                            -- Cache what the journal produced, so the next load
-                            -- does not replay it, and stamp the cache with the
-                            -- journal it holds. The stamp goes last: a cache
-                            -- that is not stamped is read again from source.
-                            when (origin == Replayed) $ recordReplayedCache manager dbConfig
-                            return $ Right loaded
+    -- Already loaded is a success, not work to do.
+    maybe (runExceptT loadFromConfig) (pure . Right) (M.lookup dbName loadedDbs)
+  where
+    loadFromConfig :: ExceptT Text IO LoadedDatabase
+    loadFromConfig = do
+        availableDbs <- liftIO $ readTVarIO (dmAvailableDbs manager)
+        dbConfig <-
+            except $ maybe (Left ("Database not found: " <> dbName)) Right (M.lookup dbName availableDbs)
+        liftIO $ reportProgress Info $ "[STARTING] Loading database: " <> T.unpack (dcDisplayName dbConfig)
+        synonymDB <- liftIO $ getMergedSynonymDB manager
+        liftIO $ warnReopenedBridges synonymDB
+        (loaded, origin) <- parseOrReplay dbConfig synonymDB
+        liftIO $ publish dbConfig synonymDB loaded origin
+        pure loaded
+
+    {- A cache saved before the last edit was journalled would come back
+    without it, so that case reads the sources again and the journal is
+    replayed over them. A cache hit already holds the edits (its stamp says
+    so); a fresh parse holds only what the author uploaded. -}
+    parseOrReplay :: DatabaseConfig -> SynonymDB -> ExceptT Text IO (LoadedDatabase, LoadOrigin)
+    parseOrReplay dbConfig synonymDB = do
+        currentIndexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+        unitConfig <- liftIO $ getMergedUnitConfig manager
+        journalAhead <- liftIO $ journalAheadOfCache dbConfig
+        eitherResult <-
+            liftIO $
+                try $
+                    loadDatabaseFromConfigWithCrossDB
+                        dbConfig
+                        synonymDB
+                        unitConfig
+                        (dmNoCache manager || journalAhead)
+                        (M.elems currentIndexedDbs)
+                        (dmLocationHierarchy manager)
+        ExceptT $ case eitherResult of
+            Left (ex :: SomeException) -> pure $ Left $ "Exception loading database: " <> T.pack (show ex)
+            Right (Left err) -> pure (Left err)
+            Right (Right (loaded, FromCache)) -> pure (Right (loaded, CacheHit))
+            Right (Right (loaded, FromSource)) -> replayEdits manager dbConfig loaded
+
+    publish :: DatabaseConfig -> SynonymDB -> LoadedDatabase -> LoadOrigin -> IO ()
+    publish dbConfig synonymDB loaded origin = do
+        atomically $
+            publishLoaded manager dbName loaded (buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded))
+        clearMethodMappingCacheForDb manager dbName
+        reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
+        -- Auto-extract synonyms from biosphere flows
+        autoCreateFlowSynonyms
+            manager
+            dbName
+            ("Auto-extracted from " <> dcDisplayName dbConfig)
+            (extractFromEcoSpold2 (dbBioFlows (ldDatabase loaded)))
+        when (needsSelfRelink origin) $
+            relinkDatabase manager dbName >>= either (warnSelfRelinkFailed dbName) (const (pure ()))
+        relinkDependents manager dbName
+        {- Cache what the journal produced, so the next load does not replay
+        it, and stamp the cache with the journal it holds. The stamp goes
+        last: a cache that is not stamped is read again from source. -}
+        when (origin == Replayed) $ recordReplayedCache manager dbConfig
+
+{- | A self-relink that failed wrote nothing, and the caller carries on: what
+was loaded is usable, its cross-database links are just not converged.
+-}
+warnSelfRelinkFailed :: Text -> Text -> IO ()
+warnSelfRelinkFailed dbName err =
+    reportProgress Warning $
+        "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
 
 {- | Where a database keeps its edits, or 'Nothing' for one the engine only
 reads from its configuration and never writes.
@@ -3609,10 +3610,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
 
     -- A failed relink wrote nothing, so the explicit save above must still fire.
     relinkFailed :: Text -> IO Bool
-    relinkFailed err = do
-        reportProgress Warning $
-            "Self-relink of " <> T.unpack dbName <> " failed: " <> T.unpack err
-        pure False
+    relinkFailed err = warnSelfRelinkFailed dbName err >> pure False
 
 --------------------------------------------------------------------------------
 -- Method Collection Management
