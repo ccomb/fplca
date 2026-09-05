@@ -48,6 +48,7 @@ activityWithRefExchange fid =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty
@@ -82,6 +83,7 @@ activityWithInputExchange fid =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty

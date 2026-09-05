@@ -406,6 +406,7 @@ mkRefExchangeAt loc =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
   where
     flowUUID = read "aaaaaaaa-0000-0000-0000-000000000001"

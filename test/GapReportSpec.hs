@@ -48,6 +48,7 @@ import Types (
     TechnosphereFlow (..),
     Unit (..),
     WasteFlow (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -124,6 +125,7 @@ techInput fid amount =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 wasteInput :: UUID -> Double -> Exchange

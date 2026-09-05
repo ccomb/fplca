@@ -286,6 +286,7 @@ prodExch =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 gasExch :: Exchange
@@ -302,6 +303,7 @@ gasExch =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 co2Exch :: Exchange
@@ -378,6 +380,7 @@ specialAct =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , TechnosphereExchange
                 { techFlowId = tfId specialInputFlow
@@ -391,6 +394,7 @@ specialAct =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = bfId specialBio
@@ -471,6 +475,7 @@ refInputAct =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         }
@@ -555,6 +560,7 @@ kgProduction flow role amount =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 coproductDb :: SimpleDatabase
@@ -642,6 +648,7 @@ gramRefDb =
                     , techPedigree = Nothing
                     , techShare = Nothing
                     , techClassification = M.empty
+                    , techProperties = noProperties
                     }
                 ]
             }

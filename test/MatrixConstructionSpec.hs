@@ -147,6 +147,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 bioExchange =
                     BiosphereExchange
@@ -222,6 +223,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 zeroBio =
                     BiosphereExchange
@@ -292,6 +294,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 tCO2 =
                     BiosphereExchange
@@ -333,6 +336,7 @@ spec = do
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 pWaste =
                     WasteExchange

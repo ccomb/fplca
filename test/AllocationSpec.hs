@@ -261,6 +261,7 @@ tech fid amount role =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 bio :: Double -> Exchange

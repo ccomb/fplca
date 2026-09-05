@@ -37,6 +37,7 @@ import Types (
     Unit (..),
     computeMinimalSelectedDeps,
     crossDBRedundantSources,
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -134,6 +135,7 @@ supplierDB offset =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
         act =
             Activity
@@ -202,6 +204,7 @@ consumerDB offset n =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 unlinkedInput =
                     TechnosphereExchange
@@ -216,6 +219,7 @@ consumerDB offset n =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 act =
                     Activity

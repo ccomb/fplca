@@ -147,6 +147,59 @@ data DeclaredShare = DeclaredShare
     deriving (Eq, Show, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DeclaredShare)
 
+{- | An amount together with the unit it is stated in.
+
+Kept as written rather than converted: the conversion needs the unit table,
+which the parsers do not carry, and a number whose unit has been forgotten
+cannot be checked against the file it came from.
+-}
+data StatedAmount = StatedAmount
+    { saUnit :: !Text
+    , saAmount :: !Double
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped StatedAmount)
+
+{- | The physical properties of one exchange, as the source states them.
+
+Each is the property of the exchange /as a whole/, not per unit of it: an
+EcoSpold 2 @\<property\>@ states kilograms per unit of the exchange amount and
+is multiplied by that amount when it is read, so 614.4 kg\/m3 on a line of
+2 m3 is recorded as 1228.8 kg. That is what an allocation key needs to sum,
+and it is what 'Database.Allocation.scaleExchange' keeps in step when an
+exchange is scaled.
+
+'Nothing' is "the source states none", never a zero standing in for it: a
+product of no mass and a product whose mass is unknown are different answers
+to whether the mass can serve as a key.
+-}
+data ExchangeProperties = ExchangeProperties
+    { epDryMass :: !(Maybe StatedAmount)
+    , epWetMass :: !(Maybe StatedAmount)
+    }
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped ExchangeProperties)
+
+-- | An exchange whose source states no property.
+noProperties :: ExchangeProperties
+noProperties = ExchangeProperties{epDryMass = Nothing, epWetMass = Nothing}
+
+{- | Multiply every property an exchange states by a factor.
+
+Two callers, one meaning: the EcoSpold 2 parser turns a property stated per
+unit into the property of the whole line, and 'Database.Allocation.allocate'
+keeps a scaled line's properties in step with its amount.
+-}
+scaleProperties :: Double -> ExchangeProperties -> ExchangeProperties
+scaleProperties factor props =
+    ExchangeProperties
+        { epDryMass = scaleStated <$> epDryMass props
+        , epWetMass = scaleStated <$> epWetMass props
+        }
+  where
+    scaleStated :: StatedAmount -> StatedAmount
+    scaleStated stated = stated{saAmount = saAmount stated * factor}
+
 -- | Unit representation (kg, MJ, m³, etc.)
 data Unit = Unit
     { unitId :: !UUID -- Unique unit identifier
@@ -265,6 +318,7 @@ data Exchange
         , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
         , techShare :: !(Maybe DeclaredShare) -- The share a product output was declared with; Nothing on inputs and where the source states none
         , techClassification :: !(M.Map Text Text) -- What the source says of this product row (SimaPro "Category"); carried onto the process split for it
+        , techProperties :: !ExchangeProperties -- Physical properties the source states of this line, the material an allocation key other than the declared one is computed from
         }
     | BiosphereExchange
         { bioFlowId :: !UUID -- Flow being exchanged

@@ -309,6 +309,7 @@ techExchange flowId amount role link =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 bareActivity :: Text -> [Exchange] -> Activity

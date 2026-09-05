@@ -33,7 +33,6 @@ module Database.Allocation (
     describeRefusal,
     scaleExchange,
     MassKeyRefusal (..),
-    StatedAmount (..),
     massShares,
 ) where
 
@@ -131,13 +130,6 @@ describeRefusal refusal = case refusal of
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
 
--- | One product row's amount and the unit it states that amount in.
-data StatedAmount = StatedAmount
-    { saUnit :: !Text
-    , saAmount :: !Double
-    }
-    deriving (Eq, Show)
-
 -- | Why the mass of a block's products cannot serve as a key.
 data MassKeyRefusal
     = -- | The unit a product is stated in, which is not a mass.
@@ -200,10 +192,19 @@ normalise act = promote act{exchanges = filter keep (exchanges act)}
         | exchangeFlowId ex == exchangeFlowId single && exchangeIsProductOutput ex = asReference ex
         | otherwise = ex
 
--- | Scale an exchange amount by a factor.
+{- | Scale an exchange amount by a factor.
+
+A technosphere line's stated properties describe the line as a whole, so they
+are scaled with it: half a line of 2 kg weighs 1 kg, and a property left
+behind at 2 kg would contradict the amount printed beside it.
+-}
 scaleExchange :: Double -> Exchange -> Exchange
 scaleExchange factor ex = case ex of
-    TechnosphereExchange{} -> ex{techAmount = techAmount ex * factor}
+    TechnosphereExchange{} ->
+        ex
+            { techAmount = techAmount ex * factor
+            , techProperties = scaleProperties factor (techProperties ex)
+            }
     BiosphereExchange{} -> ex{bioAmount = bioAmount ex * factor}
     WasteExchange{} -> ex{waAmount = waAmount ex * factor}
 

@@ -720,6 +720,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techPedigree = Nothing
                         , techShare = declaredShareOf techRoleFor raw
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
 
 --------------------------------------------------------------------------------

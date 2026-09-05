@@ -630,7 +630,7 @@ emissionDb comp =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             , BiosphereExchange bioU 0.5 unitU Emission "" Nothing Nothing
             ]
             M.empty
@@ -677,8 +677,8 @@ allocationDb =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 50 Nothing)) M.empty
-            , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 50 Nothing)) M.empty noProperties
+            , TechnosphereExchange matU 10.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             ]
             M.empty
             M.empty
@@ -719,8 +719,8 @@ zeroAllocationDb =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 0 Nothing)) M.empty
-            , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing (Just (DeclaredShare 0 Nothing)) M.empty noProperties
+            , TechnosphereExchange matU 0.0 unitU Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             ]
             M.empty
             M.empty
@@ -764,8 +764,8 @@ commentDb ped cmt =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
-            , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped Nothing M.empty
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
+            , TechnosphereExchange matU 2.0 unitU Input UUID.nil Nothing "" cmt ped Nothing M.empty noProperties
             ]
             M.empty
             M.empty
@@ -800,7 +800,7 @@ namedDb name =
             "GLO"
             LocationDeclared
             "kg"
-            [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty]
+            [TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties]
             M.empty
             M.empty
             Nothing
@@ -820,15 +820,15 @@ gUnit = testUUID 0x53
 
 -- | A valid reference product output for the catalog above.
 refProd :: Exchange
-refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 -- | A second reference product (on the material flow) — an invalid second head.
 refProd2 :: Exchange
-refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 -- | A plain material input (no reference product in the activity).
 matInput :: Exchange
-matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+matInput = TechnosphereExchange gMat 2.0 gUnit Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 -- | An emission carrying a non-finite (+Infinity) amount.
 bioInf :: Exchange
@@ -836,7 +836,7 @@ bioInf = BiosphereExchange gBio (1 / 0) gUnit Emission "" Nothing Nothing
 
 -- | A material input referencing a unit UUID absent from the unit registry.
 matMissingUnit :: Exchange
-matMissingUnit = TechnosphereExchange gMat 2.0 (testUUID 0xbad) Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty
+matMissingUnit = TechnosphereExchange gMat 2.0 (testUUID 0xbad) Input UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
 {- | A one-activity database whose exchanges are supplied verbatim, against a
 fixed catalog (a reference product flow, a material flow, an emission flow, and

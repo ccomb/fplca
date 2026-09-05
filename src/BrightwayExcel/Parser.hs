@@ -392,6 +392,7 @@ productRowOut cfg meta isRef f =
             , techPedigree = Nothing
             , techShare = Nothing
             , techClassification = M.empty
+            , techProperties = noProperties
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
     unit = Unit unitUUID effUnit effUnit ""
@@ -437,6 +438,7 @@ technosphereRowOut cfg role actName f
             , techPedigree = Nothing
             , techShare = Nothing
             , techClassification = M.empty
+            , techProperties = noProperties
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
     unit = Unit unitUUID unitName' unitName' ""
