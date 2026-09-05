@@ -49,7 +49,7 @@ emptySupply :: SupplyChainFilter
 emptySupply = SupplyChainFilter emptyCore Nothing Nothing EntriesOnly
 
 emptyConsumer :: ConsumerFilter
-emptyConsumer = ConsumerFilter emptyCore Nothing False
+emptyConsumer = ConsumerFilter emptyCore Nothing EntriesOnly
 
 -- | Update the shared core inside a 'SupplyChainFilter'.
 mapSupplyCore :: (ActivityFilterCore -> ActivityFilterCore) -> SupplyChainFilter -> SupplyChainFilter
@@ -258,7 +258,7 @@ spec = do
         it "emits technosphere edges whose endpoints are both reachable from the supplier" $ do
             db <- loadWithIndex
             let pidZ = processIdToText db 2
-                cnf = emptyConsumer{cnfIncludeEdges = True}
+                cnf = emptyConsumer{cnfEdges = WithEdges}
             case getConsumers db "test-db" pidZ cnf of
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
                 Right cr -> do

@@ -90,7 +90,7 @@ data SupplyChainFilter = SupplyChainFilter
 data ConsumerFilter = ConsumerFilter
     { cnfCore :: !ActivityFilterCore
     , cnfMaxDepth :: !(Maybe Int)
-    , cnfIncludeEdges :: !Bool -- when True, emit every technosphere edge inside the reachable consumer subgraph
+    , cnfEdges :: !Edges -- 'WithEdges' emits every technosphere edge inside the reachable consumer subgraph
     }
 
 {- | Filter for flow search. 'ffQuery' is required; callers that have no
@@ -1713,7 +1713,7 @@ four separate parameters they admitted sixteen combinations, of which the code
 only ever built these two.
 -}
 data WalkLevel
-    = RootLevel {rlRoot :: !ProcessId, rlRefAmount :: !Double}
+    = RootLevel {rlRoot :: !ProcessId}
     | DepLevel {dlDepthOffset :: !Int}
 
 {- | What one database contributes to a supply chain: how many non-zero rows it
@@ -1755,12 +1755,13 @@ collectSupplyChainEntries db dbName level supplyVec scf =
     let core = scfCore scf
         minQ = fromMaybe 0 (scfMinQuantity scf)
 
-        -- The four facts that used to arrive as four correlated parameters.
         mRootPid = case level of
             RootLevel{rlRoot = r} -> Just r
             DepLevel{} -> Nothing
+        -- A root chain is stated per the root's reference product; a dep level
+        -- receives a scaling that is already physical.
         quantityMult = case level of
-            RootLevel{rlRefAmount = a} -> a
+            RootLevel{rlRoot = r} -> getReferenceProductAmount (dbActivities db V.! fromIntegral r)
             DepLevel{} -> 1.0
         depthOffset = case level of
             RootLevel{} -> 0
@@ -1908,7 +1909,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf =
             collectSupplyChainEntries
                 db
                 dbName
-                (RootLevel processId rootRefAmount)
+                (RootLevel processId)
                 supplyVec
                 scf
         rootSummary =
@@ -1965,7 +1966,7 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
             collectSupplyChainEntries
                 rootDb
                 rootDbName
-                (RootLevel rootPid rootRefAmount)
+                (RootLevel rootPid)
                 rootScaling
                 scf
         rootSummary =
@@ -2929,7 +2930,7 @@ findTechCoefficient db link =
 
 {- | Find all activities that transitively depend on a given supplier.
 BFS through the technosphere matrix tracking depth; optional max-depth cap.
-When cnfIncludeEdges is set, every technosphere coefficient whose endpoints
+When 'cnfEdges' is 'WithEdges', every technosphere coefficient whose endpoints
 are both reachable from the supplier is emitted alongside the paginated
 result list, mirroring SupplyChainResponse.scrEdges.
 -}
@@ -3017,25 +3018,24 @@ getConsumers db dbName processIdText cnf = do
 
         -- Every (supplier, consumer) technosphere coefficient whose endpoints
         -- are both reachable from the queried supplier. Populated only when
-        -- the caller opts in via cnfIncludeEdges; keeps the default payload
-        -- identical to the pre-edges wire shape.
+        -- the caller asks for edges; keeps the default payload identical to
+        -- the pre-edges wire shape.
         visitedSet = M.insert processId 0 allConsumers
-        edges =
-            if cnfIncludeEdges cnf
-                then
-                    [ SupplyChainEdge
-                        { sceEdgeFrom = processIdToText db (fromIntegral row :: ProcessId)
-                        , sceEdgeFromDb = dbName
-                        , sceEdgeTo = processIdToText db (fromIntegral col :: ProcessId)
-                        , sceEdgeToDb = dbName
-                        , sceEdgeAmount = val
-                        }
-                    | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
-                    , row /= col
-                    , M.member (fromIntegral row :: ProcessId) visitedSet
-                    , M.member (fromIntegral col :: ProcessId) visitedSet
-                    ]
-                else []
+        edges = case cnfEdges cnf of
+            EntriesOnly -> []
+            WithEdges ->
+                [ SupplyChainEdge
+                    { sceEdgeFrom = processIdToText db (fromIntegral row :: ProcessId)
+                    , sceEdgeFromDb = dbName
+                    , sceEdgeTo = processIdToText db (fromIntegral col :: ProcessId)
+                    , sceEdgeToDb = dbName
+                    , sceEdgeAmount = val
+                    }
+                | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
+                , row /= col
+                , M.member (fromIntegral row :: ProcessId) visitedSet
+                , M.member (fromIntegral col :: ProcessId) visitedSet
+                ]
 
     Right $ ConsumersResponse (SearchResults page total offset limit hasMore 0.0) edges
 

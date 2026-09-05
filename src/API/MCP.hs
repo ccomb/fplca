@@ -1032,7 +1032,7 @@ callGetConsumers presets rid args (db, _) = runTool rid $ do
                         , Service.afcOrder = Nothing
                         }
                 , Service.cnfMaxDepth = intArg "max_depth" args
-                , Service.cnfIncludeEdges = fromMaybe False (boolArg "include_edges" args)
+                , Service.cnfEdges = if fromMaybe False (boolArg "include_edges" args) then Service.WithEdges else Service.EntriesOnly
                 }
     results <- liftShow (Service.getConsumers db dbName pid cnf)
     pure (toolSuccessJson rid (toJSON results))

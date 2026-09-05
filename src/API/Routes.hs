@@ -1842,7 +1842,7 @@ getActivityConsumers dbName processIdText nameFilter locationFilter productFilte
                         , Service.afcOrder = orderParam
                         }
                 , Service.cnfMaxDepth = maxDepthParam
-                , Service.cnfIncludeEdges = fromMaybe False includeEdgesParam
+                , Service.cnfEdges = if fromMaybe False includeEdgesParam then Service.WithEdges else Service.EntriesOnly
                 }
     either throwServiceError pure (Service.getConsumers db dbName processIdText cnf)
 
