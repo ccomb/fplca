@@ -39,7 +39,6 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (
     Activity (..),
-    AllocationKey (..),
     BioFlowDB,
     BiosphereFlow (..),
     DeclaredShare (..),

@@ -44,7 +44,6 @@ import Database.RelinkMapping (
 import SynonymDB (emptySynonymDB)
 import Types (
     Activity (..),
-    AllocationKey (..),
     Exchange (..),
     GeographyPolicy (..),
     LinkBlocker (..),
