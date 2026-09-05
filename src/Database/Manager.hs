@@ -3007,29 +3007,7 @@ Uses STM to prevent concurrent staging of the same database
 -}
 getDatabaseSetupInfo :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
 getDatabaseSetupInfo manager dbName = do
-    -- Atomic decision: already staged? already staging? need to stage?
-    action <- atomically $ do
-        stagedDbs <- readTVar (dmStagedDbs manager)
-        loadedDbs <- readTVar (dmLoadedDbs manager)
-        stagingDbs <- readTVar (dmStagingDbs manager)
-        case M.lookup dbName stagedDbs of
-            Just _ -> return $ Right AlreadyDone
-            Nothing -> case M.lookup dbName loadedDbs of
-                Just _ -> return $ Right AlreadyDone
-                Nothing ->
-                    if S.member dbName stagingDbs
-                        then retry -- another thread is staging; STM blocks until done
-                        else do
-                            availableDbs <- readTVar (dmAvailableDbs manager)
-                            case M.lookup dbName availableDbs of
-                                Nothing -> return $ Left $ SetupNotFound $ "Database not found: " <> dbName
-                                Just dbConfig
-                                    | dcIsUploaded dbConfig -> do
-                                        modifyTVar' (dmStagingDbs manager) (S.insert dbName)
-                                        return $ Right (NeedToStage dbConfig)
-                                    | otherwise ->
-                                        return $ Left $ SetupNotLoaded dbName
-
+    action <- atomically decide
     case action of
         Left err -> return $ Left err
         Right AlreadyDone -> buildSetupResult manager dbName
@@ -3044,6 +3022,35 @@ getDatabaseSetupInfo manager dbName = do
                     reportProgress Error $ "Setup staging failed for " <> T.unpack dbName <> ": " <> T.unpack err
                     return $ Left $ SetupFailed err
                 Right () -> buildSetupResult manager dbName
+  where
+    {- Already staged? already staging? need to stage? One transaction, so the
+    answer cannot go stale between the reads, and the name is reserved in the
+    same breath as the decision to stage it. -}
+    decide :: STM (Either SetupError StageAction)
+    decide = do
+        stagedDbs <- readTVar (dmStagedDbs manager)
+        loadedDbs <- readTVar (dmLoadedDbs manager)
+        if M.member dbName stagedDbs || M.member dbName loadedDbs
+            then pure (Right AlreadyDone)
+            else do
+                stagingDbs <- readTVar (dmStagingDbs manager)
+                -- Another thread holds the name: block until it is done, then
+                -- read again and find the database staged.
+                when (S.member dbName stagingDbs) retry
+                availableDbs <- readTVar (dmAvailableDbs manager)
+                maybe notFound reserve (M.lookup dbName availableDbs)
+
+    notFound :: STM (Either SetupError StageAction)
+    notFound = pure (Left (SetupNotFound ("Database not found: " <> dbName)))
+
+    -- Only an upload is staged on demand; a configured database is loaded or
+    -- it is nothing.
+    reserve :: DatabaseConfig -> STM (Either SetupError StageAction)
+    reserve dbConfig
+        | not (dcIsUploaded dbConfig) = pure (Left (SetupNotLoaded dbName))
+        | otherwise = do
+            modifyTVar' (dmStagingDbs manager) (S.insert dbName)
+            pure (Right (NeedToStage dbConfig))
 
 -- | Read current state and build setup info for a database
 buildSetupResult :: DatabaseManager -> Text -> IO (Either SetupError DatabaseSetupInfo)
