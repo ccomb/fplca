@@ -4507,15 +4507,14 @@ removeUploadedRefData baseDir name = do
             Right () ->
                 reportProgress Info $ "Deleted: " <> uploadDir
 
+-- | The sentence a candidate synonym set carries about where it came from.
+newtype SynonymOrigin = SynonymOrigin Text
+
 {- | A synonym carried by more distinct flows than this is a classification label
 or stop-word (e.g. @"organic"@), not a true synonym — 'excludeOverFrequentSynonyms'
 drops it. The bound sits in the gap between the class-label hubs (≥187 flows in
 EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
 -}
-
--- | The sentence a candidate synonym set carries about where it came from.
-newtype SynonymOrigin = SynonymOrigin Text
-
 maxSynonymFlowFrequency :: Int
 maxSynonymFlowFrequency = 25
 
