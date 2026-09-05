@@ -27,7 +27,7 @@ import Types (
     UUID,
     WasteFlow (..),
     flowKindName,
-    parseKindFilter,
+    parseKindNames,
  )
 
 spec :: Spec
@@ -277,21 +277,24 @@ unreadable name is refused whole rather than filtered down to the rest.
 kindFilterSpec :: Spec
 kindFilterSpec = describe "the kinds a request names" $ do
     it "reads one" $
-        parseKindFilter "biosphere" `shouldBe` Right (OnlyKinds (KindBiosphere :| []))
+        parseKindNames "biosphere" `shouldBe` Right (KindBiosphere :| [])
 
     it "reads several, which is how the third search tab is asked for" $
-        parseKindFilter "biosphere,waste"
-            `shouldBe` Right (OnlyKinds (KindBiosphere :| [KindWaste]))
+        parseKindNames "biosphere,waste" `shouldBe` Right (KindBiosphere :| [KindWaste])
 
     it "ignores the spaces someone writes after the commas" $
-        parseKindFilter " biosphere , waste "
-            `shouldBe` Right (OnlyKinds (KindBiosphere :| [KindWaste]))
+        parseKindNames " biosphere , waste " `shouldBe` Right (KindBiosphere :| [KindWaste])
 
-    it "reads an empty parameter as every kind, the way an absent one is read" $
-        parseKindFilter "" `shouldBe` Right AnyKind
+    it "refuses a parameter that names no kind, rather than widening" $
+        -- Someone joined an empty set of ticked boxes. Answering with every
+        -- kind would label a tab with a filter nobody asked for.
+        parseKindNames "" `shouldSatisfy` isLeft
+
+    it "refuses a list of nothing but separators for the same reason" $
+        parseKindNames " , " `shouldSatisfy` isLeft
 
     it "refuses the whole list for one name it cannot read" $
-        parseKindFilter "biosphere,bioshpere" `shouldSatisfy` isLeft
+        parseKindNames "biosphere,bioshpere" `shouldSatisfy` isLeft
   where
     isLeft :: Either a b -> Bool
     isLeft = either (const True) (const False)

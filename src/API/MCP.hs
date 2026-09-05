@@ -59,7 +59,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), KindFilter (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, parseKindFilter, processIdToText, qualifyRef, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), KindFilter (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, parseKindNames, processIdToText, qualifyRef, unresolvedCount)
 
 -- ---------------------------------------------------------------------------
 -- JSON-RPC 2.0 types
@@ -813,7 +813,7 @@ callSearchFlows rid args (db, _) =
     readKind = case KM.lookup (fromText "kind") args of
         Nothing -> Right AnyKind
         Just Null -> Right AnyKind
-        Just (String raw) -> parseKindFilter raw
+        Just (String raw) -> OnlyKinds <$> parseKindNames raw
         Just other -> Left (badKind (TE.decodeUtf8Lenient (BSL.toStrict (encode other))))
 
     badKind :: Text -> Text

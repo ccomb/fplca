@@ -1091,9 +1091,11 @@ Args:
         commas, as in ``"biosphere,waste"``, which is what is
         exchanged with nature or discarded and the bucket
         `count_search_matches` reports as ``flows``. One kind
-        needs engine wire revision 9 and several need revision 19; an
-        older engine would drop the filter and answer with every kind,
-        so the request is refused rather than sent.
+        needs engine wire revision 9: an older engine would drop the
+        filter and answer with every kind. Several need revision 19,
+        where an older engine reads the whole value as one name and
+        refuses it. Either way the request is refused here first, with
+        a message naming the revision, rather than sent.
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.

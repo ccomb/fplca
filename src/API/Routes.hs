@@ -2182,7 +2182,7 @@ unloadMethodCollectionHandler name = do
 searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
 searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortParam orderParam = do
     (db, _) <- requireDatabaseByName dbName
-    kinds <- maybe (pure AnyKind) (either badRequest pure . parseKindFilter) kindParam
+    kinds <- maybe (pure AnyKind) namedKinds kindParam
     case queryParam of
         Nothing -> return (SearchResults [] 0 0 50 False 0.0)
         Just query -> do
@@ -2197,6 +2197,11 @@ searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortPar
                         , Service.ffOrder = orderParam
                         }
             searchFlowsInternal db ff
+  where
+    -- An absent parameter is the only reading that means every kind; a
+    -- present one naming nothing is refused, see 'parseKindNames'.
+    namedKinds :: Text -> AppM KindFilter
+    namedKinds raw = either badRequest (pure . OnlyKinds) (parseKindNames raw)
 
 searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
 searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do

@@ -875,14 +875,19 @@ bucket is what is exchanged with nature or discarded, which is two of them.
 data KindFilter = AnyKind | OnlyKinds (NonEmpty ExchangeKind)
     deriving (Eq, Show)
 
-{- | Read the kinds a request named, comma-separated. One unreadable name
-refuses the whole thing: a typo dropped from the list would widen the search
-in silence, which is the same mistake as reading it as "every kind".
+{- | Read the kinds a request named, comma-separated.
+
+Every reading that names no kind is a refusal, an empty parameter included.
+@kind=@ and @kind=,@ come from a caller that meant to name something, and
+answering them with every kind would widen the search with no sign the filter
+was dropped - the same mistake as reading a typo as "every kind". Only an
+absent parameter means every kind, and that is its caller's own arm, not a
+reading of the text.
 -}
-parseKindFilter :: Text -> Either Text KindFilter
-parseKindFilter raw = case NE.nonEmpty (filter (not . T.null) (map T.strip (T.splitOn "," raw))) of
-    Nothing -> Right AnyKind
-    Just named -> OnlyKinds <$> traverse readOne named
+parseKindNames :: Text -> Either Text (NonEmpty ExchangeKind)
+parseKindNames raw = case NE.nonEmpty (filter (not . T.null) (map T.strip (T.splitOn "," raw))) of
+    Nothing -> Left ("kind names no kind: use " <> exchangeKindChoices <> ", separated by commas")
+    Just named -> traverse readOne named
   where
     readOne :: Text -> Either Text ExchangeKind
     readOne name =
