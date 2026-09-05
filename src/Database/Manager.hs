@@ -3426,14 +3426,17 @@ Runs cross-DB linking against the new dependency
 -}
 addDependencyToStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
 addDependencyToStaged manager dbName depName = do
-    indexedDbs <- readTVarIO (dmIndexedDbs manager)
     stagedResult <- getOrStageDatabase manager dbName
-
+    {- Read after staging, as the removal path does. Staging is the slow step
+    here, and a snapshot taken before it judges whether the dependency is
+    loaded on state that may be older than the answer. -}
+    indexedDbs <- readTVarIO (dmIndexedDbs manager)
     case stagedResult of
         Left err -> return $ Left err
-        Right staged -> case M.lookup depName indexedDbs of
-            Nothing -> return $ Left $ "Dependency database not loaded: " <> depName
-            Just _depIdx ->
+        Right staged
+            | not (M.member depName indexedDbs) ->
+                return $ Left $ "Dependency database not loaded: " <> depName
+            | otherwise ->
                 applyStagedDeps
                     manager
                     dbName
