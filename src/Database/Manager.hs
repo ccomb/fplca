@@ -3314,28 +3314,39 @@ setDataPath manager dbName newRelPath = runExceptT $ do
     hasData <- liftIO $ Upload.anyDataFilesIn newFullPath
     unless hasData $ throwE $ "No data files found in: " <> newRelPath
 
+    {- meta.toml carries the same two fields, and it is the only durable copy:
+    the in-memory config is rebuilt from it at every start. Read it before
+    changing anything, so a missing one refuses the whole call rather than
+    leaving a new path that lasts until the next restart. An upload always has
+    one, since that is what 'discoverUploadedDatabases' recognises it by. -}
+    meta <-
+        liftIO (UploadedDB.readUploadMeta uploadRoot)
+            >>= maybe (throwE (noMetaMessage uploadRoot)) pure
+
     newFormat <- liftIO $ Upload.detectDatabaseFormat newFullPath
     liftIO $ do
-        atomically $
+        UploadedDB.writeUploadMeta
+            uploadRoot
+            meta
+                { UploadedDB.umDataPath = T.unpack newRelPath
+                , UploadedDB.umFormat = newFormat
+                }
+        atomically $ do
             modifyTVar'
                 (dmAvailableDbs manager)
                 (M.insert dbName dbConfig{dcPath = newFullPath, dcFormat = Just newFormat})
-
-        -- meta.toml carries the same two fields, when the upload has one
-        mMeta <- UploadedDB.readUploadMeta uploadRoot
-        forM_ mMeta $ \meta ->
-            UploadedDB.writeUploadMeta
-                uploadRoot
-                meta
-                    { UploadedDB.umDataPath = T.unpack newRelPath
-                    , UploadedDB.umFormat = newFormat
-                    }
-
-        -- Clear staged DB to force re-staging with new path
-        atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+            -- Clear staged DB to force re-staging with new path
+            modifyTVar' (dmStagedDbs manager) (M.delete dbName)
 
     -- Re-stage and return fresh setup info
     withExceptT setupErrorMessage $ ExceptT (getDatabaseSetupInfo manager dbName)
+
+-- | Why a data path cannot be changed when the upload has lost its meta.toml.
+noMetaMessage :: FilePath -> Text
+noMetaMessage uploadRoot =
+    "No meta.toml under "
+        <> T.pack uploadRoot
+        <> "; the data path would live in memory only and be lost at restart"
 
 {- | Build the combined list of dependency choices.
 Excludes the current database, tags each remaining DB as selected,
