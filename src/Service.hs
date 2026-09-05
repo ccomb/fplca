@@ -332,14 +332,16 @@ getActivityInventory db processIdText =
             let !inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
             return $ Right $ toJSON inventoryExport
 
--- | Tree-traversal counters (total nodes / loop nodes / leaf nodes).
-data TreeStats = TreeStats Int Int Int -- total, loops, leaves
-
-instance Semigroup TreeStats where
-    TreeStats t1 l1 v1 <> TreeStats t2 l2 v2 = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
-
-instance Monoid TreeStats where
-    mempty = TreeStats 0 0 0
+{- | The nodes and edges a tree walk has reached so far. Threaded through the
+walk in visit order and never combined out of it: a node id can be inserted
+twice (two branches looping to the same row give two 'TreeLoop' nodes, and one
+row reached under two consumers gives two nodes with different parents), and
+the walk order is what decides which one the export carries.
+-}
+data TreeBuild = TreeBuild
+    { tbNodes :: M.Map Text ExportNode
+    , tbEdges :: [TreeEdge]
+    }
 
 {- | Helper to find ProcessId for an activity by searching the database
 This is needed because activities don't store their own ProcessId/UUID
@@ -435,9 +437,9 @@ mkBiosphereTreeEdge units flow activityPid direction ex =
             }
 
 -- | Extract biosphere exchanges from an activity and create nodes and edges.
-extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge])
-extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
-    foldr step (nodeAcc, edgeAcc) topBiosphereExchanges
+extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> TreeBuild -> TreeBuild
+extractBiosphereNodesAndEdges db activity activityProcessId depth acc0 =
+    foldr step acc0 topBiosphereExchanges
   where
     units :: UnitDB
     units = dbUnits db
@@ -448,13 +450,13 @@ extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAc
         take maxBiosphereFlows $
             L.sortBy (\a b -> compare (abs (exchangeAmount (snd b))) (abs (exchangeAmount (snd a)))) $
                 [(dir, ex) | ex@BiosphereExchange{bioDirection = dir} <- exchanges activity]
-    step :: (BioDirection, Exchange) -> (M.Map Text ExportNode, [TreeEdge]) -> (M.Map Text ExportNode, [TreeEdge])
-    step (direction, ex) acc@(nodes, edges) = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
+    step :: (BioDirection, Exchange) -> TreeBuild -> TreeBuild
+    step (direction, ex) acc = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
         Nothing -> acc
         Just flow ->
             let node = mkBiosphereExportNode units flow activityProcessId depth direction
                 edge = mkBiosphereTreeEdge units flow activityProcessId direction ex
-             in (M.insert (UUID.toText (bfId flow)) node nodes, edge : edges)
+             in TreeBuild (M.insert (UUID.toText (bfId flow)) node (tbNodes acc)) (edge : tbEdges acc)
 
 -- | ExportNode for an activity-bearing tree node (TreeLeaf or TreeNode).
 mkActivityExportNode :: Database -> Activity -> Text -> Int -> Maybe Text -> ExportNode
@@ -519,15 +521,9 @@ mkMissingExportNode nodeId name missingDepth parentId =
 the tree (depth == 0). Below the root we leave the accumulator untouched to
 keep the graph readable.
 -}
-withRootBiosphere ::
-    Database ->
-    Activity ->
-    Text ->
-    Int ->
-    (M.Map Text ExportNode, [TreeEdge]) ->
-    (M.Map Text ExportNode, [TreeEdge])
-withRootBiosphere db activity pid depth acc@(nodes, edges)
-    | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth nodes edges
+withRootBiosphere :: Database -> Activity -> Text -> Int -> TreeBuild -> TreeBuild
+withRootBiosphere db activity pid depth acc
+    | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth acc
     | otherwise = acc
 
 -- | Technosphere edge from the current node to a child subtree.
@@ -543,37 +539,36 @@ mkTechnosphereTreeEdge units fromPid toPid quantity flow =
         }
 
 -- | Extract nodes and edges from a 'LoopAwareTree'.
-extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
-extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
+extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> TreeBuild -> TreeBuild
+extractNodesAndEdges db tree depth parentId acc = case tree of
     TreeLeaf _ activity ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
-            (nodes'', edges') = withRootBiosphere db activity nodeId depth (nodes', edgeAcc)
-         in (nodes'', edges', TreeStats 1 0 1)
+         in withRootBiosphere db activity nodeId depth $
+                insertNode nodeId (mkActivityExportNode db activity nodeId depth parentId) acc
     TreeLoop pid name loopDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 1 0)
+         in insertNode nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) acc
     TreeMissing _ name missingDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkMissingExportNode nodeId name missingDepth parentId) nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 0 1)
+         in insertNode nodeId (mkMissingExportNode nodeId name missingDepth parentId) acc
     TreeNode _ activity children ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
-            (childNodes, childEdges, childStats) = foldr (processChild nodeId) (nodes', edgeAcc, TreeStats 1 0 0) children
-            (finalNodes, finalEdges) = withRootBiosphere db activity nodeId depth (childNodes, childEdges)
-         in (finalNodes, finalEdges, childStats)
+            withSelf = insertNode nodeId (mkActivityExportNode db activity nodeId depth parentId) acc
+         in withRootBiosphere db activity nodeId depth $
+                foldr (processChild nodeId) withSelf children
   where
-    processChild parentPid (quantity, flow, subtree) (nodes, edges, stats) =
-        let (n', e', s') = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) nodes edges
+    insertNode :: Text -> ExportNode -> TreeBuild -> TreeBuild
+    insertNode nodeId node built = built{tbNodes = M.insert nodeId node (tbNodes built)}
+    processChild :: Text -> (Double, TechnosphereFlow, LoopAwareTree) -> TreeBuild -> TreeBuild
+    processChild parentPid (quantity, flow, subtree) built =
+        let childBuilt = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) built
             edge = mkTechnosphereTreeEdge (dbUnits db) parentPid (getTreeNodeId db subtree) quantity flow
-         in (n', edge : e', stats <> s')
+         in childBuilt{tbEdges = edge : tbEdges childBuilt}
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Int -> LoopAwareTree -> TreeExport
 convertToTreeExport db maxDepth tree =
-    let (nodes, edges, _stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
+    let TreeBuild nodes edges = extractNodesAndEdges db tree 0 Nothing (TreeBuild M.empty [])
         -- The tree's own root, so tmRootId always names a key in the nodes map.
         actualRootId = getTreeNodeId db tree
         metadata =
