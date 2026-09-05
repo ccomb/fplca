@@ -42,6 +42,7 @@ import SharedSolver (
 import TestHelpers (withScratchDataDir)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     Database (..),
     Exchange (..),
@@ -214,11 +215,12 @@ mkConfig name =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig M.empty) acts flows M.empty M.empty units
+    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig M.empty Declared) acts flows M.empty M.empty units
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)

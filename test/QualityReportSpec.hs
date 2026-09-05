@@ -27,6 +27,7 @@ import Database.Quality (
  )
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     DeclaredShare (..),

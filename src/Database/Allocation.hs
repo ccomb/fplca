@@ -23,7 +23,7 @@ declared, whether or not the block's shares sum to 100. A single product at
 SimaPro writer emits for every process split here.
 -}
 module Database.Allocation (
-    AllocationKey (..),
+    Allocating (..),
     AllocationRefusal (..),
     AllocatedActivity,
     allocatedActivity,
@@ -31,11 +31,17 @@ module Database.Allocation (
     allocateAll,
     asAllocated,
     describeRefusal,
+    propertyKeyShares,
     scaleExchange,
-    MassKeyRefusal (..),
+    PropertyRefusal (..),
+    propertyName,
+    productProperty,
+    propertyShares,
     massShares,
 ) where
 
+import Control.Applicative ((<|>))
+import Control.Monad (guard)
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NE
@@ -45,12 +51,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Types
 import UnitConversion (UnitConfig, convertUnit)
-
--- | How the shares of a multi-output activity are decided.
-data AllocationKey
-    = -- | The source states each product's share, a number or an evaluated formula.
-      Declared
-    deriving (Eq, Show)
 
 -- | Why an activity has no honest column in the matrix.
 data AllocationRefusal
@@ -71,6 +71,16 @@ newtype AllocatedActivity = AllocatedActivity Activity
 allocatedActivity :: AllocatedActivity -> Activity
 allocatedActivity (AllocatedActivity act) = act
 
+{- | What deciding the shares of one block needs besides the block: the key,
+and the two unit tables reading a key needs -- the conversion table a property
+is weighed through, and the names this database gives its units.
+-}
+data Allocating = Allocating
+    { alKey :: !AllocationKey
+    , alUnitConfig :: !UnitConfig
+    , alUnitDB :: !UnitDB
+    }
+
 {- | Split an activity into one process per product output when every product
 carries a declared share; otherwise return it as it is, normalised.
 
@@ -79,10 +89,10 @@ source gave it, followed by the shared exchanges (inputs, avoided products,
 biosphere, waste) scaled by @share / 100@. Its unit is the product's, and its
 classification is the activity's with whatever the product row states on top.
 -}
-allocate :: AllocationKey -> UnitDB -> Activity -> NonEmpty Activity
-allocate Declared unitDB act =
+allocate :: Allocating -> Activity -> NonEmpty Activity
+allocate Allocating{alKey = key, alUnitConfig = unitCfg, alUnitDB = unitDB} act =
     fromMaybe (pure normalised) $ do
-        shares <- traverse exchangeDeclaredShare products
+        shares <- sharesUnder key
         NE.nonEmpty (zipWith process products shares)
   where
     normalised :: Activity
@@ -91,17 +101,65 @@ allocate Declared unitDB act =
     products, shared :: [Exchange]
     (products, shared) = partition exchangeIsProductOutput (exchanges normalised)
 
-    process :: Exchange -> DeclaredShare -> Activity
+    sharesUnder :: AllocationKey -> Maybe [Double]
+    sharesUnder Declared = map dsPercent <$> traverse exchangeDeclaredShare products
+    sharesUnder (ByProperty prop) = propertyKeyShares prop unitCfg unitDB products
+
+    process :: Exchange -> Double -> Activity
     process productEx share =
         normalised
-            { exchanges = asReference productEx : map (scaleExchange (dsPercent share / 100)) shared
+            { exchanges = applied share (asReference productEx) : map (scaleExchange (share / 100)) shared
             , activityUnit = getUnitNameForExchange unitDB productEx
             , activityClassification = M.union (exchangeClassification productEx) (activityClassification normalised)
             }
 
+    {- The share a split process records is the one that was applied to it.
+    Under the declared key that is already what the row says, formula included.
+    Under a property key it is not: the row's percentage and its formula both
+    describe the key the source chose, and a database whose inventory was
+    divided one way while its rows still claim another exports divided by the
+    wrong factor. -}
+    applied :: Double -> Exchange -> Exchange
+    applied share ex = case key of
+        Declared -> ex
+        ByProperty _ -> withShare share ex
+
+    withShare :: Double -> Exchange -> Exchange
+    withShare share ex = case ex of
+        TechnosphereExchange{} -> ex{techShare = Just (DeclaredShare{dsPercent = share, dsFormula = Nothing})}
+        BiosphereExchange{} -> ex
+        WasteExchange{} -> ex
+
+{- | The shares a property key gives the products of one block, keeping a
+declared zero at zero.
+
+A product whose source declares exactly 0 % carries none of the load, and the
+key divides what is left among the others. That zero is a modelling decision --
+an author who cut a residue out of the block on purpose -- and recomputing it
+into a share would undo the decision without saying so. Every other declared
+share is replaced, which is the whole point of naming another key.
+
+'Nothing' where the property cannot decide, because 'allocate' never refuses:
+the block is handed back whole and the gate says why it has no column.
+-}
+propertyKeyShares :: AllocationProperty -> UnitConfig -> UnitDB -> [Exchange] -> Maybe [Double]
+propertyKeyShares prop cfg unitDB products = do
+    block <- NE.nonEmpty products
+    shares <- either (const Nothing) Just (propertyShares prop unitDB cfg block)
+    let kept = NE.toList (NE.zipWith zeroDeclared block shares)
+        total = sum kept
+    guard (total > 0)
+    pure (map (* (100 / total)) kept)
+  where
+    zeroDeclared :: Exchange -> Double -> Double
+    zeroDeclared ex share = if declaresZero ex then 0 else share
+
+    declaresZero :: Exchange -> Bool
+    declaresZero ex = (dsPercent <$> exchangeDeclaredShare ex) == Just 0
+
 -- | 'allocate' over a parsed list, in order.
-allocateAll :: AllocationKey -> UnitDB -> [Activity] -> [Activity]
-allocateAll key unitDB = concatMap (NE.toList . allocate key unitDB)
+allocateAll :: Allocating -> [Activity] -> [Activity]
+allocateAll alloc = concatMap (NE.toList . allocate alloc)
 
 {- | The gate: the activity has no 'Coproduct' left and exactly one reference
 exchange.
@@ -130,13 +188,63 @@ describeRefusal refusal = case refusal of
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
 
--- | Why the mass of a block's products cannot serve as a key.
-data MassKeyRefusal
-    = -- | The unit a product is stated in, which is not a mass.
+-- | The word a message uses for a property.
+propertyName :: AllocationProperty -> Text
+propertyName prop = case prop of
+    DryMass -> "dry mass"
+    WetMass -> "wet mass"
+
+-- | Why a physical property cannot serve as the key of a block.
+data PropertyRefusal
+    = -- | A product of the block states nothing of the property, and nothing stands in for it.
+      NotStated
+    | -- | The unit a product is stated in, which is not a mass.
       NotAMass !Text
     | -- | The amount a product states, which no share can be read from.
       NonPositiveMass !Double
     deriving (Eq, Show)
+
+{- | The quantity one product line carries of a physical property.
+
+The source's own statement wins, in the unit the source writes it in. Where
+the source states none, a line already written in a mass unit is its own wet
+mass: that is the same fact read from the amount column instead of from a
+property table, and it is what makes a wet-mass key computable on the formats
+that have no property table at all.
+
+A dry mass is never read from an amount. Nothing in a wet kilogram says how
+much of it is water, so a block whose products declare none is refused rather
+than divided on a number that measures something else.
+-}
+productProperty :: AllocationProperty -> UnitDB -> Exchange -> Maybe StatedAmount
+productProperty prop unitDB ex = case prop of
+    DryMass -> perUnit (epDryMass (exchangeProperties ex))
+    WetMass -> perUnit (epWetMass (exchangeProperties ex)) <|> ownAmount
+  where
+    -- A property is stated per unit of the line, so the line's own amount is
+    -- what turns it into a quantity.
+    perUnit :: Maybe StatedAmount -> Maybe StatedAmount
+    perUnit stated = (\s -> s{saAmount = saAmount s * exchangeAmount ex}) <$> stated
+
+    ownAmount :: Maybe StatedAmount
+    ownAmount = Just StatedAmount{saUnit = getUnitNameForExchange unitDB ex, saAmount = exchangeAmount ex}
+
+{- | The share each product of one block carries under a property key, as
+percentages in the order given.
+
+Every quantity is converted to kilograms first, for the reason 'massShares'
+gives, and the same refusals apply on top of the property not being stated at
+all. Nothing here knows about the shares the source declares: this is what the
+property says, and combining the two is the caller's business.
+-}
+propertyShares ::
+    AllocationProperty ->
+    UnitDB ->
+    UnitConfig ->
+    NonEmpty Exchange ->
+    Either PropertyRefusal (NonEmpty Double)
+propertyShares prop unitDB cfg products =
+    massShares cfg =<< maybe (Left NotStated) Right (traverse (productProperty prop unitDB) products)
 
 {- | The share each product of one source block would carry if the key were
 its mass, as percentages in the order given.
@@ -151,10 +259,10 @@ written would hand the half-kilo of a 1 kg / 500 g pair 99.8 % of the load.
 A unit that is not a mass, or an amount at or below zero, refuses the whole
 block rather than dropping one product to a silent zero.
 -}
-massShares :: UnitConfig -> NonEmpty StatedAmount -> Either MassKeyRefusal (NonEmpty Double)
+massShares :: UnitConfig -> NonEmpty StatedAmount -> Either PropertyRefusal (NonEmpty Double)
 massShares cfg products = share <$> traverse mass products
   where
-    mass :: StatedAmount -> Either MassKeyRefusal Double
+    mass :: StatedAmount -> Either PropertyRefusal Double
     mass stated
         | saAmount stated <= 0 = Left (NonPositiveMass (saAmount stated))
         | otherwise =

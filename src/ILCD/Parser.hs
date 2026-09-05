@@ -28,10 +28,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
 import qualified Data.UUID as UUID
-import Database.Allocation (AllocationKey (..), allocate)
+import Database.Allocation (Allocating (..), allocate)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import Text.Printf (printf)
+import UnitConversion (UnitConfig)
 import qualified Xeno.SAX as X
 
 import EcoSpold.Common (bsToText, distributeFiles, isElement)
@@ -78,8 +79,8 @@ data ILCDExchangeRaw = ILCDExchangeRaw
 {- | Parse an ILCD directory into a SimpleDatabase.
 Expects subdirectories: processes/, flows/, flowproperties/, unitgroups/
 -}
-parseILCDDirectory :: FilePath -> IO (Either Text SimpleDatabase)
-parseILCDDirectory dir = do
+parseILCDDirectory :: UnitConfig -> AllocationKey -> FilePath -> IO (Either Text SimpleDatabase)
+parseILCDDirectory unitConfig key dir = do
     reportProgress Info $ "Loading ILCD database from: " ++ dir
 
     -- Step 1: Parse unit groups and flow properties (small, sequential)
@@ -102,7 +103,8 @@ parseILCDDirectory dir = do
     reportProgress Info $ printf "Parsed %d processes, building activity map..." (length rawProcesses)
 
     -- Step 5: Build ActivityMap
-    let activityMap = buildActivityMap flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB rawProcesses
+    let alloc = Allocating{alKey = key, alUnitConfig = unitConfig, alUnitDB = unitDB}
+        activityMap = buildActivityMap alloc flowInfoMap techFlowDB bioFlowDB wasteFlowDB rawProcesses
 
     -- Step 6: Fix supplier links (name-based, like SimaPro)
     let simpleDb = SimpleDatabase activityMap techFlowDB bioFlowDB wasteFlowDB unitDB
@@ -583,18 +585,18 @@ parseProcessFilesParallel files = do
 --------------------------------------------------------------------------------
 
 buildActivityMap ::
+    Allocating ->
     M.Map UUID ILCDFlowInfo ->
     TechFlowDB ->
     BioFlowDB ->
     WasteFlowDB ->
-    UnitDB ->
     [ILCDProcessRaw] ->
     ActivityMap
-buildActivityMap flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB procs =
+buildActivityMap alloc flowInfoMap techFlowDB bioFlowDB wasteFlowDB procs =
     M.fromList
         [ ((iprUUID p, productKey p activity), activity)
         | p <- procs
-        , activity <- NE.toList (allocate Declared unitDB (buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p))
+        , activity <- NE.toList (allocate alloc (buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB (alUnitDB alloc) p))
         ]
   where
     -- The process is keyed on its reference product; a dataset the gate will

@@ -35,7 +35,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Data.Word (Word32)
 import Database (buildDatabaseWithMatrices)
-import Database.Loader (loadSimaProCSV)
+import Database.Loader (defaultLoadOptions, loadSimaProCSV)
 import Matrix (computeInventoryMatrix)
 import SimaPro.Parser (parseSimaProCSV)
 import SimaPro.Writer (
@@ -226,7 +226,7 @@ loadBytes :: BS.ByteString -> IO SimpleDatabase
 loadBytes bytes = withSystemTempFile "writer-spec.csv" $ \path h -> do
     BS.hPut h bytes
     hClose h
-    either (fail . T.unpack) pure =<< loadSimaProCSV defaultUnitConfig path
+    either (fail . T.unpack) pure =<< loadSimaProCSV (defaultLoadOptions defaultUnitConfig) path
 
 -- | Wrap parser output in a 'SimpleDatabase' keyed by generated UUIDs.
 toSimple :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> SimpleDatabase
@@ -334,7 +334,7 @@ across the round-trip, but keying by name is robust either way).
 inventoryByName :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> Text -> IO (M.Map Text Double)
 inventoryByName (acts, tech, bio, waste, units) target = do
     let actMap = M.fromList [(activityKey a, a) | a <- acts]
-    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) actMap tech bio waste units
+    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) actMap tech bio waste units
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right db -> do

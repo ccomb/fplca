@@ -26,6 +26,7 @@ import Method.Types (
  )
 import Types (
     Activity (..),
+    AllocationKey (..),
     BiosphereFlow (..),
     Database (..),
     Indexes (..),
@@ -128,7 +129,7 @@ mkDB locsAndEmissions =
             , dbCrossDBLinks = []
             , dbDependsOn = []
             , dbLinkingStats = mempty
-            , dbBuiltWith = VT.BuildInputs defaultUnitConfig mempty
+            , dbBuiltWith = VT.BuildInputs defaultUnitConfig mempty VT.Declared
             , dbSynonymDB = Nothing
             , dbFlowsByName = M.empty
             , dbFlowsByCAS = M.empty

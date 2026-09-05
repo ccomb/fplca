@@ -394,6 +394,12 @@ exchangeDeclaredShare TechnosphereExchange{techShare = share} = share
 exchangeDeclaredShare BiosphereExchange{} = Nothing
 exchangeDeclaredShare WasteExchange{} = Nothing
 
+-- | The physical properties the source states of a row; none on the other axes.
+exchangeProperties :: Exchange -> ExchangeProperties
+exchangeProperties TechnosphereExchange{techProperties = props} = props
+exchangeProperties BiosphereExchange{} = noProperties
+exchangeProperties WasteExchange{} = noProperties
+
 {- | The share each product output was declared with, in source order;
 'Nothing' where the source states none. One entry on a process split from
 a block, as many as the block had products on one the gate refused.
@@ -1027,6 +1033,7 @@ database at the next start.
 data BuildInputs = BuildInputs
     { biUnitConfig :: !UnitConfig
     , biLocationAliases :: !(M.Map Text Text)
+    , biAllocation :: !AllocationKey
     }
     deriving (Eq, Show, Generic, NFData, Store)
 
@@ -1498,6 +1505,33 @@ data LinkBlocker
       designation must fail loudly, never fall back to the generic cascade.
       -}
       AliasTargetMissing !Text !(Maybe Text)
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | A physical property of a product, which shares can be divided on.
+
+Each names one measurable quantity and nothing else. There is no plain @Mass@:
+EcoSpold 2 states dry and wet mass separately, and the Abondance cheese block
+divides 51 % on dry matter where its wet mass would give 12 %, so a key that
+did not say which one it meant would be a key nobody could check.
+-}
+data AllocationProperty
+    = DryMass
+    | WetMass
+    deriving (Show, Eq, Generic, NFData, Store)
+
+{- | How the shares of a multi-output activity are decided. Maps to TOML field
+@allocation@ on a database entry.
+
+* 'Declared'   — the shares the source states, a number or an evaluated formula.
+* 'ByProperty' — recomputed from a physical property of the products.
+
+A database is loaded under one key, and the same source loaded twice under two
+keys is two databases: the choice belongs to the load, because it decides the
+inventory of every process the load produces.
+-}
+data AllocationKey
+    = Declared
+    | ByProperty !AllocationProperty
     deriving (Show, Eq, Generic, NFData, Store)
 
 {- | Per-database knob controlling how aggressively geography may be widened when

@@ -388,6 +388,7 @@ executeDbUpload fmt manager args = do
                         , dcIsUploaded = True
                         , dcDeletable = True
                         , dcGeographyPolicy = Types.GeoGlobal
+                        , dcAllocation = Types.Declared
                         }
             addDatabase manager dbConfig
             reportProgress Info $ "Database uploaded: " ++ T.unpack slug

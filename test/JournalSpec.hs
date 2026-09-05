@@ -45,6 +45,7 @@ import Database.Journal (
 import Database.Rebuild (renderKey)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -385,7 +386,7 @@ buildDepFixture :: IO Database
 buildDepFixture = do
     built <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (M.singleton (depActId, depProdId) depActivity)
             (M.singleton depProdId wheatFlow)
             M.empty
@@ -397,7 +398,7 @@ buildFixture :: IO Database
 buildFixture = do
     built <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (M.singleton (supplierActId, supplierProdId) supplierActivity)
             (M.singleton supplierProdId milkFlow)
             (M.singleton co2Id co2Flow)

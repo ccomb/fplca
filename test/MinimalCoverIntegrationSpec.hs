@@ -25,6 +25,7 @@ import SynonymDB (emptySynonymDB)
 import Test.Hspec
 import Types (
     Activity (..),
+    AllocationKey (..),
     CrossDBLink (..),
     CrossDBLinkingStats (..),
     Exchange (..),
