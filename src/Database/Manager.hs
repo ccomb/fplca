@@ -245,6 +245,7 @@ import Types (
     UUID,
     Unit (..),
     UnitDB,
+    UnresolvedProduct (..),
     allocationKeyText,
     bfCompartmentName,
     bfCompartmentSub,
@@ -3241,11 +3242,11 @@ carry the rich blockers the attribute matcher produced; dangling non-nil gaps
 are tagged 'NoNameMatch'. The two sets are disjoint (nil vs non-nil), so the
 concatenation never duplicates.
 -}
-rankMissingProducts :: Map Text (Int, LinkBlocker) -> Map Text Int -> [(Text, Int, LinkBlocker)]
+rankMissingProducts :: Map Text UnresolvedProduct -> Map Text Int -> [(Text, Int, LinkBlocker)]
 rankMissingProducts blocked dangling =
     sortOn
         (\(_, cnt, _) -> Down cnt)
-        ( [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList blocked]
+        ( [(name, upDemands u, upBlocker u) | (name, u) <- M.toList blocked]
             <> [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList dangling]
         )
 

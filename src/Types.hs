@@ -1786,14 +1786,27 @@ data AttributeFallback = AttributeFallback
     deriving (Show, Eq, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped AttributeFallback)
 
+{- | One product no dependency supplies: how many activities asked for it,
+and what stopped the first of them. Merging two stats sums the demands and
+keeps that first blocker, so a name blocked for several reasons is reported
+under one of them and counted under all.
+-}
+data UnresolvedProduct = UnresolvedProduct
+    { upDemands :: !Int
+    -- ^ Activities that asked for this product
+    , upBlocker :: !LinkBlocker
+    -- ^ What stopped the first of them
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.
 -}
 data CrossDBLinkingStats = CrossDBLinkingStats
     { cdlLinks :: ![CrossDBLink]
     -- ^ Resolved cross-DB links (technosphere + waste)
-    , cdlUnresolvedProducts :: !(M.Map Text (Int, LinkBlocker))
-    -- ^ Product name -> (count, reason)
+    , cdlUnresolvedProducts :: !(M.Map Text UnresolvedProduct)
+    -- ^ Product name -> the demands it left unsupplied
     , cdlUnknownUnits :: !(S.Set Text)
     -- ^ Unknown units from sdbUnits
     , cdlLocationFallbacks :: ![LocationFallback]
@@ -1815,8 +1828,7 @@ data CrossDBLinkingStats = CrossDBLinkingStats
 
 {- | Field-wise '<>'. On unresolved-product collision counts are summed
 and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
-has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
-not itself a 'Monoid'.
+has no canonical 'Monoid', and 'UnresolvedProduct' is not one either.
 -}
 instance Semigroup CrossDBLinkingStats where
     s1 <> s2 =
@@ -1833,7 +1845,7 @@ instance Semigroup CrossDBLinkingStats where
             , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
             }
       where
-        mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
+        mergeUnresolved u1 u2 = u1{upDemands = upDemands u1 + upDemands u2}
 
 instance Monoid CrossDBLinkingStats where
     mempty =
@@ -1880,7 +1892,7 @@ crossDBLinksCount = length . cdlLinks
 
 -- | Number of unresolved inputs
 unresolvedCount :: CrossDBLinkingStats -> Int
-unresolvedCount = sum . map fst . M.elems . cdlUnresolvedProducts
+unresolvedCount = sum . map upDemands . M.elems . cdlUnresolvedProducts
 
 -- | Cross-DB links grouped by source database
 crossDBBySource :: CrossDBLinkingStats -> M.Map Text Int

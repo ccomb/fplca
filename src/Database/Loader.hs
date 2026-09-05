@@ -1862,7 +1862,7 @@ mkGapEdge db stats actUUID prodUUID ex = case ex of
     TechnosphereExchange{} ->
         let name = flowNameOr tfName (sdbTechFlows db)
             reason = case exchangeActivityLinkId ex of
-                Nothing -> GapBlocked (maybe NoNameMatch snd (M.lookup name (cdlUnresolvedProducts stats)))
+                Nothing -> GapBlocked (maybe NoNameMatch upBlocker (M.lookup name (cdlUnresolvedProducts stats)))
                 Just _ -> GapDanglingIdentity
          in Just (edge name reason)
     WasteExchange{} -> Just (edge (flowNameOr wfName (sdbWasteFlows db)) GapWasteInput)
@@ -2150,7 +2150,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                 UnitIncompatible _ _ -> []
                 AliasTargetMissing _ _ -> []
          in mempty
-                { cdlUnresolvedProducts = M.singleton (tfName flow) (1, blocker)
+                { cdlUnresolvedProducts = M.singleton (tfName flow) UnresolvedProduct{upDemands = 1, upBlocker = blocker}
                 , cdlLocationUnresolved = unresolved
                 }
 findExchangeCrossDBLink _ _ _ BiosphereExchange{} = mempty
@@ -2250,13 +2250,17 @@ reportCrossDBLinkingStats nActivities stats = do
                 wCutoff
 
     -- Missing suppliers
-    let !missing = sortOn (\(_, (cnt, _)) -> Down cnt) $ M.toList (cdlUnresolvedProducts stats)
+    let !missing = sortOn (Down . upDemands . snd) $ M.toList (cdlUnresolvedProducts stats)
     unless (null missing) $ do
         reportProgress Warning $
             printf "Missing suppliers: %d products unresolved" (length missing)
-        forM_ (take 20 missing) $ \(name, (cnt, blocker)) ->
+        forM_ (take 20 missing) $ \(name, unresolved) ->
             reportProgress Warning $
-                printf "  - %s (%d activities) — %s" (T.unpack name) cnt (showBlocker blocker)
+                printf
+                    "  - %s (%d activities) — %s"
+                    (T.unpack name)
+                    (upDemands unresolved)
+                    (showBlocker (upBlocker unresolved))
         when (length missing > 20) $
             reportProgress Warning $
                 printf "  ... and %d more" (length missing - 20)

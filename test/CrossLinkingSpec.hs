@@ -23,11 +23,11 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "CrossDBLinkingStats <>" $ do
         it "sums unresolved-product counts per key and keeps the first blocker" $ do
-            let s1 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", (2, NoNameMatch))]} :: CrossDBLinkingStats
-                s2 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", (3, LocationUnavailable "FR")), ("maize", (1, NoNameMatch))]}
+            let s1 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", unresolved 2 NoNameMatch)]} :: CrossDBLinkingStats
+                s2 = mempty{cdlUnresolvedProducts = M.fromList [("wheat", unresolved 3 (LocationUnavailable "FR")), ("maize", unresolved 1 NoNameMatch)]}
                 merged = s1 <> s2
-            M.lookup "wheat" (cdlUnresolvedProducts merged) `shouldBe` Just (5, NoNameMatch)
-            M.lookup "maize" (cdlUnresolvedProducts merged) `shouldBe` Just (1, NoNameMatch)
+            M.lookup "wheat" (cdlUnresolvedProducts merged) `shouldBe` Just (unresolved 5 NoNameMatch)
+            M.lookup "maize" (cdlUnresolvedProducts merged) `shouldBe` Just (unresolved 1 NoNameMatch)
 
         it "adds the scalar counters" $ do
             let s1 = mempty{cdlTotalInputs = 4, cdlWasteExactLinks = 1} :: CrossDBLinkingStats
@@ -447,3 +447,7 @@ loadMin3IndexedDB = do
     case result of
         Left err -> error $ "Failed to load SAMPLE.min3: " ++ show err
         Right simpleDb -> return $ buildIndexedDatabase "SAMPLE.min3" emptySynonymDB simpleDb
+
+-- | An unresolved product with @n@ demands behind it, blocked by @b@.
+unresolved :: Int -> LinkBlocker -> UnresolvedProduct
+unresolved n b = UnresolvedProduct{upDemands = n, upBlocker = b}
