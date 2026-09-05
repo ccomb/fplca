@@ -827,6 +827,23 @@ defaultLoadOptions unitConfig =
 -- | Everything one EcoSpold dataset parses to, before it is keyed.
 type ParsedDataset = (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int)
 
+{- | Say that an EcoSpold 2 dataset divided into several processes will come
+back as one.
+
+'buildProcEntry' reads a process's identity off the file name, which carries
+one @activityUUID_productUUID@ pair whatever the file holds, so the coproducts
+a key just separated all claim it and the registry keeps the last. Loud rather
+than silent: the alternative is a database quietly missing the very products
+the key was named to produce. Keying an EcoSpold 2 process on its own product
+rather than on its file name is what would fix it.
+-}
+warnSplitKeyedOnFileName :: FilePath -> IO ()
+warnSplitKeyedOnFileName file =
+    reportProgress Warning $
+        "only one product will be kept of "
+            <> file
+            <> ": an EcoSpold 2 process is identified by its file name, which names a single product"
+
 {- | Allocate a parsed dataset before it is keyed: one entry per process
 'allocate' splits it into, each carrying the file's flows and units, so the
 entry is then keyed on its own reference product.
@@ -1101,7 +1118,10 @@ loadEcoSpoldDirectory opts dir = do
         let (errs, oks) = partitionEithers paired
         forM_ errs $ \e ->
             reportProgress Warning e
-        let (okFiles, okResults) = unzip [(f, r') | (f, r) <- oks, r' <- allocateParsed opts r]
+        let split = [(f, allocateParsed opts r) | (f, r) <- oks]
+            (okFiles, okResults) = unzip [(f, r') | (f, rs) <- split, r' <- rs]
+        unless isEcoSpold1 $
+            mapM_ (warnSplitKeyedOnFileName . fst) (filter ((> 1) . length . snd) split)
         let procs = [a | (a, _, _, _, _, _, _) <- okResults]
             techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
             bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
