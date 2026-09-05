@@ -24,7 +24,7 @@ The other direction is a promise about pyvolca's own names. A name this client p
 
 _Generated from `volca._compat`: run `python scripts/gen_api_md.py` to regenerate._
 
-This build of **pyvolca 0.11.0** speaks wire formats **2 to 18** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
+This build of **pyvolca 0.11.0** speaks wire formats **2 to 19** and requires a VoLCA engine **≥ v0.9.1**; a capability gated on a newer wire than the engine speaks refuses to run with a clear error. A name this build has retired keeps working until pyvolca **1.0**.
 
 <!-- END: compatibility -->
 
@@ -1086,10 +1086,16 @@ Args:
         ``water fossil`` and ``water, fossil`` search alike. With no
         ``sort`` asked for, names carrying the query as typed come
         first. An empty query returns nothing.
-    kind: Keep one kind only: ``"technosphere"``, ``"biosphere"`` or
-        ``"waste"``. Omit for all three. Needs engine wire revision 9;
-        an older engine would drop the filter and answer with every
-        kind, so the request is refused rather than sent.
+    kind: Keep only these kinds: ``"technosphere"``, ``"biosphere"``
+        or ``"waste"``. Omit for all three. Name several separated by
+        commas, as in ``"biosphere,waste"``, which is what is
+        exchanged with nature or discarded and the bucket
+        `count_search_matches` reports as ``flows``. One kind
+        needs engine wire revision 9: an older engine would drop the
+        filter and answer with every kind. Several need revision 19,
+        where an older engine reads the whole value as one name and
+        refuses it. Either way the request is refused here first, with
+        a message naming the revision, rather than sent.
     page / page_size: Web-style pagination; convert to wire-level
         ``offset`` / ``limit``.
     limit / offset: Wire-level escape hatch.

@@ -9,6 +9,7 @@ interleaves the media, shows them as duplicate rows.
 module FlowSearchSpec (spec) where
 
 import API.Types (FlowSearchResult (..))
+import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -21,14 +22,17 @@ import Types (
     Compartment (..),
     ExchangeKind (..),
     FlowKind (..),
+    KindFilter (..),
     TechnosphereFlow (..),
     UUID,
     WasteFlow (..),
     flowKindName,
+    parseKindNames,
  )
 
 spec :: Spec
 spec = do
+    kindFilterSpec
     matchSpec
     filterSpec
     orderSpec
@@ -158,8 +162,14 @@ orderSpec = describe "Service.flowSearchResults" $ do
                        ]
 
     it "keeps the one kind asked for" $
-        map fsrName (search byName{ffKind = Just KindBiosphere} threeKinds)
+        map fsrName (search byName{ffKind = OnlyKinds (KindBiosphere :| [])} threeKinds)
             `shouldBe` ["Water, fossil"]
+
+    it "keeps every kind asked for, which is how the third search tab is listed" $
+        -- Biosphere and waste together: what is exchanged with nature or
+        -- discarded, the bucket the search counts report as one number.
+        map fsrName (search byName{ffKind = OnlyKinds (KindBiosphere :| [KindWaste])} threeKinds)
+            `shouldBe` ["Waste water", "Water, fossil"]
 
     it "keeps all three when no kind is asked for" $
         length (search byName threeKinds) `shouldBe` 3
@@ -218,7 +228,7 @@ sortByName =
     FlowFilter
         { ffQuery = "Deltamethrin"
         , ffLang = Nothing
-        , ffKind = Nothing
+        , ffKind = AnyKind
         , ffLimit = Nothing
         , ffOffset = Nothing
         , ffSort = Nothing
@@ -257,3 +267,34 @@ biosphere n name syns =
 
 mkUUID :: Int -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
+
+{- | What a request may name in @kind@.
+
+A dropped name would widen the search in silence, which is the mistake the
+single-kind reader was already written to avoid, so a list holding one
+unreadable name is refused whole rather than filtered down to the rest.
+-}
+kindFilterSpec :: Spec
+kindFilterSpec = describe "the kinds a request names" $ do
+    it "reads one" $
+        parseKindNames "biosphere" `shouldBe` Right (KindBiosphere :| [])
+
+    it "reads several, which is how the third search tab is asked for" $
+        parseKindNames "biosphere,waste" `shouldBe` Right (KindBiosphere :| [KindWaste])
+
+    it "ignores the spaces someone writes after the commas" $
+        parseKindNames " biosphere , waste " `shouldBe` Right (KindBiosphere :| [KindWaste])
+
+    it "refuses a parameter that names no kind, rather than widening" $
+        -- Someone joined an empty set of ticked boxes. Answering with every
+        -- kind would label a tab with a filter nobody asked for.
+        parseKindNames "" `shouldSatisfy` isLeft
+
+    it "refuses a list of nothing but separators for the same reason" $
+        parseKindNames " , " `shouldSatisfy` isLeft
+
+    it "refuses the whole list for one name it cannot read" $
+        parseKindNames "biosphere,bioshpere" `shouldSatisfy` isLeft
+  where
+    isLeft :: Either a b -> Bool
+    isLeft = either (const True) (const False)

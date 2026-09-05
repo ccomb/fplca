@@ -32,8 +32,10 @@ the client works against it except the revision-gated capabilities (see
 ``Client._require_wire``), which check the engine's advertised revision
 before sending anything."""
 
-KNOWN_WIRE = 18
-"""The newest wire revision this pyvolca understands (revision 18 adds
+KNOWN_WIRE = 19
+"""The newest wire revision this pyvolca understands (revision 19 lets a flow
+search name several kinds at once, comma-separated, so the biosphere-and-waste
+bucket the search counts report is listable in one call; revision 18 added
 ``properties`` on a technosphere exchange, the dry and wet mass its source
 states of that line; revision 17 added
 ``count_search_matches``, how many processes, products and flows one query

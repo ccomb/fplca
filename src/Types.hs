@@ -37,6 +37,7 @@ import GHC.Generics (Generic)
 import Control.Lens ((&), (?~))
 import Data.List (find, nub)
 import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import Data.OpenApi (NamedSchema (..), OpenApiType (..), ToSchema (..), enum_, type_)
 import Search.BM25.Types (BM25Index)
 import SubstanceRegistry (CASNumber (..), NormName (..), nonEmptyCAS)
@@ -863,6 +864,41 @@ Read off the type, so a fourth kind cannot go unmentioned.
 -}
 exchangeKindChoices :: Text
 exchangeKindChoices = T.intercalate " | " (map exchangeKindName [minBound .. maxBound])
+
+{- | Which kinds of flow a search keeps.
+
+Not a list, because an empty list would have to mean either "every kind" or
+"no kind at all" and a caller could not tell which it had asked for. A search
+box offering a tab per bucket needs more than one kind at a time: the third
+bucket is what is exchanged with nature or discarded, which is two of them.
+-}
+data KindFilter = AnyKind | OnlyKinds (NonEmpty ExchangeKind)
+    deriving (Eq, Show)
+
+{- | Read the kinds a request named, comma-separated.
+
+Every reading that names no kind is a refusal, an empty parameter included.
+@kind=@ and @kind=,@ come from a caller that meant to name something, and
+answering them with every kind would widen the search with no sign the filter
+was dropped - the same mistake as reading a typo as "every kind". Only an
+absent parameter means every kind, and that is its caller's own arm, not a
+reading of the text.
+-}
+parseKindNames :: Text -> Either Text (NonEmpty ExchangeKind)
+parseKindNames raw = case NE.nonEmpty (filter (not . T.null) (map T.strip (T.splitOn "," raw))) of
+    Nothing -> Left ("kind names no kind: use " <> exchangeKindChoices <> ", separated by commas")
+    Just named -> traverse readOne named
+  where
+    readOne :: Text -> Either Text ExchangeKind
+    readOne name =
+        maybe (Left ("kind must be one of: " <> exchangeKindChoices <> " (got " <> name <> ")")) Right $
+            parseExchangeKind name
+
+-- | Whether a search that asked for these kinds keeps this one.
+kindFilterKeeps :: KindFilter -> ExchangeKind -> Bool
+kindFilterKeeps kinds kind = case kinds of
+    AnyKind -> True
+    OnlyKinds named -> kind `elem` named
 
 -- | Unit database (deduplicated)
 type UnitDB = M.Map UUID Unit

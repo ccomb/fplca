@@ -1540,10 +1540,16 @@ class Client:
                 ``water fossil`` and ``water, fossil`` search alike. With no
                 ``sort`` asked for, names carrying the query as typed come
                 first. An empty query returns nothing.
-            kind: Keep one kind only: ``"technosphere"``, ``"biosphere"`` or
-                ``"waste"``. Omit for all three. Needs engine wire revision 9;
-                an older engine would drop the filter and answer with every
-                kind, so the request is refused rather than sent.
+            kind: Keep only these kinds: ``"technosphere"``, ``"biosphere"``
+                or ``"waste"``. Omit for all three. Name several separated by
+                commas, as in ``"biosphere,waste"``, which is what is
+                exchanged with nature or discarded and the bucket
+                :meth:`count_search_matches` reports as ``flows``. One kind
+                needs engine wire revision 9: an older engine would drop the
+                filter and answer with every kind. Several need revision 19,
+                where an older engine reads the whole value as one name and
+                refuses it. Either way the request is refused here first, with
+                a message naming the revision, rather than sent.
             page / page_size: Web-style pagination; convert to wire-level
                 ``offset`` / ``limit``.
             limit / offset: Wire-level escape hatch.
@@ -1552,6 +1558,10 @@ class Client:
         """
         if kind is not None:
             self._require_wire(9, "search_flows(kind=...)", engine_hint="0.9.6")
+            if "," in kind:
+                self._require_wire(
+                    19, "search_flows(kind=...) naming several kinds", engine_hint="0.12.1"
+                )
         wire_limit, wire_offset = _resolve_page_args(page, page_size, limit, offset)
 
         def fetch(o: int, l: int | None) -> dict:

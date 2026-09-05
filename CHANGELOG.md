@@ -30,6 +30,13 @@
   unit to restate it in.
 
 ### Added
+- A flow search can name several kinds at once: `kind=biosphere,waste` keeps
+  what is exchanged with nature or discarded and nothing else, in one listing.
+  `search-counts` already answers that pair as a single number, and there was
+  no way to list it: a search box putting a count beside a tab had to show a
+  count and a table that disagreed. One name it cannot read refuses the whole
+  parameter, the way one unreadable name always did. Wire revision 19; a
+  single kind is written exactly as before.
 - A database can be divided on the mass of its products instead of on the
   shares its source declares. A database entry names the key it is read
   under: `allocation = "declared"` (the default, unchanged), `"dry mass"` or

@@ -772,7 +772,7 @@ params r = case r of
     SearchFlows ->
         [ pDatabase
         , Param "query" "string" Required "Flow name to search for"
-        , Param "kind" "string" Optional "Keep one kind of flow only: technosphere | biosphere | waste. Omit for all three."
+        , Param "kind" "string" Optional "Keep only these kinds of flow: technosphere | biosphere | waste. Name several separated by commas, as in \"biosphere,waste\". Omit for all three."
         , pLimit "Max results (default 20)"
         ]
     GetActivity ->

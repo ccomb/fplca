@@ -1313,7 +1313,10 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 18: the @properties@ a technosphere exchange carries, the dry and
+(revision 19: the @kind@ parameter of a flow search naming several kinds,
+comma-separated, so the biosphere-and-waste bucket the search counts report is
+listable in one call;
+revision 18: the @properties@ a technosphere exchange carries, the dry and
 wet mass its source states of that line;
 revision 17: the @search-counts@ route and its @count_search_matches@ tool,
 answering how many processes, products and flows one query matches;
@@ -1344,7 +1347,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 18
+currentWireVersion = 19
 
 getVersion :: AppM Value
 getVersion = do
@@ -2179,7 +2182,7 @@ unloadMethodCollectionHandler name = do
 searchFlows :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults FlowSearchResult)
 searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortParam orderParam = do
     (db, _) <- requireDatabaseByName dbName
-    kind <- traverse readKind kindParam
+    kinds <- maybe (pure AnyKind) namedKinds kindParam
     case queryParam of
         Nothing -> return (SearchResults [] 0 0 50 False 0.0)
         Just query -> do
@@ -2187,7 +2190,7 @@ searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortPar
                     Service.FlowFilter
                         { Service.ffQuery = query
                         , Service.ffLang = langParam
-                        , Service.ffKind = kind
+                        , Service.ffKind = kinds
                         , Service.ffLimit = limitParam
                         , Service.ffOffset = offsetParam
                         , Service.ffSort = sortParam
@@ -2195,11 +2198,10 @@ searchFlows dbName queryParam langParam kindParam limitParam offsetParam sortPar
                         }
             searchFlowsInternal db ff
   where
-    -- A typo must not read as "every kind": that would answer a question
-    -- nobody asked with no sign the filter was dropped.
-    readKind raw = case parseExchangeKind raw of
-        Just k -> pure k
-        Nothing -> badRequest ("kind must be one of: " <> exchangeKindChoices <> " (got " <> raw <> ")")
+    -- An absent parameter is the only reading that means every kind; a
+    -- present one naming nothing is refused, see 'parseKindNames'.
+    namedKinds :: Text -> AppM KindFilter
+    namedKinds raw = either badRequest (pure . OnlyKinds) (parseKindNames raw)
 
 searchActivitiesWithCount :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Bool -> Maybe Text -> [Text] -> [Text] -> [Text] -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> AppM (SearchResults ActivitySummary)
 searchActivitiesWithCount dbName nameParam geoParam productParam exactParam presetParam classSystems classValues classModes limitParam offsetParam sortParam orderParam = do
