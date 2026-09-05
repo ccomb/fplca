@@ -1426,45 +1426,19 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             let !dbDuration = realToFrac (diffUTCTime dbEnd dbStart) :: Double
             reportProgressWithTiming Info ("  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)) dbDuration
             -- Auto-extract synonyms from biosphere flows
-            let db = ldDatabase loaded
-                bioFlowDb = dbBioFlows db
+            let bioFlowDb = dbBioFlows (ldDatabase loaded)
                 !pairs = extractFromEcoSpold2 bioFlowDb
-                !bioFlowsWithSyns =
-                    length
-                        [ ()
-                        | f <- M.elems bioFlowDb
-                        , not (M.null (bfSynonyms f))
-                        ]
-            reportProgress Info $
-                "  [EXTRACT] "
-                    <> T.unpack (dcName dbConfig)
-                    <> ": "
-                    <> show (M.size bioFlowDb)
-                    <> " bio flows, "
-                    <> show bioFlowsWithSyns
-                    <> " with synonyms, "
-                    <> show (length pairs)
-                    <> " pairs"
-            -- A biosphere flow whose name carries a "/unit" suffix that
-            -- 'normalizeName' does not strip silently misses its CF (the SimaPro
-            -- unit-in-name convention; e.g. a "/MJ" absent from 'unitSuffixes').
-            -- Surface it so the fix — add the unit to 'unitSuffixes' — is visible.
-            let uncoveredUnits =
+            reportProgress Info (extractSummary bioFlowDb pairs)
+            {- A biosphere flow whose name carries a "/unit" suffix that
+            'normalizeName' does not strip silently misses its CF (the SimaPro
+            unit-in-name convention; e.g. a "/MJ" absent from 'unitSuffixes').
+            Surface it so the fix, adding the unit to 'unitSuffixes', is
+            visible. -}
+            mapM_ (reportProgress Warning . unstrippedSuffixWarning) $
+                M.toList $
                     uncoveredUnitSuffixes
                         (UnitConversion.isKnownUnit llUnitConfig)
                         (map bfName (M.elems bioFlowDb))
-            forM_ (M.toList uncoveredUnits) $ \(unit, egs) ->
-                reportProgress Warning $
-                    "  [UNIT] "
-                        <> T.unpack (dcName dbConfig)
-                        <> ": flow-name suffix /"
-                        <> T.unpack unit
-                        <> " not stripped on "
-                        <> show (length egs)
-                        <> " flows (add \"/"
-                        <> T.unpack (T.toLower unit)
-                        <> "\" to unitSuffixes); e.g. "
-                        <> T.unpack (T.intercalate ", " (take 3 egs))
             autoCreateFlowSynonyms
                 manager
                 (dcName dbConfig)
@@ -1472,6 +1446,31 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
                 pairs
         Left err ->
             reportError $ "  [FAIL] Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
+  where
+    extractSummary :: BioFlowDB -> [(Text, Text)] -> String
+    extractSummary bioFlowDb pairs =
+        "  [EXTRACT] "
+            <> T.unpack (dcName dbConfig)
+            <> ": "
+            <> show (M.size bioFlowDb)
+            <> " bio flows, "
+            <> show (length [() | f <- M.elems bioFlowDb, not (M.null (bfSynonyms f))])
+            <> " with synonyms, "
+            <> show (length pairs)
+            <> " pairs"
+
+    unstrippedSuffixWarning :: (Text, [Text]) -> String
+    unstrippedSuffixWarning (unit, egs) =
+        "  [UNIT] "
+            <> T.unpack (dcName dbConfig)
+            <> ": flow-name suffix /"
+            <> T.unpack unit
+            <> " not stripped on "
+            <> show (length egs)
+            <> " flows (add \"/"
+            <> T.unpack (T.toLower unit)
+            <> "\" to unitSuffixes); e.g. "
+            <> T.unpack (T.intercalate ", " (take 3 egs))
 
 {- | Compute dependency levels from topo-sorted load order for parallel loading.
   Level 0 = no deps, level N = depends only on levels 0..N-1.
