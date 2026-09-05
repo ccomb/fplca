@@ -1802,9 +1802,13 @@ data AttributeFallback = AttributeFallback
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped AttributeFallback)
 
 {- | One product no dependency supplies: how many activities asked for it,
-and what stopped the first of them. Merging two stats sums the demands and
-keeps that first blocker, so a name blocked for several reasons is reported
-under one of them and counted under all.
+and what stopped the first of them.
+
+The single blocker is a known gap, not a decision: merging two linking runs
+sums the demands and keeps the first blocker, so a product blocked for two
+different reasons is counted under both and named after one. Widening it to a
+count per blocker changes what the setup page and the load log display, so it
+is issue #391 rather than a field of this record.
 -}
 data UnresolvedProduct = UnresolvedProduct
     { upDemands :: !Int
