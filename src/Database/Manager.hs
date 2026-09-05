@@ -3682,7 +3682,7 @@ loadMethodCollectionFromConfig mc = runExceptT $ do
     flowInfo <- liftIO $ flowDefinitionsFor source (mfDirectory files)
     parsed <- liftIO $ parseMethodFiles flowInfo files
     collection <- except (collectionOf parsed)
-    liftIO $ mapM_ (reportProgress Info) (parseCounts parsed)
+    liftIO $ reportProgress Info (parseCounts parsed)
     liftIO $ mapM_ (reportProgress Info) (nwCounts collection)
     liftIO $ mapM_ (reportProgress Warning) (parseFailures parsed)
     pure (collection, flowInfo)
@@ -3813,16 +3813,15 @@ loadMethodCollectionFromConfig mc = runExceptT $ do
                 ++ pmfJsonMethods parsed
                 ++ concatMap mcMethods (pmfCsvCollections parsed)
 
-    parseCounts :: ParsedMethodFiles -> Maybe String
+    parseCounts :: ParsedMethodFiles -> String
     parseCounts parsed =
-        Just $
-            "  Parsed "
-                <> show (length (pmfXmlMethods parsed))
-                <> " XML, "
-                <> show (pmfCsvFileCount parsed)
-                <> " CSV, "
-                <> show (length (pmfJsonMethods parsed))
-                <> " JSON file(s)"
+        "  Parsed "
+            <> show (length (pmfXmlMethods parsed))
+            <> " XML, "
+            <> show (pmfCsvFileCount parsed)
+            <> " CSV, "
+            <> show (length (pmfJsonMethods parsed))
+            <> " JSON file(s)"
 
     nwCounts :: MethodCollection -> Maybe String
     nwCounts collection
