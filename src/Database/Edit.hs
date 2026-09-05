@@ -178,7 +178,11 @@ at the source's files and 'umSource' naming whose they are, plus the key,
 without which a restart would rebuild the database as @declared@ under a name
 promising otherwise. The source's journal is deliberately left behind: an edit
 is recorded against a process the source's key produced, and under another key
-that process need not exist.
+that process need not exist. The load says so when there is one.
+
+Asking for the key the source already reads under is refused before the load:
+that result is the source, and it is the one duplicate no load can detect,
+since a key dividing the same blocks a second time divides them just as well.
 -}
 deriveDatabase ::
     DatabaseManager ->
@@ -192,6 +196,12 @@ deriveDatabase manager srcName newName key = do
         Nothing -> pure (Left ("Database not found: " <> srcName))
         Just srcConfig
             | T.null slug -> pure (Left ("Invalid name (no usable characters): " <> newName))
+            | key == dcAllocation srcConfig ->
+                pure . Left $
+                    srcName
+                        <> " is already read under "
+                        <> allocationKeyText key
+                        <> ": the result would be that database under another name"
             | otherwise ->
                 withReservedName manager slug (nameIsFree manager slug) $ \() ->
                     loadDerived manager slug srcConfig key
@@ -255,13 +265,18 @@ dividedRefusal key srcName db
 {- | Undo a derivation that will not be kept: unload it, then take its home
 and its cache with 'removeDatabase', which refuses a loaded database.
 
-Both steps are reported rather than dropped: what is left behind if either
-fails is a registry entry or a directory nobody asked for, and the caller is
-already on its way to returning the refusal that brought us here.
+The unload is skipped when the load is what failed, since nothing was
+registered to unload and the refusal it answers would be a second warning
+saying so beside the real one.
+
+What is left behind if a step fails is a registry entry or a directory nobody
+asked for, so both are reported: the caller is already on its way to returning
+the refusal that brought us here.
 -}
 discardDerived :: DatabaseManager -> Text -> IO ()
 discardDerived manager slug = do
-    unloadDatabase manager slug >>= warnLeftover "unload"
+    loaded <- M.member slug <$> readTVarIO (dmLoadedDbs manager)
+    when loaded $ unloadDatabase manager slug >>= warnLeftover "unload"
     removeDatabase manager slug >>= warnLeftover "delete"
   where
     warnLeftover :: Text -> Either Text () -> IO ()
@@ -283,6 +298,13 @@ recordDerived slug srcConfig key = do
         let home = uploadsDir </> T.unpack slug
         createDirectoryIfMissing True home
         sourcePath <- makeAbsolute (dcPath srcConfig)
+        hasJournal <- doesFileExist (journalPath (uploadsDir </> T.unpack (dcName srcConfig)))
+        when hasJournal . reportProgress Warning . T.unpack $
+            "the edits recorded on "
+                <> dcName srcConfig
+                <> " stay behind: each names a process its key produced, and "
+                <> slug
+                <> " reads the same files under another one"
         UploadedDB.writeUploadMeta
             home
             UploadedDB.UploadMeta
@@ -394,6 +416,9 @@ recordCopy slug src = do
 {- | Rename a config for the copy: new internal name, derived display name, and
 forced deletable/uploaded so the copy can be removed again via the normal
 delete path (the source may be a TOML-pinned, non-deletable database).
+
+The source it names is the one 'recordCopy' writes to the copy's home, so a
+listing says the same thing before and after the restart that reads it back.
 -}
 renameConfig :: Text -> DatabaseConfig -> DatabaseConfig
 renameConfig newName cfg =
@@ -402,6 +427,7 @@ renameConfig newName cfg =
         , dcDisplayName = newName
         , dcIsUploaded = True
         , dcDeletable = True
+        , dcSource = Just (dcName cfg)
         }
 
 -- ---------------------------------------------------------------------------

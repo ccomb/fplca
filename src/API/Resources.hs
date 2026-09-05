@@ -325,8 +325,9 @@ description r = case r of
         \mass of each product, 'dry mass' by its dry matter, 'declared' keeps the \
         \source's own shares. The source is untouched and both stay usable side by \
         \side. This is a full load, not a copy: seconds to minutes on a large \
-        \database. Refused when the key divides no block, when the products carry no \
-        \such property, and on a read-only instance."
+        \database. Refused when the key divides no block, when it is the key the \
+        \source already reads under, when the products carry no such property, and \
+        \on a read-only instance."
     ListPresets ->
         "LCA / ACV: list named classification filter presets configured in this \
         \instance. Each preset bundles multiple (system, value, mode) classification \

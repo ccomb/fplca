@@ -11,6 +11,8 @@ the source's files again. What that has to get right is checked here:
 * a key that divides nothing is refused and leaves nothing behind: such a
   load is its source under a second name, at the price of a second database
   in memory and a second cache on disk;
+* so is the key the source already reads under, which is the duplicate no
+  count of divided blocks can see;
 * the key survives a restart, which is the one thing a derived database
   cannot work out for itself -- it owns no files, so nothing else on disk
   says its shares are not the ones its source declares.
@@ -72,6 +74,19 @@ spec = around_ withScratchDataDir $ describe "Database.Edit.deriveDatabase" $ do
                     loaded <- readTVarIO (dmLoadedDbs manager)
                     M.member "steel-wet" available `shouldBe` False
                     M.member "steel-wet" loaded `shouldBe` False
+
+    it "refuses the key its source already reads under" $
+        withSource coproductCSV $ \manager -> do
+            -- The block divides under 'Declared' as well as it does under a
+            -- property, so the count of divided blocks says nothing here: the
+            -- duplicate is the key, and it is known before any load.
+            derived <- deriveDatabase manager source "dairy-again" Declared
+            case derived of
+                Right _ -> expectationFailure "expected a refusal, the derivation was kept"
+                Left err -> do
+                    err `shouldSatisfy` isInfixOf "is already read under declared"
+                    available <- readTVarIO (dmAvailableDbs manager)
+                    M.member "dairy-again" available `shouldBe` False
 
     it "is still under its key after a restart" $
         withSource coproductCSV $ \manager -> do
