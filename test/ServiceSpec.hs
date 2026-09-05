@@ -20,7 +20,6 @@ import Service (
     ServiceError (..),
     TargetRef (..),
     buildUnitGroups,
-    extractCompartment,
     filterTreeExport,
     isResourceExtraction,
     resolveActivityAndProcessId,
@@ -149,31 +148,6 @@ spec = do
             let flow = mkBioFlow "air"
             isResourceExtraction flow `shouldBe` False
     -- Technosphere flows can't reach this function under the new type system.
-
-    -- -----------------------------------------------------------------------
-    -- extractCompartment
-    -- -----------------------------------------------------------------------
-    describe "extractCompartment" $ do
-        it "classifies air compartment" $
-            extractCompartment "air" `shouldBe` "air"
-
-        it "classifies high population air" $
-            extractCompartment "Emissions to air/high. pop." `shouldBe` "air"
-
-        it "classifies water compartment" $
-            extractCompartment "water" `shouldBe` "water"
-
-        it "classifies aquatic compartment" $
-            extractCompartment "Aquatic" `shouldBe` "water"
-
-        it "classifies soil compartment" $
-            extractCompartment "soil/agricultural" `shouldBe` "soil"
-
-        it "classifies ground as soil" $
-            extractCompartment "ground" `shouldBe` "soil"
-
-        it "falls back to other for unknown" $
-            extractCompartment "biotic resource" `shouldBe` "other"
 
     -- -----------------------------------------------------------------------
     -- buildUnitGroups

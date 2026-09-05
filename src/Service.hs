@@ -32,7 +32,7 @@ import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
-import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
+import Matrix (DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
 import qualified Search.BM25 as BM25
@@ -158,10 +158,7 @@ findActivityByProcessId db processId =
 
 -- | Resolve activity query using ProcessId format with UUID fallback for compatibility
 resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
-resolveActivityByProcessId db queryText =
-    case resolveActivityAndProcessId db queryText of
-        Right (_processId, activity) -> Right activity
-        Left err -> Left err
+resolveActivityByProcessId db = fmap snd . resolveActivityAndProcessId db
 
 {- | Resolve an activity that is about to be scored. One the allocation gate
 refused resolves for inspection, never for a score: the refusal names what is
@@ -346,14 +343,10 @@ findProcessIdForActivity db activity =
     let actName = activityName activity
         actLoc = activityLocation activity
         actUnit = activityUnit activity
-        refFlowId = case [exchangeFlowId ex | ex <- exchanges activity, exchangeIsReference ex] of
-            (fid : _) -> Just fid
-            [] -> Nothing
+        refFlowId = exchangeFlowId <$> L.find exchangeIsReference (exchanges activity)
 
         matchesActivity dbActivity =
-            let dbRefFlowId = case [exchangeFlowId ex | ex <- exchanges dbActivity, exchangeIsReference ex] of
-                    (dbFid : _) -> Just dbFid
-                    [] -> Nothing
+            let dbRefFlowId = exchangeFlowId <$> L.find exchangeIsReference (exchanges dbActivity)
              in activityName dbActivity == actName
                     && activityLocation dbActivity == actLoc
                     && activityUnit dbActivity == actUnit
@@ -389,20 +382,6 @@ countPotentialChildren db activity =
         , not (exchangeIsReference ex)
         , Just _ <- [childTarget db ex]
         ]
-
--- | Helper to extract compartment from flow category
-extractCompartment :: Text -> Text
-extractCompartment category =
-    let lowerCategory = T.toLower category
-     in if "air" `T.isInfixOf` lowerCategory
-            then "air"
-            else
-                if "water" `T.isInfixOf` lowerCategory || "aquatic" `T.isInfixOf` lowerCategory
-                    then "water"
-                    else
-                        if "soil" `T.isInfixOf` lowerCategory || "ground" `T.isInfixOf` lowerCategory
-                            then "soil"
-                            else "other"
 
 {- | Cap on biosphere flows shown per activity. System processes can declare
 hundreds; we keep the top-N by |amount| to keep graphs renderable.
@@ -580,11 +559,10 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
          in (n', edge : e', stats <> s')
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
-convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
-convertToTreeExport db _rootProcessId maxDepth tree =
+convertToTreeExport :: Database -> Int -> LoopAwareTree -> TreeExport
+convertToTreeExport db maxDepth tree =
     let (nodes, edges, _stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
-        -- Use the actual root node ID from the tree, not the passed parameter
-        -- This ensures tmRootId always matches a key in the nodes map
+        -- The tree's own root, so tmRootId always names a key in the nodes map.
         actualRootId = getTreeNodeId db tree
         metadata =
             TreeMetadata
@@ -658,13 +636,10 @@ silently dropped.
 -}
 mkGraphEdgeFromTriple ::
     Database ->
-    V.Vector Activity ->
-    UnitDB ->
-    TechFlowDB ->
     M.Map ProcessId Int ->
     SparseTriple ->
     Maybe GraphEdge
-mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col value)
+mkGraphEdgeFromTriple db nodeIdMap (SparseTriple row col value)
     | value == 0.0 = Nothing
     | otherwise = do
         let sourcePid = fromIntegral row :: ProcessId
@@ -672,11 +647,11 @@ mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col 
         src <- M.lookup sourcePid nodeIdMap
         tgt <- M.lookup targetPid nodeIdMap
         let matchingExchange = do
-                srcAct <- activities V.!? fromIntegral row
+                srcAct <- dbActivities db V.!? fromIntegral row
                 targetUUID <- prActivity <$> processIdToRef db targetPid
                 L.find (isInputLinkTo targetUUID) (exchanges srcAct)
-            flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) flows
-            uName = maybe "<unresolved unit>" (getUnitNameForTechFlow units) flowInfo
+            flowInfo = matchingExchange >>= \ex -> M.lookup (exchangeFlowId ex) (dbTechFlows db)
+            uName = maybe "<unresolved unit>" (getUnitNameForTechFlow (dbUnits db)) flowInfo
             flowName = case (flowInfo, matchingExchange) of
                 (Just f, _) -> tfName f
                 (Nothing, Just ex) -> unresolvedFlowName (exchangeFlowId ex)
@@ -687,10 +662,10 @@ mkGraphEdgeFromTriple db activities units flows nodeIdMap (SparseTriple row col 
 sentinel node rather than crashing — preserves the project's "no silent
 errors, no silent successes" stance.
 -}
-mkGraphNode :: Database -> V.Vector Activity -> Int -> (ProcessId, Double) -> GraphNode
-mkGraphNode db activities nodeId (pid, cumulativeVal) =
+mkGraphNode :: Database -> Int -> (ProcessId, Double) -> GraphNode
+mkGraphNode db nodeId (pid, cumulativeVal) =
     let processIdText = processIdToText db pid
-     in case activities V.!? fromIntegral pid of
+     in case dbActivities db V.!? fromIntegral pid of
             Just activity ->
                 GraphNode
                     { gnNodeId = nodeId
@@ -723,12 +698,11 @@ buildActivityGraph db sharedSolver queryText cutoffPercent =
                 threshold = sum (map abs supplyList) * (cutoffPercent / 100.0)
                 significantActivities = selectSignificantActivities threshold processId supplyList
                 nodeIdMap = M.fromList [(pid, idx) | (idx, (pid, _)) <- zip [0 ..] significantActivities]
-                activities = dbActivities db
                 edges =
                     mapMaybe
-                        (mkGraphEdgeFromTriple db activities (dbUnits db) (dbTechFlows db) nodeIdMap)
+                        (mkGraphEdgeFromTriple db nodeIdMap)
                         (U.toList (dbTechnosphereTriples db))
-                nodes = zipWith (mkGraphNode db activities) [0 ..] significantActivities
+                nodes = zipWith (mkGraphNode db) [0 ..] significantActivities
                 unitGroups = buildUnitGroups (map gnUnit nodes)
             pure $ Right $ GraphExport nodes edges unitGroups
 
@@ -1094,9 +1068,7 @@ calculateActivityMetadata db activity =
         wasteExchanges = [(fid, linkId) | WasteExchange{waFlowId = fid, waActivityLinkId = linkId} <- allExchanges]
         wasteLinked = length [() | (fid, linkId) <- wasteExchanges, linkId /= UUID.nil || S.member fid resolved]
         wasteOrphan = length wasteExchanges - wasteLinked
-        refProduct = case [ex | ex <- allExchanges, exchangeIsReference ex] of
-            [] -> Nothing
-            (ex : _) -> Just (exchangeFlowId ex)
+        refProduct = exchangeFlowId <$> L.find exchangeIsReference allExchanges
      in ActivityMetadata
             { pmTotalFlows = uniqueFlows
             , pmTechnosphereInputs = techInputs
@@ -1292,7 +1264,7 @@ toExchangeWithUnit ::
 toExchangeWithUnit db links exchange =
     -- Surface the raw UUID when the flow does not resolve — a clear failure
     -- the consumer can debug, not a silent "unknown".
-    let unresolvedName = "<unresolved flow " <> UUID.toText (exchangeFlowId exchange) <> ">"
+    let unresolvedName = unresolvedFlowName (exchangeFlowId exchange)
         (flowName, compartment) = fromMaybe (unresolvedName, Nothing) (resolveFlow db exchange)
         target = resolveTarget db links exchange
      in ExchangeWithUnit
@@ -1312,21 +1284,21 @@ toExchangeWithUnit db links exchange =
 are always technosphere.
 -}
 getReferenceProductName :: TechFlowDB -> Activity -> Maybe Text
-getReferenceProductName flows activity =
-    case [ex | ex <- exchanges activity, exchangeIsReference ex] of
-        (ex : _) -> fmap tfName (M.lookup (exchangeFlowId ex) flows)
-        [] -> Nothing
+getReferenceProductName flows activity = do
+    ex <- L.find exchangeIsReference (exchanges activity)
+    tfName <$> M.lookup (exchangeFlowId ex) flows
 
 -- | Get reference product info (name, amount, unit) from activity exchanges
 getReferenceProductInfo :: TechFlowDB -> UnitDB -> Activity -> (Text, Double, Text)
 getReferenceProductInfo flows units activity =
-    case [ex | ex <- exchanges activity, exchangeIsReference ex] of
-        (ex : _) ->
-            let name = maybe "" tfName (M.lookup (exchangeFlowId ex) flows)
-                amount = exchangeAmount ex
-                uName = getUnitNameForExchange units ex
-             in (name, amount, uName)
-        [] -> ("", 1.0, "")
+    maybe ("", 1.0, "") describe (L.find exchangeIsReference (exchanges activity))
+  where
+    describe :: Exchange -> (Text, Double, Text)
+    describe ex =
+        ( maybe "" tfName (M.lookup (exchangeFlowId ex) flows)
+        , exchangeAmount ex
+        , getUnitNameForExchange units ex
+        )
 
 {- | Build an 'ActivitySummary' from a (ProcessId, Activity) pair. Encapsulates
 the reference-product + allocation + native-type projection shared by
@@ -1434,9 +1406,7 @@ technosphere by definition.
 -}
 getActivityReferenceProductDetail :: Database -> Activity -> Maybe FlowDetail
 getActivityReferenceProductDetail db activity = do
-    refExchange <- case filter exchangeIsReference (exchanges activity) of
-        [] -> Nothing
-        (ex : _) -> Just ex
+    refExchange <- L.find exchangeIsReference (exchanges activity)
     flow <- M.lookup (exchangeFlowId refExchange) (dbTechFlows db)
     let usageCount = getFlowUsageCount db (tfId flow)
     let uName = getUnitNameForTechFlow (dbUnits db) flow
@@ -2021,7 +1991,7 @@ walkDepLevels ::
     S.Set Text ->
     IO (Either ServiceError (Int, [SupplyChainEntry], [SupplyChainEdge]))
 walkDepLevels unitCfg depLookup consumerDb consumerScaling extras scf includeEdges depth visited
-    | depth >= maxSubsDepth = pure (Right (0, [], []))
+    | depth >= SharedSolver.maxDepsDepth = pure (Right (0, [], []))
     | otherwise = do
         let demandsMap = accumulateDepDemandsWith consumerDb extras consumerScaling
         results <-
@@ -2047,7 +2017,7 @@ resolveOneDep ::
     Int ->
     -- | visited
     S.Set Text ->
-    (Text, M.Map (UUID, UUID) (Double, Text)) ->
+    (Text, SupplierDemands) ->
     IO (Either ServiceError (Int, [SupplyChainEntry], [SupplyChainEdge]))
 resolveOneDep unitCfg depLookup scf includeEdges depth visited (depDbName, demands)
     | depDbName `S.member` visited = pure (Right (0, [], []))
@@ -2161,9 +2131,7 @@ bfsToPattern from matches adj = go (Empty |> from) (IM.singleton from from)
 -- | Get reference product amount for an activity (defaults to 1.0)
 getReferenceProductAmount :: Activity -> Double
 getReferenceProductAmount activity =
-    case [exchangeAmount ex | ex <- exchanges activity, exchangeIsReference ex] of
-        (amt : _) -> amt
-        [] -> 1.0
+    maybe 1.0 exchangeAmount (L.find exchangeIsReference (exchanges activity))
 
 {- | Root-only scaling vector: solve @(I-A)x = d@. Substitutions are applied by
 the cross-DB applicator ('applySubstitutionsAt', via
@@ -2270,10 +2238,6 @@ resolveRootOnly db t
             Left (NotScorable msg) -> Left msg
             Left e -> Left (T.pack (show e))
 
--- | Safety net against pathological dep chains. Matches 'SharedSolver.maxDepsDepth'.
-maxSubsDepth :: Int
-maxSubsDepth = 10
-
 {- | A global ('AllConsumers') substitution enumerates the replaced supplier's
 consumers from the __root__ technosphere row, so @from@ must live in the
 root DB. Reject a dep-qualified @from@ up front rather than letting the
@@ -2362,17 +2326,17 @@ validateAnchorDbs depLookup rootDbObj rootDb subs = do
         then pure (Right ())
         else do
             reachable <- reachableDepDbs depLookup rootDbName rootDbObj
-            let unreachable = externalAnchorDbs `S.difference` reachable
-            case S.toList unreachable of
-                [] -> pure (Right ())
-                (d : _) -> do
-                    mLoad <- depLookup d
-                    pure $ Left $ MatrixError $ case mLoad of
-                        Nothing -> "substitution consumer references unloaded database: " <> d
-                        Just _ ->
-                            "substitution consumer database '"
-                                <> d
-                                <> "' is not reachable from root database's dep-graph"
+            maybe (pure (Right ())) refuse (S.lookupMin (externalAnchorDbs `S.difference` reachable))
+  where
+    refuse :: Text -> IO (Either ServiceError ())
+    refuse d = do
+        mLoad <- depLookup d
+        pure $ Left $ MatrixError $ case mLoad of
+            Nothing -> "substitution consumer references unloaded database: " <> d
+            Just _ ->
+                "substitution consumer database '"
+                    <> d
+                    <> "' is not reachable from root database's dep-graph"
 
 {- | BFS the loaded portion of the dep-DB DAG from @rootDbName@. Returns
 the set of DB names that are statically reachable via 'dbCrossDBLinks'
@@ -2432,7 +2396,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allS
                     (\inv s -> SharedSolver.CrossDBSolution inv (NE.singleton (unThisDb thisDbName, thisDb, s)))
                     localInvs
                     scalings'
-        if depth >= maxSubsDepth
+        if depth >= SharedSolver.maxDepsDepth
             then pure (Right baseSolutions)
             else do
                 let perRootDepDemands = map (accumulateDepDemandsWith thisDb virtualLks) scalings'
@@ -2442,7 +2406,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allS
                     else do
                         depResults <-
                             mapConcurrently
-                                (resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth (length scalings'))
+                                (resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth)
                                 allDepDbs
                         pure $ case sequence depResults of
                             Left err -> Left err
@@ -2468,16 +2432,15 @@ resolveDepWithSubs ::
     [DepDemands] ->
     [Substitution] ->
     Int ->
-    Int ->
     Text ->
     IO (Either ServiceError [Maybe SharedSolver.CrossDBSolution])
-resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth k depDbName = do
+resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
             -- Same shape as 'SharedSolver.resolveDep': absent dep DB
             -- contributes 'Nothing' at every root; dropped before merge.
-            pure (Right (replicate k Nothing))
+            pure (Right (replicate (length perRootDepDemands) Nothing))
         Just (depDb, depSolver) ->
             case SharedSolver.prepareDepDemandVecs unitCfg depDbName depDb perRootDepDemands of
                 Left err -> pure (Left (MatrixError err))
@@ -2544,7 +2507,7 @@ The ADT replaces a @(Bool, Bool)@ dispatch on @(fromDb == thisDbName,
 toDb == thisDbName)@: each constructor names what the boolean meant.
 -}
 data Endpoint
-    = Here !ProcessId !(UUID, UUID)
+    = Here !ProcessId
     | Elsewhere !DepRef
 
 -- | An endpoint that lives in a dependency database.
@@ -2600,12 +2563,18 @@ requireConsumers db supplier = case technosphereRow db supplier of
     [] -> Left $ MatrixError $ "global substitution: activity is consumed nowhere: " <> processIdToText db supplier
     row -> Right row
 
+{- | The reference exchange a substitution reads, which is the produced one.
+Deliberately narrower than 'exchangeIsReference' alone: an activity that
+treats a waste has a reference input, and no unit to normalize a column to.
+-}
+isReferenceOutput :: Exchange -> Bool
+isReferenceOutput ex = exchangeIsReference ex && not (exchangeIsInput ex)
+
 -- | Reference-product unit an activity's technosphere column is normalized to.
 referenceProductUnit :: Database -> ProcessId -> Maybe Text
 referenceProductUnit db pid =
-    case [ex | ex <- exchanges (dbActivities db V.! fromIntegral pid), exchangeIsReference ex, not (exchangeIsInput ex)] of
-        (ex : _) -> Just (getUnitNameForExchange (dbUnits db) ex)
-        [] -> Nothing
+    getUnitNameForExchange (dbUnits db)
+        <$> L.find isReferenceOutput (exchanges (dbActivities db V.! fromIntegral pid))
 
 {- | Unit-conversion factor κ for a within-DB substitution @from → to@: how
 many reference units of @to@'s product equal one of @from@'s, so the
@@ -2734,7 +2703,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
         Endpoint ->
         Either ServiceError RankOneUpdate
     -- Case A: both suppliers in this DB. Symmetric rank-1 on the consumer column.
-    planUpdate sub cPid (Here fromPid _) (Here toPid _) = do
+    planUpdate sub cPid (Here fromPid) (Here toPid) = do
         a <- requireTech sub cPid fromPid
         Right $
             RankOneUpdate
@@ -2743,13 +2712,13 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                 []
     -- Case B: drop this-DB oldSup, route demand to other-DB newSup.
     -- aRaw = aNorm * normFactor (the cross-DB link stores *raw* coefficients).
-    planUpdate sub cPid (Here fromPid _) (Elsewhere toRef) = do
+    planUpdate sub cPid (Here fromPid) (Elsewhere toRef) = do
         a <- requireTech sub cPid fromPid
         let aRaw = a * activityNormalizationFactor thisDb cPid
             newLk = virtualLinkTo cPid toRef aRaw
         Right $ RankOneUpdate cPid [(fromIntegral fromPid, a)] [newLk]
     -- Case C: cancel existing cross-DB link, pull new this-DB supplier.
-    planUpdate sub cPid (Elsewhere fromRef) (Here toPid _) = do
+    planUpdate sub cPid (Elsewhere fromRef) (Here toPid) = do
         s <- requireStatic sub cPid fromRef
         let aRaw = cdlCoefficient s
             aNorm = aRaw / activityNormalizationFactor thisDb cPid
@@ -2773,8 +2742,8 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     planGlobalUpdate fromEp toEp = case fromEp of
         Elsewhere _ ->
             Left $ MatrixError "global substitution requires the replaced activity (from) to live in the root database"
-        Here fromPid _ -> case toEp of
-            Here toPid _ -> planGlobalWithinDB unitCfg thisDb fromPid toPid
+        Here fromPid -> case toEp of
+            Here toPid -> planGlobalWithinDB unitCfg thisDb fromPid toPid
             Elsewhere toRef -> do
                 v <- requireConsumers thisDb fromPid
                 let links =
@@ -2783,8 +2752,8 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                         ]
                 Right $ GlobalRankOneUpdate [(fromIntegral fromPid, 1.0)] v links
 
-    virtualLinkTo cPid toRef =
-        mkVirtualLink thisDb cPid (drDb toRef) (drDbName toRef) (drUUIDs toRef) (drPid toRef)
+    virtualLinkTo :: ProcessId -> DepRef -> Double -> CrossDBLink
+    virtualLinkTo = mkVirtualLink thisDb
 
     requireTech sub cPid fromPid =
         maybe (Left $ noTechLink sub cPid) Right $
@@ -2835,10 +2804,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     resolveEndpoint :: Text -> Text -> IO (Either ServiceError Endpoint)
     resolveEndpoint refDb pidText
         | refDb == thisDbName =
-            pure $ case resolveScorable thisDb pidText of
-                Left e -> Left e
-                Right (p, _) ->
-                    Right $ Here p (dbProcessIdTable thisDb V.! fromIntegral p)
+            pure $ Here . fst <$> resolveScorable thisDb pidText
         | otherwise = do
             mPair <- depLookup refDb
             pure $ case mPair of
@@ -2872,24 +2838,15 @@ mkVirtualLink ::
     Database ->
     -- | consumer's root ProcessId
     ProcessId ->
-    -- | dep DB (supplier side)
-    Database ->
-    -- | dep DB name
-    Text ->
-    -- | supplier's (actUUID, prodUUID) in dep DB
-    (UUID, UUID) ->
-    -- | supplier's dep-DB ProcessId
-    ProcessId ->
+    -- | the supplier, in its own dependency database
+    DepRef ->
     -- | raw exchange coefficient (pre-normalization)
     Double ->
     CrossDBLink
-mkVirtualLink rootDb consumerPid depDb depDbName supUUIDs supPid coef =
+mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drUUIDs = (supActU, supProdU)} coef =
     let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
         supAct = dbActivities depDb V.! fromIntegral supPid
-        refUnit = case [ex | ex <- exchanges supAct, exchangeIsReference ex, not (exchangeIsInput ex)] of
-            (ex : _) -> getUnitNameForExchange (dbUnits depDb) ex
-            [] -> ""
-        (supActU, supProdU) = supUUIDs
+        refUnit = maybe "" (getUnitNameForExchange (dbUnits depDb)) (L.find isReferenceOutput (exchanges supAct))
      in CrossDBLink
             { cdlConsumerActUUID = cActU
             , cdlConsumerProdUUID = cProdU
@@ -2926,16 +2883,15 @@ findStaticCrossDBLink rootDb consumerPid depDbName depSupUUIDs =
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
 findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double
 findTechCoefficient db consumer supplier =
-    let techTriples = dbTechnosphereTriples db
-        consumerIdx = fromIntegral consumer :: Int32
-        supplierIdx = fromIntegral supplier :: Int32
-        matching =
-            U.filter
-                (\(SparseTriple row col _) -> row == supplierIdx && col == consumerIdx)
-                techTriples
-     in if U.null matching
-            then Nothing
-            else let SparseTriple _ _ val = U.head matching in Just val
+    coefficient <$> U.find isWanted (dbTechnosphereTriples db)
+  where
+    consumerIdx, supplierIdx :: Int32
+    consumerIdx = fromIntegral consumer
+    supplierIdx = fromIntegral supplier
+    isWanted :: SparseTriple -> Bool
+    isWanted (SparseTriple row col _) = row == supplierIdx && col == consumerIdx
+    coefficient :: SparseTriple -> Double
+    coefficient (SparseTriple _ _ val) = val
 
 {- | Find all activities that transitively depend on a given supplier.
 BFS through the technosphere matrix tracking depth; optional max-depth cap.
