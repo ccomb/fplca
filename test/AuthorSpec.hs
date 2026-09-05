@@ -5,7 +5,7 @@
 'Database.Edit.replaceActivities').
 
 Authoring is the strict counterpart of importing. Where the loader warns and
-drops a row it cannot resolve, authoring refuses — so most of what follows is
+drops a row it cannot resolve, authoring refuses, so most of what follows is
 one red case per refusal, plus the two properties that make repeated authoring
 safe: identity is a function of what was written (author twice, get the same
 key), and writing then deleting leaves the activity set it started from.
@@ -51,6 +51,7 @@ import Types (
     Exchange (..),
     LocationSource (..),
     Pedigree (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -573,7 +574,7 @@ resolveOrFail db authored = case validateAuthored (contextOf db) [authored] of
 contextOf :: Database -> AuthorContext
 contextOf db = AuthorContext{acDb = db, acDeps = [], acUnitConfig = defaultUnitConfig}
 
--- | The same database with no activities — used to prove a dependency link resolves.
+-- | The same database with no activities, used to prove a dependency link resolves.
 emptyOf :: Database -> Database
 emptyOf db = db{dbActivities = V.empty, dbProcessIdTable = V.empty, dbProcessIdLookup = M.empty}
 
@@ -666,7 +667,7 @@ air = Compartment{compartmentName = "air", compartmentSub = Nothing}
 -- ---------------------------------------------------------------------------
 
 {- | Everything about an activity except its inventory. An edit must carry all
-of it through untouched — and it is exactly what a re-description would lose,
+of it through untouched, and it is exactly what a re-description would lose,
 since an authored activity has none of it to state.
 -}
 type ActivityFacts =
@@ -818,7 +819,7 @@ importedActivity =
 buildFixture :: IO Database
 buildFixture = buildFixtureAt supplierActId supplierProdId
 
-{- | The same fixture with the supplier under chosen UUIDs — high ones sort
+{- | The same fixture with the supplier under chosen UUIDs, high ones sort
 after any authored key, which forces a renumbering on insert.
 -}
 buildFixtureAt :: UUID -> UUID -> IO Database
@@ -826,19 +827,21 @@ buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            ( M.fromList
-                [ ((actId, prodId), supplierActivityAt actId prodId)
-                , ((treatActId, usedOilId), treatmentActivity)
-                ]
-            )
-            ( M.fromList
-                [ (prodId, milkFlowAt prodId)
-                , (usedOilId, usedOilFlow)
-                ]
-            )
-            (M.singleton co2Id co2Flow)
-            (M.singleton usedOilId usedOilWasteFlow)
-            unitTable
+            SimpleDatabase
+                { sdbActivities =
+                    M.fromList
+                        [ ((actId, prodId), supplierActivityAt actId prodId)
+                        , ((treatActId, usedOilId), treatmentActivity)
+                        ]
+                , sdbTechFlows =
+                    M.fromList
+                        [ (prodId, milkFlowAt prodId)
+                        , (usedOilId, usedOilFlow)
+                        ]
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.singleton usedOilId usedOilWasteFlow
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 {- | The same fixture with a second product on the treatment, so its activity
@@ -850,24 +853,26 @@ buildTwoProductTreatment = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            ( M.fromList
-                [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
-                , ((treatActId, usedOilId), treatmentWithHeat)
-                , ((treatActId, heatId), treatmentWithHeat)
-                ]
-            )
-            ( M.fromList
-                [ (supplierProdId, milkFlowAt supplierProdId)
-                , (usedOilId, usedOilFlow)
-                , (heatId, heatFlow)
-                ]
-            )
-            (M.singleton co2Id co2Flow)
-            (M.singleton usedOilId usedOilWasteFlow)
-            unitTable
+            SimpleDatabase
+                { sdbActivities =
+                    M.fromList
+                        [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
+                        , ((treatActId, usedOilId), treatmentWithHeat)
+                        , ((treatActId, heatId), treatmentWithHeat)
+                        ]
+                , sdbTechFlows =
+                    M.fromList
+                        [ (supplierProdId, milkFlowAt supplierProdId)
+                        , (usedOilId, usedOilFlow)
+                        , (heatId, heatFlow)
+                        ]
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.singleton usedOilId usedOilWasteFlow
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
-{- | A database that declares no biosphere flow at all — bio vocabulary can
+{- | A database that declares no biosphere flow at all, bio vocabulary can
 only come from a dependency.
 -}
 buildBareFixture :: IO Database
@@ -877,11 +882,13 @@ buildBareFixture = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            (M.singleton (supplierActId, supplierProdId) noBio)
-            (M.singleton supplierProdId (milkFlowAt supplierProdId))
-            M.empty
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) noBio
+                , sdbTechFlows = M.singleton supplierProdId (milkFlowAt supplierProdId)
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID

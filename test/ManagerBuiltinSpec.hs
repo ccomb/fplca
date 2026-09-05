@@ -5,13 +5,13 @@ module ManagerBuiltinSpec (spec) where
 import Config (defaultConfig)
 import Control.Concurrent.STM (readTVarIO)
 import qualified Data.Map.Strict as M
-import Database.Manager (DatabaseManager (..), initDatabaseManager)
+import Database.Manager (CachePolicy (..), DatabaseManager (..), initDatabaseManager)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "initDatabaseManager with the built-in defaults" $
     it "loads the four built-in tables and the geographies without a file in sight" $ do
-        manager <- initDatabaseManager defaultConfig True
+        manager <- initDatabaseManager defaultConfig NoCache
         comps <- readTVarIO (dmLoadedCompMaps manager)
         units <- readTVarIO (dmLoadedUnitDefs manager)
         syns <- readTVarIO (dmLoadedFlowSyns manager)

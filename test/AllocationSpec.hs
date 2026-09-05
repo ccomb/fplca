@@ -507,7 +507,7 @@ withTwoOutputDataset k = withSystemTempDirectory "es2-two-outputs" $ \dir -> do
     BS.writeFile (dir </> "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.spold") twoOutputsXml
     loaded <- loadDatabaseWithLocationAliases (defaultLoadOptions defaultUnitConfig) dir
     simpleDb <- either (fail . T.unpack) pure loaded
-    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) (sdbActivities simpleDb) (sdbTechFlows simpleDb) (sdbBioFlows simpleDb) (sdbWasteFlows simpleDb) (sdbUnits simpleDb)
+    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) simpleDb
     db <- either (fail . T.unpack) pure built
     k (simpleDb, db)
 

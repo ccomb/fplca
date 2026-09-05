@@ -9,7 +9,7 @@ Delete is reconstruction over an immutable 'Database':
 * deleting a set of ProcessIds drops exactly those activities and renumbers the
   survivors, rebuilding the interning tables, indexes, and sparse matrices;
 * an exchange in a surviving activity that pointed at a deleted activity is
-  UNLINKED (activity link reset to nil), never silently dropped — the database
+  UNLINKED (activity link reset to nil), never silently dropped: the database
   is left ready for relinking;
 * the selection resolver computes @(filtered ∪ extra) \\ keep@, so the UI's
   "delete the whole filtered set" honours per-row checkbox overrides;
@@ -41,6 +41,7 @@ import Database.Edit (
     resolveDeleteSelection,
  )
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     LoadedDatabase (..),
     initDatabaseManager,
@@ -56,6 +57,7 @@ import Types (
     GeographyPolicy (..),
     LocationSource (..),
     ProcessId,
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -142,7 +144,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Left err -> expectationFailure ("deleteActivities failed: " <> show err)
                 Right db' -> do
                     -- The mid activity kept its input exchange, but the link to
-                    -- the deleted supplier is now nil — ready for relinking.
+                    -- the deleted supplier is now nil, ready for relinking.
                     let midInputLinks =
                             [ (techActivityLinkId ex, techProcessLinkId ex)
                             | act <- V.toList (dbActivities db')
@@ -201,7 +203,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
 
     describe "deleteActivitiesInDB (filter-driven, in-place)" $ do
         it "deletes the whole filtered set and respects keep" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 600)
             installLoaded manager "edit-me" db
             -- Filter matches the two "food" activities; keep one by its
@@ -224,7 +226,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                         `shouldSatisfy` elem "food-A"
 
         it "fails loudly on an unknown keep process id" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 700)
             installLoaded manager "edit-me-2" db
             r <-
@@ -237,7 +239,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected unknown keep id to fail"
 
         it "fails when the database is not loaded" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             r <- deleteActivitiesInDB manager "ghost" emptyDelete
             fmap doRemoved r `shouldBe` Left "Database not loaded: ghost"
 
@@ -245,7 +247,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             -- Deleting from "base" would renumber/remove activities that the loaded
             -- "dependent" links to across databases; those links would then silently
             -- drop at solve time. The delete must be refused, mirroring unloadDatabase.
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             base <- buildOrFail (classifiedDB 800)
             installLoaded manager "base" base
             dep <- buildOrFail (classifiedDB 900)
@@ -261,7 +263,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
 
     describe "deleteActivitiesInDB (delete exactly these ids)" $ do
         it "deletes exactly the listed process ids, no base filter" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1000)
             installLoaded manager "by-ids" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1001) (mkUUID 1001))
@@ -277,7 +279,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                         `shouldNotSatisfy` elem "food-A"
 
         it "refuses ids combined with a filter field" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1100)
             installLoaded manager "by-ids-2" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1101) (mkUUID 1101))
@@ -291,7 +293,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected ids+filter to be refused"
 
         it "fails loudly on an unknown id" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1200)
             installLoaded manager "by-ids-3" db
             r <- deleteActivitiesInDB manager "by-ids-3" emptyDelete{drIds = Just ["not-a-real-process-id"]}
@@ -300,7 +302,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected unknown id to fail"
 
         it "refuses ids combined with exact (it would silently do nothing)" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1300)
             installLoaded manager "by-ids-4" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1301) (mkUUID 1301))
@@ -310,7 +312,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected ids+exact to be refused"
 
         it "composes ids with keep and extra: (ids ∪ extra) \\ keep" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1400)
             installLoaded manager "by-ids-5" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1401) (mkUUID 1401))
@@ -332,7 +334,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
         it "deletes only the extras when ids is the empty selection" $ do
             -- The official replacement for the old "unsatisfiable filter +
             -- extra" hack: an empty ids selection plus explicit extras.
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1500)
             installLoaded manager "by-ids-6" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1501) (mkUUID 1501))
@@ -414,7 +416,16 @@ mkConfig name =
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) acts flows M.empty M.empty units
+    r <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = acts
+                , sdbTechFlows = flows
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = units
+                }
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)
@@ -488,7 +499,7 @@ inputFrom supplierActUUID supplierProdUUID =
         }
 
 {- | A waste output linking to a treatment activity's
-@(treatmentActUUID, treatmentProdUUID)@ — the same @(activityLink, flowId)@
+@(treatmentActUUID, treatmentProdUUID)@, the same @(activityLink, flowId)@
 key resolution a technosphere input uses.
 -}
 wasteOut :: UUID -> UUID -> Exchange

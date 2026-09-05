@@ -13,11 +13,11 @@ convention is uniform, so the only realistic way to mix them is
 cross-database: an ecoinvent-style orphan waste OUTPUT resolved to a
 background treatment in another DB via 'findWasteTreatmentAcrossDatabases'.
 That path scores through the dep-demand solve ('accumulateDepDemandsWith'),
-NOT the static technosphere triples — and the dep-demand path applies no
+NOT the static technosphere triples, and the dep-demand path applies no
 input/output sign, only 'cdlCoefficient'.
 
 A correctly treated 3 kg of waste at 2 kg CO2 / kg MUST contribute +6 kg CO2 in
-every case — treating waste adds burden, it never subtracts it.
+every case: treating waste adds burden, it never subtracts it.
 -}
 module WasteTreatmentSignSpec (spec) where
 
@@ -153,11 +153,13 @@ buildDB :: T.Text -> M.Map (UUID, UUID) Activity -> IO Database
 buildDB name acts =
     buildDatabaseWithMatrices
         (BuildInputs defaultUnitConfig mempty Declared)
-        acts
-        techFlowDB
-        (M.singleton co2 co2Flow)
-        wasteFlowDB
-        (M.singleton kgU (Unit kgU "kg" "kg" ""))
+        SimpleDatabase
+            { sdbActivities = acts
+            , sdbTechFlows = techFlowDB
+            , sdbBioFlows = M.singleton co2 co2Flow
+            , sdbWasteFlows = wasteFlowDB
+            , sdbUnits = M.singleton kgU (Unit kgU "kg" "kg" "")
+            }
         >>= either (\e -> fail (T.unpack name <> ": " <> T.unpack e)) pure
 
 co2Of :: M.Map UUID Double -> Double

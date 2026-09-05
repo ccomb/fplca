@@ -6,12 +6,12 @@ inverse of 'EcoSpold.Parser2'.
 We exercise three properties against a self-contained fixture 'SimpleDatabase'
 built in Haskell:
 
-  (a) __idempotence modulo volatile metadata__ — @write(D)@ then
+  (a) __idempotence modulo volatile metadata__: @write(D)@ then
       @write(parse(write(D)))@ produce byte-identical output once volatile
       metadata is excluded (we exclude it by writing with 'noVolatileMeta').
-  (b) __semantic round-trip__ — @parse(write(D))@ is structurally equal to @D@
+  (b) __semantic round-trip__: @parse(write(D))@ is structurally equal to @D@
       (order-insensitive on exchanges/flows).
-  (c) __score-equivalence__ — @parse(write(D))@ yields the same LCIA inventory
+  (c) __score-equivalence__: @parse(write(D))@ yields the same LCIA inventory
       (the engine's matrix-level score input) as @D@ within tolerance.
 
 The fixture is constructed directly rather than loaded from a bundled
@@ -19,7 +19,7 @@ The fixture is constructed directly rather than loaded from a bundled
 reuses a single @unitId@ across flows with *different* unit-name strings (a
 degenerate-input stress test for the parser). The loader collapses those to
 one unit per UUID in name-resolution order, which depends on filename
-ordering — a property of the loader on malformed input, not of the writer.
+ordering, a property of the loader on malformed input, not of the writer.
 A clean fixture (one name per unit UUID, distinct flow UUIDs) isolates the
 writer's own determinism, which is what this spec asserts.
 -}
@@ -301,13 +301,7 @@ fixtureWasteCoproduct =
 buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
     res <-
-        buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty Declared)
-            (sdbActivities sdb)
-            (sdbTechFlows sdb)
-            (sdbBioFlows sdb)
-            (sdbWasteFlows sdb)
-            (sdbUnits sdb)
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) sdb
     case res of
         Left err -> error $ "matrix build failed: " ++ T.unpack err
         Right db -> pure db
@@ -401,7 +395,7 @@ spec = describe "EcoSpold2 writer round-trip" $ do
 
     -- Regression: the subtlest inversion paths. renderWaste maps waIsInput to
     -- inputGroup 5 / outputGroup 2, and a coproduct goes to outputGroup 2 too
-    -- (the Waste classification, not the group, distinguishes them) — both must
+    -- (the Waste classification, not the group, distinguishes them), both must
     -- survive write→parse rather than flip direction or role.
     it "round-trips waste direction (in/out) and a coproduct" $ do
         sdb' <- roundTrip fixtureWasteCoproduct
@@ -437,7 +431,7 @@ spec = describe "EcoSpold2 writer round-trip" $ do
         it "rejects an exchange whose flow is absent from the registry" $
             -- `land` is not in the single-flow biosphere registry, so the writer
             -- would emit a nameless, compartment-less exchange (name degrading to
-            -- the bare UUID) — symmetric to the missing-unit downgrade above.
+            -- the bare UUID), symmetric to the missing-unit downgrade above.
             checkEcoSpold2Exportable
                 (fixtureWithExchange (BiosphereExchange land 1.0 unitKg Emission "" Nothing Nothing))
                 `shouldSatisfy` isLeft

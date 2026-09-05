@@ -7,18 +7,18 @@
 The fixture 'SimpleDatabase' is built in Haskell using the very UUID generators
 the parser feeds its flows/units/activities through ('generateFlowUUID',
 'generateUnitUUID', 'generateActivityUUID'), so @parse (write D)@ reconstructs
-the same identities — no committed binary fixture, and no dependence on the
+the same identities: no committed binary fixture, and no dependence on the
 cross-database link pass (technosphere links are left @nil@, exactly the state
 the parser produces for a freshly imported workbook).
 
 Three contracts are proven:
 
-  (a) /logical-cell idempotence/ — re-exporting the parsed content yields the
+  (a) /logical-cell idempotence/: re-exporting the parsed content yields the
       same worksheet rows. Byte identity is not attempted (zip metadata is
       volatile); we compare the parsed-then-rewritten logical cells.
-  (b) /semantic round-trip/ — @parse (write D)@ is structurally equal to @D@,
+  (b) /semantic round-trip/: @parse (write D)@ is structurally equal to @D@,
       order-insensitively (activities, exchanges, flows, units).
-  (c) /score equivalence/ — the biosphere inventory of a sample activity is
+  (c) /score equivalence/: the biosphere inventory of a sample activity is
       preserved across the round-trip, within tolerance, using the engine's
       matrix solver.
 -}
@@ -174,7 +174,7 @@ spec = describe "BrightwayExcel.Writer" $ do
         it "(i) canonicalizes a non-canonical reference unit, then is a fixed point" $
             -- The parser normalizes a reference product's unit to canonical at
             -- ingest (g→kg here, scaling 1000→1). So parse(write D) ≠ D for a
-            -- non-canonical reference unit — the contract is fixed-point over the
+            -- non-canonical reference unit: the contract is fixed-point over the
             -- parser's image: a second round-trip reproduces the first exactly.
             withWritten gramRefDb $
                 parseBrightwayExcel gramConfig >=> \case
@@ -189,7 +189,7 @@ spec = describe "BrightwayExcel.Writer" $ do
         it "(j) round-trips a single-paragraph activity description" $
             -- The writer newline-joins 'activityDescription' into the one comment
             -- the format allows; the parser reads it back as a one-element list.
-            -- A single paragraph is therefore a fixed point — the realistic case,
+            -- A single paragraph is therefore a fixed point, the realistic case,
             -- since the parser's own image has ≤1 element (see 'activityRows').
             withWritten describedDb $
                 parseBrightwayExcel defaultUnitConfig >=> \case
@@ -227,7 +227,7 @@ spec = describe "BrightwayExcel.Writer" $ do
         it "rejects a reference input rather than round-tripping it to a duplicated row" $ do
             -- Brightway has no marker for a reference input. Emitting it would
             -- re-parse to a synthetic reference product (from the meta row) PLUS an
-            -- ordinary input (from the data row) — two exchanges on one flow, whose
+            -- ordinary input (from the data row): two exchanges on one flow, whose
             -- duplicate (i,j) matrix entries sum and double the coefficient.
             let db =
                     refInputDb
@@ -489,7 +489,7 @@ refInputDb =
 
 {- | The base fixture with a comment attached to its reference product, its
 technosphere input, and its biosphere emission, to prove exchange-level comments
-survive the round-trip — including on production rows ('productRowOut').
+survive the round-trip, including on production rows ('productRowOut').
 -}
 commentDb :: SimpleDatabase
 commentDb =
@@ -836,7 +836,7 @@ rebuild (acts, techDB, bioDB, wasteDB, unitDB) =
 
 {- | The deterministic logical cells the writer would emit for a database: the
 per-activity 'activityRows' (which already carry every value the format records,
-addressed by column). Comparing these is the logical-cell idempotence contract —
+addressed by column). Comparing these is the logical-cell idempotence contract:
 byte identity of the zip is deliberately not required.
 -}
 logicalCells :: SimpleDatabase -> [[[Cell]]]
@@ -853,13 +853,7 @@ logicalCells db =
 co2Inventory :: SimpleDatabase -> IO (Either Text (Maybe Double))
 co2Inventory sdb = do
     built <-
-        buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty Declared)
-            (sdbActivities sdb)
-            (sdbTechFlows sdb)
-            (sdbBioFlows sdb)
-            (sdbWasteFlows sdb)
-            (sdbUnits sdb)
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) sdb
     case built of
         Left err -> pure (Left err)
         Right db -> do

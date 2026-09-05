@@ -48,7 +48,7 @@ import App.Env (AppEnv (..), runApp)
 import Config (DatabaseConfig (..), defaultConfig)
 import Control.Exception (bracket_)
 import Database (buildDatabaseWithMatrices)
-import Database.Manager (DatabaseManager (..), LoadedDatabase (..), initDatabaseManager)
+import Database.Manager (CachePolicy (..), DatabaseManager (..), LoadedDatabase (..), initDatabaseManager)
 import Database.Upload (DatabaseFormat (..))
 import SharedSolver (createSharedSolver)
 import Types (
@@ -62,6 +62,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -366,7 +367,7 @@ withDb mkConfig act =
         bracket_ (setEnv "VOLCA_DATA_DIR" root) (unsetEnv "VOLCA_DATA_DIR") $ do
             let dataDir = root </> "uploads" </> "databases" </> "authored" </> "data"
             createDirectoryIfMissing True dataDir
-            dbm <- initDatabaseManager defaultConfig True
+            dbm <- initDatabaseManager defaultConfig NoCache
             db <- buildFixture
             solver <- createSharedSolver "authored" (triplesOf db) (fromIntegral (dbActivityCount db))
             let config = mkConfig "authored" dataDir
@@ -435,7 +436,7 @@ emission =
         , beComment = Nothing
         }
 
-{- | The identity the engine will mint for an activity input — the same
+{- | The identity the engine will mint for an activity input, the same
 function 'Database.Author' uses, restated here as the caller's expectation
 rather than borrowed, so a change to the minting rule fails this test loudly.
 -}
@@ -454,11 +455,13 @@ buildFixture = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            (M.singleton (supplierActId, supplierProdId) milkActivity)
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) milkActivity
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID

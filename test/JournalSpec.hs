@@ -53,6 +53,7 @@ import Types (
     Database (..),
     Exchange (..),
     LocationSource (..),
+    SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -310,7 +311,7 @@ usedOilOut =
     AuthoredWasteOutput{awProvider = supplierPid, awAmount = 0.2, awUnit = Nothing, awComment = Nothing}
 
 {- | One edit of every kind an inventory edit records, each with the number of
-exchanges it matched — including a selector that named more than one line.
+exchanges it matched, including a selector that named more than one line.
 -}
 editedInventory :: JournalOp
 editedInventory =
@@ -387,11 +388,13 @@ buildDepFixture = do
     built <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            (M.singleton (depActId, depProdId) depActivity)
-            (M.singleton depProdId wheatFlow)
-            M.empty
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = M.singleton (depActId, depProdId) depActivity
+                , sdbTechFlows = M.singleton depProdId wheatFlow
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure built
 
 buildFixture :: IO Database
@@ -399,11 +402,13 @@ buildFixture = do
     built <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty Declared)
-            (M.singleton (supplierActId, supplierProdId) supplierActivity)
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) supplierActivity
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure built
 
 mkUUID :: Int -> UUID

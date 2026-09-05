@@ -11,14 +11,14 @@ write→parse cycle has a fair fixed point to land on.
 
 Three properties are pinned:
 
-  (a) idempotence modulo volatile metadata — @write(D)@ then
+  (a) idempotence modulo volatile metadata: @write(D)@ then
       @write(parse(write(D)))@ produce byte-identical output (the version
       banner is the only volatile field and it is pinned by 'WriterConfig');
 
-  (b) semantic round-trip — @parse(write(D))@ is structurally equal to @D@,
+  (b) semantic round-trip: @parse(write(D))@ is structurally equal to @D@,
       order-insensitively, on activities, flows and units;
 
-  (c) score-equivalence — @parse(write(D))@ yields the same biosphere
+  (c) score-equivalence: @parse(write(D))@ yields the same biosphere
       inventory (the LCIA-precursor vector) as @D@ within tolerance, via the
       engine's 'computeInventoryMatrix'.
 -}
@@ -277,7 +277,7 @@ data ActivityShape = ActivityShape
 
 {- | (kind, flow-name, unit-name, rounded-amount, is-input, is-reference,
 comment, pedigree). Comment and pedigree are carried so the semantic
-round-trip (property b) actually pins them — without them the per-exchange
+round-trip (property b) actually pins them: without them the per-exchange
 metadata could be silently dropped on parse-back and the test would not notice.
 -}
 data ExchangeShape = ExchangeShape
@@ -334,7 +334,16 @@ across the round-trip, but keying by name is robust either way).
 inventoryByName :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> Text -> IO (M.Map Text Double)
 inventoryByName (acts, tech, bio, waste, units) target = do
     let actMap = M.fromList [(activityKey a, a) | a <- acts]
-    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) actMap tech bio waste units
+    built <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty Declared)
+            SimpleDatabase
+                { sdbActivities = actMap
+                , sdbTechFlows = tech
+                , sdbBioFlows = bio
+                , sdbWasteFlows = waste
+                , sdbUnits = units
+                }
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right db -> do
@@ -595,7 +604,7 @@ spec = describe "SimaPro.Writer round-trip" $ do
 -- Emission-medium guard fixture
 -- ---------------------------------------------------------------------------
 
-{- | A distinct, valid UUID for a fixture, built totally from a tag — no partial
+{- | A distinct, valid UUID for a fixture, built totally from a tag, no partial
 'read' that would crash the suite on a typo.
 -}
 testUUID :: Word32 -> UUID
@@ -688,7 +697,7 @@ allocationDb =
 
 {- | A 0%-allocated activity: its shared material input is stored at 0 (the parser
 scaled every shared amount by allocFraction = 0 on import). A correct writer emits
-that 0 as-is — no divide-by-zero — so the re-import scales 0 by 0 back to 0.
+that 0 as-is (no divide-by-zero) so the re-import scales 0 by 0 back to 0.
 -}
 zeroAllocationDb :: SimpleDatabase
 zeroAllocationDb =
@@ -822,7 +831,7 @@ gUnit = testUUID 0x53
 refProd :: Exchange
 refProd = TechnosphereExchange gProd 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
--- | A second reference product (on the material flow) — an invalid second head.
+-- | A second reference product (on the material flow), an invalid second head.
 refProd2 :: Exchange
 refProd2 = TechnosphereExchange gMat 1.0 gUnit ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
 
