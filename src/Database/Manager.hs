@@ -505,8 +505,10 @@ instance FromJSON DatabaseStatus where
             <*> v .:? "dsDependsOn" A..!= []
             -- A status written before the key was on the wire describes a
             -- database divided the way its source declares, which is what it
-            -- was; an unreadable word means the same rather than a guess.
-            <*> (either (const Declared) id . parseAllocationKey <$> v .:? "dsAllocation" A..!= "declared")
+            -- was. A word this client cannot read is not that: showing
+            -- "declared" beside shares some other key produced is the silent
+            -- misreading the field was put on the wire to end.
+            <*> (v .:? "dsAllocation" A..!= "declared" >>= either (fail . T.unpack) pure . parseAllocationKey)
             <*> v .:? "dsSource"
 
 -- | Status of a method collection (e.g., EF-3.1) for API responses

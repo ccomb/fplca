@@ -50,8 +50,16 @@
 
   A key that divides no block of the source is refused, naming both numbers:
   such a load is that database under a second name, costing a second database
-  in memory and a second matrix cache on disk. An unreadable key is refused
-  with the list of keys there are, never read as `declared`.
+  in memory and a second matrix cache on disk. So is the key the source
+  already reads under, before the load rather than after it: that duplicate is
+  the one no count of divided blocks can see, since dividing the same blocks a
+  second time divides them just as well. An unreadable key is refused with the
+  list of keys there are, never read as `declared` -- in a `meta.toml` either,
+  where it now leaves the database out of the listing and says so, rather than
+  handing back declared shares under a name promising otherwise.
+
+  A database's recorded source is the same before and after a restart: a copy
+  named none in memory and its own source's name once read back.
 
   The key a database was divided under, and the source whose files it reads,
   now travel with its status, so a column of shares can say whether the source

@@ -29,7 +29,6 @@ module Database.UploadedDatabase (
 
 import Control.Exception (SomeException, try)
 import Control.Monad (filterM, forM)
-import Data.Either (fromRight)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -42,7 +41,8 @@ import Text.Read (readMaybe)
 
 -- Re-export DatabaseFormat from Database.Upload (single definition)
 import Database.Upload (DatabaseFormat (..))
-import Types (AllocationKey (..), allocationKeyText, parseAllocationKey)
+import Progress (ProgressLevel (..), reportProgress)
+import Types (AllocationKey, allocationKeyText, parseAllocationKey)
 
 -- | Metadata for an uploaded database
 data UploadMeta = UploadMeta
@@ -164,6 +164,15 @@ parseMetaToml content = do
     format <- getValue "format" >>= parseFormat . unquote
     dataPath <- T.unpack . unquote <$> getValue "dataPath"
 
+    -- A key nobody wrote is the declared one, which is what every file
+    -- written before this field existed means. A key nobody can read stops
+    -- the whole file: dividing a database on a guess would restate its
+    -- inventory in silence, where a database the scan refuses is named in
+    -- the log and still on disk for a binary that knows the key.
+    allocation <-
+        either (const Nothing) Just $
+            parseAllocationKey (maybe "declared" unquote (getValue "allocation"))
+
     return
         UploadMeta
             { umVersion = version
@@ -173,11 +182,7 @@ parseMetaToml content = do
             , umDataPath = dataPath
             , umDepends = maybe [] parseStringList (getValue "depends")
             , umSource = unquote <$> getValue "source"
-            , -- A key nobody wrote is the declared one, which is what every
-              -- file written before this field existed means. A key nobody
-              -- can read is refused for the same reason: dividing a database
-              -- on a guess would restate its inventory in silence.
-              umAllocation = fromRight Declared (parseAllocationKey (maybe "declared" unquote (getValue "allocation")))
+            , umAllocation = allocation
             }
 
 {- | Undo the escaping 'formatMetaToml' writes, so a value survives the round
@@ -269,9 +274,11 @@ scanUploadsIn dir = do
             dirsOnly <- filterM (doesDirectoryExist . snd) fullPaths
             results <- forM dirsOnly $ \(slug, dirPath) -> do
                 maybeMeta <- readUploadMeta dirPath
-                return $ case maybeMeta of
-                    Just meta -> Just (slug, dirPath, meta)
-                    Nothing -> Nothing
+                case maybeMeta of
+                    Just meta -> pure (Just (slug, dirPath, meta))
+                    Nothing ->
+                        Nothing
+                            <$ reportProgress Warning (dirPath <> ": meta.toml could not be read, the database is left out")
             return (catMaybes results)
 
 {- | Discover all uploaded databases by scanning the uploads directory
