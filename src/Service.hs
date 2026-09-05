@@ -158,10 +158,7 @@ findActivityByProcessId db processId =
 
 -- | Resolve activity query using ProcessId format with UUID fallback for compatibility
 resolveActivityByProcessId :: Database -> Text -> Either ServiceError Activity
-resolveActivityByProcessId db queryText =
-    case resolveActivityAndProcessId db queryText of
-        Right (_processId, activity) -> Right activity
-        Left err -> Left err
+resolveActivityByProcessId db = fmap snd . resolveActivityAndProcessId db
 
 {- | Resolve an activity that is about to be scored. One the allocation gate
 refused resolves for inspection, never for a score: the refusal names what is
@@ -2362,17 +2359,17 @@ validateAnchorDbs depLookup rootDbObj rootDb subs = do
         then pure (Right ())
         else do
             reachable <- reachableDepDbs depLookup rootDbName rootDbObj
-            let unreachable = externalAnchorDbs `S.difference` reachable
-            case S.toList unreachable of
-                [] -> pure (Right ())
-                (d : _) -> do
-                    mLoad <- depLookup d
-                    pure $ Left $ MatrixError $ case mLoad of
-                        Nothing -> "substitution consumer references unloaded database: " <> d
-                        Just _ ->
-                            "substitution consumer database '"
-                                <> d
-                                <> "' is not reachable from root database's dep-graph"
+            maybe (pure (Right ())) refuse (S.lookupMin (externalAnchorDbs `S.difference` reachable))
+  where
+    refuse :: Text -> IO (Either ServiceError ())
+    refuse d = do
+        mLoad <- depLookup d
+        pure $ Left $ MatrixError $ case mLoad of
+            Nothing -> "substitution consumer references unloaded database: " <> d
+            Just _ ->
+                "substitution consumer database '"
+                    <> d
+                    <> "' is not reachable from root database's dep-graph"
 
 {- | BFS the loaded portion of the dep-DB DAG from @rootDbName@. Returns
 the set of DB names that are statically reachable via 'dbCrossDBLinks'
@@ -2926,16 +2923,15 @@ findStaticCrossDBLink rootDb consumerPid depDbName depSupUUIDs =
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
 findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double
 findTechCoefficient db consumer supplier =
-    let techTriples = dbTechnosphereTriples db
-        consumerIdx = fromIntegral consumer :: Int32
-        supplierIdx = fromIntegral supplier :: Int32
-        matching =
-            U.filter
-                (\(SparseTriple row col _) -> row == supplierIdx && col == consumerIdx)
-                techTriples
-     in if U.null matching
-            then Nothing
-            else let SparseTriple _ _ val = U.head matching in Just val
+    coefficient <$> U.find isWanted (dbTechnosphereTriples db)
+  where
+    consumerIdx, supplierIdx :: Int32
+    consumerIdx = fromIntegral consumer
+    supplierIdx = fromIntegral supplier
+    isWanted :: SparseTriple -> Bool
+    isWanted (SparseTriple row col _) = row == supplierIdx && col == consumerIdx
+    coefficient :: SparseTriple -> Double
+    coefficient (SparseTriple _ _ val) = val
 
 {- | Find all activities that transitively depend on a given supplier.
 BFS through the technosphere matrix tracking depth; optional max-depth cap.
