@@ -3369,10 +3369,14 @@ setDataPath manager dbName newRelPath = runExceptT $ do
     -- Re-stage and return fresh setup info
     withExceptT setupErrorMessage $ ExceptT (getDatabaseSetupInfo manager dbName)
 
--- | Why a data path cannot be changed when the upload has lost its meta.toml.
+{- | Why a data path cannot be changed when the upload has lost its meta.toml.
+'UploadedDB.readUploadMeta' answers the same for a file that is absent, one
+that cannot be read and one that does not parse, so the message claims no more
+than it knows.
+-}
 noMetaMessage :: FilePath -> Text
 noMetaMessage uploadRoot =
-    "No meta.toml under "
+    "No readable meta.toml under "
         <> T.pack uploadRoot
         <> "; the data path would live in memory only and be lost at restart"
 
