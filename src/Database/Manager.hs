@@ -1421,9 +1421,7 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             -- reaches the native CAS bridge.
             let loaded = loaded0{ldDatabase = enrichBioFlowCAS (dmCasBindings manager) (ldDatabase loaded0)}
                 indexedDb = buildIndexedDatabaseFromDB (dcName dbConfig) llSynonyms (ldDatabase loaded)
-            atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert (dcName dbConfig) loaded)
-                modifyTVar' (dmIndexedDbs manager) (M.insert (dcName dbConfig) indexedDb)
+            atomically $ publishLoaded manager (dcName dbConfig) loaded indexedDb
             dbEnd <- getCurrentTime
             let !dbDuration = realToFrac (diffUTCTime dbEnd dbStart) :: Double
             reportProgressWithTiming Info ("  [OK] Loaded: " <> T.unpack (dcDisplayName dbConfig)) dbDuration
@@ -2150,9 +2148,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                         Left err -> return (Left err)
                         Right (loaded, origin) -> do
                             let indexedDb = buildIndexedDatabaseFromDB dbName synonymDB (ldDatabase loaded)
-                            atomically $ do
-                                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-                                modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+                            atomically $ publishLoaded manager dbName loaded indexedDb
                             clearMethodMappingCacheForDb manager dbName
                             reportProgress Info $ "  [OK] Loaded:" <> T.unpack (dcDisplayName dbConfig)
                             -- Auto-extract synonyms from biosphere flows
@@ -2554,11 +2550,8 @@ relinkDatabaseWith manager dbName aliases persistedDeps = withLogScope dbName $ 
                 result = roResult outcome
                 cacheChanged = roCacheChanged outcome
                 loaded' = loaded{ldDatabase = db'}
-            atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
-                modifyTVar'
-                    (dmIndexedDbs manager)
-                    (M.insert dbName (buildIndexedDatabaseFromDB dbName synonymDB db'))
+            atomically $
+                publishLoaded manager dbName loaded' (buildIndexedDatabaseFromDB dbName synonymDB db')
             clearMethodMappingCacheForDb manager dbName
             -- Persist the relinked Database back to its matrix cache so the
             -- next startup doesn't have to re-discover the same links or lose
@@ -2882,6 +2875,17 @@ removeDatabase manager dbName = do
         when cacheExists $ do
             removeFile zstdFile
             reportProgress Info $ "Deleted cache: " ++ zstdFile
+
+{- | Install a loaded database and the index built from it under one name.
+
+The two maps move together or not at all: a reader that finds the database
+without its index gets one that cross-database linking cannot see into, and
+nothing would report the gap.
+-}
+publishLoaded :: DatabaseManager -> Text -> LoadedDatabase -> IndexedDatabase -> STM ()
+publishLoaded manager dbName loaded indexedDb = do
+    modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
+    modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
 
 -- | Helper to remove database from in-memory maps only
 removeFromMemory :: DatabaseManager -> Text -> IO (Either Text ())
@@ -3587,8 +3591,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
         -- Move from staged to loaded
         atomically $ do
             modifyTVar' (dmStagedDbs manager) (M.delete dbName)
-            modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded)
-            modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+            publishLoaded manager dbName loaded indexedDb
         clearMethodMappingCacheForDb manager dbName
         -- Finalizing is the moment the dependency pin becomes the database's
         -- own; record it where a restart reads.
