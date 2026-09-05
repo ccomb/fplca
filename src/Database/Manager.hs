@@ -1748,13 +1748,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
         Right (dbRaw, source) -> do
             -- Initialize runtime fields (synonym DB and flow name index)
             let database = BM25.addBM25Index (initializeRuntimeFields dbRaw synonymDB)
-
-                -- Create shared solver with lazy factorization (deferred to first query)
-                techTriples = dbTechnosphereTriples database
-                activityCount = dbActivityCount database
-                techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]
-                activityCountInt = fromIntegral activityCount
-            sharedSolver <- createSharedSolver (dcName dbConfig) techTriplesInt activityCountInt
+            sharedSolver <- solverFor (dcName dbConfig) database
 
             return $
                 Right
@@ -2240,16 +2234,8 @@ replayEdits manager dbConfig loaded =
                             -- The rebuild resets the runtime indexes and moves
                             -- every matrix row, so both are made again here.
                             let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
-                                techTriplesInt =
-                                    [ (fromIntegral i, fromIntegral j, v)
-                                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
-                                    ]
                             clearCachedSolver (dcName dbConfig)
-                            solver <-
-                                createSharedSolver
-                                    (dcName dbConfig)
-                                    techTriplesInt
-                                    (fromIntegral (dbActivityCount withRuntime))
+                            solver <- solverFor (dcName dbConfig) withRuntime
                             pure (Right (loaded{ldDatabase = withRuntime, ldSharedSolver = solver}, Replayed))
 
 {- | Save the replayed database to its matrix cache and stamp the cache with
@@ -2872,6 +2858,16 @@ removeDatabase manager dbName = do
         when cacheExists $ do
             removeFile zstdFile
             reportProgress Info $ "Deleted cache: " ++ zstdFile
+
+{- | The solver for a database, over the technosphere triples it holds.
+Factorization is lazy, so this costs nothing until the first query.
+-}
+solverFor :: Text -> Database -> IO SharedSolver
+solverFor dbName db =
+    createSharedSolver
+        dbName
+        [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList (dbTechnosphereTriples db)]
+        (fromIntegral (dbActivityCount db))
 
 {- | Install a loaded database and the index built from it under one name.
 
@@ -3578,13 +3574,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
 
     publish :: StagedDatabase -> SynonymDB -> FinalizedBuild -> IO LoadedDatabase
     publish staged synonymDB FinalizedBuild{..} = do
-        -- Create shared solver with lazy factorization (deferred to first query)
-        let techTriplesInt =
-                [ (fromIntegral i, fromIntegral j, v)
-                | SparseTriple i j v <- U.toList (dbTechnosphereTriples fbDatabase)
-                ]
-        sharedSolver <-
-            createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount fbDatabase))
+        sharedSolver <- solverFor dbName fbDatabase
         let loaded =
                 LoadedDatabase
                     { ldDatabase = fbDatabase
