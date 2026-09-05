@@ -28,6 +28,7 @@ import qualified Data.Vector.Unboxed as U
 import Matrix (buildDemandVectorFromIndex)
 import Service (
     ServiceError (..),
+    Swap (..),
     computeScalingVectorWithSubstitutionsCrossDB,
     substitutionUnitFactor,
     technosphereRow,
@@ -128,8 +129,8 @@ spec = do
             -- electricity is in MJ, steel in kg — energy vs mass, no conversion.
             case (activityByInfix db "electricity generation", activityByInfix db "steel production") of
                 (Just elec, Just steel) -> do
-                    substitutionUnitFactor defaultUnitConfig db elec steel `shouldSatisfy` isLeft
-                    substitutionUnitFactor defaultUnitConfig db elec elec `shouldSatisfy` isRightNear 1.0
+                    substitutionUnitFactor defaultUnitConfig db (Swap elec steel) `shouldSatisfy` isLeft
+                    substitutionUnitFactor defaultUnitConfig db (Swap elec elec) `shouldSatisfy` isRightNear 1.0
                 _ -> expectationFailure "SAMPLE.units missing electricity/steel activities"
 
 -- | A fresh 'SharedSolver' over a database's own technosphere triples.

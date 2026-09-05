@@ -2225,7 +2225,7 @@ resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
 resolveSpec db p = do
     consumerPid <- resolveRootOnly db (perConsumer p)
     supplierPid <- resolveRootOnly db (perSupplier p)
-    case findTechCoefficient db consumerPid supplierPid of
+    case findTechCoefficient db (TechLink consumerPid supplierPid) of
         Nothing ->
             Left $
                 "no technosphere link from consumer "
@@ -2554,6 +2554,25 @@ data GlobalRankOneUpdate = GlobalRankOneUpdate
     , gruExtras :: ![CrossDBLink]
     }
 
+{- | The two ends of one technosphere coefficient @A[supplier, consumer]@.
+Named because the ends are both a 'ProcessId': read the matrix at
+@A[consumer, supplier]@ and you get a well-formed answer about the wrong
+edge, which no test would notice.
+-}
+data TechLink = TechLink
+    { tlConsumer :: !ProcessId
+    , tlSupplier :: !ProcessId
+    }
+
+{- | A global substitution within one database: every consumer of @swapFrom@
+buys @swapTo@ instead. Two 'ProcessId's again, and swapping them inverts the
+unit factor κ rather than failing.
+-}
+data Swap = Swap
+    { swapFrom :: !ProcessId
+    , swapTo :: !ProcessId
+    }
+
 {- | The replaced supplier's technosphere row: every consumer that sources
 from @supplier@, paired with the (normalized) coefficient. Index space
 matches 'perturbA' / 'findTechCoefficient' (ProcessId == matrix index).
@@ -2595,8 +2614,8 @@ give @κ = 1@ (matching the per-edge path, which assumes same-unit
 suppliers). 'Left' when the two reference products are dimensionally
 incompatible — never a silently wrong coefficient.
 -}
-substitutionUnitFactor :: UnitConfig -> Database -> ProcessId -> ProcessId -> Either ServiceError Double
-substitutionUnitFactor unitCfg db fromPid toPid = do
+substitutionUnitFactor :: UnitConfig -> Database -> Swap -> Either ServiceError Double
+substitutionUnitFactor unitCfg db (Swap fromPid toPid) = do
     fromUnit <- maybe (Left $ noRefUnit fromPid) Right $ referenceProductUnit db fromPid
     toUnit <- maybe (Left $ noRefUnit toPid) Right $ referenceProductUnit db toPid
     -- Identical units are κ = 1 by definition, independent of the conversion
@@ -2614,10 +2633,10 @@ substitutionUnitFactor unitCfg db fromPid toPid = do
 removes it from every consumer; the @-κ@ at @to@ adds the unit-converted
 demand. No virtual links (both suppliers live in this DB).
 -}
-planGlobalWithinDB :: UnitConfig -> Database -> ProcessId -> ProcessId -> Either ServiceError GlobalRankOneUpdate
-planGlobalWithinDB unitCfg db fromPid toPid = do
+planGlobalWithinDB :: UnitConfig -> Database -> Swap -> Either ServiceError GlobalRankOneUpdate
+planGlobalWithinDB unitCfg db swap@(Swap fromPid toPid) = do
     v <- requireConsumers db fromPid
-    kappa <- substitutionUnitFactor unitCfg db fromPid toPid
+    kappa <- substitutionUnitFactor unitCfg db swap
     Right $ GlobalRankOneUpdate [(fromIntegral fromPid, 1.0), (fromIntegral toPid, negate kappa)] v []
 
 {- | Apply all substitutions whose consumer lives in @thisDbName@ to the
@@ -2755,7 +2774,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
         Elsewhere _ ->
             Left $ MatrixError "global substitution requires the replaced activity (from) to live in the root database"
         Here fromPid -> case toEp of
-            Here toPid -> planGlobalWithinDB unitCfg thisDb fromPid toPid
+            Here toPid -> planGlobalWithinDB unitCfg thisDb (Swap fromPid toPid)
             Elsewhere toRef -> do
                 v <- requireConsumers thisDb fromPid
                 let links =
@@ -2769,7 +2788,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
 
     requireTech sub cPid fromPid =
         maybe (Left $ noTechLink sub cPid) Right $
-            findTechCoefficient thisDb cPid fromPid
+            findTechCoefficient thisDb (TechLink cPid fromPid)
 
     requireStatic sub cPid fromRef =
         maybe (Left $ noStaticLink sub cPid (drDbName fromRef) (drPid fromRef)) Right $
@@ -2893,13 +2912,13 @@ findStaticCrossDBLink rootDb consumerPid depDbName depSupRef =
             [] -> Nothing
 
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
-findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double
-findTechCoefficient db consumer supplier =
+findTechCoefficient :: Database -> TechLink -> Maybe Double
+findTechCoefficient db link =
     coefficient <$> U.find isWanted (dbTechnosphereTriples db)
   where
     consumerIdx, supplierIdx :: Int32
-    consumerIdx = fromIntegral consumer
-    supplierIdx = fromIntegral supplier
+    consumerIdx = fromIntegral (tlConsumer link)
+    supplierIdx = fromIntegral (tlSupplier link)
     isWanted :: SparseTriple -> Bool
     isWanted (SparseTriple row col _) = row == supplierIdx && col == consumerIdx
     coefficient :: SparseTriple -> Double
