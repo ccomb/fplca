@@ -17,6 +17,7 @@ import qualified Search.BM25 as BM25
 import Service (
     ActivityFilterCore (..),
     ConsumerFilter (..),
+    Edges (..),
     NamePattern (..),
     SupplyChainFilter (..),
     bfsToPattern,
@@ -45,7 +46,7 @@ emptyCore =
         }
 
 emptySupply :: SupplyChainFilter
-emptySupply = SupplyChainFilter emptyCore Nothing Nothing
+emptySupply = SupplyChainFilter emptyCore Nothing Nothing EntriesOnly
 
 emptyConsumer :: ConsumerFilter
 emptyConsumer = ConsumerFilter emptyCore Nothing False
@@ -68,7 +69,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
             supplyVec <- computeScalingVector db rootProcessId
 
-            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
                 entries = scrSupplyChain response
 
             -- With rootRefAmount = 1, sceQuantity must equal sceScalingFactor exactly
@@ -86,7 +87,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
             supplyVec <- computeScalingVector db rootProcessId
 
-            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
                 entries = scrSupplyChain response
 
             -- All entries should have depth > 0 (root is excluded from supply chain)
@@ -100,7 +101,7 @@ spec = do
             supplyVec <- computeScalingVector db rootProcessId
 
             -- No depth filter: should get Y (depth 1) and Z (depth 2)
-            let noFilter = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let noFilter = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
             scrFilteredActivities noFilter `shouldSatisfy` (>= 2)
 
             -- Depth 1: should only get Y (direct supplier)
@@ -111,7 +112,6 @@ spec = do
                         rootProcessId
                         supplyVec
                         emptySupply{scfMaxDepth = Just 1}
-                        False
             scrFilteredActivities depth1 `shouldSatisfy` (< scrFilteredActivities noFilter)
 
     -- -----------------------------------------------------------------------
@@ -130,7 +130,6 @@ spec = do
                     pid
                     vec
                     (mapSupplyCore (\c -> c{afcName = nameQ}) emptySupply)
-                    False
 
         it "narrows to single entry when token matches only one activity" $ do
             db <- loadWithIndex
@@ -200,7 +199,6 @@ spec = do
                         rootPid
                         supplyVec
                         (mapSupplyCore (\c -> c{afcName = Just "produc", afcSort = Just "depth"}) emptySupply)
-                        False
             map sceDepth (scrSupplyChain resp) `shouldBe` [1, 2]
 
     describe "Fuzzy name filter on consumers" $ do

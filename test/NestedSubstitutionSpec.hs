@@ -18,6 +18,7 @@ import qualified Data.Vector.Unboxed as U
 import Matrix (buildDemandVectorFromIndex)
 import Service (
     ActivityFilterCore (..),
+    Edges (..),
     ServiceError (..),
     SupplyChainFilter (..),
     applySubstitutionsAt,
@@ -289,6 +290,7 @@ spec = do
                                 }
                         , scfMaxDepth = Nothing
                         , scfMinQuantity = Nothing
+                        , scfEdges = EntriesOnly
                         }
             eResp <-
                 buildSupplyChainFromScalingVectorCrossDB
@@ -300,7 +302,6 @@ spec = do
                     scaling
                     []
                     scf
-                    False
             case eResp of
                 Left e -> expectationFailure ("supply-chain CrossDB failed: " <> show e)
                 Right resp -> do

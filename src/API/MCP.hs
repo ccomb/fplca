@@ -911,20 +911,22 @@ callGetSupplyChain dbManager presets rid args = runTool rid $ do
                         }
                 , Service.scfMaxDepth = intArg "max_depth" args
                 , Service.scfMinQuantity = doubleArg "min_quantity" args
+                , -- No MCP tool asks for the subgraph's edges; the REST route does.
+                  Service.scfEdges = Service.EntriesOnly
                 }
     subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
     unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
     payload <-
         if null subs
             then -- Plain cross-DB supply chain.
-                toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf False) >>= liftShow)
+                toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf) >>= liftShow)
             else do
                 -- Substitution-aware: re-solve the root scaling, then build from it.
                 (processId, _) <- liftService (Service.resolveScorable db pid)
                 (scalingVec, virtualLinks) <-
                     liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db dbName solver processId subs) >>= liftShow
                 resp <-
-                    liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf False) >>= liftShow
+                    liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf) >>= liftShow
                 pure (toJSON resp)
     pure $ toolSuccessJson rid payload
 

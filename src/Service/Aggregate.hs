@@ -42,6 +42,7 @@ import API.Types (
 import Matrix (activityNormalizationFactor, buildDemandVectorFromIndex)
 import Service (
     ActivityFilterCore (..),
+    Edges (..),
     ServiceError (..),
     SupplyChainFilter (..),
     buildSupplyChainFromScalingVectorCrossDB,
@@ -195,7 +196,6 @@ aggregate unitConfig flowDB unitDB db dbName solver depLookup pidText params =
                             supplyVec
                             []
                             af
-                            False
                     return $ fmap (reduce params . rowsFromSupplyChain) eResp
                 ScopeBiosphere -> do
                     solE <- computeInventoryMatrixWithDepsCached unitConfig depLookup db dbName solver processId
@@ -231,6 +231,7 @@ aggregate unitConfig flowDB unitDB db dbName solver depLookup pidText params =
                     }
             , scfMaxDepth = maxD
             , scfMinQuantity = Nothing
+            , scfEdges = EntriesOnly
             }
 
 -- ---------------------------------------------------------------------------
