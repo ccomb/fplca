@@ -57,6 +57,7 @@ uploadedEntry name =
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 spec :: Spec

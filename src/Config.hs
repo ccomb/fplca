@@ -85,7 +85,7 @@ import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, normalise, takeDirectory, takeFileName, (</>))
 import TOML (DecodeTOML (..), Decoder, TOMLError, Table, Value (..), decode, decodeFile, getArrayOf, getField, getFieldOpt, getFieldOptWith, getFieldWith)
-import Types (AllocationKey (..), AllocationProperty (..), GeographyPolicy (..))
+import Types (AllocationKey (..), GeographyPolicy (..), parseAllocationKey)
 
 -- | A single classification filter entry (system + value)
 data ClassificationEntry = ClassificationEntry
@@ -226,6 +226,12 @@ data DatabaseConfig = DatabaseConfig
     , dcDeletable :: !Bool -- May the UI delete this entry? Defaults to dcIsUploaded.
     , dcGeographyPolicy :: !GeographyPolicy -- How aggressively to widen geography when linking suppliers
     , dcAllocation :: !AllocationKey -- How a multi-output block is divided; the same source under two keys is two databases
+    , dcSource :: !(Maybe Text)
+    {- ^ The database whose files this one reads, when it does not own them: a
+    copy, or a source re-keyed under another allocation. Carried here rather
+    than left in the upload metadata because a reader of a re-keyed database
+    needs to know the shares were recomputed, and from what.
+    -}
     }
     deriving (Show, Eq, Generic)
 
@@ -526,6 +532,7 @@ instance DecodeTOML DatabaseConfig where
         dcDeletable <- fromMaybe dcIsUploaded <$> getFieldOpt "deletable"
         dcGeographyPolicy <- fromMaybe GeoGlobal <$> getFieldOptWith geographyPolicyDecoder "geography_policy"
         dcAllocation <- fromMaybe Declared <$> getFieldOptWith allocationKeyDecoder "allocation"
+        let dcSource = Nothing -- A configured database owns the files it names
         pure DatabaseConfig{..}
 
 {- | @allocation@ on a database entry: how its multi-output blocks are divided.
@@ -538,11 +545,7 @@ carries one key.
 allocationKeyDecoder :: Decoder AllocationKey
 allocationKeyDecoder = do
     raw <- tomlDecoder :: Decoder Text
-    case T.toLower raw of
-        "declared" -> pure Declared
-        "dry mass" -> pure (ByProperty DryMass)
-        "wet mass" -> pure (ByProperty WetMass)
-        other -> fail $ "allocation: expected one of declared|dry mass|wet mass, got: " <> T.unpack other
+    either (fail . T.unpack . ("allocation: " <>)) pure (parseAllocationKey raw)
 
 geographyPolicyDecoder :: Decoder GeographyPolicy
 geographyPolicyDecoder = do

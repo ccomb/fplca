@@ -82,6 +82,8 @@ knownDivergences =
     , ("compute_sensitivity", "process_id")
     , ("count_search_matches", "database")
     , ("count_search_matches", "query")
+    , ("derive_database", "database")
+    , ("derive_database", "new_name")
     , ("edit_exchanges", "add_biosphere")
     , ("edit_exchanges", "add_inputs")
     , ("edit_exchanges", "add_waste_outputs")

@@ -199,6 +199,7 @@ consumerConfig path =
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 -- ---------------------------------------------------------------------------

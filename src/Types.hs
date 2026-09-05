@@ -1570,6 +1570,39 @@ data AllocationKey
     | ByProperty !AllocationProperty
     deriving (Show, Eq, Generic, NFData, Store)
 
+{- | The word a property is written as, wherever one is written: a warning, a
+TOML file, a @meta.toml@, a query parameter.
+-}
+propertyName :: AllocationProperty -> Text
+propertyName prop = case prop of
+    DryMass -> "dry mass"
+    WetMass -> "wet mass"
+
+-- | The word a key is written as. Inverse of 'parseAllocationKey'.
+allocationKeyText :: AllocationKey -> Text
+allocationKeyText key = case key of
+    Declared -> "declared"
+    ByProperty prop -> propertyName prop
+
+{- | The key a word names, case-blind, with the words it could have been when
+it names none.
+
+One vocabulary for the config file, the upload metadata and the request that
+asks for a key, so a word that works in one works in all three. An unknown
+word is refused rather than read as 'Declared': a database loaded under a key
+nobody asked for, carrying the name of the key they did ask for, is the silent
+misbehaviour this returns 'Left' to avoid.
+-}
+parseAllocationKey :: Text -> Either Text AllocationKey
+parseAllocationKey raw =
+    maybe (Left refusal) Right (lookup (T.toLower (T.strip raw)) table)
+  where
+    table :: [(Text, AllocationKey)]
+    table = [(allocationKeyText k, k) | k <- [Declared, ByProperty DryMass, ByProperty WetMass]]
+
+    refusal :: Text
+    refusal = "expected one of " <> T.intercalate " | " (map fst table) <> ", got: " <> raw
+
 {- | Per-database knob controlling how aggressively geography may be widened when
 linking an exchange to a supplier. Maps to TOML field @geography_policy@.
 

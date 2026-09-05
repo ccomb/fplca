@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- An EcoSpold 2 dataset whose block a key divides into several processes now
+  says that only one of them will be kept. A process is identified by its file
+  name there, which names a single product, so the coproducts a key had just
+  separated all claimed the same identity and the registry kept the last one:
+  a database quietly missing the very products the key was named to produce.
 - A released Linux binary now reports the commit it was built from, and a
   release binary the tag it carries. Both used to come out as `unknown` and
   an empty tag on Linux alone (`volca --version`, `GET /api/v1/version`),
@@ -30,6 +35,27 @@
   unit to restate it in.
 
 ### Added
+- A database can now be asked for another allocation key without editing the
+  configuration file: `POST /api/v1/db/{name}/derive/{newName}?allocation=wet
+  mass`, the `derive_database` tool, and `Client.derive_database` in pyvolca.
+  Until now naming a key meant writing a second `[[databases]]` entry and
+  restarting, which nobody hosting an engine can do and which cost the person
+  running one their own file. The source is untouched and both stay loadable,
+  so the two allocations of one study can be compared side by side.
+
+  This is a load, not a copy: the key decides the inventory of every process a
+  load produces, so the sources are read again. Seconds to minutes on a large
+  database, against the milliseconds a copy takes, and it answers with what a
+  load answers with.
+
+  A key that divides no block of the source is refused, naming both numbers:
+  such a load is that database under a second name, costing a second database
+  in memory and a second matrix cache on disk. An unreadable key is refused
+  with the list of keys there are, never read as `declared`.
+
+  The key a database was divided under, and the source whose files it reads,
+  now travel with its status, so a column of shares can say whether the source
+  stated them or a property recomputed them. Wire revision 20.
 - A flow search can name several kinds at once: `kind=biosphere,waste` keeps
   what is exchanged with nature or discarded and nothing else, in one listing.
   `search-counts` already answers that pair as a single number, and there was

@@ -11,6 +11,7 @@ import Test.Hspec
 import API.DatabaseHandlers (convertDbStatus)
 import API.Types (DatabaseStatusAPI (..))
 import Database.Manager (DatabaseLoadStatus (..), DatabaseStatus (..))
+import Types (AllocationKey (..), AllocationProperty (..))
 
 mkStatus :: [A.Value -> A.Value] -> DatabaseStatus
 mkStatus _ =
@@ -25,6 +26,8 @@ mkStatus _ =
         , dsFormat = Nothing
         , dsActivityCount = 42
         , dsDependsOn = ["ecoinvent-3-9-1-adapted", "wfldb"]
+        , dsAllocation = ByProperty WetMass
+        , dsSource = Just "agribalyse-3-2-declared"
         }
 
 spec :: Spec
@@ -49,7 +52,12 @@ spec = do
                         ]
             let decoded = A.fromJSON legacy :: A.Result DatabaseStatus
             case decoded of
-                A.Success ds -> dsDependsOn ds `shouldBe` []
+                A.Success ds -> do
+                    dsDependsOn ds `shouldBe` []
+                    -- Written before a database could be re-keyed, so it was
+                    -- divided the way its source declares.
+                    dsAllocation ds `shouldBe` Declared
+                    dsSource ds `shouldBe` Nothing
                 A.Error e -> expectationFailure e
 
     describe "convertDbStatus" $ do
@@ -70,3 +78,8 @@ spec = do
             let api = convertDbStatus (mkStatus [])
                 roundTripped = fromJust (decode (encode api)) :: DatabaseStatusAPI
             dsaDependsOn roundTripped `shouldBe` dsaDependsOn api
+
+        it "says which key divided it, and whose files it reads" $ do
+            let api = convertDbStatus (mkStatus [])
+            dsaAllocation api `shouldBe` "wet mass"
+            dsaSource api `shouldBe` Just "agribalyse-3-2-declared"

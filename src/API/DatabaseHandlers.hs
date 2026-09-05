@@ -27,6 +27,7 @@ module API.DatabaseHandlers (
     coverageReportToAPI,
     explainCFToAPI,
     copyDatabaseHandler,
+    deriveDatabaseHandler,
     deleteDatabaseHandler,
     deleteActivitiesHandler,
     createActivitiesHandler,
@@ -62,6 +63,7 @@ module API.DatabaseHandlers (
     memoryRefusal,
     loadRefusal,
     copyRefusal,
+    quotaCounts,
     loadQuotaRefusal,
     simpleAction,
     formatToText,
@@ -158,6 +160,7 @@ import Database.Edit (
     WriteVerb (..),
     copyDatabase,
     deleteActivitiesInDB,
+    deriveDatabase,
     editExchanges,
     refusalMessage,
     writeActivities,
@@ -236,10 +239,12 @@ import Types (
     Database (..),
     GeographyPolicy (..),
     ProcessRef (..),
+    allocationKeyText,
     bfCompartmentName,
     bfCompartmentSub,
     blockerReasonDetail,
     getUnitNameForBioFlow,
+    parseAllocationKey,
     processRefText,
     unresolvedCount,
  )
@@ -523,6 +528,39 @@ copyDatabaseHandler dbName newName = do
         Just msg -> pure (ActivateResponse False msg Nothing)
         Nothing ->
             simpleAction (copyDatabase dbManager dbName newName) ("Copied database: " <> dbName <> " -> " <> newName)
+
+{- | Read a loaded or configured database's own files again under another
+allocation key, and register the result under @newName@.
+
+Answers with what a load answers with, not with what a copy answers with: it
+is a load, of tens of seconds on a large source, and the page that asks for it
+is the one that already waits on that answer and shows the progress lines
+underneath it.
+
+An unreadable key is a 400 naming the keys there are. A key that divided
+nothing is a refusal from the engine, carried in the same @LoadFailed@ as
+every other reason a load produced no database.
+-}
+deriveDatabaseHandler :: Text -> Text -> Maybe Text -> AppM LoadDatabaseResponse
+deriveDatabaseHandler dbName newName mAllocation = do
+    guardMutation
+    key <- either badKey pure (parseAllocationKey (fromMaybe "declared" mAllocation))
+    dbManager <- asks aeDbManager
+    hostingConfig <- asks aeHostingConfig
+    -- A derived database is another database of the user's own, already
+    -- loaded, so it spends both budgets exactly as a copy does.
+    refusal <- liftIO $ do
+        (uploaded, loadedUploads) <- quotaCounts dbManager
+        pure (copyRefusal uploaded loadedUploads hostingConfig)
+    case refusal of
+        Just msg -> pure (LoadFailed msg)
+        Nothing ->
+            liftIO (deriveDatabase dbManager dbName newName key) >>= \case
+                Left err -> pure (LoadFailed err)
+                Right (loadedDb, depResults) -> pure (LoadSucceeded (makeStatusFromLoadedDb loadedDb) depResults)
+  where
+    badKey :: Text -> AppM a
+    badKey err = throwError err400{errBody = BSL.fromStrict (T.encodeUtf8 ("allocation: " <> err))}
 
 -- | Delete an uploaded database (move to trash)
 deleteDatabaseHandler :: Text -> AppM ActivateResponse
@@ -934,6 +972,7 @@ uploadDatabaseHandler mName mDesc src = do
                             , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                             , UploadedDB.umDepends = []
                             , UploadedDB.umSource = Nothing
+                            , UploadedDB.umAllocation = Declared
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 
@@ -953,6 +992,7 @@ uploadDatabaseHandler mName mDesc src = do
                             , dcDeletable = True
                             , dcGeographyPolicy = GeoGlobal
                             , dcAllocation = Declared
+                            , dcSource = Nothing
                             }
 
                 -- Add to manager
@@ -979,6 +1019,8 @@ convertDbStatus ds =
         , dsaFormat = formatDisplayText <$> dsFormat ds
         , dsaActivityCount = dsActivityCount ds
         , dsaDependsOn = dsDependsOn ds
+        , dsaAllocation = allocationKeyText (dsAllocation ds)
+        , dsaSource = dsSource ds
         }
   where
     statusToText Unloaded = "unloaded"
@@ -1005,6 +1047,8 @@ makeStatusFromLoadedDb loaded =
             , dsaFormat = formatDisplayText <$> dcFormat config
             , dsaActivityCount = V.length (dbActivities db)
             , dsaDependsOn = dcDepends config
+            , dsaAllocation = allocationKeyText (dcAllocation config)
+            , dsaSource = dcSource config
             }
 
 -- uploadFormatToMeta removed - types are now unified (UploadedDB re-exports from Upload)
@@ -1133,6 +1177,7 @@ uploadMethodHandler mName mDesc src =
                             , UploadedDB.umDataPath = makeRelative uploadDir methodDir
                             , UploadedDB.umDepends = []
                             , UploadedDB.umSource = Nothing
+                            , UploadedDB.umAllocation = Declared
                             }
                 liftIO $ UploadedDB.writeUploadMeta uploadDir meta
 

@@ -836,6 +836,14 @@ data DatabaseStatusAPI = DatabaseStatusAPI
     , dsaFormat :: Maybe Text -- Database format (EcoSpold 2, EcoSpold 1, SimaPro CSV)
     , dsaActivityCount :: Int -- Number of activities (0 if unloaded)
     , dsaDependsOn :: [Text] -- Names of databases this one depends on (for cross-DB linking)
+    , dsaAllocation :: Text
+    {- ^ The key its multi-output blocks were divided under: @declared@, @dry
+    mass@ or @wet mass@. On the wire because a reader looking at a column of
+    shares has no other way to tell whether the source stated them or a
+    property recomputed them, and a column headed @declared@ over recomputed
+    shares says something untrue.
+    -}
+    , dsaSource :: Maybe Text -- The database whose files it reads, when it owns none (a copy, or a re-keyed load)
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped DatabaseStatusAPI)

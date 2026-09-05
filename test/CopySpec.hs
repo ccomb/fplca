@@ -218,6 +218,7 @@ mkConfig name =
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 buildOrFail :: SimpleParts -> IO Database

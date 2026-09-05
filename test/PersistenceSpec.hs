@@ -335,6 +335,7 @@ baseConfig name =
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 uploadedConfig :: Text -> FilePath -> DatabaseConfig

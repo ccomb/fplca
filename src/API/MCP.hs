@@ -21,6 +21,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
+import qualified Data.Vector as V
 import Network.HTTP.Types (hContentType, status200, status202, status405)
 import Network.Wai (Application, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import System.Random (randomIO)
@@ -34,12 +35,12 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), except, runExceptT, throwE)
 import Data.Bifunctor (first)
 import Database (filterByName, flowSearchFields)
-import Database.Edit (editExchanges, refusalMessage)
+import Database.Edit (deriveDatabase, editExchanges, refusalMessage)
 import Database.Manager (DatabaseManager (..), LoadedDatabase (..), getDatabase)
 import qualified Database.Manager as DM
 
 import qualified API.BatchImpacts as BI
-import API.DatabaseHandlers (coverageReportToAPI, editReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI)
+import API.DatabaseHandlers (copyRefusal, coverageReportToAPI, editReportToAPI, explainCFToAPI, gapReportToAPI, loadQuotaRefusal, qualityReportToAPI, quotaCounts)
 import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Routes (collectionNotLoadedMessage)
@@ -59,7 +60,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), KindFilter (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, parseKindNames, processIdToText, qualifyRef, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), KindFilter (..), ProcessId, UUID, UnitDB, activityLocation, activityName, allocationKeyText, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseAllocationKey, parseExchangeKind, parseKindNames, processIdToText, qualifyRef, unresolvedCount)
 
 -- ---------------------------------------------------------------------------
 -- JSON-RPC 2.0 types
@@ -472,6 +473,7 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_databases" -> callListDatabases dbManager rid
     "load_database" -> callLoadDatabase dbManager mHosting rid args
     "unload_database" -> callUnloadDatabase dbManager rid args
+    "derive_database" -> callDeriveDatabase dbManager mHosting rid args
     "list_presets" -> callListPresets presets rid
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows" -> withDb dbManager rid args $ callSearchFlows rid args
@@ -683,6 +685,31 @@ callUnloadDatabase dbManager rid args = runTool rid $ do
             object
                 [ "status" .= ("unloaded" :: Text)
                 , "database" .= dbName
+                ]
+
+{- | Read a database's sources again under another allocation key. Wraps
+'Edit.deriveDatabase', which refuses a key that divides no block rather than
+registering the source a second time under a name promising otherwise. The
+hosting quota applies as it does to a copy: what comes out is another loaded
+database of the user's own.
+-}
+callDeriveDatabase :: DatabaseManager -> Maybe HostingConfig -> Value -> KeyMap Value -> IO Value
+callDeriveDatabase dbManager mHosting rid args = runTool rid $ do
+    dbName <- except (requireText "database" args)
+    newName <- except (requireText "new_name" args)
+    key <- except (parseAllocationKey (fromMaybe "declared" (textArg "allocation" args)))
+    liftIO (quotaCounts dbManager) >>= \(uploaded, loadedUploads) ->
+        maybe (pure ()) throwE (copyRefusal uploaded loadedUploads mHosting)
+    (loaded, deps) <- ExceptT (deriveDatabase dbManager dbName newName key)
+    pure $
+        toolSuccessJson rid $
+            object
+                [ "status" .= ("loaded" :: Text)
+                , "database" .= newName
+                , "source" .= dbName
+                , "allocation" .= allocationKeyText key
+                , "activities" .= V.length (dbActivities (ldDatabase loaded))
+                , "dependencies" .= deps
                 ]
 
 callListPresets :: [ClassificationPreset] -> Value -> IO Value
