@@ -2132,7 +2132,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                 | otherwise -> mempty
     unresolvedStats flow blocker =
         let unresolved = case blocker of
-                LocationRejectedByPolicy req actLoc kind ->
+                LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = actLoc, lrBestKind = kind} ->
                     [ LocationUnresolved
                         { luProduct = tfName flow
                         , luRequested = req
@@ -2147,8 +2147,8 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                         }
                     ]
                 NoNameMatch -> []
-                UnitIncompatible _ _ -> []
-                AliasTargetMissing _ _ -> []
+                UnitIncompatible{} -> []
+                AliasTargetMissing{} -> []
          in mempty
                 { cdlUnresolvedProducts = M.singleton (tfName flow) UnresolvedProduct{upDemands = 1, upBlocker = blocker}
                 , cdlLocationUnresolved = unresolved
@@ -2320,9 +2320,9 @@ reportCrossDBLinkingStats nActivities stats = do
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"
-showBlocker (UnitIncompatible q s) = printf "Unit: %s vs %s" (T.unpack q) (T.unpack s)
+showBlocker UnitIncompatible{uiQueryUnit = q, uiSupplierUnit = s} = printf "Unit: %s vs %s" (T.unpack q) (T.unpack s)
 showBlocker (LocationUnavailable loc) = printf "Location: %s" (T.unpack loc)
-showBlocker (LocationRejectedByPolicy req act kind) =
+showBlocker LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = act, lrBestKind = kind} =
     printf "Rejected by policy: %s → %s (%s)" (T.unpack req) (T.unpack act) (T.unpack (locationKindCode kind))
 showBlocker (AliasTargetMissing name mLoc) =
     printf "Mapping target not found: %s%s" (T.unpack name) (maybe "" ((" @ " <>) . T.unpack) mLoc)

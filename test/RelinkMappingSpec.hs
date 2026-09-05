@@ -261,7 +261,7 @@ spec = do
 
         it "surfaces a unit mismatch as UnitIncompatible, never a silent drop" $
             case findSupplierInIndexedDBs (mkCtx aliasMap) consumerName "FR" "m3" of
-                CrossDBNotLinked (UnitIncompatible req got) -> do
+                CrossDBNotLinked UnitIncompatible{uiQueryUnit = req, uiSupplierUnit = got} -> do
                     req `shouldBe` "m3"
                     got `shouldBe` "kg"
                 CrossDBNotLinked other -> expectationFailure $ "Expected UnitIncompatible, got: " ++ show other

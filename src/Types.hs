@@ -1534,14 +1534,19 @@ toSimpleDatabase db =
 data LinkBlocker
     = -- | Product not found at all
       NoNameMatch
-    | -- | queryUnit, supplierUnit
-      UnitIncompatible !Text !Text
+    | -- | The supplier ships that product under a unit the demand cannot use.
+      UnitIncompatible
+        { uiQueryUnit :: !Text
+        , uiSupplierUnit :: !Text
+        }
     | -- | requestedLoc (no fallback found above threshold)
       LocationUnavailable !Text
-    | {- | requestedLoc, bestCandidateLoc, bestCandidateKind — match existed but the database's
-      geography_policy rejected it
-      -}
-      LocationRejectedByPolicy !Text !Text !LocationKind
+    | -- | A match existed and the database's geography_policy rejected it.
+      LocationRejectedByPolicy
+        { lrRequested :: !Text
+        , lrBestCandidate :: !Text
+        , lrBestKind :: !LocationKind
+        }
     | {- | targetName, targetLocation — a relink-mapping row designated a supplier
       that no pinned dependency ships ('Nothing' when the name matches nowhere,
       'Just' the pinned location when the name exists but not there). A curated
@@ -1671,9 +1676,10 @@ surfaces can never name the same blocker differently.
 blockerReason :: LinkBlocker -> BlockerReason
 blockerReason blocker = case blocker of
     NoNameMatch -> BlockerReason "no_name_match" Nothing
-    UnitIncompatible q s -> BlockerReason "unit_incompatible" (Just (q <> " vs " <> s))
+    UnitIncompatible{uiQueryUnit = q, uiSupplierUnit = s} ->
+        BlockerReason "unit_incompatible" (Just (q <> " vs " <> s))
     LocationUnavailable loc -> BlockerReason "location_unavailable" (Just loc)
-    LocationRejectedByPolicy req act kind ->
+    LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = act, lrBestKind = kind} ->
         BlockerReason "location_rejected" (Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
     AliasTargetMissing name mLoc ->
         BlockerReason "alias_target_missing" (Just (name <> maybe "" (" @ " <>) mLoc))

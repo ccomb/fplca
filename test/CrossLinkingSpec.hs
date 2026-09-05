@@ -226,7 +226,7 @@ spec = do
                         }
             -- "product Y" exists in kg; asking for m3 should fail unit check
             case findSupplierInIndexedDBs ctx "product Y" "GLO" "m3" of
-                CrossDBNotLinked (UnitIncompatible _ _) -> return ()
+                CrossDBNotLinked UnitIncompatible{} -> return ()
                 CrossDBNotLinked reason -> expectationFailure $ "Expected UnitIncompatible but got: " ++ show reason
                 CrossDBLinked{} -> expectationFailure "Expected CrossDBNotLinked for unit mismatch"
 
@@ -323,7 +323,7 @@ spec = do
         it "GeoExact rejects FR query against a GLO candidate with kind=GlobalLoc" $ do
             idb <- loadMin3IndexedDB
             case findSupplierInIndexedDBs (mkCtx GeoExact idb) "product Y" "FR" "kg" of
-                CrossDBNotLinked (LocationRejectedByPolicy req actLoc kind) -> do
+                CrossDBNotLinked LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = actLoc, lrBestKind = kind} -> do
                     req `shouldBe` "FR"
                     actLoc `shouldBe` "GLO"
                     kind `shouldBe` GlobalLoc
@@ -334,7 +334,7 @@ spec = do
         it "GeoParent also rejects a GLO candidate (parent-only does not include global)" $ do
             idb <- loadMin3IndexedDB
             case findSupplierInIndexedDBs (mkCtx GeoParent idb) "product Y" "FR" "kg" of
-                CrossDBNotLinked (LocationRejectedByPolicy _ _ kind) ->
+                CrossDBNotLinked LocationRejectedByPolicy{lrBestKind = kind} ->
                     kind `shouldBe` GlobalLoc
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected LocationRejectedByPolicy GlobalLoc but got: " ++ show reason
