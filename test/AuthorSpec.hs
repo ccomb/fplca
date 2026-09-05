@@ -824,19 +824,17 @@ buildFixtureAt actId prodId = do
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
                 { sdbActivities =
-                    ( M.fromList
+                    M.fromList
                         [ ((actId, prodId), supplierActivityAt actId prodId)
                         , ((treatActId, usedOilId), treatmentActivity)
                         ]
-                    )
                 , sdbTechFlows =
-                    ( M.fromList
+                    M.fromList
                         [ (prodId, milkFlowAt prodId)
                         , (usedOilId, usedOilFlow)
                         ]
-                    )
-                , sdbBioFlows = (M.singleton co2Id co2Flow)
-                , sdbWasteFlows = (M.singleton usedOilId usedOilWasteFlow)
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.singleton usedOilId usedOilWasteFlow
                 , sdbUnits = unitTable
                 }
     either (fail . show) pure r
@@ -852,21 +850,19 @@ buildTwoProductTreatment = do
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
                 { sdbActivities =
-                    ( M.fromList
+                    M.fromList
                         [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
                         , ((treatActId, usedOilId), treatmentWithHeat)
                         , ((treatActId, heatId), treatmentWithHeat)
                         ]
-                    )
                 , sdbTechFlows =
-                    ( M.fromList
+                    M.fromList
                         [ (supplierProdId, milkFlowAt supplierProdId)
                         , (usedOilId, usedOilFlow)
                         , (heatId, heatFlow)
                         ]
-                    )
-                , sdbBioFlows = (M.singleton co2Id co2Flow)
-                , sdbWasteFlows = (M.singleton usedOilId usedOilWasteFlow)
+                , sdbBioFlows = M.singleton co2Id co2Flow
+                , sdbWasteFlows = M.singleton usedOilId usedOilWasteFlow
                 , sdbUnits = unitTable
                 }
     either (fail . show) pure r
@@ -882,8 +878,8 @@ buildBareFixture = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.singleton (supplierActId, supplierProdId) noBio)
-                , sdbTechFlows = (M.singleton supplierProdId (milkFlowAt supplierProdId))
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) noBio
+                , sdbTechFlows = M.singleton supplierProdId (milkFlowAt supplierProdId)
                 , sdbBioFlows = M.empty
                 , sdbWasteFlows = M.empty
                 , sdbUnits = unitTable

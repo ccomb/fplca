@@ -129,8 +129,8 @@ buildDb acts flows = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.fromList acts)
-                , sdbTechFlows = (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
+                { sdbActivities = M.fromList acts
+                , sdbTechFlows = M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows]
                 , sdbBioFlows = M.empty
                 , sdbWasteFlows = M.empty
                 , sdbUnits = M.empty

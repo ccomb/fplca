@@ -90,11 +90,11 @@ buildFixture comp = do
         DB.buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.singleton (actU, prodU) act)
-                , sdbTechFlows = (M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing))
-                , sdbBioFlows = (M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp)))
+                { sdbActivities = M.singleton (actU, prodU) act
+                , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing)
+                , sdbBioFlows = M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp))
                 , sdbWasteFlows = M.empty
-                , sdbUnits = (M.singleton unitU (Unit unitU "kg" "kg" ""))
+                , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
                 }
     either (fail . ("buildDatabaseWithMatrices: " <>) . T.unpack) pure r
   where

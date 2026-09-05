@@ -155,9 +155,9 @@ buildDB name acts =
         SimpleDatabase
             { sdbActivities = acts
             , sdbTechFlows = techFlowDB
-            , sdbBioFlows = (M.singleton co2 co2Flow)
+            , sdbBioFlows = M.singleton co2 co2Flow
             , sdbWasteFlows = wasteFlowDB
-            , sdbUnits = (M.singleton kgU (Unit kgU "kg" "kg" ""))
+            , sdbUnits = M.singleton kgU (Unit kgU "kg" "kg" "")
             }
         >>= either (\e -> fail (T.unpack name <> ": " <> T.unpack e)) pure
 

@@ -360,8 +360,8 @@ buildFrom activities = do
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
                 { sdbActivities = activities
-                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
-                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
                 , sdbWasteFlows = M.empty
                 , sdbUnits = unitTable
                 }

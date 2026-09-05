@@ -235,10 +235,10 @@ buildFixture consumer rows flows = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.insert (consumerActId, consumerProdId) consumer rows)
-                , sdbTechFlows = (M.insert consumerProdId (techFlow consumerProdId "cheese") flows)
+                { sdbActivities = M.insert (consumerActId, consumerProdId) consumer rows
+                , sdbTechFlows = M.insert consumerProdId (techFlow consumerProdId "cheese") flows
                 , sdbBioFlows = M.empty
-                , sdbWasteFlows = (M.singleton scrapId (wasteFlow scrapId "scrap"))
+                , sdbWasteFlows = M.singleton scrapId (wasteFlow scrapId "scrap")
                 , sdbUnits = unitTable
                 }
     either (fail . show) pure r

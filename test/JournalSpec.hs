@@ -387,8 +387,8 @@ buildDepFixture = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.singleton (depActId, depProdId) depActivity)
-                , sdbTechFlows = (M.singleton depProdId wheatFlow)
+                { sdbActivities = M.singleton (depActId, depProdId) depActivity
+                , sdbTechFlows = M.singleton depProdId wheatFlow
                 , sdbBioFlows = M.empty
                 , sdbWasteFlows = M.empty
                 , sdbUnits = unitTable
@@ -401,9 +401,9 @@ buildFixture = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.singleton (supplierActId, supplierProdId) supplierActivity)
-                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
-                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) supplierActivity
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
                 , sdbWasteFlows = M.empty
                 , sdbUnits = unitTable
                 }

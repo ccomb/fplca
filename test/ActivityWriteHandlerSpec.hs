@@ -453,9 +453,9 @@ buildFixture = do
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
             SimpleDatabase
-                { sdbActivities = (M.singleton (supplierActId, supplierProdId) milkActivity)
-                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
-                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                { sdbActivities = M.singleton (supplierActId, supplierProdId) milkActivity
+                , sdbTechFlows = M.singleton supplierProdId milkFlow
+                , sdbBioFlows = M.singleton co2Id co2Flow
                 , sdbWasteFlows = M.empty
                 , sdbUnits = unitTable
                 }
