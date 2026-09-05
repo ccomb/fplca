@@ -340,6 +340,7 @@ test-suite lca-tests
                      , AggregateSpec
                      , CopySpec
                      , DeriveSpec
+                     , SourceBlockSpec
                      , AuthorSpec
                      , JournalSpec
                      , ActivityWriteHandlerSpec

@@ -1318,7 +1318,10 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 20: the @derive@ route, which reads a source again under another
+(revision 21: the @block@ an activity summary carries, and the
+@blockProducts@ beside it, so a listing can gather the coproducts of one
+source block and say when it is showing only part of one;
+revision 20: the @derive@ route, which reads a source again under another
 allocation key, and the @allocation@ and @source@ a database status carries,
 without which a column of shares cannot say whether the source stated them;
 revision 19: the @kind@ parameter of a flow search naming several kinds,
@@ -1355,7 +1358,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 20
+currentWireVersion = 21
 
 getVersion :: AppM Value
 getVersion = do

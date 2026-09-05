@@ -1320,6 +1320,14 @@ the declared key. It is ``None`` outside an activity's own product list,
 when the block's products are not all stated in a mass, and against an
 engine older than wire revision 15.
 
+``block`` names the source block the process came out of, as a value to
+compare and never to read: the coproducts of one block carry the same one
+and nothing else does, which is what lets a listing gather them.
+``block_products`` is how many products that block holds, so a page
+showing fewer rows than that knows it is showing part of a block and not
+the whole of it. Both are ``None`` against an engine older than wire
+revision 21.
+
 | Field | Type | Default |
 |-------|------|---------|
 | `process_id` | `str` | _required_ |
@@ -1331,6 +1339,8 @@ engine older than wire revision 15.
 | `allocation_percent` | `float \| None` | None |
 | `allocation_formula` | `str \| None` | None |
 | `mass_allocation_percent` | `float \| None` | None |
+| `block` | `str \| None` | None |
+| `block_products` | `int \| None` | None |
 
 ### `ActivityContribution`
 

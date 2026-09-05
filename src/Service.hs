@@ -287,6 +287,7 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                     M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
 
         !(prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) unitDB rootActivity
+        !rootBlock = sourceBlockOf db processId rootActivity
 
         !metadata =
             InventoryMetadata
@@ -302,6 +303,8 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                         , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                         , prsMassAllocationPercent = Nothing
                         , prsNativeType = activityNativeType rootActivity
+                        , prsBlock = sbName rootBlock
+                        , prsBlockProducts = sbProducts rootBlock
                         }
                 , imTotalFlows = length flowDetails
                 , imEmissionFlows = emissionFlows
@@ -1322,6 +1325,7 @@ cross-DB unit DB build the record by hand.
 mkActivitySummary :: Database -> ProcessId -> Activity -> ActivitySummary
 mkActivitySummary db processId activity =
     let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
+        block = sourceBlockOf db processId activity
      in ActivitySummary
             { prsProcessId = processIdToText db processId
             , prsActivityName = activityName activity
@@ -1333,6 +1337,8 @@ mkActivitySummary db processId activity =
             , prsAllocationFormula = dsFormula =<< activityReferenceShare activity
             , prsMassAllocationPercent = Nothing
             , prsNativeType = activityNativeType activity
+            , prsBlock = sbName block
+            , prsBlockProducts = sbProducts block
             }
 
 {- | Placeholder summary surfaced when the products index points at a
@@ -1352,6 +1358,8 @@ unknownActivitySummary db pid =
         , prsAllocationFormula = Nothing
         , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
+        , prsBlock = processIdToText db pid
+        , prsBlockProducts = 1
         }
 
 {- | The coproducts of one source dataset block, as 'ActivitySummary'. Keyed on
@@ -1512,6 +1520,8 @@ crossDBLinkToSummary link =
         , prsAllocationFormula = Nothing
         , prsMassAllocationPercent = Nothing
         , prsNativeType = Nothing
+        , prsBlock = supplierRefText link
+        , prsBlockProducts = 1
         }
 
 {- | Resolve an exchange's target as 'ActivitySummary', falling back to the
@@ -1912,6 +1922,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf =
                 (RootLevel processId)
                 supplyVec
                 scf
+        rootBlock = sourceBlockOf db processId rootActivity
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText db processId
@@ -1927,6 +1938,8 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf =
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                 , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
+                , prsBlock = sbName rootBlock
+                , prsBlockProducts = sbProducts rootBlock
                 }
      in SupplyChainResponse
             { scrRoot = rootSummary
@@ -1962,6 +1975,7 @@ buildSupplyChainFromScalingVectorCrossDB ::
 buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName rootPid rootScaling extraLinks scf = do
     let rootActivity = dbActivities rootDb V.! fromIntegral rootPid
         rootRefAmount = getReferenceProductAmount rootActivity
+        rootBlock = sourceBlockOf rootDb rootPid rootActivity
         rootCollected =
             collectSupplyChainEntries
                 rootDb
@@ -1984,6 +1998,8 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                 , prsAllocationFormula = dsFormula =<< activityReferenceShare rootActivity
                 , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
+                , prsBlock = sbName rootBlock
+                , prsBlockProducts = sbProducts rootBlock
                 }
     eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf 1 S.empty
     pure $ case eDep of

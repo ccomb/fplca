@@ -195,6 +195,17 @@ data ActivitySummary = ActivitySummary
     , prsAllocationFormula :: Maybe Text -- Raw SimaPro allocation formula; Nothing if purely numeric
     , prsMassAllocationPercent :: Maybe Double -- What the share would be if the key were the product's mass (%, 0..100), to be read beside the declared one; Nothing outside a block's own product list, on a block of one product or one whose source declares no share, and when its products are not all stated in a mass
     , prsNativeType :: Maybe NativeActivityType -- Source-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source lacks the field
+    , prsBlock :: Text
+    {- ^ The source block this process came out of, as a name to compare and
+    never to read: the coproducts of one block carry the same one and nothing
+    else does. A listing gathers its rows on it, which the process id cannot
+    do: it names the product, not the block it was written in.
+    -}
+    , prsBlockProducts :: Int
+    {- ^ How many products that block holds, which is not the number of rows
+    a page shows of it: a page holding the last row of a block has no other
+    way to say the block goes on.
+    -}
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivitySummary)

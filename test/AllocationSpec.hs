@@ -65,6 +65,8 @@ product_ unitName amount declared = (summary, Just row)
             , prsAllocationFormula = Nothing
             , prsMassAllocationPercent = Nothing
             , prsNativeType = Nothing
+            , prsBlock = ""
+            , prsBlockProducts = 2
             }
 
     row :: Exchange
