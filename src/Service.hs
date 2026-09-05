@@ -69,6 +69,11 @@ data SearchFilter = SearchFilter
     , sfExactMatch :: !Bool
     }
 
+{- | Whether a walk also reports every technosphere edge inside the subgraph it
+reached. Edges cost an extra pass over the triples, so they are asked for.
+-}
+data Edges = WithEdges | EntriesOnly
+
 {- | Filter for supply-chain walks. Adds the depth cap and the magnitude
 cut-off that only make sense downstream from a root activity.
 -}
@@ -76,6 +81,7 @@ data SupplyChainFilter = SupplyChainFilter
     { scfCore :: !ActivityFilterCore
     , scfMaxDepth :: !(Maybe Int)
     , scfMinQuantity :: !(Maybe Double)
+    , scfEdges :: !Edges
     }
 
 {- | Filter for reverse-walk (/consumers). Adds a depth cap but no
@@ -84,7 +90,7 @@ data SupplyChainFilter = SupplyChainFilter
 data ConsumerFilter = ConsumerFilter
     { cnfCore :: !ActivityFilterCore
     , cnfMaxDepth :: !(Maybe Int)
-    , cnfIncludeEdges :: !Bool -- when True, emit every technosphere edge inside the reachable consumer subgraph
+    , cnfEdges :: !Edges -- 'WithEdges' emits every technosphere edge inside the reachable consumer subgraph
     }
 
 {- | Filter for flow search. 'ffQuery' is required; callers that have no
@@ -100,6 +106,13 @@ data FlowFilter = FlowFilter
     , ffSort :: Maybe Text
     , ffOrder :: Maybe Text
     }
+
+{- | A case-blind substring a name is searched for, as opposed to a name, a
+process reference or a database name. Compared with
+'Normalize.caseInsensitiveInfixOf', never parsed.
+-}
+newtype NamePattern = NamePattern {unNamePattern :: Text}
+    deriving (Eq, Show)
 
 -- | Empty flow-search response used by callers that have no query to run.
 emptyFlowSearchResults :: Value
@@ -325,14 +338,16 @@ getActivityInventory db processIdText =
             let !inventoryExport = convertToInventoryExport db (dbBioFlows db) (dbUnits db) processId activity inventory
             return $ Right $ toJSON inventoryExport
 
--- | Tree-traversal counters (total nodes / loop nodes / leaf nodes).
-data TreeStats = TreeStats Int Int Int -- total, loops, leaves
-
-instance Semigroup TreeStats where
-    TreeStats t1 l1 v1 <> TreeStats t2 l2 v2 = TreeStats (t1 + t2) (l1 + l2) (v1 + v2)
-
-instance Monoid TreeStats where
-    mempty = TreeStats 0 0 0
+{- | The nodes and edges a tree walk has reached so far. Threaded through the
+walk in visit order and never combined out of it: a node id can be inserted
+twice (two branches looping to the same row give two 'TreeLoop' nodes, and one
+row reached under two consumers gives two nodes with different parents), and
+the walk order is what decides which one the export carries.
+-}
+data TreeBuild = TreeBuild
+    { tbNodes :: M.Map Text ExportNode
+    , tbEdges :: [TreeEdge]
+    }
 
 {- | Helper to find ProcessId for an activity by searching the database
 This is needed because activities don't store their own ProcessId/UUID
@@ -390,8 +405,8 @@ maxBiosphereFlows :: Int
 maxBiosphereFlows = 50
 
 -- | ExportNode for a single biosphere flow attached to a parent activity.
-mkBiosphereExportNode :: UnitDB -> BiosphereFlow -> Text -> Int -> Bool -> ExportNode
-mkBiosphereExportNode units flow parentPid depth isEmission =
+mkBiosphereExportNode :: UnitDB -> BiosphereFlow -> Text -> Int -> BioDirection -> ExportNode
+mkBiosphereExportNode units flow parentPid depth direction =
     let compartmentTxt = bfCompartmentName flow
      in ExportNode
             { enId = UUID.toText (bfId flow)
@@ -399,7 +414,9 @@ mkBiosphereExportNode units flow parentPid depth isEmission =
             , enDescription = [compartmentTxt]
             , enLocation = ""
             , enUnit = getUnitNameForBioFlow units flow
-            , enNodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
+            , enNodeType = case direction of
+                Emission -> BiosphereEmissionNode
+                Resource -> BiosphereResourceNode
             , enDepth = depth
             , enLoopTarget = Nothing
             , enParentId = Just parentPid
@@ -410,13 +427,12 @@ mkBiosphereExportNode units flow parentPid depth isEmission =
 {- | Edge linking an activity to a biosphere flow. Direction depends on whether
 the exchange is an emission (activity -> flow) or a resource (flow -> activity).
 -}
-mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> Bool -> Exchange -> TreeEdge
-mkBiosphereTreeEdge units flow activityPid isEmission ex =
+mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> BioDirection -> Exchange -> TreeEdge
+mkBiosphereTreeEdge units flow activityPid direction ex =
     let flowIdText = UUID.toText (bfId flow)
-        (edgeFrom, edgeTo, edgeType) =
-            if isEmission
-                then (activityPid, flowIdText, BiosphereEmissionEdge)
-                else (flowIdText, activityPid, BiosphereResourceEdge)
+        (edgeFrom, edgeTo, edgeType) = case direction of
+            Emission -> (activityPid, flowIdText, BiosphereEmissionEdge)
+            Resource -> (flowIdText, activityPid, BiosphereResourceEdge)
      in TreeEdge
             { teFrom = edgeFrom
             , teTo = edgeTo
@@ -427,22 +443,26 @@ mkBiosphereTreeEdge units flow activityPid isEmission ex =
             }
 
 -- | Extract biosphere exchanges from an activity and create nodes and edges.
-extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge])
-extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
-    foldr step (nodeAcc, edgeAcc) topBiosphereExchanges
+extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> TreeBuild -> TreeBuild
+extractBiosphereNodesAndEdges db activity activityProcessId depth acc0 =
+    foldr step acc0 topBiosphereExchanges
   where
+    units :: UnitDB
     units = dbUnits db
+    -- The generator both selects the biosphere rows and reads the direction off
+    -- the constructor that carries it, so no later step has to recover it.
+    topBiosphereExchanges :: [(BioDirection, Exchange)]
     topBiosphereExchanges =
         take maxBiosphereFlows $
-            L.sortBy (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a))) $
-                filter isBiosphereExchange (exchanges activity)
-    step ex acc@(nodes, edges) = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
+            L.sortBy (\a b -> compare (abs (exchangeAmount (snd b))) (abs (exchangeAmount (snd a)))) $
+                [(dir, ex) | ex@BiosphereExchange{bioDirection = dir} <- exchanges activity]
+    step :: (BioDirection, Exchange) -> TreeBuild -> TreeBuild
+    step (direction, ex) acc = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
         Nothing -> acc
         Just flow ->
-            let isEmission = not (exchangeIsInput ex)
-                node = mkBiosphereExportNode units flow activityProcessId depth isEmission
-                edge = mkBiosphereTreeEdge units flow activityProcessId isEmission ex
-             in (M.insert (UUID.toText (bfId flow)) node nodes, edge : edges)
+            let node = mkBiosphereExportNode units flow activityProcessId depth direction
+                edge = mkBiosphereTreeEdge units flow activityProcessId direction ex
+             in TreeBuild (M.insert (UUID.toText (bfId flow)) node (tbNodes acc)) (edge : tbEdges acc)
 
 -- | ExportNode for an activity-bearing tree node (TreeLeaf or TreeNode).
 mkActivityExportNode :: Database -> Activity -> Text -> Int -> Maybe Text -> ExportNode
@@ -507,15 +527,9 @@ mkMissingExportNode nodeId name missingDepth parentId =
 the tree (depth == 0). Below the root we leave the accumulator untouched to
 keep the graph readable.
 -}
-withRootBiosphere ::
-    Database ->
-    Activity ->
-    Text ->
-    Int ->
-    (M.Map Text ExportNode, [TreeEdge]) ->
-    (M.Map Text ExportNode, [TreeEdge])
-withRootBiosphere db activity pid depth acc@(nodes, edges)
-    | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth nodes edges
+withRootBiosphere :: Database -> Activity -> Text -> Int -> TreeBuild -> TreeBuild
+withRootBiosphere db activity pid depth acc
+    | depth == 0 = extractBiosphereNodesAndEdges db activity pid depth acc
     | otherwise = acc
 
 -- | Technosphere edge from the current node to a child subtree.
@@ -531,37 +545,36 @@ mkTechnosphereTreeEdge units fromPid toPid quantity flow =
         }
 
 -- | Extract nodes and edges from a 'LoopAwareTree'.
-extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> M.Map Text ExportNode -> [TreeEdge] -> (M.Map Text ExportNode, [TreeEdge], TreeStats)
-extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
+extractNodesAndEdges :: Database -> LoopAwareTree -> Int -> Maybe Text -> TreeBuild -> TreeBuild
+extractNodesAndEdges db tree depth parentId acc = case tree of
     TreeLeaf _ activity ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
-            (nodes'', edges') = withRootBiosphere db activity nodeId depth (nodes', edgeAcc)
-         in (nodes'', edges', TreeStats 1 0 1)
+         in withRootBiosphere db activity nodeId depth $
+                insertNode nodeId (mkActivityExportNode db activity nodeId depth parentId) acc
     TreeLoop pid name loopDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 1 0)
+         in insertNode nodeId (mkLoopExportNode db pid nodeId name loopDepth parentId) acc
     TreeMissing _ name missingDepth ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkMissingExportNode nodeId name missingDepth parentId) nodeAcc
-         in (nodes', edgeAcc, TreeStats 1 0 1)
+         in insertNode nodeId (mkMissingExportNode nodeId name missingDepth parentId) acc
     TreeNode _ activity children ->
         let nodeId = getTreeNodeId db tree
-            nodes' = M.insert nodeId (mkActivityExportNode db activity nodeId depth parentId) nodeAcc
-            (childNodes, childEdges, childStats) = foldr (processChild nodeId) (nodes', edgeAcc, TreeStats 1 0 0) children
-            (finalNodes, finalEdges) = withRootBiosphere db activity nodeId depth (childNodes, childEdges)
-         in (finalNodes, finalEdges, childStats)
+            withSelf = insertNode nodeId (mkActivityExportNode db activity nodeId depth parentId) acc
+         in withRootBiosphere db activity nodeId depth $
+                foldr (processChild nodeId) withSelf children
   where
-    processChild parentPid (quantity, flow, subtree) (nodes, edges, stats) =
-        let (n', e', s') = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) nodes edges
+    insertNode :: Text -> ExportNode -> TreeBuild -> TreeBuild
+    insertNode nodeId node built = built{tbNodes = M.insert nodeId node (tbNodes built)}
+    processChild :: Text -> (Double, TechnosphereFlow, LoopAwareTree) -> TreeBuild -> TreeBuild
+    processChild parentPid (quantity, flow, subtree) built =
+        let childBuilt = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) built
             edge = mkTechnosphereTreeEdge (dbUnits db) parentPid (getTreeNodeId db subtree) quantity flow
-         in (n', edge : e', stats <> s')
+         in childBuilt{tbEdges = edge : tbEdges childBuilt}
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
 convertToTreeExport :: Database -> Int -> LoopAwareTree -> TreeExport
 convertToTreeExport db maxDepth tree =
-    let (nodes, edges, _stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
+    let TreeBuild nodes edges = extractNodesAndEdges db tree 0 Nothing (TreeBuild M.empty [])
         -- The tree's own root, so tmRootId always names a key in the nodes map.
         actualRootId = getTreeNodeId db tree
         metadata =
@@ -578,10 +591,10 @@ convertToTreeExport db maxDepth tree =
 {- | Post-filter a TreeExport by name: keep matching nodes plus all their ancestors up to root.
 Uses the enParentId chain already stored in each ExportNode — no extra graph traversal.
 -}
-filterTreeExport :: Text -> TreeExport -> TreeExport
+filterTreeExport :: NamePattern -> TreeExport -> TreeExport
 filterTreeExport pat export =
     let nodes = teNodes export
-        matchingIds = M.keysSet $ M.filter (Normalize.caseInsensitiveInfixOf pat . enName) nodes
+        matchingIds = M.keysSet $ M.filter (Normalize.caseInsensitiveInfixOf (unNamePattern pat) . enName) nodes
         ancestorsOf nId = case enParentId =<< M.lookup nId nodes of
             Nothing -> S.empty
             Just pid -> S.insert pid (ancestorsOf pid)
@@ -1593,9 +1606,8 @@ getSupplyChain ::
     SharedSolver ->
     Text ->
     SupplyChainFilter ->
-    Bool ->
     IO (Either ServiceError SupplyChainResponse)
-getSupplyChain unitCfg depLookup db dbName sharedSolver processIdText af includeEdges =
+getSupplyChain unitCfg depLookup db dbName sharedSolver processIdText af =
     case resolveScorable db processIdText of
         Left err -> return $ Left err
         Right (processId, _rootActivity) ->
@@ -1614,14 +1626,13 @@ getSupplyChain unitCfg depLookup db dbName sharedSolver processIdText af include
                         supplyVec
                         []
                         af
-                        includeEdges
 
 {- | Find the shortest supply chain path from a root process to the first upstream activity
 whose name contains the given substring (case-insensitive).
 Returns path steps ordered root → target, each with cumulative quantity, scaling factor,
 and local_step_ratio (upstream ÷ downstream scaling factors).
 -}
-getPathTo :: Database -> SharedSolver -> Text -> Text -> IO (Either ServiceError Value)
+getPathTo :: Database -> SharedSolver -> Text -> NamePattern -> IO (Either ServiceError Value)
 getPathTo db solver pidText target = do
     case resolveScorable db pidText of
         Left err -> return $ Left err
@@ -1640,7 +1651,7 @@ getPathTo db solver pidText target = do
                                         (fromIntegral rootPid)
                                         ( \i ->
                                             Normalize.caseInsensitiveInfixOf
-                                                target
+                                                (unNamePattern target)
                                                 (activityName (dbActivities db V.! i))
                                         )
                                         adj
@@ -1648,7 +1659,7 @@ getPathTo db solver pidText target = do
                                     Nothing ->
                                         Left $
                                             ActivityNotFound $
-                                                "No upstream node matching '" <> target <> "' reachable from " <> pidText
+                                                "No upstream node matching '" <> unNamePattern target <> "' reachable from " <> pidText
                                     Just [] ->
                                         Left $
                                             ActivityNotFound $
@@ -1691,38 +1702,73 @@ getPathTo db solver pidText target = do
                                                     , "total_ratio" .= totalRatio
                                                     ]
 
+{- | Where a supply-chain collection stands.
+
+At the root the root row is left out of its own chain, quantities are scaled by
+the root's reference amount, process ids stay bare, and depth counts from zero.
+In a dependency database nothing is excluded, the scaling that arrives is
+already physical, ids are qualified with @db::@, and depth continues from the
+level that reached it. The two are one fact, so they travel as one value: as
+four separate parameters they admitted sixteen combinations, of which the code
+only ever built these two.
+-}
+data WalkLevel
+    = RootLevel {rlRoot :: !ProcessId}
+    | DepLevel {dlDepthOffset :: !Int}
+
+{- | What one database contributes to a supply chain: how many non-zero rows it
+had before filtering, the entries that passed, and the edges. Summed across
+levels, pointwise, nearer level first.
+-}
+data Collected = Collected
+    { cUnfilteredCount :: !Int
+    , cEntries :: ![SupplyChainEntry]
+    , cEdges :: ![SupplyChainEdge]
+    }
+
+instance Semigroup Collected where
+    Collected t1 es1 ed1 <> Collected t2 es2 ed2 =
+        Collected (t1 + t2) (es1 ++ es2) (ed1 ++ ed2)
+
+instance Monoid Collected where
+    mempty = Collected 0 [] []
+
 {- | Collect filtered supply-chain entries + edges from a single DB's scaling
 vector. Applies @minQuantity@, name/location/product/class/maxDepth filters,
 BFS depth assignment, and upstream-count accumulation — but deliberately
 does NOT sort, limit, or offset. Callers merge collections from multiple
 databases and then apply sorting/pagination once on the combined list.
 
-Entry @sceProcessId@ is qualified with @dbName::@ iff @qualifyPids@ is True
-(used for dep-DB entries in cross-DB expansion; root entries stay bare for
-backward compatibility with callers that navigate on bare root PIDs).
+Entry @sceProcessId@ is qualified with @dbName::@ at a dep level only; root
+entries stay bare for callers that navigate on bare root PIDs.
 -}
 collectSupplyChainEntries ::
     Database ->
     -- | DB name
     Text ->
-    -- | root PID to exclude (Nothing at dep levels)
-    Maybe ProcessId ->
+    WalkLevel ->
     -- | scaling vector
     U.Vector Double ->
     SupplyChainFilter ->
-    -- | include edges
-    Bool ->
-    -- | qualify processIds with @dbName::@
-    Bool ->
-    -- | multiplier for sceQuantity (rootRefAmount at root, 1.0 at dep)
-    Double ->
-    -- | depth offset added to per-DB BFS depth
-    Int ->
-    -- | (unfiltered non-zero count, filtered entries, edges)
-    (Int, [SupplyChainEntry], [SupplyChainEdge])
-collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyPids quantityMult depthOffset =
+    Collected
+collectSupplyChainEntries db dbName level supplyVec scf =
     let core = scfCore scf
         minQ = fromMaybe 0 (scfMinQuantity scf)
+
+        mRootPid = case level of
+            RootLevel{rlRoot = r} -> Just r
+            DepLevel{} -> Nothing
+        -- A root chain is stated per the root's reference product; a dep level
+        -- receives a scaling that is already physical.
+        quantityMult = case level of
+            RootLevel{rlRoot = r} -> getReferenceProductAmount (dbActivities db V.! fromIntegral r)
+            DepLevel{} -> 1.0
+        depthOffset = case level of
+            RootLevel{} -> 0
+            DepLevel{dlDepthOffset = d} -> d
+        qualifyPids = case level of
+            RootLevel{} -> False
+            DepLevel{} -> True
         n = U.length supplyVec
 
         allEntries =
@@ -1805,26 +1851,25 @@ collectSupplyChainEntries db dbName mRootPid supplyVec scf includeEdges qualifyP
             ]
 
         allIdxSet = S.fromList (maybe [] ((: []) . fromIntegral) mRootPid ++ map (fromIntegral . fst) allEntries)
-        edges =
-            if not includeEdges
-                then []
-                else
-                    U.foldl'
-                        ( \acc (SparseTriple row col val) ->
-                            if S.member (fromIntegral row :: Int) allIdxSet && S.member (fromIntegral col :: Int) allIdxSet
-                                then
-                                    SupplyChainEdge
-                                        (qualify (fromIntegral row))
-                                        dbName
-                                        (qualify (fromIntegral col))
-                                        dbName
-                                        val
-                                        : acc
-                                else acc
-                        )
-                        []
-                        (dbTechnosphereTriples db)
-     in (length allEntries, filteredEntries, edges)
+        edges = case scfEdges scf of
+            EntriesOnly -> []
+            WithEdges ->
+                U.foldl'
+                    ( \acc (SparseTriple row col val) ->
+                        if S.member (fromIntegral row :: Int) allIdxSet && S.member (fromIntegral col :: Int) allIdxSet
+                            then
+                                SupplyChainEdge
+                                    (qualify (fromIntegral row))
+                                    dbName
+                                    (qualify (fromIntegral col))
+                                    dbName
+                                    val
+                                    : acc
+                            else acc
+                    )
+                    []
+                    (dbTechnosphereTriples db)
+     in Collected (length allEntries) filteredEntries edges
 
 {- | Sort, offset, and limit a list of supply-chain entries using the shared
 filter core's @afcSort@ / @afcOrder@ / @afcLimit@ / @afcOffset@. All
@@ -1856,23 +1901,17 @@ buildSupplyChainFromScalingVector ::
     ProcessId ->
     U.Vector Double ->
     SupplyChainFilter ->
-    -- | include edges (expensive: extra pass over technosphere triples)
-    Bool ->
     SupplyChainResponse
-buildSupplyChainFromScalingVector db dbName processId supplyVec scf includeEdges =
+buildSupplyChainFromScalingVector db dbName processId supplyVec scf =
     let rootActivity = dbActivities db V.! fromIntegral processId
         rootRefAmount = getReferenceProductAmount rootActivity
-        (totalActs, entries, edges) =
+        Collected totalActs entries edges =
             collectSupplyChainEntries
                 db
                 dbName
-                (Just processId)
+                (RootLevel processId)
                 supplyVec
                 scf
-                includeEdges
-                False
-                rootRefAmount
-                0
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText db processId
@@ -1919,23 +1958,17 @@ buildSupplyChainFromScalingVectorCrossDB ::
     -- | extra virtual links from subs
     [CrossDBLink] ->
     SupplyChainFilter ->
-    -- | include edges
-    Bool ->
     IO (Either ServiceError SupplyChainResponse)
-buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName rootPid rootScaling extraLinks scf includeEdges = do
+buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName rootPid rootScaling extraLinks scf = do
     let rootActivity = dbActivities rootDb V.! fromIntegral rootPid
         rootRefAmount = getReferenceProductAmount rootActivity
-        (rootTotal, rootEntries, rootEdges) =
+        rootCollected =
             collectSupplyChainEntries
                 rootDb
                 rootDbName
-                (Just rootPid)
+                (RootLevel rootPid)
                 rootScaling
                 scf
-                includeEdges
-                False
-                rootRefAmount
-                0
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText rootDb rootPid
@@ -1952,19 +1985,18 @@ buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName roo
                 , prsMassAllocationPercent = Nothing
                 , prsNativeType = activityNativeType rootActivity
                 }
-    eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf includeEdges 1 S.empty
+    eDep <- walkDepLevels unitCfg depLookup rootDb rootScaling extraLinks scf 1 S.empty
     pure $ case eDep of
         Left err -> Left err
-        Right (depTotal, depEntries, depEdges) ->
-            let combinedEntries = rootEntries ++ depEntries
-                combinedEdges = rootEdges ++ depEdges
+        Right depCollected ->
+            let Collected total entries edges = rootCollected <> depCollected
              in Right
                     SupplyChainResponse
                         { scrRoot = rootSummary
-                        , scrTotalActivities = rootTotal + depTotal
-                        , scrFilteredActivities = length combinedEntries
-                        , scrSupplyChain = sortAndPaginate (scfCore scf) combinedEntries
-                        , scrEdges = combinedEdges
+                        , scrTotalActivities = total
+                        , scrFilteredActivities = length entries
+                        , scrSupplyChain = sortAndPaginate (scfCore scf) entries
+                        , scrEdges = edges
                         }
 
 {- | Recursive helper: for every cross-DB link emerging from @consumerScaling@,
@@ -1984,25 +2016,22 @@ walkDepLevels ::
     -- | extra virtual links visible at this level
     [CrossDBLink] ->
     SupplyChainFilter ->
-    Bool ->
     -- | current depth
     Int ->
     -- | visited DB names (cycle guard)
     S.Set Text ->
-    IO (Either ServiceError (Int, [SupplyChainEntry], [SupplyChainEdge]))
-walkDepLevels unitCfg depLookup consumerDb consumerScaling extras scf includeEdges depth visited
-    | depth >= SharedSolver.maxDepsDepth = pure (Right (0, [], []))
+    IO (Either ServiceError Collected)
+walkDepLevels unitCfg depLookup consumerDb consumerScaling extras scf depth visited
+    | depth >= SharedSolver.maxDepsDepth = pure (Right mempty)
     | otherwise = do
         let demandsMap = accumulateDepDemandsWith consumerDb extras consumerScaling
         results <-
             mapM
-                (resolveOneDep unitCfg depLookup scf includeEdges depth visited)
+                (resolveOneDep unitCfg depLookup scf depth visited)
                 (M.toList demandsMap)
         pure $ case lefts results of
             (err : _) -> Left err
-            [] -> Right (foldr merge3 (0, [], []) (rights results))
-  where
-    merge3 (t1, es1, ed1) (t2, es2, ed2) = (t1 + t2, es1 ++ es2, ed1 ++ ed2)
+            [] -> Right (mconcat (rights results))
 
 {- | For a single dep DB: solve its induced demand, collect filtered entries
 using the shared 'collectSupplyChainEntries' helper (so it gets the same
@@ -2012,34 +2041,29 @@ resolveOneDep ::
     UnitConfig ->
     SharedSolver.DepSolverLookup ->
     SupplyChainFilter ->
-    Bool ->
     -- | current depth (the one we're entering)
     Int ->
     -- | visited
     S.Set Text ->
     (Text, SupplierDemands) ->
-    IO (Either ServiceError (Int, [SupplyChainEntry], [SupplyChainEdge]))
-resolveOneDep unitCfg depLookup scf includeEdges depth visited (depDbName, demands)
-    | depDbName `S.member` visited = pure (Right (0, [], []))
+    IO (Either ServiceError Collected)
+resolveOneDep unitCfg depLookup scf depth visited (depDbName, demands)
+    | depDbName `S.member` visited = pure (Right mempty)
     | otherwise = do
         mDep <- depLookup depDbName
         case mDep of
-            Nothing -> pure (Right (0, [], [])) -- unloaded dep DB: silent skip (matches LCIA path)
+            Nothing -> pure (Right mempty) -- unloaded dep DB: silent skip (matches LCIA path)
             Just (depDb, depSolver) -> case depDemandsToVector unitCfg depDbName depDb demands of
                 Left err -> pure (Left (MatrixError err))
                 Right demandVec -> do
                     depScaling <- solveWithSharedSolver depSolver demandVec
-                    let (localTotal, localEntries, localEdges) =
+                    let local =
                             collectSupplyChainEntries
                                 depDb
                                 depDbName
-                                Nothing
+                                (DepLevel depth)
                                 depScaling
                                 scf
-                                includeEdges
-                                True
-                                1.0
-                                depth
                     eDeeper <-
                         walkDepLevels
                             unitCfg
@@ -2048,17 +2072,9 @@ resolveOneDep unitCfg depLookup scf includeEdges depth visited (depDbName, deman
                             depScaling
                             []
                             scf
-                            includeEdges
                             (depth + 1)
                             (S.insert depDbName visited)
-                    pure $ case eDeeper of
-                        Left err -> Left err
-                        Right (deeperTotal, deeperEntries, deeperEdges) ->
-                            Right
-                                ( localTotal + deeperTotal
-                                , localEntries ++ deeperEntries
-                                , localEdges ++ deeperEdges
-                                )
+                    pure $ (local <>) <$> eDeeper
 
 {- | Build reverse adjacency (consumer -> [supplier]) from a vector of
 technosphere sparse triplets. Each triplet @(row=supplier, col=consumer)@
@@ -2213,7 +2229,7 @@ resolveSpec :: Database -> Perturbation -> Either Text (Int, [(Int, Double)])
 resolveSpec db p = do
     consumerPid <- resolveRootOnly db (perConsumer p)
     supplierPid <- resolveRootOnly db (perSupplier p)
-    case findTechCoefficient db consumerPid supplierPid of
+    case findTechCoefficient db (TechLink consumerPid supplierPid) of
         Nothing ->
             Left $
                 "no technosphere link from consumer "
@@ -2515,7 +2531,7 @@ data DepRef = DepRef
     { drDbName :: !Text
     , drDb :: !Database
     , drPid :: !ProcessId
-    , drUUIDs :: !(UUID, UUID)
+    , drRef :: !ProcessRef
     }
 
 {- | A planned rank-1 perturbation of one consumer column plus any virtual
@@ -2540,6 +2556,25 @@ data GlobalRankOneUpdate = GlobalRankOneUpdate
     { gruU :: ![(Int, Double)]
     , gruV :: ![(Int, Double)]
     , gruExtras :: ![CrossDBLink]
+    }
+
+{- | The two ends of one technosphere coefficient @A[supplier, consumer]@.
+Named because the ends are both a 'ProcessId': read the matrix at
+@A[consumer, supplier]@ and you get a well-formed answer about the wrong
+edge, which no test would notice.
+-}
+data TechLink = TechLink
+    { tlConsumer :: !ProcessId
+    , tlSupplier :: !ProcessId
+    }
+
+{- | A global substitution within one database: every consumer of @swapFrom@
+buys @swapTo@ instead. Two 'ProcessId's again, and swapping them inverts the
+unit factor κ rather than failing.
+-}
+data Swap = Swap
+    { swapFrom :: !ProcessId
+    , swapTo :: !ProcessId
     }
 
 {- | The replaced supplier's technosphere row: every consumer that sources
@@ -2583,8 +2618,8 @@ give @κ = 1@ (matching the per-edge path, which assumes same-unit
 suppliers). 'Left' when the two reference products are dimensionally
 incompatible — never a silently wrong coefficient.
 -}
-substitutionUnitFactor :: UnitConfig -> Database -> ProcessId -> ProcessId -> Either ServiceError Double
-substitutionUnitFactor unitCfg db fromPid toPid = do
+substitutionUnitFactor :: UnitConfig -> Database -> Swap -> Either ServiceError Double
+substitutionUnitFactor unitCfg db (Swap fromPid toPid) = do
     fromUnit <- maybe (Left $ noRefUnit fromPid) Right $ referenceProductUnit db fromPid
     toUnit <- maybe (Left $ noRefUnit toPid) Right $ referenceProductUnit db toPid
     -- Identical units are κ = 1 by definition, independent of the conversion
@@ -2602,10 +2637,10 @@ substitutionUnitFactor unitCfg db fromPid toPid = do
 removes it from every consumer; the @-κ@ at @to@ adds the unit-converted
 demand. No virtual links (both suppliers live in this DB).
 -}
-planGlobalWithinDB :: UnitConfig -> Database -> ProcessId -> ProcessId -> Either ServiceError GlobalRankOneUpdate
-planGlobalWithinDB unitCfg db fromPid toPid = do
+planGlobalWithinDB :: UnitConfig -> Database -> Swap -> Either ServiceError GlobalRankOneUpdate
+planGlobalWithinDB unitCfg db swap@(Swap fromPid toPid) = do
     v <- requireConsumers db fromPid
-    kappa <- substitutionUnitFactor unitCfg db fromPid toPid
+    kappa <- substitutionUnitFactor unitCfg db swap
     Right $ GlobalRankOneUpdate [(fromIntegral fromPid, 1.0), (fromIntegral toPid, negate kappa)] v []
 
 {- | Apply all substitutions whose consumer lives in @thisDbName@ to the
@@ -2743,7 +2778,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
         Elsewhere _ ->
             Left $ MatrixError "global substitution requires the replaced activity (from) to live in the root database"
         Here fromPid -> case toEp of
-            Here toPid -> planGlobalWithinDB unitCfg thisDb fromPid toPid
+            Here toPid -> planGlobalWithinDB unitCfg thisDb (Swap fromPid toPid)
             Elsewhere toRef -> do
                 v <- requireConsumers thisDb fromPid
                 let links =
@@ -2757,11 +2792,11 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
 
     requireTech sub cPid fromPid =
         maybe (Left $ noTechLink sub cPid) Right $
-            findTechCoefficient thisDb cPid fromPid
+            findTechCoefficient thisDb (TechLink cPid fromPid)
 
     requireStatic sub cPid fromRef =
         maybe (Left $ noStaticLink sub cPid (drDbName fromRef) (drPid fromRef)) Right $
-            findStaticCrossDBLink thisDb cPid (drDbName fromRef) (drUUIDs fromRef)
+            findStaticCrossDBLink thisDb cPid (drDbName fromRef) (drRef fromRef)
 
     applyRankOne mFact xs upd = do
         -- Apply the same rank-1 update to each of the K vectors. z depends
@@ -2824,7 +2859,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                                     { drDbName = refDb
                                     , drDb = depDb
                                     , drPid = p
-                                    , drUUIDs = dbProcessIdTable depDb V.! fromIntegral p
+                                    , drRef = uncurry ProcessRef (dbProcessIdTable depDb V.! fromIntegral p)
                                     }
 
 {- | Build a synthesized 'CrossDBLink' for a what-if substitution targeting a
@@ -2843,19 +2878,19 @@ mkVirtualLink ::
     -- | raw exchange coefficient (pre-normalization)
     Double ->
     CrossDBLink
-mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drUUIDs = (supActU, supProdU)} coef =
-    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drRef = supRef} coef =
+    let consumerRef = uncurry ProcessRef (dbProcessIdTable rootDb V.! fromIntegral consumerPid)
         supAct = dbActivities depDb V.! fromIntegral supPid
         refUnit = maybe "" (getUnitNameForExchange (dbUnits depDb)) (L.find isReferenceOutput (exchanges supAct))
      in CrossDBLink
-            { cdlConsumerActUUID = cActU
-            , cdlConsumerProdUUID = cProdU
+            { cdlConsumerActUUID = prActivity consumerRef
+            , cdlConsumerProdUUID = prProduct consumerRef
             , -- Substitution links never enter 'dbCrossDBLinks' and the API
               -- surface only indexes load-time links by 'cdlConsumerFlowId',
               -- so the discriminator is unused for synthetic links.
               cdlConsumerFlowId = UUID.nil
-            , cdlSupplierActUUID = supActU
-            , cdlSupplierProdUUID = supProdU
+            , cdlSupplierActUUID = prActivity supRef
+            , cdlSupplierProdUUID = prProduct supRef
             , cdlCoefficient = coef
             , cdlExchangeUnit = refUnit
             , cdlFlowName = activityName supAct
@@ -2868,26 +2903,26 @@ mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPi
 Returns 'Nothing' if no link exists — caller surfaces as 422 rather than
 silently no-op.
 -}
-findStaticCrossDBLink :: Database -> ProcessId -> Text -> (UUID, UUID) -> Maybe CrossDBLink
-findStaticCrossDBLink rootDb consumerPid depDbName depSupUUIDs =
-    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+findStaticCrossDBLink :: Database -> ProcessId -> Text -> ProcessRef -> Maybe CrossDBLink
+findStaticCrossDBLink rootDb consumerPid depDbName depSupRef =
+    let consumerRef = uncurry ProcessRef (dbProcessIdTable rootDb V.! fromIntegral consumerPid)
         matches lk =
             cdlSourceDatabase lk == depDbName
-                && cdlConsumerActUUID lk == cActU
-                && cdlConsumerProdUUID lk == cProdU
-                && (cdlSupplierActUUID lk, cdlSupplierProdUUID lk) == depSupUUIDs
+                && cdlConsumerActUUID lk == prActivity consumerRef
+                && cdlConsumerProdUUID lk == prProduct consumerRef
+                && ProcessRef (cdlSupplierActUUID lk) (cdlSupplierProdUUID lk) == depSupRef
      in case filter matches (dbCrossDBLinks rootDb) of
             (lk : _) -> Just lk
             [] -> Nothing
 
 -- | Find the technosphere coefficient A[supplier, consumer] from the sparse triples
-findTechCoefficient :: Database -> ProcessId -> ProcessId -> Maybe Double
-findTechCoefficient db consumer supplier =
+findTechCoefficient :: Database -> TechLink -> Maybe Double
+findTechCoefficient db link =
     coefficient <$> U.find isWanted (dbTechnosphereTriples db)
   where
     consumerIdx, supplierIdx :: Int32
-    consumerIdx = fromIntegral consumer
-    supplierIdx = fromIntegral supplier
+    consumerIdx = fromIntegral (tlConsumer link)
+    supplierIdx = fromIntegral (tlSupplier link)
     isWanted :: SparseTriple -> Bool
     isWanted (SparseTriple row col _) = row == supplierIdx && col == consumerIdx
     coefficient :: SparseTriple -> Double
@@ -2895,7 +2930,7 @@ findTechCoefficient db consumer supplier =
 
 {- | Find all activities that transitively depend on a given supplier.
 BFS through the technosphere matrix tracking depth; optional max-depth cap.
-When cnfIncludeEdges is set, every technosphere coefficient whose endpoints
+When 'cnfEdges' is 'WithEdges', every technosphere coefficient whose endpoints
 are both reachable from the supplier is emitted alongside the paginated
 result list, mirroring SupplyChainResponse.scrEdges.
 -}
@@ -2983,25 +3018,24 @@ getConsumers db dbName processIdText cnf = do
 
         -- Every (supplier, consumer) technosphere coefficient whose endpoints
         -- are both reachable from the queried supplier. Populated only when
-        -- the caller opts in via cnfIncludeEdges; keeps the default payload
-        -- identical to the pre-edges wire shape.
+        -- the caller asks for edges; keeps the default payload identical to
+        -- the pre-edges wire shape.
         visitedSet = M.insert processId 0 allConsumers
-        edges =
-            if cnfIncludeEdges cnf
-                then
-                    [ SupplyChainEdge
-                        { sceEdgeFrom = processIdToText db (fromIntegral row :: ProcessId)
-                        , sceEdgeFromDb = dbName
-                        , sceEdgeTo = processIdToText db (fromIntegral col :: ProcessId)
-                        , sceEdgeToDb = dbName
-                        , sceEdgeAmount = val
-                        }
-                    | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
-                    , row /= col
-                    , M.member (fromIntegral row :: ProcessId) visitedSet
-                    , M.member (fromIntegral col :: ProcessId) visitedSet
-                    ]
-                else []
+        edges = case cnfEdges cnf of
+            EntriesOnly -> []
+            WithEdges ->
+                [ SupplyChainEdge
+                    { sceEdgeFrom = processIdToText db (fromIntegral row :: ProcessId)
+                    , sceEdgeFromDb = dbName
+                    , sceEdgeTo = processIdToText db (fromIntegral col :: ProcessId)
+                    , sceEdgeToDb = dbName
+                    , sceEdgeAmount = val
+                    }
+                | SparseTriple row col val <- U.toList (dbTechnosphereTriples db)
+                , row /= col
+                , M.member (fromIntegral row :: ProcessId) visitedSet
+                , M.member (fromIntegral col :: ProcessId) visitedSet
+                ]
 
     Right $ ConsumersResponse (SearchResults page total offset limit hasMore 0.0) edges
 

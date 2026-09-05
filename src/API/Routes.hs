@@ -1180,8 +1180,9 @@ buildSupplyChainFilter ::
     [Text] ->
     Maybe Text ->
     Maybe Text ->
+    Service.Edges ->
     Either Text Service.SupplyChainFilter
-buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam = do
+buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam maxDepthParam locationFilter productFilter presetParam classSystems classValues classModes sortParam orderParam edges = do
     classifications <- mergeClassFilters presets presetParam classSystems classValues classModes
     pure
         Service.SupplyChainFilter
@@ -1198,6 +1199,7 @@ buildSupplyChainFilter presets nameFilter limitParam minQuantity offsetParam max
                     }
             , Service.scfMaxDepth = maxDepthParam
             , Service.scfMinQuantity = minQuantity
+            , Service.scfEdges = edges
             }
 
 buildFlowEntry :: Database -> MethodTables -> UUID -> FlowCFEntry
@@ -1545,7 +1547,7 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
     dbManager <- asks aeDbManager
     presets <- asks aeClassificationPresets
     (db, sharedSolver) <- requireDatabaseByName dbName
-    let includeEdges = fromMaybe False includeEdgesParam
+    let edges = if fromMaybe False includeEdgesParam then Service.WithEdges else Service.EntriesOnly
     scf <-
         either badRequest pure $
             buildSupplyChainFilter
@@ -1563,10 +1565,11 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
                 classModes
                 sortParam
                 orderParam
+                edges
     case mSub of
         Nothing -> do
             unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
-            result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf includeEdges
+            result <- liftIO $ Service.getSupplyChain unitCfg (DM.mkDepSolverLookup dbManager) db dbName sharedSolver processIdText scf
             either throwServiceError pure result
         Just subReq -> do
             unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
@@ -1595,7 +1598,6 @@ activitySupplyChainCore dbName processIdText nameFilter limitParam minQuantity o
                                 scalingVec
                                 virtualLinks
                                 scf
-                                includeEdges
                     either throwServiceError pure eResp
 
 getActivitySupplyChain ::
@@ -1840,7 +1842,7 @@ getActivityConsumers dbName processIdText nameFilter locationFilter productFilte
                         , Service.afcOrder = orderParam
                         }
                 , Service.cnfMaxDepth = maxDepthParam
-                , Service.cnfIncludeEdges = fromMaybe False includeEdgesParam
+                , Service.cnfEdges = if fromMaybe False includeEdgesParam then Service.WithEdges else Service.EntriesOnly
                 }
     either throwServiceError pure (Service.getConsumers db dbName processIdText cnf)
 
@@ -1852,7 +1854,7 @@ getActivityPathTo dbName processIdText targetParam = do
             (throwError err400{errBody = "Missing required 'target' query parameter"})
             pure
             targetParam
-    result <- liftIO $ Service.getPathTo db solver processIdText target
+    result <- liftIO $ Service.getPathTo db solver processIdText (Service.NamePattern target)
     case result of
         Left (Service.ActivityNotFound msg) ->
             throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}

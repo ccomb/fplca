@@ -911,20 +911,22 @@ callGetSupplyChain dbManager presets rid args = runTool rid $ do
                         }
                 , Service.scfMaxDepth = intArg "max_depth" args
                 , Service.scfMinQuantity = doubleArg "min_quantity" args
+                , -- No MCP tool asks for the subgraph's edges; the REST route does.
+                  Service.scfEdges = Service.EntriesOnly
                 }
     subs <- except (parseArrayArg "substitutions" Nothing args :: Either Text [Substitution])
     unitCfg <- liftIO $ DM.getMergedUnitConfig dbManager
     payload <-
         if null subs
             then -- Plain cross-DB supply chain.
-                toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf False) >>= liftShow)
+                toJSON <$> (liftIO (Service.getSupplyChain unitCfg depLookup db dbName solver pid scf) >>= liftShow)
             else do
                 -- Substitution-aware: re-solve the root scaling, then build from it.
                 (processId, _) <- liftService (Service.resolveScorable db pid)
                 (scalingVec, virtualLinks) <-
                     liftIO (Service.computeScalingVectorWithSubstitutionsCrossDB unitCfg depLookup db dbName solver processId subs) >>= liftShow
                 resp <-
-                    liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf False) >>= liftShow
+                    liftIO (Service.buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup db dbName processId scalingVec virtualLinks scf) >>= liftShow
                 pure (toJSON resp)
     pure $ toolSuccessJson rid payload
 
@@ -1008,7 +1010,7 @@ callGetPathTo :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetPathTo rid args (db, solver) = runTool rid $ do
     pid <- except (requireText "process_id" args)
     target <- except (requireText "target" args)
-    val <- liftIO (Service.getPathTo db solver pid target) >>= liftShow
+    val <- liftIO (Service.getPathTo db solver pid (Service.NamePattern target)) >>= liftShow
     pure (toolSuccessJson rid val)
 
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
@@ -1030,7 +1032,7 @@ callGetConsumers presets rid args (db, _) = runTool rid $ do
                         , Service.afcOrder = Nothing
                         }
                 , Service.cnfMaxDepth = intArg "max_depth" args
-                , Service.cnfIncludeEdges = fromMaybe False (boolArg "include_edges" args)
+                , Service.cnfEdges = if fromMaybe False (boolArg "include_edges" args) then Service.WithEdges else Service.EntriesOnly
                 }
     results <- liftShow (Service.getConsumers db dbName pid cnf)
     pure (toolSuccessJson rid (toJSON results))

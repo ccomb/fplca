@@ -17,6 +17,8 @@ import qualified Search.BM25 as BM25
 import Service (
     ActivityFilterCore (..),
     ConsumerFilter (..),
+    Edges (..),
+    NamePattern (..),
     SupplyChainFilter (..),
     bfsToPattern,
     buildSupplyChainFromScalingVector,
@@ -44,10 +46,10 @@ emptyCore =
         }
 
 emptySupply :: SupplyChainFilter
-emptySupply = SupplyChainFilter emptyCore Nothing Nothing
+emptySupply = SupplyChainFilter emptyCore Nothing Nothing EntriesOnly
 
 emptyConsumer :: ConsumerFilter
-emptyConsumer = ConsumerFilter emptyCore Nothing False
+emptyConsumer = ConsumerFilter emptyCore Nothing EntriesOnly
 
 -- | Update the shared core inside a 'SupplyChainFilter'.
 mapSupplyCore :: (ActivityFilterCore -> ActivityFilterCore) -> SupplyChainFilter -> SupplyChainFilter
@@ -67,7 +69,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
             supplyVec <- computeScalingVector db rootProcessId
 
-            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
                 entries = scrSupplyChain response
 
             -- With rootRefAmount = 1, sceQuantity must equal sceScalingFactor exactly
@@ -85,7 +87,7 @@ spec = do
             let rootProcessId = 0 :: ProcessId
             supplyVec <- computeScalingVector db rootProcessId
 
-            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let response = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
                 entries = scrSupplyChain response
 
             -- All entries should have depth > 0 (root is excluded from supply chain)
@@ -99,7 +101,7 @@ spec = do
             supplyVec <- computeScalingVector db rootProcessId
 
             -- No depth filter: should get Y (depth 1) and Z (depth 2)
-            let noFilter = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply False
+            let noFilter = buildSupplyChainFromScalingVector db "test-db" rootProcessId supplyVec emptySupply
             scrFilteredActivities noFilter `shouldSatisfy` (>= 2)
 
             -- Depth 1: should only get Y (direct supplier)
@@ -110,7 +112,6 @@ spec = do
                         rootProcessId
                         supplyVec
                         emptySupply{scfMaxDepth = Just 1}
-                        False
             scrFilteredActivities depth1 `shouldSatisfy` (< scrFilteredActivities noFilter)
 
     -- -----------------------------------------------------------------------
@@ -129,7 +130,6 @@ spec = do
                     pid
                     vec
                     (mapSupplyCore (\c -> c{afcName = nameQ}) emptySupply)
-                    False
 
         it "narrows to single entry when token matches only one activity" $ do
             db <- loadWithIndex
@@ -199,7 +199,6 @@ spec = do
                         rootPid
                         supplyVec
                         (mapSupplyCore (\c -> c{afcName = Just "produc", afcSort = Just "depth"}) emptySupply)
-                        False
             map sceDepth (scrSupplyChain resp) `shouldBe` [1, 2]
 
     describe "Fuzzy name filter on consumers" $ do
@@ -259,7 +258,7 @@ spec = do
         it "emits technosphere edges whose endpoints are both reachable from the supplier" $ do
             db <- loadWithIndex
             let pidZ = processIdToText db 2
-                cnf = emptyConsumer{cnfIncludeEdges = True}
+                cnf = emptyConsumer{cnfEdges = WithEdges}
             case getConsumers db "test-db" pidZ cnf of
                 Left err -> expectationFailure $ "getConsumers failed: " ++ show err
                 Right cr -> do
@@ -317,29 +316,29 @@ spec = do
                     }
 
         it "filter matching leaf keeps leaf + all ancestors" $ do
-            let result = filterTreeExport "leaf" tree
+            let result = filterTreeExport (NamePattern "leaf") tree
             M.keys (teNodes result) `shouldMatchList` ["r", "m", "l"]
             length (teEdges result) `shouldBe` 2
 
         it "filter matching middle node keeps middle + root only" $ do
-            let result = filterTreeExport "middle" tree
+            let result = filterTreeExport (NamePattern "middle") tree
             M.keys (teNodes result) `shouldMatchList` ["r", "m"]
             map (\e -> (teFrom e, teTo e)) (teEdges result) `shouldMatchList` [("r", "m")]
 
         it "filter matching root keeps root only" $ do
-            let result = filterTreeExport "root" tree
+            let result = filterTreeExport (NamePattern "root") tree
             M.keys (teNodes result) `shouldMatchList` ["r"]
             length (teEdges result) `shouldBe` 0
 
         it "filter with no match returns empty" $ do
-            let result = filterTreeExport "nonexistent" tree
+            let result = filterTreeExport (NamePattern "nonexistent") tree
             M.size (teNodes result) `shouldBe` 0
             length (teEdges result) `shouldBe` 0
 
         it "updates tmTotalNodes to match filtered count" $ do
-            let result = filterTreeExport "leaf" tree
+            let result = filterTreeExport (NamePattern "leaf") tree
             tmTotalNodes (teTree result) `shouldBe` 3
-            let result2 = filterTreeExport "middle" tree
+            let result2 = filterTreeExport (NamePattern "middle") tree
             tmTotalNodes (teTree result2) `shouldBe` 2
 
     -- -----------------------------------------------------------------------
@@ -374,7 +373,7 @@ spec = do
                 actCount = fromIntegral (dbActivityCount db)
             solver <- createSharedSolver "test" techTriples actCount
             let rootPid = processIdToText db 0
-            result <- getPathTo db solver rootPid "product Z"
+            result <- getPathTo db solver rootPid (NamePattern "product Z")
             case result of
                 Left err -> expectationFailure $ "Expected Right but got Left: " ++ show err
                 Right val -> do
@@ -392,7 +391,7 @@ spec = do
                 actCount = fromIntegral (dbActivityCount db)
             solver <- createSharedSolver "test" techTriples actCount
             let rootPid = processIdToText db 0
-            result <- getPathTo db solver rootPid "no such activity"
+            result <- getPathTo db solver rootPid (NamePattern "no such activity")
             case result of
                 Left _ -> return ()
                 Right _ -> expectationFailure "Expected Left but got Right"
