@@ -110,7 +110,7 @@ module Method.Mapping (
     -- * Statistics
     MappingStats (..),
     computeMappingStats,
-    strategyPriority,
+    entryPriority,
 ) where
 
 import Control.Applicative ((<|>))
@@ -1307,8 +1307,8 @@ data SubMatch = ExactSub | MediumLevelSub
 
 {- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
 heuristic/expanded): when two CFs collide on one flow or table key, the lower
-rank — the more discriminating match — wins. Exported so diagnostics dedup
-with the same preference the score tables use.
+rank — the more discriminating match — wins. What the score tables actually
+compare is 'entryPriority', which also ranks an entry no resolution reached.
 -}
 strategyPriority :: MatchStrategy -> Int
 strategyPriority ByUUID = 0
@@ -1318,8 +1318,11 @@ strategyPriority ByCAS = 3
 strategyPriority ByProxy = 4
 
 {- | Cascade rank of a table entry. One no build-side resolution reached ranks
-with 'ByProxy', the least discriminating match: two such entries meeting on one
-key tie here and the comparison falls through to the factor.
+with 'ByProxy', the least discriminating match, so the two tie here and the
+entry is chosen on the rungs below: the raw-name rank first, then the factor.
+
+Exported so a consumer ranking entries outside this module reaches the same
+verdict as the score tables do.
 -}
 entryPriority :: BuildProvenance -> Int
 entryPriority = maybe (strategyPriority ByProxy) strategyPriority . bpStrategy
@@ -1566,7 +1569,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
   where
     cfOf cf = CF (mcfValue cf) (CFUnit (mcfUnit cf))
 
-    entryOf cf mflow = TableEntry (cfOf cf) (BuildProvenance (matchStrategy mflow) cf)
+    entryOf cf mflow = TableEntry (cfOf cf) (BuildProvenance (snd <$> mflow) cf)
 
     -- The Bool rode along only for 'preferBetter''s raw-name rank.
     dropRank = M.map fst
@@ -1708,8 +1711,6 @@ buildMethodTables methodFamily cmap energyDensities mappings =
     rawNameMatches cf mflow = case mflow of
         Just (flow, _) -> T.toLower (T.strip (mcfFlowName cf)) == T.toLower (T.strip (bfName flow))
         Nothing -> False
-
-    matchStrategy = fmap snd
 
     -- Use matched flow's name only for name/synonym/proxy matches: those key
     -- the CF under the database flow it resolved to, not the method CF's own name.

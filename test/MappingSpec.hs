@@ -520,37 +520,48 @@ spec = do
         -- table-key comparison ranks it with a proxy match: the least
         -- discriminating rank there is. Two rows meeting on one name key, one
         -- borrowed through a proxy edge and one nothing resolved, therefore
-        -- tie on rank, and the comparison falls through to the higher factor.
+        -- tie on rank, and the entry is chosen on the rungs below: the
+        -- raw-name rank, which neither row here passes, then the factor.
         -- The tie is stated in one rank table and read in one comparison, and
         -- neither says it out loud, so it is pinned here.
-        let borrowed = mkCFComp "phosphorus" "water" "" 5.0
-            unresolved = mkCFComp "phosphate" "water" "" 20.0
+        --
+        -- One case would not pin it: whichever factor is the larger, a rank
+        -- that moved in one direction still returns that row. So both are
+        -- asserted, the higher factor once on each side. Together they fail
+        -- whichever way the unresolved row's rank moves.
+        let borrowedAt = mkCFComp "phosphorus" "water" ""
+            unresolvedAt = mkCFComp "phosphate" "water" ""
 
-        it "ranks with a proxy match, so the higher factor decides the key" $ do
-            targetId <- nextRandom
-            probeId <- nextRandom
-            let target = mkFlow targetId "phosphate" "water" Nothing
-                probe = mkFlow probeId "phosphate" "water" Nothing
-                tables =
-                    buildMethodTables
-                        OtherCFFamily
-                        M.empty
-                        M.empty
-                        [ (borrowed, Just (target, ByProxy))
-                        , (unresolved, Nothing)
-                        ]
-            cfValue <$> lookupCFForFlow tables probeId (Just probe) `shouldBe` Just 20.0
+            servedFor mappings = do
+                targetId <- nextRandom
+                probeId <- nextRandom
+                let target = mkFlow targetId "phosphate" "water" Nothing
+                    probe = mkFlow probeId "phosphate" "water" Nothing
+                    tables = buildMethodTables OtherCFFamily M.empty M.empty (mappings target)
+                pure (cfValue <$> lookupCFForFlow tables probeId (Just probe))
+
+        it "loses the key to a larger factor a proxy match carries" $ do
+            served <-
+                servedFor $ \target ->
+                    [ (borrowedAt 20.0, Just (target, ByProxy))
+                    , (unresolvedAt 5.0, Nothing)
+                    ]
+            served `shouldBe` Just 20.0
+
+        it "takes the key from a smaller factor a proxy match carries" $ do
+            served <-
+                servedFor $ \target ->
+                    [ (borrowedAt 5.0, Just (target, ByProxy))
+                    , (unresolvedAt 20.0, Nothing)
+                    ]
+            served `shouldBe` Just 20.0
 
         it "borrows the proxy row's own name, which is what makes the two meet" $ do
-            -- Without this the test above proves nothing: the two rows have
+            -- Without this the two tests above prove nothing: the rows have
             -- different names, and they compete only because a proxy match
             -- files its row under the flow it borrowed from.
-            targetId <- nextRandom
-            probeId <- nextRandom
-            let target = mkFlow targetId "phosphate" "water" Nothing
-                probe = mkFlow probeId "phosphate" "water" Nothing
-                proxyOnly = buildMethodTables OtherCFFamily M.empty M.empty [(borrowed, Just (target, ByProxy))]
-            cfValue <$> lookupCFForFlow proxyOnly probeId (Just probe) `shouldBe` Just 5.0
+            served <- servedFor $ \target -> [(borrowedAt 5.0, Just (target, ByProxy))]
+            served `shouldBe` Just 5.0
 
     describe "sea-water gate on wildcard fallbacks" $ do
         -- The same emission to the sea, under two methods that differ in one
