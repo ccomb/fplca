@@ -34,6 +34,7 @@ module SharedSolver (
     computeInventoryMatrixWithDepsCached,
     computeInventoryMatrixBatchWithDepsCached,
     goWithDepsFromScalings,
+    maxDepsDepth,
     mergeSolutions,
     prepareDepDemandVecs,
     crossDBProcessContributions,
