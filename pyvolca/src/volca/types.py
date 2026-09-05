@@ -563,7 +563,7 @@ class Activity(FromJson):
     ``block_products`` is how many products that block holds, so a page
     showing fewer rows than that knows it is showing part of a block and not
     the whole of it. Both are ``None`` against an engine older than wire
-    revision 20.
+    revision 21.
     """
 
     process_id: str

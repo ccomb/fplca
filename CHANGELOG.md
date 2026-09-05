@@ -70,7 +70,7 @@
   names the product, not the block it was written in. The block name is for
   comparing
   and never for reading, and the count is what lets a page say it is showing
-  only part of a block rather than the whole of it. Wire revision 20.
+  only part of a block rather than the whole of it. Wire revision 21.
 - A flow search can name several kinds at once: `kind=biosphere,waste` keeps
   what is exchanged with nature or discarded and nothing else, in one listing.
   `search-counts` already answers that pair as a single number, and there was
