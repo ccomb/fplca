@@ -120,6 +120,10 @@ module Database.Manager (
 
     -- * Internal (for tests: pure dependency-list builder)
     buildDependencyChoices,
+
+    -- * Installing a database the caller built itself
+    solverFor,
+    publishLoaded,
 ) where
 
 import API.JsonOptions (Stripped (..))

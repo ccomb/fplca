@@ -56,7 +56,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as U
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, makeAbsolute)
 import System.FilePath ((</>))
 
@@ -89,7 +88,9 @@ import Database.Manager (
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
+    publishLoaded,
     relinkDatabase,
+    solverFor,
     withReservedName,
  )
 import Database.Rebuild (processKey, renderKey, resolveProcess)
@@ -98,11 +99,9 @@ import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
 import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
-import SharedSolver (createSharedSolver)
 import Types (
     Database (..),
     ProcessId,
-    SparseTriple (..),
     findProcessIdByActivityUUID,
     getActivity,
     initializeRuntimeFields,
@@ -164,16 +163,8 @@ registerCopy manager slug src =
         Right () -> do
             let copiedDb = ldDatabase src
                 newConfig = renameConfig slug (ldConfig src)
-                -- Fresh solver: a distinct name keys a distinct factorization cache.
-                techTriplesInt =
-                    [ (fromIntegral i, fromIntegral j, v)
-                    | SparseTriple i j v <- U.toList (dbTechnosphereTriples copiedDb)
-                    ]
-            solver <-
-                createSharedSolver
-                    slug
-                    techTriplesInt
-                    (fromIntegral (dbActivityCount copiedDb))
+            -- Fresh solver: a distinct name keys a distinct factorization cache.
+            solver <- solverFor slug copiedDb
             synonymDB <- getMergedSynonymDB manager
             let copied =
                     LoadedDatabase
@@ -183,9 +174,8 @@ registerCopy manager slug src =
                         }
                 indexedDb = buildIndexedDatabaseFromDB slug synonymDB copiedDb
             atomically $ do
-                modifyTVar' (dmLoadedDbs manager) (M.insert slug copied)
+                publishLoaded manager slug copied indexedDb
                 modifyTVar' (dmAvailableDbs manager) (M.insert slug newConfig)
-                modifyTVar' (dmIndexedDbs manager) (M.insert slug indexedDb)
             clearMethodMappingCacheForDb manager slug
             pure (Right ())
 
@@ -609,19 +599,13 @@ commitMutation ::
 commitMutation manager dbName loaded edited home = do
     synonymDB <- getMergedSynonymDB manager
     let withRuntime = BM25.addBM25Index (initializeRuntimeFields edited synonymDB)
-        techTriplesInt =
-            [ (fromIntegral i, fromIntegral j, v)
-            | SparseTriple i j v <- U.toList (dbTechnosphereTriples withRuntime)
-            ]
     -- The solver cached under this name has the pre-edit dimensions; drain and
     -- destroy it before installing the rebuilt one, as the delete path does.
     clearCachedSolver dbName
-    solver <- createSharedSolver dbName techTriplesInt (fromIntegral (dbActivityCount withRuntime))
+    solver <- solverFor dbName withRuntime
     let loaded' = loaded{ldDatabase = withRuntime, ldSharedSolver = solver}
         indexedDb = buildIndexedDatabaseFromDB dbName synonymDB withRuntime
-    atomically $ do
-        modifyTVar' (dmLoadedDbs manager) (M.insert dbName loaded')
-        modifyTVar' (dmIndexedDbs manager) (M.insert dbName indexedDb)
+    atomically $ publishLoaded manager dbName loaded' indexedDb
     clearMethodMappingCacheForDb manager dbName
     warnings <- case home of
         -- The transient path must not relink: 'relinkDatabase' saves the
