@@ -59,7 +59,7 @@ import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
 import qualified SharedSolver
-import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, processIdToText, qualifyRef, unresolvedCount)
+import Types (Activity (..), BiosphereFlow (..), Database (..), FlowKind (BioKind), Indexes (..), KindFilter (..), ProcessId, UUID, UnitDB, activityLocation, activityName, bfCompartmentName, bfCompartmentSub, exchangeIsInput, exchangeKindChoices, exchangeKindOf, getUnitNameForBioFlow, lookupExchangeFlow, parseExchangeKind, parseKindFilter, processIdToText, qualifyRef, unresolvedCount)
 
 -- ---------------------------------------------------------------------------
 -- JSON-RPC 2.0 types
@@ -787,7 +787,7 @@ callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) =
     case readKind of
         Left err -> return $ toolError rid err
-        Right kind -> case textArg "query" args of
+        Right kinds -> case textArg "query" args of
             Nothing -> return $ toolSuccessJson rid Service.emptyFlowSearchResults
             Just query -> do
                 let limit = intArg "limit" args
@@ -795,7 +795,7 @@ callSearchFlows rid args (db, _) =
                         Service.FlowFilter
                             { Service.ffQuery = query
                             , Service.ffLang = Nothing
-                            , Service.ffKind = kind
+                            , Service.ffKind = kinds
                             , Service.ffLimit = limit <|> Just 20
                             , Service.ffOffset = Nothing
                             , Service.ffSort = Nothing
@@ -809,14 +809,14 @@ callSearchFlows rid args (db, _) =
     -- A typo must not read as "every kind", the way a dropped filter would,
     -- and neither must a value that is not text at all: 'textArg' cannot tell
     -- @{"kind": true}@ from an absent key, so the lookup is read here.
+    readKind :: Either Text KindFilter
     readKind = case KM.lookup (fromText "kind") args of
-        Nothing -> Right Nothing
-        Just Null -> Right Nothing
-        Just (String raw) -> case parseExchangeKind raw of
-            Just k -> Right (Just k)
-            Nothing -> Left (badKind raw)
+        Nothing -> Right AnyKind
+        Just Null -> Right AnyKind
+        Just (String raw) -> parseKindFilter raw
         Just other -> Left (badKind (TE.decodeUtf8Lenient (BSL.toStrict (encode other))))
 
+    badKind :: Text -> Text
     badKind got = "kind must be one of: " <> exchangeKindChoices <> " (got " <> got <> ")"
 
 callGetActivity :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
