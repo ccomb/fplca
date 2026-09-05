@@ -847,6 +847,34 @@ class Client:
         """
         return self._call("unload_database", db_name=db_name)
 
+    def derive_database(
+        self,
+        new_name: str,
+        allocation: str,
+        db_name: str | None = None,
+    ) -> dict:
+        """Read a database's sources again under another allocation key.
+
+        Divides every multi-output block by a physical property of the
+        products instead of by the shares the source declares: ``"wet mass"``
+        weighs each product as it is, ``"dry mass"`` weighs its dry matter,
+        ``"declared"`` keeps the source's own shares. The source is untouched
+        and both stay loadable side by side, so two allocations of one study
+        can be compared.
+
+        This is a full load, not a copy: seconds to minutes on a large
+        database. Refused when the key divides no block of the source, or when
+        it is the key that source already reads under: either would leave that
+        source under a second name.
+        """
+        self._require_wire(20, "derive_database", engine_hint="0.12.1")
+        return self._call(
+            "derive_database",
+            db_name=self._db(db_name),
+            new_name=new_name,
+            allocation=allocation,
+        )
+
     # -- Database write operations --
     #
     # These mutate a loaded database (copy / delete / relink / export /

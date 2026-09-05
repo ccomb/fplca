@@ -32,6 +32,7 @@ cfg name display =
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 -- IndexedDatabase whose idbByProductName has 'n' distinct dummy keys, so

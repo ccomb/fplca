@@ -29,6 +29,7 @@ while any copy of it is loaded.
 -}
 module Database.Edit (
     copyDatabase,
+    deriveDatabase,
     resolveDeleteSelection,
     DeleteSelection (..),
     DeleteRequest (..),
@@ -45,7 +46,7 @@ module Database.Edit (
     refusalMessage,
 ) where
 
-import Control.Concurrent.STM (atomically, modifyTVar', readTVar, readTVarIO)
+import Control.Concurrent.STM (STM, atomically, modifyTVar', readTVar, readTVarIO)
 import Control.Exception (SomeException, try)
 import Control.Monad (when)
 import qualified Data.IntSet as IS
@@ -82,26 +83,34 @@ import Database.Journal (
 import qualified Database.Loader as Loader
 import Database.Manager (
     DatabaseManager (..),
+    DepLoadResult,
     LoadedDatabase (..),
     clearMethodMappingCacheForDb,
     editHome,
     getDatabase,
     getMergedSynonymDB,
     getMergedUnitConfig,
+    loadDatabase,
     publishLoaded,
     relinkDatabase,
+    removeDatabase,
     solverFor,
+    unloadDatabase,
     withReservedName,
  )
 import Database.Rebuild (processKey, renderKey, resolveProcess)
 import Database.Upload (DatabaseFormat (..), slugify)
 import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
+import Progress (ProgressLevel (..), reportProgress)
 import qualified Search.BM25 as BM25
 import Service (bm25Retrieve)
 import Types (
+    AllocationKey,
     Database (..),
+    NativeProcessId,
     ProcessId,
+    allocationKeyText,
     findProcessIdByActivityUUID,
     getActivity,
     initializeRuntimeFields,
@@ -136,17 +145,194 @@ copyDatabase manager srcName newName = do
             getDatabase manager srcName >>= \case
                 Nothing -> pure $ Left $ "Database not loaded: " <> srcName
                 Just src ->
-                    withReservedName manager slug (nameIsFree slug) $ \() ->
+                    withReservedName manager slug (nameIsFree manager slug) $ \() ->
                         registerCopy manager slug src
+
+{- | Whether a name designates nothing yet: not loaded, not configured, and
+not being written under by somebody else.
+
+Read inside the transaction that claims it, which is what leaves no window
+between finding a name free and taking it.
+-}
+nameIsFree :: DatabaseManager -> Text -> STM (Either Text ())
+nameIsFree manager slug = do
+    loadedDbs <- readTVar (dmLoadedDbs manager)
+    availableDbs <- readTVar (dmAvailableDbs manager)
+    stagingDbs <- readTVar (dmStagingDbs manager)
+    pure $
+        if M.member slug loadedDbs || M.member slug availableDbs || S.member slug stagingDbs
+            then Left ("Database already exists: " <> slug)
+            else Right ()
+
+{- | Read a source's own files again under another allocation key, and
+register the result under @newName@.
+
+Not a copy. A copy shares the source's value as it stands, and the key is what
+produced that value: it decides the inventory of every process the load
+produces, so a re-keyed database has to be read from the files again. That is
+a full load -- tens of seconds where a copy is instantaneous -- which is why
+this hands back what a load hands back rather than what a copy does.
+
+The home it writes is a copy's home: no data of its own, 'umDataPath' pointing
+at the source's files and 'umSource' naming whose they are, plus the key,
+without which a restart would rebuild the database as @declared@ under a name
+promising otherwise. The source's journal is deliberately left behind: an edit
+is recorded against a process the source's key produced, and under another key
+that process need not exist. The load says so when there is one.
+
+Asking for the key the source already reads under is refused before the load:
+that result is the source, and it is the one duplicate no load can detect,
+since a key dividing the same blocks a second time divides them just as well.
+-}
+deriveDatabase ::
+    DatabaseManager ->
+    Text ->
+    Text ->
+    AllocationKey ->
+    IO (Either Text (LoadedDatabase, [DepLoadResult]))
+deriveDatabase manager srcName newName key = do
+    availableDbs <- readTVarIO (dmAvailableDbs manager)
+    case M.lookup srcName availableDbs of
+        Nothing -> pure (Left ("Database not found: " <> srcName))
+        Just srcConfig
+            | T.null slug -> pure (Left ("Invalid name (no usable characters): " <> newName))
+            | key == dcAllocation srcConfig ->
+                pure . Left $
+                    srcName
+                        <> " is already read under "
+                        <> allocationKeyText key
+                        <> ": the result would be that database under another name"
+            | otherwise ->
+                withReservedName manager slug (nameIsFree manager slug) $ \() ->
+                    loadDerived manager slug srcConfig key
   where
-    nameIsFree slug = do
-        loadedDbs <- readTVar (dmLoadedDbs manager)
-        availableDbs <- readTVar (dmAvailableDbs manager)
-        stagingDbs <- readTVar (dmStagingDbs manager)
-        pure $
-            if M.member slug loadedDbs || M.member slug availableDbs || S.member slug stagingDbs
-                then Left ("Database already exists: " <> slug)
-                else Right ()
+    slug :: Text
+    slug = slugify newName
+
+{- | Give the derived database a home, register it, load it, and keep it only
+if the key actually divided something.
+
+A key that divided no block leaves a database identical to its source, under a
+name saying its shares were recomputed, and costing a second database in
+memory and a second matrix cache on disk. There is no way to know that without
+loading -- what a property divides depends on what each block states -- so the
+load happens and is then thrown away, home and cache with it.
+-}
+loadDerived ::
+    DatabaseManager ->
+    Text ->
+    DatabaseConfig ->
+    AllocationKey ->
+    IO (Either Text (LoadedDatabase, [DepLoadResult]))
+loadDerived manager slug srcConfig key =
+    recordDerived slug srcConfig key >>= \case
+        Left err -> pure (Left err)
+        Right derivedConfig -> do
+            atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert slug derivedConfig)
+            loadDatabase manager slug >>= \case
+                Left err -> Left err <$ discardDerived manager slug
+                Right (loaded, deps) -> case dividedRefusal key (dcName srcConfig) (ldDatabase loaded) of
+                    Nothing -> pure (Right (loaded, deps))
+                    Just refusal -> Left refusal <$ discardDerived manager slug
+
+{- | Why the key divided nothing worth keeping, when it did.
+
+The coproducts a key divided share an 'activityGroupKey', so a block it
+divided is several processes under one key and a block it could not is the
+single process it came in as. Counting the first is the only measure of what a
+key did to a database, and both numbers are named: @0 of 4087@ says the source
+carries blocks and none of them could be weighed, where @0 of 0@ would say it
+carries none at all.
+-}
+dividedRefusal :: AllocationKey -> Text -> Database -> Maybe Text
+dividedRefusal key srcName db
+    | divided > 0 = Nothing
+    | otherwise =
+        Just $
+            allocationKeyText key
+                <> " divided 0 of the "
+                <> T.pack (show (M.size blocks))
+                <> " blocks of "
+                <> srcName
+                <> ": the result would be that database under another name"
+  where
+    blocks :: M.Map (UUID.UUID, Maybe NativeProcessId) [ProcessId]
+    blocks = dbActivityProductsIndex db
+
+    divided :: Int
+    divided = length (filter ((> 1) . length) (M.elems blocks))
+
+{- | Undo a derivation that will not be kept: unload it, then take its home
+and its cache with 'removeDatabase', which refuses a loaded database.
+
+The unload is skipped when the load is what failed, since nothing was
+registered to unload and the refusal it answers would be a second warning
+saying so beside the real one.
+
+What is left behind if a step fails is a registry entry or a directory nobody
+asked for, so both are reported: the caller is already on its way to returning
+the refusal that brought us here.
+-}
+discardDerived :: DatabaseManager -> Text -> IO ()
+discardDerived manager slug = do
+    loaded <- M.member slug <$> readTVarIO (dmLoadedDbs manager)
+    when loaded $ unloadDatabase manager slug >>= warnLeftover "unload"
+    removeDatabase manager slug >>= warnLeftover "delete"
+  where
+    warnLeftover :: Text -> Either Text () -> IO ()
+    warnLeftover step =
+        either
+            (\err -> reportProgress Warning . T.unpack $ "could not " <> step <> " " <> slug <> ": " <> err)
+            pure
+
+{- | Write the derived database's home and return the config it loads from.
+
+The path is the source's own, made absolute for the same reason a copy's is:
+it is read back from a home of its own, where a path relative to the working
+directory would mean somewhere else.
+-}
+recordDerived :: Text -> DatabaseConfig -> AllocationKey -> IO (Either Text DatabaseConfig)
+recordDerived slug srcConfig key = do
+    written <- try $ do
+        uploadsDir <- UploadedDB.getDatabaseUploadsDir
+        let home = uploadsDir </> T.unpack slug
+        createDirectoryIfMissing True home
+        sourcePath <- makeAbsolute (dcPath srcConfig)
+        hasJournal <- doesFileExist (journalPath (uploadsDir </> T.unpack (dcName srcConfig)))
+        when hasJournal . reportProgress Warning . T.unpack $
+            "the edits recorded on "
+                <> dcName srcConfig
+                <> " stay behind: each names a process its key produced, and "
+                <> slug
+                <> " reads the same files under another one"
+        UploadedDB.writeUploadMeta
+            home
+            UploadedDB.UploadMeta
+                { UploadedDB.umVersion = UploadedDB.metaVersion
+                , UploadedDB.umDisplayName = slug
+                , UploadedDB.umDescription = dcDescription srcConfig
+                , UploadedDB.umFormat = fromMaybe UnknownFormat (dcFormat srcConfig)
+                , UploadedDB.umDataPath = sourcePath
+                , UploadedDB.umDepends = dcDepends srcConfig
+                , UploadedDB.umSource = Just (dcName srcConfig)
+                , UploadedDB.umAllocation = key
+                }
+        pure
+            srcConfig
+                { dcName = slug
+                , dcDisplayName = slug
+                , dcPath = sourcePath
+                , dcLoad = False
+                , dcDefault = False
+                , dcIsUploaded = True
+                , dcDeletable = True
+                , dcAllocation = key
+                , dcSource = Just (dcName srcConfig)
+                }
+    pure $ case written of
+        Right config -> Right config
+        Left (err :: SomeException) ->
+            Left $ "could not record the derived database " <> slug <> ": " <> T.pack (show err)
 
 {- | Build the copy's solver/index and insert it under @slug@. Caller holds the
 'dmStagingDbs' reservation for @slug@.
@@ -218,6 +404,9 @@ recordCopy slug src = do
                 , UploadedDB.umDataPath = sourcePath
                 , UploadedDB.umDepends = dbDependsOn (ldDatabase src)
                 , UploadedDB.umSource = Just (dcName config)
+                , -- A copy holds the source's value as it stands, which the
+                  -- source's own key produced.
+                  UploadedDB.umAllocation = dcAllocation config
                 }
     pure $ case written of
         Right () -> Right ()
@@ -227,6 +416,9 @@ recordCopy slug src = do
 {- | Rename a config for the copy: new internal name, derived display name, and
 forced deletable/uploaded so the copy can be removed again via the normal
 delete path (the source may be a TOML-pinned, non-deletable database).
+
+The source it names is the one 'recordCopy' writes to the copy's home, so a
+listing says the same thing before and after the restart that reads it back.
 -}
 renameConfig :: Text -> DatabaseConfig -> DatabaseConfig
 renameConfig newName cfg =
@@ -235,6 +427,7 @@ renameConfig newName cfg =
         , dcDisplayName = newName
         , dcIsUploaded = True
         , dcDeletable = True
+        , dcSource = Just (dcName cfg)
         }
 
 -- ---------------------------------------------------------------------------

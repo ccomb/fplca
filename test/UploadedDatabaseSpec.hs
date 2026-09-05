@@ -7,6 +7,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Database.UploadedDatabase
+import Types (AllocationKey (..))
 
 -- | Minimal UploadMeta without description
 baseMeta :: UploadMeta
@@ -19,6 +20,7 @@ baseMeta =
         , umDataPath = "data"
         , umDepends = []
         , umSource = Nothing
+        , umAllocation = Declared
         }
 
 spec :: Spec
@@ -94,6 +96,7 @@ spec = do
                         , umDataPath = "data"
                         , umDepends = []
                         , umSource = Nothing
+                        , umAllocation = Declared
                         }
 
         it "parses meta with description" $ do

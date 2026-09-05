@@ -244,6 +244,7 @@ import Types (
     UUID,
     Unit (..),
     UnitDB,
+    allocationKeyText,
     bfCompartmentName,
     bfCompartmentSub,
     blockerReasonDetail,
@@ -256,6 +257,7 @@ import Types (
     enrichBioFlowCAS,
     flowClosure,
     initializeRuntimeFields,
+    parseAllocationKey,
     toSimpleDatabase,
     unresolvedCount,
  )
@@ -466,6 +468,8 @@ data DatabaseStatus = DatabaseStatus
     , dsFormat :: !(Maybe Upload.DatabaseFormat) -- Detected format
     , dsActivityCount :: !Int -- Number of activities (0 if unloaded)
     , dsDependsOn :: ![Text] -- Names of databases this one depends on (for cross-DB linking)
+    , dsAllocation :: !AllocationKey -- The key its multi-output blocks were divided under
+    , dsSource :: !(Maybe Text) -- The database whose files it reads, when it owns none
     }
     deriving (Show, Eq, Generic)
 
@@ -482,6 +486,8 @@ instance ToJSON DatabaseStatus where
             , "dsFormat" .= dsFormat
             , "dsActivityCount" .= dsActivityCount
             , "dsDependsOn" .= dsDependsOn
+            , "dsAllocation" .= allocationKeyText dsAllocation
+            , "dsSource" .= dsSource
             ]
 
 instance FromJSON DatabaseStatus where
@@ -497,6 +503,13 @@ instance FromJSON DatabaseStatus where
             <*> v .:? "dsFormat"
             <*> v .: "dsActivityCount"
             <*> v .:? "dsDependsOn" A..!= []
+            -- A status written before the key was on the wire describes a
+            -- database divided the way its source declares, which is what it
+            -- was. A word this client cannot read is not that: showing
+            -- "declared" beside shares some other key produced is the silent
+            -- misreading the field was put on the wire to end.
+            <*> (v .:? "dsAllocation" A..!= "declared" >>= either (fail . T.unpack) pure . parseAllocationKey)
+            <*> v .:? "dsSource"
 
 -- | Status of a method collection (e.g., EF-3.1) for API responses
 data MethodCollectionStatus = MethodCollectionStatus
@@ -1567,7 +1580,12 @@ uploadMetaToConfig slug dirPath meta =
         , dcIsUploaded = True -- Discovered from uploads/ directory
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal -- Uploads can't yet express policy; default to permissive
-        , dcAllocation = Declared
+        , -- Read, never assumed: a database derived under a property key is
+          -- rebuilt from this config at every restart, and a hardcoded
+          -- 'Declared' here handed it back divided the way its source
+          -- declares under a name promising the opposite.
+          dcAllocation = UploadedDB.umAllocation meta
+        , dcSource = UploadedDB.umSource meta
         }
 
 {- | Record an uploaded database's dependency pin where a restart can find it.
@@ -1714,6 +1732,8 @@ listDatabases manager = do
                 , dsFormat = dcFormat config
                 , dsActivityCount = actCount
                 , dsDependsOn = dcDepends config
+                , dsAllocation = dcAllocation config
+                , dsSource = dcSource config
                 }
 
 -- | File extensions 'resolveDataPath' knows how to extract as archives.

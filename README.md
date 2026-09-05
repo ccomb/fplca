@@ -137,7 +137,9 @@ allocation = "declared"        # how a multi-output block is divided:
                                # declared | dry mass | wet mass. Naming a mass
                                # recomputes the shares from it instead of
                                # reading the ones the source states; to have
-                               # both, configure the same path twice.
+                               # both, configure the same path twice, or ask
+                               # for the second one at runtime with
+                               # POST /db/{name}/derive/{newName}?allocation=
 # locationAliases = { "FR" = "France" }   # per-database location renames
 
 [[methods]]
@@ -274,6 +276,7 @@ GET    /api/v1/db                                                        List da
 POST   /api/v1/db/upload                                                 Upload a database archive
 POST   /api/v1/db/{dbName}/load                                          Load a configured database
 POST   /api/v1/db/{dbName}/unload                                        Unload (keep config, free memory)
+POST   /api/v1/db/{dbName}/derive/{newName}?allocation=                  Read the same sources under another allocation key
 POST   /api/v1/db/{dbName}/relink                                        Re-resolve cross-DB links (optional JSON body: depDb + mappingCsv for an alias relink)
 GET    /api/v1/db/{dbName}/gap-report                                    Supplier-gap report (what is still unsupplied after linking)
 GET    /api/v1/db/{dbName}/quality-report                                Dataset-soundness report (what is malformed in the database)
@@ -540,6 +543,7 @@ volca method delete ef-31                        # delete
 | Relink / finalize | `POST /db/{name}/(relink\|finalize)` | `database relink DB --to DEP --mapping CSV` |
 | Setup / dependencies | `GET /db/{name}/setup`, `POST .../{add,remove}-dependency/{dep}`, `POST .../set-data-path` | — |
 | Copy database | `POST /db/{name}/copy/{newName}` | `database copy SRC NEW_NAME` |
+| Re-key database | `POST /db/{name}/derive/{newName}?allocation=` | — |
 | Delete activities (by filter or ids) | `POST /db/{name}/delete` | `database delete-activities DB [filters\|--id …]` |
 | Export database | `POST /db/{name}/export` | `database export DB --format FMT --out FILE` |
 | Delete database | `DELETE /db/{name}` | `database delete NAME` |

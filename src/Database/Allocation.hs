@@ -239,12 +239,6 @@ describeRefusal refusal = case refusal of
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
 
--- | The word a message uses for a property.
-propertyName :: AllocationProperty -> Text
-propertyName prop = case prop of
-    DryMass -> "dry mass"
-    WetMass -> "wet mass"
-
 -- | Why a physical property cannot serve as the key of a block.
 data PropertyRefusal
     = -- | A product of the block states nothing of the property, and nothing stands in for it.

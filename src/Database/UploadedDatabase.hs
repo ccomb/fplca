@@ -41,6 +41,8 @@ import Text.Read (readMaybe)
 
 -- Re-export DatabaseFormat from Database.Upload (single definition)
 import Database.Upload (DatabaseFormat (..))
+import Progress (ProgressLevel (..), reportProgress)
+import Types (AllocationKey, allocationKeyText, parseAllocationKey)
 
 -- | Metadata for an uploaded database
 data UploadMeta = UploadMeta
@@ -63,16 +65,24 @@ data UploadMeta = UploadMeta
     A file written before this field existed is not a copy, which is what it
     meant.
     -}
+    , umAllocation :: !AllocationKey
+    {- ^ The key this database's multi-output blocks were divided under. The
+    only durable record of it: a re-keyed database owns no files of its own,
+    so nothing else on disk says the shares it loads are not the ones its
+    source declares. A file written before this field existed reads back as
+    'Declared', which is what it meant.
+    -}
     }
     deriving (Show, Eq, Generic)
 
 {- | The @meta.toml@ shape this engine writes, stamped by every writer.
-Version 3 added @source@, which is what tells a copy from an upload. The
-parser reads every version, taking absent fields to mean what their absence
-meant when they did not exist.
+Version 3 added @source@, which is what tells a copy from an upload; version 4
+added @allocation@, without which a re-keyed database came back declared after
+a restart. The parser reads every version, taking absent fields to mean what
+their absence meant when they did not exist.
 -}
 metaVersion :: Int
-metaVersion = 3
+metaVersion = 4
 
 -- | Name of the metadata file in each upload directory
 metaFileName :: FilePath
@@ -154,6 +164,15 @@ parseMetaToml content = do
     format <- getValue "format" >>= parseFormat . unquote
     dataPath <- T.unpack . unquote <$> getValue "dataPath"
 
+    -- A key nobody wrote is the declared one, which is what every file
+    -- written before this field existed means. A key nobody can read stops
+    -- the whole file: dividing a database on a guess would restate its
+    -- inventory in silence, where a database the scan refuses is named in
+    -- the log and still on disk for a binary that knows the key.
+    allocation <-
+        either (const Nothing) Just $
+            parseAllocationKey (maybe "declared" unquote (getValue "allocation"))
+
     return
         UploadMeta
             { umVersion = version
@@ -163,6 +182,7 @@ parseMetaToml content = do
             , umDataPath = dataPath
             , umDepends = maybe [] parseStringList (getValue "depends")
             , umSource = unquote <$> getValue "source"
+            , umAllocation = allocation
             }
 
 {- | Undo the escaping 'formatMetaToml' writes, so a value survives the round
@@ -221,6 +241,7 @@ formatMetaToml UploadMeta{..} =
             ++ [ "format = " <> quote (formatToText umFormat)
                , "dataPath = " <> quote (T.pack umDataPath)
                , "depends = [" <> T.intercalate ", " (map quote umDepends) <> "]"
+               , "allocation = " <> quote (allocationKeyText umAllocation)
                ]
             ++ maybe [] (\s -> ["source = " <> quote s]) umSource
   where
@@ -253,9 +274,11 @@ scanUploadsIn dir = do
             dirsOnly <- filterM (doesDirectoryExist . snd) fullPaths
             results <- forM dirsOnly $ \(slug, dirPath) -> do
                 maybeMeta <- readUploadMeta dirPath
-                return $ case maybeMeta of
-                    Just meta -> Just (slug, dirPath, meta)
-                    Nothing -> Nothing
+                case maybeMeta of
+                    Just meta -> pure (Just (slug, dirPath, meta))
+                    Nothing ->
+                        Nothing
+                            <$ reportProgress Warning (dirPath <> ": meta.toml could not be read, the database is left out")
             return (catMaybes results)
 
 {- | Discover all uploaded databases by scanning the uploads directory

@@ -119,6 +119,7 @@ dbConfigFor name =
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 -- | Install a database in the manager's loaded set, solver and config included.

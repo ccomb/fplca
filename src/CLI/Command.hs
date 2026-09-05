@@ -371,6 +371,7 @@ executeDbUpload fmt manager args = do
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                         , UploadedDB.umDepends = []
                         , UploadedDB.umSource = Nothing
+                        , UploadedDB.umAllocation = Types.Declared
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 
@@ -389,6 +390,7 @@ executeDbUpload fmt manager args = do
                         , dcDeletable = True
                         , dcGeographyPolicy = Types.GeoGlobal
                         , dcAllocation = Types.Declared
+                        , dcSource = Nothing
                         }
             addDatabase manager dbConfig
             reportProgress Info $ "Database uploaded: " ++ T.unpack slug
@@ -440,6 +442,7 @@ executeMcUpload fmt manager args = do
                         , UploadedDB.umDataPath = makeRelative uploadDir (urPath uploadResult)
                         , UploadedDB.umDepends = []
                         , UploadedDB.umSource = Nothing
+                        , UploadedDB.umAllocation = Types.Declared
                         }
             UploadedDB.writeUploadMeta uploadDir meta
 

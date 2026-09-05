@@ -403,6 +403,7 @@ uploadedConfig name dataDir =
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 -- ---------------------------------------------------------------------------

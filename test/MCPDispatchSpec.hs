@@ -118,6 +118,7 @@ sampleConfig =
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
         , dcAllocation = Declared
+        , dcSource = Nothing
         }
 
 -- | Call a tool against that fixture, freshly loaded.

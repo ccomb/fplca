@@ -143,6 +143,9 @@ type LCAAPI =
                 -- Characterization-coverage report: flows a method collection scores only through a name bridge
                 :<|> "db" :> Capture "dbName" Text :> "characterization-coverage" :> QueryParam "collection" Text :> QueryParam "limit" Int :> Get '[JSON] CoverageReportAPI
                 :<|> "db" :> Capture "dbName" Text :> "copy" :> Capture "newName" Text :> Post '[JSON] ActivateResponse
+                -- Read a source again under another allocation key. A load, not a
+                -- copy: the key decides the inventory, so it answers as a load does
+                :<|> "db" :> Capture "dbName" Text :> "derive" :> Capture "newName" Text :> QueryParam "allocation" Text :> Post '[JSON] LoadDatabaseResponse
                 :<|> "db" :> Capture "dbName" Text :> Delete '[JSON] ActivateResponse
                 -- Delete the whole filtered set of activities (selection in JSON body)
                 :<|> "db" :> Capture "dbName" Text :> "delete" :> ReqBody '[JSON] DeleteSelectionRequest :> Post '[JSON] DeleteSelectionResponse
@@ -1315,7 +1318,10 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 19: the @kind@ parameter of a flow search naming several kinds,
+(revision 20: the @derive@ route, which reads a source again under another
+allocation key, and the @allocation@ and @source@ a database status carries,
+without which a column of shares cannot say whether the source stated them;
+revision 19: the @kind@ parameter of a flow search naming several kinds,
 comma-separated, so the biosphere-and-waste bucket the search counts report is
 listable in one call;
 revision 18: the @properties@ a technosphere exchange carries, the dry and
@@ -1349,7 +1355,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 19
+currentWireVersion = 20
 
 getVersion :: AppM Value
 getVersion = do
@@ -2297,6 +2303,7 @@ lcaServer env = hoistServer lcaAPI (runApp env) handlers
             :<|> computedQualityReportCsvH
             :<|> DBHandlers.coverageReportHandler
             :<|> DBHandlers.copyDatabaseHandler
+            :<|> DBHandlers.deriveDatabaseHandler
             :<|> DBHandlers.deleteDatabaseHandler
             :<|> DBHandlers.deleteActivitiesHandler
             :<|> DBHandlers.createActivitiesHandler

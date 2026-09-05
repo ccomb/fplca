@@ -43,8 +43,11 @@ import Network.HTTP.Types.Method (StdMethod (..))
 {- | Every operation VoLCA exposes through its user-facing surfaces.
 
 What belongs here is what an analyst does. That covers the analysis operations,
-and loading or unloading a database: those change which databases are in the
-working set rather than the data itself. It also covers editing the inventory
+and loading, unloading or re-keying a database: those change which databases
+are in the working set rather than the data itself, and which key divides a
+multi-output block is a choice of analysis, not of installation -- it is the
+question "what would this study look like allocated by mass", asked of a
+source nobody may edit. It also covers editing the inventory
 of an activity: adjusting an imported dataset to the study at hand is analysis
 work, done on a database of one's own, and the engine refuses it on the
 background data it reads from its configuration.
@@ -58,6 +61,7 @@ data Resource
     = ListDatabases
     | LoadDatabase
     | UnloadDatabase
+    | DeriveDatabase
     | ListPresets
     | SearchActivities
     | SearchFlows
@@ -138,6 +142,7 @@ resourceMutates :: Resource -> Bool
 resourceMutates r = case r of
     LoadDatabase -> True
     UnloadDatabase -> True
+    DeriveDatabase -> True
     ListDatabases -> False
     ListPresets -> False
     SearchActivities -> False
@@ -195,6 +200,7 @@ apiPath r = case r of
     ListDatabases -> Just (GET, ["db"])
     LoadDatabase -> Just (POST, ["db", "{dbName}", "load"])
     UnloadDatabase -> Just (POST, ["db", "{dbName}", "unload"])
+    DeriveDatabase -> Just (POST, ["db", "{dbName}", "derive", "{newName}"])
     ListPresets -> Just (GET, ["classification-presets"])
     SearchActivities -> Just (GET, ["db", "{dbName}", "activities"])
     SearchFlows -> Just (GET, ["db", "{dbName}", "flows"])
@@ -244,6 +250,7 @@ mcpName r = case r of
     ListDatabases -> "list_databases"
     LoadDatabase -> "load_database"
     UnloadDatabase -> "unload_database"
+    DeriveDatabase -> "derive_database"
     ListPresets -> "list_presets"
     SearchActivities -> "search_activities"
     SearchFlows -> "search_flows"
@@ -310,6 +317,17 @@ description r = case r of
         "LCA / ACV: unload a database from memory to free RAM. The on-disk data is \
         \kept and the database can be reloaded later with load_database. Refuses if \
         \another loaded database still depends on it: unload the dependents first."
+    DeriveDatabase ->
+        "LCA / ACV: read a database's source files again under another allocation \
+        \key, and register the result under a new name. Use it to ask what a study \
+        \would look like with the multi-output blocks divided by a physical property \
+        \instead of the shares the source declares: 'wet mass' divides a block by the \
+        \mass of each product, 'dry mass' by its dry matter, 'declared' keeps the \
+        \source's own shares. The source is untouched and both stay usable side by \
+        \side. This is a full load, not a copy: seconds to minutes on a large \
+        \database. Refused when the key divides no block, when it is the key the \
+        \source already reads under, when the products carry no such property, and \
+        \on a read-only instance."
     ListPresets ->
         "LCA / ACV: list named classification filter presets configured in this \
         \instance. Each preset bundles multiple (system, value, mode) classification \
@@ -756,6 +774,11 @@ params r = case r of
     ListDatabases -> []
     LoadDatabase -> [pDatabase]
     UnloadDatabase -> [pDatabase]
+    DeriveDatabase ->
+        [ pDatabase
+        , Param "new_name" "string" Required "Name to register the re-keyed database under. Must not already exist."
+        , Param "allocation" "string" Optional "The key its multi-output blocks are divided by: declared (the source's own shares, the default) | dry mass | wet mass."
+        ]
     ListPresets -> []
     SearchActivities ->
         [ pDatabase
