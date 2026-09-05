@@ -2527,7 +2527,7 @@ data DepRef = DepRef
     { drDbName :: !Text
     , drDb :: !Database
     , drPid :: !ProcessId
-    , drUUIDs :: !(UUID, UUID)
+    , drRef :: !ProcessRef
     }
 
 {- | A planned rank-1 perturbation of one consumer column plus any virtual
@@ -2773,7 +2773,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
 
     requireStatic sub cPid fromRef =
         maybe (Left $ noStaticLink sub cPid (drDbName fromRef) (drPid fromRef)) Right $
-            findStaticCrossDBLink thisDb cPid (drDbName fromRef) (drUUIDs fromRef)
+            findStaticCrossDBLink thisDb cPid (drDbName fromRef) (drRef fromRef)
 
     applyRankOne mFact xs upd = do
         -- Apply the same rank-1 update to each of the K vectors. z depends
@@ -2836,7 +2836,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                                     { drDbName = refDb
                                     , drDb = depDb
                                     , drPid = p
-                                    , drUUIDs = dbProcessIdTable depDb V.! fromIntegral p
+                                    , drRef = uncurry ProcessRef (dbProcessIdTable depDb V.! fromIntegral p)
                                     }
 
 {- | Build a synthesized 'CrossDBLink' for a what-if substitution targeting a
@@ -2855,19 +2855,19 @@ mkVirtualLink ::
     -- | raw exchange coefficient (pre-normalization)
     Double ->
     CrossDBLink
-mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drUUIDs = (supActU, supProdU)} coef =
-    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPid = supPid, drRef = supRef} coef =
+    let consumerRef = uncurry ProcessRef (dbProcessIdTable rootDb V.! fromIntegral consumerPid)
         supAct = dbActivities depDb V.! fromIntegral supPid
         refUnit = maybe "" (getUnitNameForExchange (dbUnits depDb)) (L.find isReferenceOutput (exchanges supAct))
      in CrossDBLink
-            { cdlConsumerActUUID = cActU
-            , cdlConsumerProdUUID = cProdU
+            { cdlConsumerActUUID = prActivity consumerRef
+            , cdlConsumerProdUUID = prProduct consumerRef
             , -- Substitution links never enter 'dbCrossDBLinks' and the API
               -- surface only indexes load-time links by 'cdlConsumerFlowId',
               -- so the discriminator is unused for synthetic links.
               cdlConsumerFlowId = UUID.nil
-            , cdlSupplierActUUID = supActU
-            , cdlSupplierProdUUID = supProdU
+            , cdlSupplierActUUID = prActivity supRef
+            , cdlSupplierProdUUID = prProduct supRef
             , cdlCoefficient = coef
             , cdlExchangeUnit = refUnit
             , cdlFlowName = activityName supAct
@@ -2880,14 +2880,14 @@ mkVirtualLink rootDb consumerPid DepRef{drDbName = depDbName, drDb = depDb, drPi
 Returns 'Nothing' if no link exists — caller surfaces as 422 rather than
 silently no-op.
 -}
-findStaticCrossDBLink :: Database -> ProcessId -> Text -> (UUID, UUID) -> Maybe CrossDBLink
-findStaticCrossDBLink rootDb consumerPid depDbName depSupUUIDs =
-    let (cActU, cProdU) = dbProcessIdTable rootDb V.! fromIntegral consumerPid
+findStaticCrossDBLink :: Database -> ProcessId -> Text -> ProcessRef -> Maybe CrossDBLink
+findStaticCrossDBLink rootDb consumerPid depDbName depSupRef =
+    let consumerRef = uncurry ProcessRef (dbProcessIdTable rootDb V.! fromIntegral consumerPid)
         matches lk =
             cdlSourceDatabase lk == depDbName
-                && cdlConsumerActUUID lk == cActU
-                && cdlConsumerProdUUID lk == cProdU
-                && (cdlSupplierActUUID lk, cdlSupplierProdUUID lk) == depSupUUIDs
+                && cdlConsumerActUUID lk == prActivity consumerRef
+                && cdlConsumerProdUUID lk == prProduct consumerRef
+                && ProcessRef (cdlSupplierActUUID lk) (cdlSupplierProdUUID lk) == depSupRef
      in case filter matches (dbCrossDBLinks rootDb) of
             (lk : _) -> Just lk
             [] -> Nothing
