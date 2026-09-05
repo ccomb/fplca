@@ -534,7 +534,7 @@ Delete a method collection: unload it and remove its staged file.
 
 Delete a reference-data set of ``kind`` and remove its staged file.
 
-##### `Client.derive_database(new_name: str, allocation: str = 'wet mass', db_name: str | None = None) -> dict`
+##### `Client.derive_database(new_name: str, allocation: str, db_name: str | None = None) -> dict`
 
 Read a database's sources again under another allocation key.
 
@@ -546,8 +546,9 @@ and both stay loadable side by side, so two allocations of one study
 can be compared.
 
 This is a full load, not a copy: seconds to minutes on a large
-database. Refused when the key divides no block of the source, which
-would leave that source under a second name.
+database. Refused when the key divides no block of the source, or when
+it is the key that source already reads under: either would leave that
+source under a second name.
 
 ##### `Client.download_flow_synonyms(name: str) -> bytes`
 

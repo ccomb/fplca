@@ -850,7 +850,7 @@ class Client:
     def derive_database(
         self,
         new_name: str,
-        allocation: str = "wet mass",
+        allocation: str,
         db_name: str | None = None,
     ) -> dict:
         """Read a database's sources again under another allocation key.
@@ -863,9 +863,11 @@ class Client:
         can be compared.
 
         This is a full load, not a copy: seconds to minutes on a large
-        database. Refused when the key divides no block of the source, which
-        would leave that source under a second name.
+        database. Refused when the key divides no block of the source, or when
+        it is the key that source already reads under: either would leave that
+        source under a second name.
         """
+        self._require_wire(20, "derive_database", engine_hint="0.12.1")
         return self._call(
             "derive_database",
             db_name=self._db(db_name),
