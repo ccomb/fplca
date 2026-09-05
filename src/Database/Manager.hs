@@ -133,7 +133,7 @@ import Data.Bifunctor (first)
 import Data.Char (toLower)
 import qualified Data.Csv as Csv
 import Data.Either (fromRight, lefts, partitionEithers, rights)
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.List (intercalate, isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
@@ -1153,24 +1153,33 @@ discoverRefDataSources config =
     withUploads :: String -> [RefDataConfig] -> FilePath -> IO [RefDataConfig]
     withUploads kind configured dir = do
         combined <- (configured ++) <$> discoverUploadedRefData dir
-        mapM_ (reportProgress Warning . shadowed kind) (repeatedNames combined)
+        mapM_ (reportProgress Warning) (shadowedSources kind combined)
         pure combined
 
-    {- 'newManager' indexes these by name, so a repeated one keeps the last and
-    drops the rest. An uploaded directory named like a configured source is all
-    it takes, and the configuration checks duplicates for databases and method
-    collections but not for these. Say which source is being ignored. -}
-    shadowed :: String -> Text -> String
-    shadowed kind name =
-        "Reference data: more than one "
-            <> kind
-            <> " source named "
-            <> T.unpack name
-            <> "; the last one wins and the others are ignored"
-
--- | The names that appear more than once, each reported once.
-repeatedNames :: [RefDataConfig] -> [Text]
-repeatedNames rds = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(rdName rd, 1) | rd <- rds]))
+{- | One warning per name held by more than one source. 'newManager' indexes
+these by name, so a repeated one keeps the last and drops the rest: an uploaded
+directory named like a configured source is all it takes, and the configuration
+checks duplicates for databases and method collections but not for these. Which
+one wins follows from a concatenation order nothing states, so name the file
+being read as well as the ones being ignored.
+-}
+shadowedSources :: String -> [RefDataConfig] -> [String]
+shadowedSources kind rds =
+    [ "Reference data: more than one "
+        <> kind
+        <> " source named "
+        <> T.unpack name
+        <> "; reading "
+        <> winner
+        <> ", ignoring "
+        <> intercalate ", " (reverse ignored)
+    | (name, winner : ignored@(_ : _)) <- M.toList lastFirst
+    ]
+  where
+    -- 'M.fromListWith' prepends, so a group comes out last source first, and
+    -- that first one is what 'M.fromList' keeps.
+    lastFirst :: Map Text [String]
+    lastFirst = M.fromListWith (++) [(rdName rd, [describeSource (rdSource rd)]) | rd <- rds]
 
 {- | The location hierarchy this run scores against. Falling back to the
 built-in hierarchy when a named file cannot be read would change every
