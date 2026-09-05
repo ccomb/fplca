@@ -733,9 +733,18 @@ only node with no row to name.
 -}
 data LoopAwareTree
     = TreeLeaf !ProcessId !Activity
-    | TreeNode !ProcessId !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Row + activity + (quantity, child product flow, subtree)
+    | TreeNode !ProcessId !Activity ![TreeChild] -- Row + activity + what it consumes
     | TreeLoop !ProcessId !Text !Int -- Already visited, or depth/budget spent: row + ActivityName + Depth
     | TreeMissing !UUID !Text !Int -- Declared link no row satisfies: activity UUID + name + Depth
+
+{- | One branch under a 'TreeNode': how much the parent consumes, the product
+flow the edge is labelled with, and the subtree that supplies it.
+-}
+data TreeChild = TreeChild
+    { childAmount :: !Double
+    , childFlow :: !TechnosphereFlow
+    , childSubtree :: !LoopAwareTree
+    }
 
 -- | Technosphere flow database (deduplicated by UUID)
 type TechFlowDB = M.Map UUID TechnosphereFlow

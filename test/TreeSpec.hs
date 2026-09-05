@@ -29,7 +29,7 @@ spec = do
             it "second level is also a TreeNode (Y)" $ do
                 tree <- treeFromSample "SAMPLE.min3" sampleMin3ActivityX 10
                 case tree of
-                    TreeNode _ _ [(_, _, subtree)] ->
+                    TreeNode _ _ [TreeChild{childSubtree = subtree}] ->
                         case subtree of
                             TreeNode _ act _ -> activityName act `shouldBe` "production of product Y"
                             _ -> expectationFailure "Expected TreeNode for Y"
@@ -38,7 +38,7 @@ spec = do
             it "leaf node Z is a TreeLeaf with no children" $ do
                 tree <- treeFromSample "SAMPLE.min3" sampleMin3ActivityX 10
                 case tree of
-                    TreeNode _ _ [(_, _, TreeNode _ _ [(_, _, leaf)])] ->
+                    TreeNode _ _ [TreeChild{childSubtree = TreeNode _ _ [TreeChild{childSubtree = leaf}]}] ->
                         case leaf of
                             TreeLeaf _ act -> activityName act `shouldBe` "production of product Z"
                             _ -> expectationFailure "Expected TreeLeaf for Z"
@@ -47,7 +47,7 @@ spec = do
             it "edge amount from X to Y is 0.6" $ do
                 tree <- treeFromSample "SAMPLE.min3" sampleMin3ActivityX 10
                 case tree of
-                    TreeNode _ _ [(amount, _, _)] -> amount `shouldBe` 0.6
+                    TreeNode _ _ [TreeChild{childAmount = amount}] -> amount `shouldBe` 0.6
                     _ -> expectationFailure "Expected TreeNode for X"
 
         -- -----------------------------------------------------------------------
@@ -57,7 +57,7 @@ spec = do
             it "depth=1 — Y becomes a TreeLoop (depth limit)" $ do
                 tree <- treeFromSample "SAMPLE.min3" sampleMin3ActivityX 1
                 case tree of
-                    TreeNode _ _ [(_, _, child)] ->
+                    TreeNode _ _ [TreeChild{childSubtree = child}] ->
                         case child of
                             TreeLoop{} -> return ()
                             _ -> expectationFailure "Expected TreeLoop for Y at depth 1"
@@ -72,7 +72,7 @@ spec = do
             it "depth=2 — Z becomes a TreeLoop at depth 2" $ do
                 tree <- treeFromSample "SAMPLE.min3" sampleMin3ActivityX 2
                 case tree of
-                    TreeNode _ _ [(_, _, TreeNode _ _ [(_, _, leaf)])] ->
+                    TreeNode _ _ [TreeChild{childSubtree = TreeNode _ _ [TreeChild{childSubtree = leaf}]}] ->
                         case leaf of
                             TreeLoop{} -> return ()
                             _ -> expectationFailure "Expected TreeLoop for Z at depth 2"
@@ -128,10 +128,10 @@ treeContainsLoop :: LoopAwareTree -> Bool
 treeContainsLoop (TreeLeaf _ _) = False
 treeContainsLoop (TreeMissing{}) = False
 treeContainsLoop (TreeLoop{}) = True
-treeContainsLoop (TreeNode _ _ children) = any (\(_, _, t) -> treeContainsLoop t) children
+treeContainsLoop (TreeNode _ _ children) = any (treeContainsLoop . childSubtree) children
 
 countNodes :: LoopAwareTree -> Int
 countNodes (TreeLeaf _ _) = 1
 countNodes (TreeMissing{}) = 1
 countNodes (TreeLoop{}) = 1
-countNodes (TreeNode _ _ children) = 1 + sum (map (\(_, _, t) -> countNodes t) children)
+countNodes (TreeNode _ _ children) = 1 + sum (map (countNodes . childSubtree) children)
