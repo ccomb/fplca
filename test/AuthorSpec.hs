@@ -41,6 +41,7 @@ import Database.Rebuild (deleteActivities, insertActivities, replaceActivities)
 import Service (convertActivityForAPI)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BioDirection (..),
     BiosphereFlow (..),
     BuildInputs (..),
@@ -824,7 +825,7 @@ buildFixtureAt :: UUID -> UUID -> IO Database
 buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             ( M.fromList
                 [ ((actId, prodId), supplierActivityAt actId prodId)
                 , ((treatActId, usedOilId), treatmentActivity)
@@ -848,7 +849,7 @@ buildTwoProductTreatment :: IO Database
 buildTwoProductTreatment = do
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             ( M.fromList
                 [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
                 , ((treatActId, usedOilId), treatmentWithHeat)
@@ -875,7 +876,7 @@ buildBareFixture = do
         noBio = act{exchanges = filter isTechnosphereExchange (exchanges act)}
     r <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (M.singleton (supplierActId, supplierProdId) noBio)
             (M.singleton supplierProdId (milkFlowAt supplierProdId))
             M.empty

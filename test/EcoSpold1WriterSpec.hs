@@ -414,7 +414,7 @@ buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
     result <-
         DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (sdbActivities sdb)
             (sdbTechFlows sdb)
             (sdbBioFlows sdb)

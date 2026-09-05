@@ -61,7 +61,7 @@ fixtureDir = "test-data/SAMPLE.ilcd"
 -- | Parse the fixture into a 'SimpleDatabase' (fails the test on Left).
 loadFixture :: IO SimpleDatabase
 loadFixture = do
-    r <- parseILCDDirectory fixtureDir
+    r <- parseILCDDirectory defaultUnitConfig Declared fixtureDir
     case r of
         Left err -> error ("fixture parse failed: " <> T.unpack err)
         Right db -> pure db
@@ -74,7 +74,7 @@ roundTrip :: SimpleDatabase -> IO SimpleDatabase
 roundTrip db = withSystemTempDirectory "ilcd-writer-spec" $ \dir -> do
     writeILCDDatabase defaultWriteOptions dir db
         >>= either (\e -> error ("ILCD write failed: " <> T.unpack e)) pure
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -91,7 +91,7 @@ This is the byte stream 'Database.Export' ships to clients.
 archiveRoundTrip :: SimpleDatabase -> IO SimpleDatabase
 archiveRoundTrip db = withSystemTempDirectory "ilcd-archive-spec" $ \dir -> do
     extractFilesFromArchive [OptDestination dir] (toArchive (archiveOrFail defaultWriteOptions db))
-    r <- parseILCDDirectory dir
+    r <- parseILCDDirectory defaultUnitConfig Declared dir
     case r of
         Left err -> error ("archive round-trip parse failed: " <> T.unpack err)
         Right db' -> pure db'
@@ -201,7 +201,7 @@ inventoryByName :: SimpleDatabase -> Text -> IO (M.Map Text Double)
 inventoryByName db target = do
     built <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (sdbActivities db)
             (sdbTechFlows db)
             (sdbBioFlows db)

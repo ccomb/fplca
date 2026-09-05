@@ -49,6 +49,7 @@ import Database.Rebuild (deleteActivities)
 import SharedSolver (SharedSolver, createSharedSolver)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     Database (..),
     Exchange (..),
@@ -408,11 +409,12 @@ mkConfig name =
         , dcIsUploaded = False
         , dcDeletable = True
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) acts flows M.empty M.empty units
+    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) acts flows M.empty M.empty units
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)

@@ -34,9 +34,10 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
+import Database.Loader (LoadOptions (..))
 import Database.Manager (RawLoad (..), loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
-import Types (GeographyPolicy (..))
+import Types (AllocationKey (..), GeographyPolicy (..))
 import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
 
 {- | Copy regular files from one directory into another (non-recursive,
@@ -62,11 +63,15 @@ runRawWith unitConfig locationAliases dstDir = do
         loadDatabaseRawWithCrossDB
             RawLoad
                 { rlDbName = "test"
-                , rlLocationAliases = locationAliases
+                , rlLoadOptions =
+                    LoadOptions
+                        { loUnitConfig = unitConfig
+                        , loLocationAliases = locationAliases
+                        , loAllocation = Declared
+                        }
                 , rlSourcePath = dstDir
                 , rlNoCache = False -- cache must be written/read
                 , rlSynonymDB = emptySynonymDB
-                , rlUnitConfig = unitConfig
                 , rlOtherIndexes = []
                 , rlLocationHierarchy = M.empty
                 , rlGeographyPolicy = GeoGlobal

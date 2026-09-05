@@ -88,7 +88,7 @@ buildFixture :: Compartment -> IO Database
 buildFixture comp = do
     r <-
         DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (M.singleton (actU, prodU) act)
             (M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing))
             (M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp)))

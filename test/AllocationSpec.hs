@@ -10,6 +10,7 @@ import Control.Monad ((<=<))
 import qualified Data.ByteString as BS
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
@@ -22,7 +23,7 @@ import Test.Hspec
 import API.Types (ActivitySummary (..))
 import Database (buildDatabaseWithMatrices)
 import Database.Allocation
-import Database.Loader (loadDatabaseWithLocationAliases)
+import Database.Loader (defaultLoadOptions, loadDatabaseWithLocationAliases)
 import Database.MatrixBuild (InterningTables (..), buildInterningTables, buildSupplierRefUnits, buildTechTriples)
 import Database.Quality (QualityCheck (..), QualityOffender (..), QualityReport (..), qualityReport)
 import qualified Service
@@ -45,24 +46,74 @@ massUnits =
     mass = [1, 0, 0, 0, 0, 0, 0, 0]
     energy = [0, 0, 0, 1, 0, 0, 0, 0]
 
--- | A product row of a block, as an 'ActivitySummary' reports it.
-product_ :: Text -> Double -> Maybe Double -> ActivitySummary
-product_ unitName amount declared =
-    ActivitySummary
-        { prsProcessId = ""
-        , prsActivityName = ""
-        , prsLocation = ""
-        , prsProductName = ""
-        , prsProductAmount = amount
-        , prsProductUnit = unitName
-        , prsAllocationPercent = declared
-        , prsAllocationFormula = Nothing
-        , prsMassAllocationPercent = Nothing
-        , prsNativeType = Nothing
-        }
+{- | A product of a block as the products table reports it: the summary the
+reader sees, and the row it was split from, which is where a mass is read.
+-}
+product_ :: Text -> Double -> Maybe Double -> (ActivitySummary, Maybe Exchange)
+product_ unitName amount declared = (summary, Just row)
+  where
+    summary :: ActivitySummary
+    summary =
+        ActivitySummary
+            { prsProcessId = ""
+            , prsActivityName = ""
+            , prsLocation = ""
+            , prsProductName = ""
+            , prsProductAmount = amount
+            , prsProductUnit = unitName
+            , prsAllocationPercent = declared
+            , prsAllocationFormula = Nothing
+            , prsMassAllocationPercent = Nothing
+            , prsNativeType = Nothing
+            }
+
+    row :: Exchange
+    row = (tech cheeseId amount ReferenceProduct){techUnitId = if unitName == "kg" then kgId else mjId}
 
 kg :: Double -> StatedAmount
 kg amount = StatedAmount{saUnit = "kg", saAmount = amount}
+
+-- | Splitting on what the source declares, over the fixture's units.
+declaredOn :: Allocating
+declaredOn = Allocating{alKey = Declared, alUnitConfig = massUnits, alUnitDB = units}
+
+-- | Splitting on a physical property instead.
+byPropertyOn :: AllocationProperty -> Allocating
+byPropertyOn prop = declaredOn{alKey = ByProperty prop}
+
+-- | The share the reference exchange of a split process records.
+appliedShare :: Activity -> Maybe Double
+appliedShare act = listToMaybe [dsPercent d | ex <- exchanges act, exchangeIsReference ex, Just d <- [exchangeDeclaredShare ex]]
+
+-- | The five Abondance quantities as the product rows of one block.
+abondanceRows :: NE.NonEmpty Exchange
+abondanceRows = NE.map (plainRow . saAmount) abondance
+
+-- | A product row stating nothing but its amount, in kilograms.
+plainRow :: Double -> Exchange
+plainRow amount = tech cheeseId amount Coproduct
+
+-- | A product row in megajoules, which no mass can be read from.
+energyRow :: Double -> Exchange
+energyRow amount = (tech cheeseId amount Coproduct){techUnitId = mjId}
+
+-- | A product row declaring one property, stated per unit of the row.
+declaring :: AllocationProperty -> Text -> Double -> Double -> Exchange
+declaring prop unit perUnit amount = (tech cheeseId amount Coproduct){techProperties = stated}
+  where
+    stated :: ExchangeProperties
+    stated = case prop of
+        DryMass -> noProperties{epDryMass = Just (StatedAmount unit perUnit)}
+        WetMass -> noProperties{epWetMass = Just (StatedAmount unit perUnit)}
+
+-- | What the products table shows in the mass column for a block.
+column :: [(ActivitySummary, Maybe Exchange)] -> [Maybe Double]
+column = map prsMassAllocationPercent . Service.withMassAllocationPercent massUnits units
+
+-- | A product whose row declares a wet mass per unit of itself.
+declaringWetMass :: Double -> Double -> Maybe Double -> (ActivitySummary, Maybe Exchange)
+declaringWetMass perUnit amount declared =
+    (fst (product_ "kg" amount declared), Just (declaring WetMass "kg" perUnit amount))
 
 round1 :: Double -> Double
 round1 x = fromIntegral (round (x * 10) :: Int) / 10
@@ -71,7 +122,7 @@ spec :: Spec
 spec = do
     describe "allocate Declared" $ do
         it "splits a block into one process per product, scaled by each declared share" $ do
-            let processes = NE.toList (allocate Declared units block)
+            let processes = NE.toList (allocate declaredOn block)
             length processes `shouldBe` 3
             -- Each process keeps its own product as the reference, and only it.
             [exchangeFlowId ex | p <- processes, ex <- exchanges p, exchangeIsReference ex] `shouldBe` [cheeseId, wheyId, creamId]
@@ -82,12 +133,12 @@ spec = do
             [avoidedAmounts p | p <- processes] `shouldBe` [[0.5], [0.3], [0.2]]
 
         it "keeps the declared share on each process's reference, for the writer and the wire" $ do
-            let processes = NE.toList (allocate Declared units block)
+            let processes = NE.toList (allocate declaredOn block)
             map (fmap dsPercent . activityReferenceShare) processes `shouldBe` [Just 50, Just 30, Just 20]
             map (dsFormula <=< activityReferenceShare) processes `shouldBe` [Nothing, Just "Qw*DMw/total*100", Nothing]
 
         it "names each process's unit after its product, and its category after the product row" $ do
-            let processes = NE.toList (allocate Declared units block)
+            let processes = NE.toList (allocate declaredOn block)
             map activityUnit processes `shouldBe` ["kg", "MJ", "kg"]
             map (M.lookup "Category" . activityClassification) processes
                 `shouldBe` [Just "Food\\Transformation", Just "Animal feed\\Others", Just "Food\\Transformation"]
@@ -97,44 +148,44 @@ spec = do
         it "applies a single product's share as declared, 0 % included" $ do
             let zero = activity [productRow cheeseId 1.0 ReferenceProduct (Just 0) M.empty, input 10.0]
                 half = activity [productRow cheeseId 1.0 ReferenceProduct (Just 51) M.empty, input 10.0]
-            concatMap inputAmounts (allocate Declared units zero) `shouldBe` [0.0]
-            concatMap inputAmounts (allocate Declared units half) `shouldBe` [5.1]
+            concatMap inputAmounts (allocate declaredOn zero) `shouldBe` [0.0]
+            concatMap inputAmounts (allocate declaredOn half) `shouldBe` [5.1]
 
         it "leaves a single product with no share as it is" $ do
             let plain = activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty, input 10.0]
-            map shape (NE.toList (allocate Declared units plain)) `shouldBe` [shape plain]
+            map shape (NE.toList (allocate declaredOn plain)) `shouldBe` [shape plain]
 
         it "leaves an activity whole when a product output carries no share" $ do
             let noShares = activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty, productRow wheyId 2.0 Coproduct Nothing M.empty, input 10.0]
                 oneShare = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow wheyId 2.0 Coproduct Nothing M.empty, input 10.0]
-            map shape (NE.toList (allocate Declared units noShares)) `shouldBe` [shape noShares]
-            map shape (NE.toList (allocate Declared units oneShare)) `shouldBe` [shape oneShare]
+            map shape (NE.toList (allocate declaredOn noShares)) `shouldBe` [shape noShares]
+            map shape (NE.toList (allocate declaredOn oneShare)) `shouldBe` [shape oneShare]
 
         it "lets an avoided product through unsplit, scaled with the other shared lines" $ do
             let substituting = activity [productRow cheeseId 1.0 ReferenceProduct (Just 50) M.empty, avoided 2.0]
-            concatMap avoidedAmounts (allocate Declared units substituting) `shouldBe` [1.0]
+            concatMap avoidedAmounts (allocate declaredOn substituting) `shouldBe` [1.0]
 
     describe "allocate normalises first, as the EcoSpold parsers used to" $ do
         it "drops a zero-amount coproduct the source states no share for" $ do
             let act = activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty, productRow wheyId 0.0 Coproduct Nothing M.empty]
-            length (concatMap exchanges (allocate Declared units act)) `shouldBe` 1
+            length (concatMap exchanges (allocate declaredOn act)) `shouldBe` 1
 
         it "keeps a zero-amount product row that declares a share: it is a process of its own" $ do
             let act = activity [productRow cheeseId 1.0 ReferenceProduct (Just 100) M.empty, productRow wheyId 0.0 Coproduct (Just 0) M.empty]
-            length (allocate Declared units act) `shouldBe` 2
+            length (allocate declaredOn act) `shouldBe` 2
 
         it "promotes the only non-zero output of an activity with no reference" $ do
             let act = activity [productRow wheyId 2.0 Coproduct Nothing M.empty, productRow creamId 0.0 Coproduct Nothing M.empty]
-                result = NE.toList (allocate Declared units act)
+                result = NE.toList (allocate declaredOn act)
             [exchangeFlowId ex | p <- result, ex <- exchanges p, exchangeIsReference ex] `shouldBe` [wheyId]
 
         it "does not choose between two non-zero outputs" $ do
             let act = activity [productRow wheyId 2.0 Coproduct Nothing M.empty, productRow creamId 1.0 Coproduct Nothing M.empty]
-            any exchangeIsReference (concatMap exchanges (allocate Declared units act)) `shouldBe` False
+            any exchangeIsReference (concatMap exchanges (allocate declaredOn act)) `shouldBe` False
 
     describe "asAllocated" $ do
         it "accepts a split process and a single-output activity alike" $ do
-            let processes = NE.toList (allocate Declared units block)
+            let processes = NE.toList (allocate declaredOn block)
             map (either (const False) (const True) . asAllocated) processes `shouldBe` [True, True, True]
             either (const False) (const True) (asAllocated (activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty])) `shouldBe` True
 
@@ -178,24 +229,124 @@ spec = do
             massShares massUnits (NE.fromList [kg 1.0, kg 0.0]) `shouldBe` Left (NonPositiveMass 0.0)
             massShares massUnits (NE.fromList [kg (-1.0)]) `shouldBe` Left (NonPositiveMass (-1.0))
 
+    describe "allocate under a property key" $ do
+        it "divides on the property rather than on what the source declares" $ do
+            -- Two products of 1 kg and 3 kg, declared 60/40 by their source.
+            let block = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow creamId 3.0 Coproduct (Just 40) M.empty, input 10.0]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) block) `shouldBe` [2.5, 7.5]
+
+        it "keeps a product its source cut out of the block at zero" $ do
+            -- The residue row declares 0 %: its author took it out of the
+            -- block on purpose, and the mass divides between the other two.
+            let block =
+                    activity
+                        [ productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty
+                        , productRow creamId 3.0 Coproduct (Just 40) M.empty
+                        , productRow feedId 4.0 Coproduct (Just 0) M.empty
+                        , input 10.0
+                        ]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) block) `shouldBe` [2.5, 7.5, 0.0]
+
+        it "records on each process the share that was applied to it" $ do
+            -- The SimaPro writer divides an exchange by this field to rebuild
+            -- the block, so a row still claiming its declared share would
+            -- export an inventory divided by the wrong factor.
+            let block = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow creamId 3.0 Coproduct (Just 40) M.empty]
+            map appliedShare (NE.toList (allocate (byPropertyOn WetMass) block)) `shouldBe` [Just 25.0, Just 75.0]
+
+        it "leaves a process of one product as its source wrote it" $ do
+            -- 51 % of a block whose other outputs the file does not carry. A
+            -- key answering 100 % would hand this process the whole inventory
+            -- its author had cut in half.
+            let lone = activity [productRow cheeseId 1.0 ReferenceProduct (Just 51) M.empty, input 10.0]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) lone) `shouldBe` [5.1]
+            map appliedShare (NE.toList (allocate (byPropertyOn WetMass) lone)) `shouldBe` [Just 51.0]
+
+        it "keeps a lone product's declared zero at zero" $ do
+            -- The same reading from the other end: nothing to divide, and the
+            -- source says this process carries none of the block.
+            let lone = activity [productRow cheeseId 1.0 ReferenceProduct (Just 0) M.empty, input 10.0]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) lone) `shouldBe` [0.0]
+
+        it "never weighs a row it holds at zero" $ do
+            -- The residue is stated in megajoules, which no mass reads. Its
+            -- share is zero before its mass is looked at, so demanding one
+            -- would refuse the block on the very row the zero rule protects.
+            let block =
+                    activity
+                        [ productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty
+                        , productRow creamId 3.0 Coproduct (Just 40) M.empty
+                        , (productRow feedId 4.0 Coproduct (Just 0) M.empty){techUnitId = mjId}
+                        , input 10.0
+                        ]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) block) `shouldBe` [2.5, 7.5, 0.0]
+
+        it "hands back a block the property cannot divide, for the gate to refuse" $ do
+            -- Neither row declares a dry mass, and no amount stands in for one.
+            let block = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow creamId 3.0 Coproduct (Just 40) M.empty]
+            map (length . exchanges) (NE.toList (allocate (byPropertyOn DryMass) block)) `shouldBe` [2]
+
+    describe "propertyShares" $ do
+        it "reads the Abondance block the way its wet mass would, against its declared key" $
+            -- The same five quantities and the same answer as massShares gives
+            -- them, reached from the exchanges rather than from a summary: the
+            -- rows state no property, so their own amounts are their wet mass.
+            fmap (map round1 . NE.toList) (propertyShares WetMass units massUnits abondanceRows)
+                `shouldBe` Right [11.7, 65.3, 13.2, 9.1, 0.8]
+
+        it "believes a declared mass over the one the amount implies" $
+            -- Two lines of 2 kg and 1 kg, the first declaring half a kilo of
+            -- wet mass per kilo. On the amounts alone this block would read
+            -- 66.7 / 33.3.
+            fmap
+                (map round1 . NE.toList)
+                (propertyShares WetMass units massUnits (NE.fromList [declaring WetMass "kg" 0.5 2.0, plainRow 1.0]))
+                `shouldBe` Right [50.0, 50.0]
+
+        it "reads a property stated per unit against the length of its line" $
+            -- 614.4 kg of dry matter per m3, on 1 m3 and on 3 m3.
+            fmap
+                (map round1 . NE.toList)
+                (propertyShares DryMass units massUnits (NE.fromList [declaring DryMass "kg" 614.4 1.0, declaring DryMass "kg" 614.4 3.0]))
+                `shouldBe` Right [25.0, 75.0]
+
+        it "refuses a dry mass no product states, rather than reading the amount as one" $
+            -- A kilo of cheese says nothing about how much of it is water.
+            propertyShares DryMass units massUnits (NE.fromList [plainRow 1.0])
+                `shouldBe` Left NotStated
+
+        it "refuses a line that neither declares a mass nor is stated in one" $
+            propertyShares WetMass units massUnits (NE.fromList [plainRow 1.0, energyRow 4.0])
+                `shouldBe` Left (NotAMass "MJ")
+
+        it "refuses a declared mass stated in something that is not a mass" $
+            propertyShares WetMass units massUnits (NE.fromList [declaring WetMass "dimensionless" 1.0 2.0])
+                `shouldBe` Left (NotAMass "dimensionless")
+
     describe "withMassAllocationPercent" $ do
         it "fills a block whose source states a share on every product" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)])
+            column [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)]
                 `shouldBe` [Just 25, Just 75]
 
         it "leaves a lone product alone, there being nothing to compare it against" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 100)])
-                `shouldBe` [Nothing]
+            column [product_ "kg" 1 (Just 100)] `shouldBe` [Nothing]
 
         it "leaves a block whose datasets arrived already allocated alone" $
             -- Each is normalised to one of its own product and states no
             -- share, so the amounts are not one run's joint outputs.
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing])
+            column [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing]
                 `shouldBe` [Nothing, Nothing]
 
         it "leaves a block whose products are not all a mass alone" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)])
+            column [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)]
                 `shouldBe` [Nothing, Nothing]
+
+        it "reads a declared mass, so the column and an allocation key agree" $
+            -- 2 kg declaring half a kilo of wet mass per kilo, beside 1 kg.
+            -- On the amounts alone this block would read 66.7 / 33.3, and a
+            -- database loaded under `wet mass` would show 50 beside it.
+            column [declaringWetMass 0.5 2 (Just 60), product_ "kg" 1 (Just 40)]
+                `shouldBe` [Just 50, Just 50]
 
     describe "the matrix" $ do
         it "gives a refused activity no column, and says why" $ do
@@ -354,9 +505,9 @@ endToEnd =
 withTwoOutputDataset :: ((SimpleDatabase, Database) -> IO ()) -> IO ()
 withTwoOutputDataset k = withSystemTempDirectory "es2-two-outputs" $ \dir -> do
     BS.writeFile (dir </> "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.spold") twoOutputsXml
-    loaded <- loadDatabaseWithLocationAliases defaultUnitConfig M.empty dir
+    loaded <- loadDatabaseWithLocationAliases (defaultLoadOptions defaultUnitConfig) dir
     simpleDb <- either (fail . T.unpack) pure loaded
-    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) (sdbActivities simpleDb) (sdbTechFlows simpleDb) (sdbBioFlows simpleDb) (sdbWasteFlows simpleDb) (sdbUnits simpleDb)
+    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) (sdbActivities simpleDb) (sdbTechFlows simpleDb) (sdbBioFlows simpleDb) (sdbWasteFlows simpleDb) (sdbUnits simpleDb)
     db <- either (fail . T.unpack) pure built
     k (simpleDb, db)
 

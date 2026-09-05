@@ -122,13 +122,14 @@ stubConfig =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 buildDb :: [((UUID.UUID, UUID.UUID), Activity)] -> [(UUID.UUID, Text)] -> IO Database
 buildDb acts flows = do
     res <-
         buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
+            (BuildInputs defaultUnitConfig mempty Declared)
             (M.fromList acts)
             (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
             M.empty

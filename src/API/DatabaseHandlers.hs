@@ -229,6 +229,7 @@ import qualified Method.Explain as Explain
 import Method.Mapping (BuildProvenance (..), CF (..), CFUnit (..), MatchStrategy (..), strategyToText)
 import Method.Types (Method (..), MethodCF (..))
 import Types (
+    AllocationKey (..),
     BiosphereFlow (..),
     Database (..),
     GeographyPolicy (..),
@@ -949,6 +950,7 @@ uploadDatabaseHandler mName mDesc src = do
                             , dcIsUploaded = True -- Freshly uploaded database
                             , dcDeletable = True
                             , dcGeographyPolicy = GeoGlobal
+                            , dcAllocation = Declared
                             }
 
                 -- Add to manager

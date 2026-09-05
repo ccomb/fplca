@@ -43,6 +43,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Types (
     Activity (..),
+    AllocationKey (..),
     BuildInputs (..),
     CrossDBLink (..),
     Database (..),
@@ -161,7 +162,7 @@ supplierLoadedConfig name =
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) acts flows M.empty M.empty units
+    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty Declared) acts flows M.empty M.empty units
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)
@@ -186,6 +187,7 @@ consumerConfig path =
         , dcIsUploaded = False
         , dcDeletable = False
         , dcGeographyPolicy = GeoGlobal
+        , dcAllocation = Declared
         }
 
 -- ---------------------------------------------------------------------------
