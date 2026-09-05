@@ -629,7 +629,10 @@ dependency cycle terminates instead of looping.
 dependencyClosure :: Map Text LoadedDatabase -> Text -> [Database]
 dependencyClosure loaded root = go (S.singleton root) (depsOf root)
   where
+    depsOf :: Text -> [Text]
     depsOf name = maybe [] (dbDependsOn . ldDatabase) (M.lookup name loaded)
+
+    go :: S.Set Text -> [Text] -> [Database]
     go _ [] = []
     go seen (name : rest)
         | S.member name seen = go seen rest
@@ -1050,10 +1053,13 @@ transitively. The seen set is what makes a dependency cycle terminate.
 dependentsClosure :: Map Text LoadedDatabase -> Text -> S.Set Text
 dependentsClosure loaded = go S.empty . pure
   where
+    go :: S.Set Text -> [Text] -> S.Set Text
     go seen [] = seen
     go seen (name : rest)
         | S.member name seen = go seen rest
         | otherwise = go (S.insert name seen) (rest ++ directDependents name)
+
+    directDependents :: Text -> [Text]
     directDependents name =
         [ other
         | (other, ld) <- M.toList loaded
@@ -1797,6 +1803,7 @@ supportedSourceFormats :: Text
 supportedSourceFormats =
     T.intercalate ", " (mapMaybe label [minBound .. maxBound])
   where
+    label :: DirectoryFormat -> Maybe Text
     label f = case f of
         FormatSpold -> Just "EcoSpold v2 (.spold)"
         FormatXML -> Just "EcoSpold v1 (.xml)"
@@ -2432,6 +2439,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = withLogScope dbName $ d
   where
     -- Idempotent: a concurrent relink may have pinned the dep between the
     -- snapshot above and this transaction, so never prepend a duplicate.
+    addPinnedDep :: Text -> LoadedDatabase -> LoadedDatabase
     addPinnedDep dep ld =
         let db = ldDatabase ld
          in if dep `elem` dbDependsOn db
@@ -2845,9 +2853,11 @@ removeDatabase manager dbName = do
     tryIO :: IO a -> IO (Either SomeException a)
     tryIO = Control.Exception.try
     -- The databases copied from this one, which still read its files.
+    copiesOf :: Text -> IO [Text]
     copiesOf name = do
         uploads <- UploadedDB.discoverUploadedDatabases
         pure [slug | (slug, _, meta) <- uploads, UploadedDB.umSource meta == Just name]
+    deleteUpload :: DatabaseConfig -> IO (Either Text ())
     deleteUpload dbConfig = do
         uploadsDir <- UploadedDB.getDatabaseUploadsDir
         let uploadDir = uploadsDir </> T.unpack dbName
@@ -2864,6 +2874,7 @@ removeDatabase manager dbName = do
                 -- Directory already missing, just remove from memory
                 reportProgress Info $ "Directory already missing: " <> uploadDir
                 removeFromMemory manager dbName
+    deleteCacheFile :: Text -> FilePath -> IO ()
     deleteCacheFile name sourcePath = do
         cacheFile <- Loader.generateMatrixCacheFilename name sourcePath
         let zstdFile = cacheFile ++ ".zst"
@@ -2969,11 +2980,13 @@ databaseCoverageReport manager dbName mCollection = do
                     pure (Right (Coverage.CoverageReport dbName bridges))
   where
     -- The named collection (must be loaded) or every loaded one, by name.
+    collectionsToReport :: Maybe Text -> Map Text MethodCollection -> Either Text [(Text, MethodCollection)]
     collectionsToReport sel loaded = case sel of
         Just name -> case M.lookup name loaded of
             Just mc -> Right [(name, mc)]
             Nothing -> Left ("Method collection not loaded: " <> name)
         Nothing -> Right (M.toList loaded)
+    collectionBridgesFor :: Database -> (Text, MethodCollection) -> IO Coverage.CollectionBridges
     collectionBridgesFor db (collName, mc) = do
         let methods = mcMethods mc
         tables <- mapM (mapMethodToTablesCached manager dbName (CollectionName collName) db) methods
@@ -3082,6 +3095,7 @@ stagedLinkCounts staged =
         , lcCrossDBLinks = Loader.crossDBLinksCount (sdLinkingStats staged)
         }
   where
+    sdb :: SimpleDatabase
     sdb = sdSimpleDB staged
 
 {- | Tally for a loaded database. Counts are recomputed from the activity set
@@ -3277,6 +3291,7 @@ discoverCandidatePaths dbConfig = do
         return PathCandidate{pcPath = T.pack rel, pcFormat = label, pcFileCount = count}
   where
     -- Simple relative path: strip upload root prefix
+    makeRelativePath :: FilePath -> FilePath -> FilePath
     makeRelativePath base path
         | base `isPrefixOf` path =
             let r = drop (length base + 1) path
@@ -3889,6 +3904,7 @@ warnReopenedBridges synDB =
                 <> dirLabel (seDir e)
                 <> ") is re-linked in the opposite direction's view by other rows; its direction restriction is void"
   where
+    dirLabel :: BridgeDirection -> String
     dirLabel BridgeBoth = "both"
     dirLabel BridgeInput = "input"
     dirLabel BridgeOutput = "output"
@@ -3992,7 +4008,10 @@ getMergedFlowMetadata manager = do
             atomically $ writeTVar (dmMergedFlowMetadataCache manager) (Just snap)
             pure snap
   where
+    bioFingerprint :: BiosphereFlow -> (Text, Text, Maybe Text)
     bioFingerprint f = (bfName f, bfCompartmentName f, bfCompartmentSub f)
+
+    unitFingerprint :: Unit -> Text
     unitFingerprint = unitName
 
     collisions :: (Ord fp) => (v -> fp) -> [Map UUID v] -> [UUID]
@@ -4316,11 +4335,13 @@ parseGeographies label bytes = do
         then Right (M.fromList parsed)
         else Left (label <> ": duplicate codes: " <> T.intercalate ", " dups)
   where
+    meaningful :: Text -> Bool
     meaningful line =
         let stripped = T.strip line
          in not (T.null stripped)
                 && not ("#" `T.isPrefixOf` stripped)
                 && not ("code," `T.isPrefixOf` stripped)
+    entry :: (Text, Text, Text) -> (Text, (Text, [Text]))
     entry (codeRaw, displayRaw, parentsRaw) =
         let code = T.strip codeRaw
             display = T.strip displayRaw
