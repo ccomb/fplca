@@ -851,7 +851,7 @@ data WasteRole
 caller refuses with its own message rather than filtering on a guess.
 -}
 parseExchangeKind :: Text -> Maybe ExchangeKind
-parseExchangeKind raw = find ((== raw) . exchangeKindName) [minBound .. maxBound]
+parseExchangeKind = codedBy exchangeKindName
 
 {- | The kinds a request may name, for the message that refuses the others.
 Read off the type, so a fourth kind cannot go unmentioned.
