@@ -101,6 +101,13 @@ data FlowFilter = FlowFilter
     , ffOrder :: Maybe Text
     }
 
+{- | A case-blind substring a name is searched for, as opposed to a name, a
+process reference or a database name. Compared with
+'Normalize.caseInsensitiveInfixOf', never parsed.
+-}
+newtype NamePattern = NamePattern {unNamePattern :: Text}
+    deriving (Eq, Show)
+
 -- | Empty flow-search response used by callers that have no query to run.
 emptyFlowSearchResults :: Value
 emptyFlowSearchResults = toJSON (SearchResults ([] :: [FlowSearchResult]) 0 0 50 False 0.0)
@@ -578,10 +585,10 @@ convertToTreeExport db maxDepth tree =
 {- | Post-filter a TreeExport by name: keep matching nodes plus all their ancestors up to root.
 Uses the enParentId chain already stored in each ExportNode — no extra graph traversal.
 -}
-filterTreeExport :: Text -> TreeExport -> TreeExport
+filterTreeExport :: NamePattern -> TreeExport -> TreeExport
 filterTreeExport pat export =
     let nodes = teNodes export
-        matchingIds = M.keysSet $ M.filter (Normalize.caseInsensitiveInfixOf pat . enName) nodes
+        matchingIds = M.keysSet $ M.filter (Normalize.caseInsensitiveInfixOf (unNamePattern pat) . enName) nodes
         ancestorsOf nId = case enParentId =<< M.lookup nId nodes of
             Nothing -> S.empty
             Just pid -> S.insert pid (ancestorsOf pid)
@@ -1621,7 +1628,7 @@ whose name contains the given substring (case-insensitive).
 Returns path steps ordered root → target, each with cumulative quantity, scaling factor,
 and local_step_ratio (upstream ÷ downstream scaling factors).
 -}
-getPathTo :: Database -> SharedSolver -> Text -> Text -> IO (Either ServiceError Value)
+getPathTo :: Database -> SharedSolver -> Text -> NamePattern -> IO (Either ServiceError Value)
 getPathTo db solver pidText target = do
     case resolveScorable db pidText of
         Left err -> return $ Left err
@@ -1640,7 +1647,7 @@ getPathTo db solver pidText target = do
                                         (fromIntegral rootPid)
                                         ( \i ->
                                             Normalize.caseInsensitiveInfixOf
-                                                target
+                                                (unNamePattern target)
                                                 (activityName (dbActivities db V.! i))
                                         )
                                         adj
@@ -1648,7 +1655,7 @@ getPathTo db solver pidText target = do
                                     Nothing ->
                                         Left $
                                             ActivityNotFound $
-                                                "No upstream node matching '" <> target <> "' reachable from " <> pidText
+                                                "No upstream node matching '" <> unNamePattern target <> "' reachable from " <> pidText
                                     Just [] ->
                                         Left $
                                             ActivityNotFound $

@@ -1008,7 +1008,7 @@ callGetPathTo :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callGetPathTo rid args (db, solver) = runTool rid $ do
     pid <- except (requireText "process_id" args)
     target <- except (requireText "target" args)
-    val <- liftIO (Service.getPathTo db solver pid target) >>= liftShow
+    val <- liftIO (Service.getPathTo db solver pid (Service.NamePattern target)) >>= liftShow
     pure (toolSuccessJson rid val)
 
 callGetConsumers :: [ClassificationPreset] -> Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value

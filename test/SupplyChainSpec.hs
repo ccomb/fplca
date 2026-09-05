@@ -17,6 +17,7 @@ import qualified Search.BM25 as BM25
 import Service (
     ActivityFilterCore (..),
     ConsumerFilter (..),
+    NamePattern (..),
     SupplyChainFilter (..),
     bfsToPattern,
     buildSupplyChainFromScalingVector,
@@ -317,29 +318,29 @@ spec = do
                     }
 
         it "filter matching leaf keeps leaf + all ancestors" $ do
-            let result = filterTreeExport "leaf" tree
+            let result = filterTreeExport (NamePattern "leaf") tree
             M.keys (teNodes result) `shouldMatchList` ["r", "m", "l"]
             length (teEdges result) `shouldBe` 2
 
         it "filter matching middle node keeps middle + root only" $ do
-            let result = filterTreeExport "middle" tree
+            let result = filterTreeExport (NamePattern "middle") tree
             M.keys (teNodes result) `shouldMatchList` ["r", "m"]
             map (\e -> (teFrom e, teTo e)) (teEdges result) `shouldMatchList` [("r", "m")]
 
         it "filter matching root keeps root only" $ do
-            let result = filterTreeExport "root" tree
+            let result = filterTreeExport (NamePattern "root") tree
             M.keys (teNodes result) `shouldMatchList` ["r"]
             length (teEdges result) `shouldBe` 0
 
         it "filter with no match returns empty" $ do
-            let result = filterTreeExport "nonexistent" tree
+            let result = filterTreeExport (NamePattern "nonexistent") tree
             M.size (teNodes result) `shouldBe` 0
             length (teEdges result) `shouldBe` 0
 
         it "updates tmTotalNodes to match filtered count" $ do
-            let result = filterTreeExport "leaf" tree
+            let result = filterTreeExport (NamePattern "leaf") tree
             tmTotalNodes (teTree result) `shouldBe` 3
-            let result2 = filterTreeExport "middle" tree
+            let result2 = filterTreeExport (NamePattern "middle") tree
             tmTotalNodes (teTree result2) `shouldBe` 2
 
     -- -----------------------------------------------------------------------
@@ -374,7 +375,7 @@ spec = do
                 actCount = fromIntegral (dbActivityCount db)
             solver <- createSharedSolver "test" techTriples actCount
             let rootPid = processIdToText db 0
-            result <- getPathTo db solver rootPid "product Z"
+            result <- getPathTo db solver rootPid (NamePattern "product Z")
             case result of
                 Left err -> expectationFailure $ "Expected Right but got Left: " ++ show err
                 Right val -> do
@@ -392,7 +393,7 @@ spec = do
                 actCount = fromIntegral (dbActivityCount db)
             solver <- createSharedSolver "test" techTriples actCount
             let rootPid = processIdToText db 0
-            result <- getPathTo db solver rootPid "no such activity"
+            result <- getPathTo db solver rootPid (NamePattern "no such activity")
             case result of
                 Left _ -> return ()
                 Right _ -> expectationFailure "Expected Left but got Right"

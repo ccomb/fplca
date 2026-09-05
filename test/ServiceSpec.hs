@@ -17,6 +17,7 @@ import qualified Data.Set as S
 import Data.Text (Text)
 import Data.UUID (fromWords, nil, toText)
 import Service (
+    NamePattern (..),
     ServiceError (..),
     TargetRef (..),
     buildUnitGroups,
@@ -220,7 +221,7 @@ spec = do
                         , ("sibling", Just "root", "Unrelated Process")
                         ]
                         [("root", "child"), ("root", "sibling")]
-                filtered = filterTreeExport "widget" export
+                filtered = filterTreeExport (NamePattern "widget") export
              in M.keysSet (teNodes filtered) `shouldBe` S.fromList ["root", "child"]
 
         it "excludes edges whose endpoints are filtered out" $
@@ -231,7 +232,7 @@ spec = do
                         , ("sibling", Just "root", "Unrelated Process")
                         ]
                         [("root", "child"), ("root", "sibling")]
-                filtered = filterTreeExport "widget" export
+                filtered = filterTreeExport (NamePattern "widget") export
              in length (teEdges filtered) `shouldBe` 1
 
         it "returns all nodes when pattern matches all" $
@@ -239,12 +240,12 @@ spec = do
                     mkTreeExport
                         [("a", Nothing, "Alpha"), ("b", Just "a", "Beta")]
                         [("a", "b")]
-                filtered = filterTreeExport "a" export -- matches "Alpha"
+                filtered = filterTreeExport (NamePattern "a") export -- matches "Alpha"
              in M.size (teNodes filtered) `shouldBe` 2
 
         it "returns empty when no match" $
             let export = mkTreeExport [("a", Nothing, "Alpha")] []
-                filtered = filterTreeExport "zzz" export
+                filtered = filterTreeExport (NamePattern "zzz") export
              in M.size (teNodes filtered) `shouldBe` 0
 
         it "updates tmTotalNodes in metadata" $
@@ -254,7 +255,7 @@ spec = do
                         , ("child", Just "root", "Match Me")
                         ]
                         [("root", "child")]
-                filtered = filterTreeExport "match" export
+                filtered = filterTreeExport (NamePattern "match") export
              in tmTotalNodes (teTree filtered) `shouldBe` 2
 
 -- ---------------------------------------------------------------------------

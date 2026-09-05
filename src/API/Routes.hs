@@ -1852,7 +1852,7 @@ getActivityPathTo dbName processIdText targetParam = do
             (throwError err400{errBody = "Missing required 'target' query parameter"})
             pure
             targetParam
-    result <- liftIO $ Service.getPathTo db solver processIdText target
+    result <- liftIO $ Service.getPathTo db solver processIdText (Service.NamePattern target)
     case result of
         Left (Service.ActivityNotFound msg) ->
             throwError err404{errBody = BSL.fromStrict $ T.encodeUtf8 msg}
