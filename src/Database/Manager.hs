@@ -3617,127 +3617,210 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
 -- Method Collection Management
 --------------------------------------------------------------------------------
 
+{- | What a method path turned out to hold: one file carrying its own
+factors, or a directory to scan. The two are read differently and only the
+directory has flow definitions beside it.
+-}
+data MethodSource
+    = BareMethodFile FilePath
+    | MethodDirectory FilePath
+
+{- | The method files found under one directory, split by what parses them.
+Three lists of paths, so they are named rather than positional.
+-}
+data MethodFiles = MethodFiles
+    { mfDirectory :: !FilePath
+    , mfXml :: ![FilePath]
+    , mfCsv :: ![FilePath]
+    , mfJson :: ![FilePath]
+    }
+
+-- | What came back from parsing them, before the collection is assembled.
+data ParsedMethodFiles = ParsedMethodFiles
+    { pmfXmlMethods :: ![Method]
+    , pmfCsvCollections :: ![MethodCollection]
+    -- ^ SimaPro method exports, which are whole collections
+    , pmfCsvMethods :: ![Method]
+    -- ^ tabular CSVs, which are loose methods
+    , pmfCsvFileCount :: !Int
+    , pmfJsonMethods :: ![Method]
+    , pmfErrors :: ![String]
+    }
+
 {- | Load methods from a MethodConfig path (directory or archive).
 Handles ZIP/7z archives via resolveDataPath, finds method XMLs,
 and enriches CFs from ILCD flow XMLs when available.
 -}
 loadMethodCollectionFromConfig :: MethodConfig -> IO (Either Text (MethodCollection, M.Map UUID ILCDFlowInfo))
-loadMethodCollectionFromConfig mc = do
-    -- Resolve archives (ZIP → extracted directory). Single .json (openLCA
-    -- JSON-LD ImpactCategory) and .csv (SimaPro method export) files are
-    -- accepted directly without a wrapping directory or archive.
-    resolvedPath <- resolveDataPath (mcPath mc)
-    isDir <- doesDirectoryExist resolvedPath
-    isFile <- doesFileExist resolvedPath
-    let ext = map toLower (takeExtension resolvedPath)
-        isSingleJson = isFile && ext == ".json"
-        isSingleCsv = isFile && ext == ".csv"
-        isBareFile = isSingleJson || isSingleCsv
-    if not isDir && not isBareFile
-        then
-            return . Left $
-                if not isFile
-                    then "Method path not found: " <> T.pack (mcPath mc)
-                    else
-                        if ext `elem` archiveExtensions
-                            -- resolveDataPath returns the archive path unchanged when
-                            -- extraction failed, so an archive reaching here means that.
-                            then "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
-                            else "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
-        else do
-            (dir, xmlFiles, csvFiles, jsonFiles) <-
-                if isBareFile
-                    then
-                        return
-                            ( takeDirectory resolvedPath
-                            , []
-                            , [takeFileName resolvedPath | isSingleCsv]
-                            , [takeFileName resolvedPath | isSingleJson]
-                            )
-                    else do
-                        -- Find method directory (handles nested ILCD structures)
-                        d <- findMethodDirectory resolvedPath
-                        -- listDirectory order is filesystem-dependent; sort so a
-                        -- collection loads its methods in the same order on every
-                        -- machine (and a re-export of it is byte-stable).
-                        fs <- sort <$> listDirectory d
-                        let xs = filter (\f -> map toLower (takeExtension f) == ".xml") fs
-                            cs = filter (\f -> map toLower (takeExtension f) == ".csv") fs
-                            js = filter (\f -> map toLower (takeExtension f) == ".json") fs
-                        return (d, xs, cs, js)
-            if null xmlFiles && null csvFiles && null jsonFiles
-                then return $ Left $ "No method files (.xml/.csv/.json) found in: " <> T.pack dir
-                else do
-                    -- A bare method file (.csv/.json) carries its own CFs and has no
-                    -- ILCD flows/ sibling; only a real ILCD directory does. Scanning a
-                    -- coincidental neighbouring flows/ would parse unrelated flow XMLs
-                    -- and register foreign synonyms under this collection's name.
-                    mFlowsDir <-
-                        if isBareFile
-                            then return Nothing
-                            else FlowResolver.resolveFlowDirectory dir
-                    flowInfo <- case mFlowsDir of
-                        Nothing -> do
-                            reportProgress Info "  No flows/ directory found, using shortDescription fallback"
-                            return M.empty
-                        Just flowsDir -> do
-                            reportProgress Info $ "  Loading ILCD flow XMLs from: " <> flowsDir
-                            info <- FlowResolver.parseFlowDirectory flowsDir
-                            reportProgress Info $ "  Loaded " <> show (M.size info) <> " flow definitions"
-                            return info
-                    -- Parse method files with flow enrichment
-                    xmlResults <- forM xmlFiles $ \f ->
-                        Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
-                    -- Split CSV files into SimaPro method exports and tabular CSVs
-                    csvParsed <- forM csvFiles $ \f -> do
-                        bytes <- stripBOM <$> BS.readFile (dir </> f)
-                        if isSimaProMethodCSV bytes
-                            then return $ fmap Left (parseSimaProMethodCSVBytes bytes)
-                            else return $ fmap Right (parseMethodCSVBytes bytes)
-                    -- openLCA JSON-LD ImpactCategory files (carries optional regionalized CFs).
-                    -- Only files that actually carry @type=ImpactCategory are parsed; others
-                    -- are skipped silently since arbitrary .json files can sit alongside
-                    -- method data (e.g. metadata or other openLCA entity types).
-                    jsonResults <- forM jsonFiles $ \f -> do
-                        bytes <- BS.readFile (dir </> f)
-                        if OlcaSchema.isOlcaImpactCategoryJson bytes
-                            then return $ Just $ OlcaSchema.parseOlcaImpactCategoryBytes bytes
-                            else return Nothing
-                    let (xmlErrs, xmlMethods) = partitionEithers xmlResults
-                        (csvErrs, csvOks) = partitionEithers csvParsed
-                        (jsonErrs, jsonMethods) = partitionEithers (catMaybes jsonResults)
-                        -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method]
-                        spCollections = lefts csvOks
-                        tabularMethods = concat (rights csvOks)
-                        allMethods =
-                            xmlMethods
-                                ++ tabularMethods
-                                ++ jsonMethods
-                                ++ concatMap mcMethods spCollections
-                        -- Merge NW data from all SimaPro CSV sources
-                        allDamageCats = concatMap mcDamageCategories spCollections
-                        allNWSets = concatMap mcNormWeightSets spCollections
-                        collection = MethodCollection allMethods allDamageCats allNWSets []
-                        errs = xmlErrs ++ csvErrs ++ jsonErrs
-                    case (null allMethods, errs) of
-                        (True, firstErr : _) ->
-                            return $ Left $ "All method files failed to parse: " <> T.pack firstErr
-                        _ -> do
-                            let xmlOk = length xmlMethods
-                                csvOk = length csvOks
-                                jsonOk = length jsonMethods
-                            reportProgress Info $ "  Parsed " <> show xmlOk <> " XML, " <> show csvOk <> " CSV, " <> show jsonOk <> " JSON file(s)"
-                            unless (null allDamageCats) $
-                                reportProgress Info $
-                                    "  "
-                                        <> show (length allDamageCats)
-                                        <> " damage categories, "
-                                        <> show (length allNWSets)
-                                        <> " normalization-weighting set(s)"
-                            unless (null errs) $
-                                reportProgress Warning $
-                                    "  " <> show (length errs) <> " method file(s) failed to parse"
-                            return $ Right (collection, flowInfo)
+loadMethodCollectionFromConfig mc = runExceptT $ do
+    {- Resolve archives (ZIP to extracted directory). Single .json (openLCA
+    JSON-LD ImpactCategory) and .csv (SimaPro method export) files are accepted
+    directly without a wrapping directory or archive. -}
+    resolvedPath <- liftIO $ resolveDataPath (mcPath mc)
+    source <- ExceptT $ methodSourceAt resolvedPath
+    files <- liftIO $ methodFilesOf source
+    when (noMethodFiles files) $
+        throwE ("No method files (.xml/.csv/.json) found in: " <> T.pack (mfDirectory files))
+    flowInfo <- liftIO $ flowDefinitionsFor source (mfDirectory files)
+    parsed <- liftIO $ parseMethodFiles flowInfo files
+    collection <- except (collectionOf parsed)
+    liftIO $ mapM_ (reportProgress Info) (parseCounts parsed)
+    liftIO $ mapM_ (reportProgress Info) (nwCounts collection)
+    liftIO $ mapM_ (reportProgress Warning) (parseFailures parsed)
+    pure (collection, flowInfo)
+  where
+    {- What the path turned out to hold. A bare method file carries its own CFs
+    and has no ILCD flows/ sibling; only a real directory does. -}
+    methodSourceAt :: FilePath -> IO (Either Text MethodSource)
+    methodSourceAt resolvedPath = do
+        isDir <- doesDirectoryExist resolvedPath
+        isFile <- doesFileExist resolvedPath
+        let ext = map toLower (takeExtension resolvedPath)
+        pure $ case (isDir, isFile, ext) of
+            (True, _, _) -> Right (MethodDirectory resolvedPath)
+            (_, True, ".json") -> Right (BareMethodFile resolvedPath)
+            (_, True, ".csv") -> Right (BareMethodFile resolvedPath)
+            _ -> Left (unusableMethodPath isFile ext)
+
+    -- resolveDataPath returns the archive path unchanged when extraction
+    -- failed, so an archive reaching here means that.
+    unusableMethodPath :: Bool -> String -> Text
+    unusableMethodPath isFile ext
+        | not isFile = "Method path not found: " <> T.pack (mcPath mc)
+        | ext `elem` archiveExtensions =
+            "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
+        | otherwise =
+            "Unsupported method file type (expected a directory, archive, .csv, or .json): "
+                <> T.pack (mcPath mc)
+
+    methodFilesOf :: MethodSource -> IO MethodFiles
+    methodFilesOf (BareMethodFile file) =
+        pure
+            MethodFiles
+                { mfDirectory = takeDirectory file
+                , mfXml = []
+                , mfCsv = [takeFileName file | isExt ".csv" file]
+                , mfJson = [takeFileName file | isExt ".json" file]
+                }
+    methodFilesOf (MethodDirectory root) = do
+        -- Find method directory (handles nested ILCD structures)
+        dir <- findMethodDirectory root
+        {- listDirectory order is filesystem-dependent; sort so a collection
+        loads its methods in the same order on every machine (and a re-export
+        of it is byte-stable). -}
+        entries <- sort <$> listDirectory dir
+        pure
+            MethodFiles
+                { mfDirectory = dir
+                , mfXml = filter (isExt ".xml") entries
+                , mfCsv = filter (isExt ".csv") entries
+                , mfJson = filter (isExt ".json") entries
+                }
+
+    isExt :: String -> FilePath -> Bool
+    isExt ext f = map toLower (takeExtension f) == ext
+
+    noMethodFiles :: MethodFiles -> Bool
+    noMethodFiles files = null (mfXml files) && null (mfCsv files) && null (mfJson files)
+
+    {- Scanning a coincidental neighbouring flows/ would parse unrelated flow
+    XMLs and register foreign synonyms under this collection's name, so only a
+    real ILCD directory is looked at. -}
+    flowDefinitionsFor :: MethodSource -> FilePath -> IO (M.Map UUID ILCDFlowInfo)
+    flowDefinitionsFor (BareMethodFile _) _ = pure M.empty
+    flowDefinitionsFor (MethodDirectory _) dir =
+        FlowResolver.resolveFlowDirectory dir >>= \case
+            Nothing -> do
+                reportProgress Info "  No flows/ directory found, using shortDescription fallback"
+                pure M.empty
+            Just flowsDir -> do
+                reportProgress Info $ "  Loading ILCD flow XMLs from: " <> flowsDir
+                info <- FlowResolver.parseFlowDirectory flowsDir
+                reportProgress Info $ "  Loaded " <> show (M.size info) <> " flow definitions"
+                pure info
+
+    parseMethodFiles :: M.Map UUID ILCDFlowInfo -> MethodFiles -> IO ParsedMethodFiles
+    parseMethodFiles flowInfo files = do
+        let dir = mfDirectory files
+        -- Parse method files with flow enrichment
+        xmlResults <- forM (mfXml files) $ \f ->
+            Method.Parser.parseMethodFileWithFlows flowInfo (dir </> f)
+        -- Split CSV files into SimaPro method exports and tabular CSVs
+        csvResults <- forM (mfCsv files) $ \f -> do
+            bytes <- stripBOM <$> BS.readFile (dir </> f)
+            pure $
+                if isSimaProMethodCSV bytes
+                    then fmap Left (parseSimaProMethodCSVBytes bytes)
+                    else fmap Right (parseMethodCSVBytes bytes)
+        {- openLCA JSON-LD ImpactCategory files (carries optional regionalized
+        CFs). Only files that actually carry @type=ImpactCategory are parsed;
+        others are skipped silently since arbitrary .json files can sit
+        alongside method data (e.g. metadata or other openLCA entity types). -}
+        jsonResults <- forM (mfJson files) $ \f -> do
+            bytes <- BS.readFile (dir </> f)
+            pure $
+                if OlcaSchema.isOlcaImpactCategoryJson bytes
+                    then Just (OlcaSchema.parseOlcaImpactCategoryBytes bytes)
+                    else Nothing
+        let (xmlErrs, xmlMethods) = partitionEithers xmlResults
+            (csvErrs, csvOks) = partitionEithers csvResults
+            (jsonErrs, jsonMethods) = partitionEithers (catMaybes jsonResults)
+        pure
+            ParsedMethodFiles
+                { pmfXmlMethods = xmlMethods
+                , pmfCsvCollections = lefts csvOks
+                , pmfCsvMethods = concat (rights csvOks)
+                , pmfCsvFileCount = length csvOks
+                , pmfJsonMethods = jsonMethods
+                , pmfErrors = xmlErrs ++ csvErrs ++ jsonErrs
+                }
+
+    -- Merge: SimaPro CSVs are MethodCollections, tabular CSVs are [Method].
+    collectionOf :: ParsedMethodFiles -> Either Text MethodCollection
+    collectionOf parsed = case (allMethods, pmfErrors parsed) of
+        ([], firstErr : _) -> Left ("All method files failed to parse: " <> T.pack firstErr)
+        _ ->
+            Right $
+                MethodCollection
+                    allMethods
+                    -- Merge NW data from all SimaPro CSV sources
+                    (concatMap mcDamageCategories (pmfCsvCollections parsed))
+                    (concatMap mcNormWeightSets (pmfCsvCollections parsed))
+                    []
+      where
+        allMethods :: [Method]
+        allMethods =
+            pmfXmlMethods parsed
+                ++ pmfCsvMethods parsed
+                ++ pmfJsonMethods parsed
+                ++ concatMap mcMethods (pmfCsvCollections parsed)
+
+    parseCounts :: ParsedMethodFiles -> Maybe String
+    parseCounts parsed =
+        Just $
+            "  Parsed "
+                <> show (length (pmfXmlMethods parsed))
+                <> " XML, "
+                <> show (pmfCsvFileCount parsed)
+                <> " CSV, "
+                <> show (length (pmfJsonMethods parsed))
+                <> " JSON file(s)"
+
+    nwCounts :: MethodCollection -> Maybe String
+    nwCounts collection
+        | null (mcDamageCategories collection) = Nothing
+        | otherwise =
+            Just $
+                "  "
+                    <> show (length (mcDamageCategories collection))
+                    <> " damage categories, "
+                    <> show (length (mcNormWeightSets collection))
+                    <> " normalization-weighting set(s)"
+
+    parseFailures :: ParsedMethodFiles -> Maybe String
+    parseFailures parsed
+        | null (pmfErrors parsed) = Nothing
+        | otherwise = Just ("  " <> show (length (pmfErrors parsed)) <> " method file(s) failed to parse")
 
 -- | List all method collections with their status
 listMethodCollections :: DatabaseManager -> IO [MethodCollectionStatus]
