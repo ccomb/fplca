@@ -135,6 +135,13 @@ spec = do
                            , "The factor applied is 29.8 per kg."
                            ]
 
+        it "says a line no database flow claimed is filed under the method's own name" $
+            renderResolution (Characterized (match RungExactName NoMatch) UnitsIdentical)
+                `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
+                           , "No database flow claimed that line when the method was loaded; it is filed under the name the method itself uses."
+                           , "The factor applied is 29.8 per kg."
+                           ]
+
         it "spells out the energy content that bridges the units" $
             renderResolution
                 ( Characterized

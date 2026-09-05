@@ -515,6 +515,43 @@ spec = do
             -- insertion order must not matter
             score (reverse mappings) `shouldBe` 2.0 * 34.5
 
+    describe "a row no database flow claimed at build time" $ do
+        -- Such a row is filed under the method's own flow name, and the
+        -- table-key comparison ranks it with a proxy match: the least
+        -- discriminating rank there is. Two rows meeting on one name key, one
+        -- borrowed through a proxy edge and one nothing resolved, therefore
+        -- tie on rank, and the comparison falls through to the higher factor.
+        -- The tie is stated in one rank table and read in one comparison, and
+        -- neither says it out loud, so it is pinned here.
+        let borrowed = mkCFComp "phosphorus" "water" "" 5.0
+            unresolved = mkCFComp "phosphate" "water" "" 20.0
+
+        it "ranks with a proxy match, so the higher factor decides the key" $ do
+            targetId <- nextRandom
+            probeId <- nextRandom
+            let target = mkFlow targetId "phosphate" "water" Nothing
+                probe = mkFlow probeId "phosphate" "water" Nothing
+                tables =
+                    buildMethodTables
+                        OtherCFFamily
+                        M.empty
+                        M.empty
+                        [ (borrowed, Just (target, ByProxy))
+                        , (unresolved, Nothing)
+                        ]
+            cfValue <$> lookupCFForFlow tables probeId (Just probe) `shouldBe` Just 20.0
+
+        it "borrows the proxy row's own name, which is what makes the two meet" $ do
+            -- Without this the test above proves nothing: the two rows have
+            -- different names, and they compete only because a proxy match
+            -- files its row under the flow it borrowed from.
+            targetId <- nextRandom
+            probeId <- nextRandom
+            let target = mkFlow targetId "phosphate" "water" Nothing
+                probe = mkFlow probeId "phosphate" "water" Nothing
+                proxyOnly = buildMethodTables OtherCFFamily M.empty M.empty [(borrowed, Just (target, ByProxy))]
+            cfValue <$> lookupCFForFlow proxyOnly probeId (Just probe) `shouldBe` Just 5.0
+
     describe "sea-water gate on wildcard fallbacks" $ do
         -- The same emission to the sea, under two methods that differ in one
         -- thing: whether they write a sea-water factor of their own. A method
