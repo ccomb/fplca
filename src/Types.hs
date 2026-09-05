@@ -1546,7 +1546,7 @@ data LocationKind
       GlobalLoc
     | -- | Different but not in the hierarchy (e.g. SimaPro "Mixed data")
       UnrelatedLoc
-    deriving (Show, Eq, Generic, NFData, Store)
+    deriving (Show, Eq, Enum, Bounded, Generic, NFData, Store)
 
 {- | Stable lowercase wire code for a 'LocationKind'. Single source of truth
 shared by the JSON encoder and the human-readable rejection reason, so the UI
@@ -1588,27 +1588,27 @@ blockerReason blocker = case blocker of
 instance FromJSON LocationKind where
     parseJSON v = do
         s <- parseJSON v
-        case (s :: Text) of
-            "exact" -> pure ExactLoc
-            "parent" -> pure ParentLoc
-            "global" -> pure GlobalLoc
-            "unrelated" -> pure UnrelatedLoc
-            other -> fail $ "Invalid LocationKind: " <> T.unpack other
+        maybe (fail $ "Invalid LocationKind: " <> T.unpack s) pure (codedBy locationKindCode s)
 
-{- | OpenAPI schema for 'LocationKind' as a string-enum matching the wire codes
-produced by 'locationKindCode'. The generic schema would expose the raw
-Haskell constructor names; this keeps the spec in sync with the ToJSON.
+{- | The value a wire code names, read off the code function itself so a decoder
+cannot fall behind the encoder. Inverse of the @*Code@ functions.
 -}
+codedBy :: (Enum a, Bounded a) => (a -> Text) -> Text -> Maybe a
+codedBy code s = find ((== s) . code) [minBound .. maxBound]
+
+{- | OpenAPI schema for an enum spelled on the wire as lowercase codes. The
+generic schema would expose the raw Haskell constructor names; taking the codes
+from the same function the encoder uses keeps the spec in sync with the ToJSON.
+-}
+codeSchema :: (Enum a, Bounded a) => Text -> (a -> Text) -> NamedSchema
+codeSchema name code =
+    NamedSchema (Just name) $
+        mempty
+            & type_ ?~ OpenApiString
+            & enum_ ?~ map (toJSON . code) [minBound .. maxBound]
+
 instance ToSchema LocationKind where
-    declareNamedSchema _ =
-        pure $
-            NamedSchema (Just "LocationKind") $
-                mempty
-                    & type_ ?~ OpenApiString
-                    & enum_
-                        ?~ [ toJSON (c :: Text)
-                           | c <- ["exact", "parent", "global", "unrelated"]
-                           ]
+    declareNamedSchema _ = pure (codeSchema "LocationKind" locationKindCode)
 
 {- | How serious a dataset-soundness finding is. Declaration order is the
 severity order, so 'Ord' sorts the worst findings first.
@@ -1624,7 +1624,7 @@ data Severity
       WarningSev
     | -- | Incomplete rather than wrong
       InfoSev
-    deriving (Show, Eq, Ord, Generic, NFData)
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, NFData)
 
 {- | Stable lowercase wire code for a 'Severity'. Single source of truth shared
 by the JSON encoder and the schema, so consumers never see raw Haskell
@@ -1641,26 +1641,10 @@ instance ToJSON Severity where
 instance FromJSON Severity where
     parseJSON v = do
         s <- parseJSON v
-        case (s :: Text) of
-            "danger" -> pure DangerSev
-            "warning" -> pure WarningSev
-            "info" -> pure InfoSev
-            other -> fail $ "Invalid Severity: " <> T.unpack other
+        maybe (fail $ "Invalid Severity: " <> T.unpack s) pure (codedBy severityCode s)
 
-{- | OpenAPI schema for 'Severity' as a string-enum matching the wire codes
-produced by 'severityCode', for the same reason as 'LocationKind': the generic
-schema would expose the Haskell constructor names.
--}
 instance ToSchema Severity where
-    declareNamedSchema _ =
-        pure $
-            NamedSchema (Just "Severity") $
-                mempty
-                    & type_ ?~ OpenApiString
-                    & enum_
-                        ?~ [ toJSON (c :: Text)
-                           | c <- ["danger", "warning", "info"]
-                           ]
+    declareNamedSchema _ = pure (codeSchema "Severity" severityCode)
 
 -- | A product whose supplier was found at a wider geography than requested.
 data LocationFallback = LocationFallback
