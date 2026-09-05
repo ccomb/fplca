@@ -397,8 +397,8 @@ maxBiosphereFlows :: Int
 maxBiosphereFlows = 50
 
 -- | ExportNode for a single biosphere flow attached to a parent activity.
-mkBiosphereExportNode :: UnitDB -> BiosphereFlow -> Text -> Int -> Bool -> ExportNode
-mkBiosphereExportNode units flow parentPid depth isEmission =
+mkBiosphereExportNode :: UnitDB -> BiosphereFlow -> Text -> Int -> BioDirection -> ExportNode
+mkBiosphereExportNode units flow parentPid depth direction =
     let compartmentTxt = bfCompartmentName flow
      in ExportNode
             { enId = UUID.toText (bfId flow)
@@ -406,7 +406,9 @@ mkBiosphereExportNode units flow parentPid depth isEmission =
             , enDescription = [compartmentTxt]
             , enLocation = ""
             , enUnit = getUnitNameForBioFlow units flow
-            , enNodeType = if isEmission then BiosphereEmissionNode else BiosphereResourceNode
+            , enNodeType = case direction of
+                Emission -> BiosphereEmissionNode
+                Resource -> BiosphereResourceNode
             , enDepth = depth
             , enLoopTarget = Nothing
             , enParentId = Just parentPid
@@ -417,13 +419,12 @@ mkBiosphereExportNode units flow parentPid depth isEmission =
 {- | Edge linking an activity to a biosphere flow. Direction depends on whether
 the exchange is an emission (activity -> flow) or a resource (flow -> activity).
 -}
-mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> Bool -> Exchange -> TreeEdge
-mkBiosphereTreeEdge units flow activityPid isEmission ex =
+mkBiosphereTreeEdge :: UnitDB -> BiosphereFlow -> Text -> BioDirection -> Exchange -> TreeEdge
+mkBiosphereTreeEdge units flow activityPid direction ex =
     let flowIdText = UUID.toText (bfId flow)
-        (edgeFrom, edgeTo, edgeType) =
-            if isEmission
-                then (activityPid, flowIdText, BiosphereEmissionEdge)
-                else (flowIdText, activityPid, BiosphereResourceEdge)
+        (edgeFrom, edgeTo, edgeType) = case direction of
+            Emission -> (activityPid, flowIdText, BiosphereEmissionEdge)
+            Resource -> (flowIdText, activityPid, BiosphereResourceEdge)
      in TreeEdge
             { teFrom = edgeFrom
             , teTo = edgeTo
@@ -438,17 +439,21 @@ extractBiosphereNodesAndEdges :: Database -> Activity -> Text -> Int -> M.Map Te
 extractBiosphereNodesAndEdges db activity activityProcessId depth nodeAcc edgeAcc =
     foldr step (nodeAcc, edgeAcc) topBiosphereExchanges
   where
+    units :: UnitDB
     units = dbUnits db
+    -- The generator both selects the biosphere rows and reads the direction off
+    -- the constructor that carries it, so no later step has to recover it.
+    topBiosphereExchanges :: [(BioDirection, Exchange)]
     topBiosphereExchanges =
         take maxBiosphereFlows $
-            L.sortBy (\a b -> compare (abs (exchangeAmount b)) (abs (exchangeAmount a))) $
-                filter isBiosphereExchange (exchanges activity)
-    step ex acc@(nodes, edges) = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
+            L.sortBy (\a b -> compare (abs (exchangeAmount (snd b))) (abs (exchangeAmount (snd a)))) $
+                [(dir, ex) | ex@BiosphereExchange{bioDirection = dir} <- exchanges activity]
+    step :: (BioDirection, Exchange) -> (M.Map Text ExportNode, [TreeEdge]) -> (M.Map Text ExportNode, [TreeEdge])
+    step (direction, ex) acc@(nodes, edges) = case M.lookup (exchangeFlowId ex) (dbBioFlows db) of
         Nothing -> acc
         Just flow ->
-            let isEmission = not (exchangeIsInput ex)
-                node = mkBiosphereExportNode units flow activityProcessId depth isEmission
-                edge = mkBiosphereTreeEdge units flow activityProcessId isEmission ex
+            let node = mkBiosphereExportNode units flow activityProcessId depth direction
+                edge = mkBiosphereTreeEdge units flow activityProcessId direction ex
              in (M.insert (UUID.toText (bfId flow)) node nodes, edge : edges)
 
 -- | ExportNode for an activity-bearing tree node (TreeLeaf or TreeNode).
