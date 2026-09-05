@@ -233,9 +233,9 @@ reach, which is its dependencies' as much as its own — see 'FlowClosure'.
 mapContextFor :: FlowClosure -> SynonymDB -> CompartmentMap -> MapContext
 mapContextFor closure synDB cmap =
     MapContext
-        { mcBioFlowsByUUID = fcByUUID closure
-        , mcBioFlowsByName = fcByName closure
-        , mcBioFlowsByCAS = fcByCAS closure
+        { mcBioFlowsByUUID = clByUUID closure
+        , mcBioFlowsByName = clByName closure
+        , mcBioFlowsByCAS = clByCAS closure
         , mcSynonymDB = synDB
         , mcActivities = M.empty
         , mcCompartmentMap = cmap
