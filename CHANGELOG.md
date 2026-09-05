@@ -42,8 +42,14 @@
   line already written in a mass unit is its own wet mass, which is what makes
   the key computable on the formats that carry no property table at all
   (SimaPro, ILCD, EcoSpold 1). A dry mass is never read from an amount:
-  nothing in a wet kilogram says how much of it is water, so a block whose
-  products declare none keeps the shares it came with.
+  nothing in a wet kilogram says how much of it is water. A block the key
+  cannot weigh is not divided at all and has no column in the matrix, the same
+  refusal a block stating no share gets: asking for a key a database cannot
+  provide costs those blocks rather than inventing numbers for them.
+
+  A process with a single product output is left as its source wrote it. There
+  is nothing there to divide, and its declared share is the only statement in
+  existence about the outputs the file does not carry.
 
   A product its source declares at 0 % stays at 0 %, and the key divides what
   is left among the others. That zero is a modelling decision, usually a

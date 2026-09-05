@@ -33,6 +33,7 @@ module Database.Loader (
     LoadOptions (..),
     defaultLoadOptions,
     loadDatabaseWithLocationAliases,
+    reportKeyRefusals,
     loadSimaProCSV,
     loadDatabaseWithCrossDBLinking,
     findFilesByExtRecursive,
@@ -125,7 +126,14 @@ import qualified Data.UUID.V5 as UUID5
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word64)
-import Database.Allocation (Allocating (..), allocate, allocateAll)
+import Database.Allocation (
+    Allocating (..),
+    PropertyRefusal,
+    allocate,
+    allocateAll,
+    describePropertyRefusal,
+    propertyKeyRefusals,
+ )
 import Database.CrossLinking (
     AliasMap,
     CrossDBLinkResult (..),
@@ -739,6 +747,12 @@ normalized to the canonical base unit of their dimension at ingest time.
 -}
 loadDatabaseWithLocationAliases :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
 loadDatabaseWithLocationAliases opts path = do
+    loaded <- readSourceUnder opts path
+    either (pure . Left) (\db -> Right db <$ reportKeyRefusals opts db) loaded
+
+-- | The load itself, before anything is said about what the key refused.
+readSourceUnder :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
+readSourceUnder opts path = do
     -- Check if path is a file (SimaPro CSV) or directory (EcoSpold)
     isFile <- doesFileExist path
     isDir <- doesDirectoryExist path
@@ -769,6 +783,28 @@ data LoadOptions = LoadOptions
     , loLocationAliases :: !(M.Map T.Text T.Text) -- Wrong location -> correct location
     , loAllocation :: !AllocationKey -- How a multi-output block is divided
     }
+
+{- | Say what the key this load asked for could not divide.
+
+Loud rather than silent: such a block keeps every share its source declared
+and still loses its column, and nothing else in the run says which key refused
+it or why. The first ten are named, and a count says how many there were.
+-}
+reportKeyRefusals :: LoadOptions -> SimpleDatabase -> IO ()
+reportKeyRefusals opts db = case loAllocation opts of
+    Declared -> pure ()
+    ByProperty prop -> unless (null refusals) $ do
+        reportProgress Warning $
+            show (length refusals) <> " blocks were not divided: the key names a property they do not carry"
+        mapM_ (warn prop) (take 10 refusals)
+  where
+    refusals :: [(T.Text, PropertyRefusal)]
+    refusals = propertyKeyRefusals (allocating opts (sdbUnits db)) (M.elems (sdbActivities db))
+
+    warn :: AllocationProperty -> (T.Text, PropertyRefusal) -> IO ()
+    warn prop (name, reason) =
+        reportProgress Warning . T.unpack $
+            name <> " has no column -- " <> describePropertyRefusal prop reason
 
 -- | What 'allocate' reads, for a load of these options over these units.
 allocating :: LoadOptions -> UnitDB -> Allocating

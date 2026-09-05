@@ -46,21 +46,29 @@ massUnits =
     mass = [1, 0, 0, 0, 0, 0, 0, 0]
     energy = [0, 0, 0, 1, 0, 0, 0, 0]
 
--- | A product row of a block, as an 'ActivitySummary' reports it.
-product_ :: Text -> Double -> Maybe Double -> ActivitySummary
-product_ unitName amount declared =
-    ActivitySummary
-        { prsProcessId = ""
-        , prsActivityName = ""
-        , prsLocation = ""
-        , prsProductName = ""
-        , prsProductAmount = amount
-        , prsProductUnit = unitName
-        , prsAllocationPercent = declared
-        , prsAllocationFormula = Nothing
-        , prsMassAllocationPercent = Nothing
-        , prsNativeType = Nothing
-        }
+{- | A product of a block as the products table reports it: the summary the
+reader sees, and the row it was split from, which is where a mass is read.
+-}
+product_ :: Text -> Double -> Maybe Double -> (ActivitySummary, Maybe Exchange)
+product_ unitName amount declared = (summary, Just row)
+  where
+    summary :: ActivitySummary
+    summary =
+        ActivitySummary
+            { prsProcessId = ""
+            , prsActivityName = ""
+            , prsLocation = ""
+            , prsProductName = ""
+            , prsProductAmount = amount
+            , prsProductUnit = unitName
+            , prsAllocationPercent = declared
+            , prsAllocationFormula = Nothing
+            , prsMassAllocationPercent = Nothing
+            , prsNativeType = Nothing
+            }
+
+    row :: Exchange
+    row = (tech cheeseId amount ReferenceProduct){techUnitId = if unitName == "kg" then kgId else mjId}
 
 kg :: Double -> StatedAmount
 kg amount = StatedAmount{saUnit = "kg", saAmount = amount}
@@ -97,6 +105,15 @@ declaring prop unit perUnit amount = (tech cheeseId amount Coproduct){techProper
     stated = case prop of
         DryMass -> noProperties{epDryMass = Just (StatedAmount unit perUnit)}
         WetMass -> noProperties{epWetMass = Just (StatedAmount unit perUnit)}
+
+-- | What the products table shows in the mass column for a block.
+column :: [(ActivitySummary, Maybe Exchange)] -> [Maybe Double]
+column = map prsMassAllocationPercent . Service.withMassAllocationPercent massUnits units
+
+-- | A product whose row declares a wet mass per unit of itself.
+declaringWetMass :: Double -> Double -> Maybe Double -> (ActivitySummary, Maybe Exchange)
+declaringWetMass perUnit amount declared =
+    (fst (product_ "kg" amount declared), Just (declaring WetMass "kg" perUnit amount))
 
 round1 :: Double -> Double
 round1 x = fromIntegral (round (x * 10) :: Int) / 10
@@ -237,6 +254,33 @@ spec = do
             let block = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow creamId 3.0 Coproduct (Just 40) M.empty]
             map appliedShare (NE.toList (allocate (byPropertyOn WetMass) block)) `shouldBe` [Just 25.0, Just 75.0]
 
+        it "leaves a process of one product as its source wrote it" $ do
+            -- 51 % of a block whose other outputs the file does not carry. A
+            -- key answering 100 % would hand this process the whole inventory
+            -- its author had cut in half.
+            let lone = activity [productRow cheeseId 1.0 ReferenceProduct (Just 51) M.empty, input 10.0]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) lone) `shouldBe` [5.1]
+            map appliedShare (NE.toList (allocate (byPropertyOn WetMass) lone)) `shouldBe` [Just 51.0]
+
+        it "keeps a lone product's declared zero at zero" $ do
+            -- The same reading from the other end: nothing to divide, and the
+            -- source says this process carries none of the block.
+            let lone = activity [productRow cheeseId 1.0 ReferenceProduct (Just 0) M.empty, input 10.0]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) lone) `shouldBe` [0.0]
+
+        it "never weighs a row it holds at zero" $ do
+            -- The residue is stated in megajoules, which no mass reads. Its
+            -- share is zero before its mass is looked at, so demanding one
+            -- would refuse the block on the very row the zero rule protects.
+            let block =
+                    activity
+                        [ productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty
+                        , productRow creamId 3.0 Coproduct (Just 40) M.empty
+                        , (productRow feedId 4.0 Coproduct (Just 0) M.empty){techUnitId = mjId}
+                        , input 10.0
+                        ]
+            concatMap inputAmounts (allocate (byPropertyOn WetMass) block) `shouldBe` [2.5, 7.5, 0.0]
+
         it "hands back a block the property cannot divide, for the gate to refuse" $ do
             -- Neither row declares a dry mass, and no amount stands in for one.
             let block = activity [productRow cheeseId 1.0 ReferenceProduct (Just 60) M.empty, productRow creamId 3.0 Coproduct (Just 40) M.empty]
@@ -281,22 +325,28 @@ spec = do
 
     describe "withMassAllocationPercent" $ do
         it "fills a block whose source states a share on every product" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)])
+            column [product_ "kg" 1 (Just 60), product_ "kg" 3 (Just 40)]
                 `shouldBe` [Just 25, Just 75]
 
         it "leaves a lone product alone, there being nothing to compare it against" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 100)])
-                `shouldBe` [Nothing]
+            column [product_ "kg" 1 (Just 100)] `shouldBe` [Nothing]
 
         it "leaves a block whose datasets arrived already allocated alone" $
             -- Each is normalised to one of its own product and states no
             -- share, so the amounts are not one run's joint outputs.
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing])
+            column [product_ "kg" 1 Nothing, product_ "kg" 1 Nothing]
                 `shouldBe` [Nothing, Nothing]
 
         it "leaves a block whose products are not all a mass alone" $
-            map prsMassAllocationPercent (Service.withMassAllocationPercent massUnits [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)])
+            column [product_ "kg" 1 (Just 60), product_ "MJ" 3 (Just 40)]
                 `shouldBe` [Nothing, Nothing]
+
+        it "reads a declared mass, so the column and an allocation key agree" $
+            -- 2 kg declaring half a kilo of wet mass per kilo, beside 1 kg.
+            -- On the amounts alone this block would read 66.7 / 33.3, and a
+            -- database loaded under `wet mass` would show 50 beside it.
+            column [declaringWetMass 0.5 2 (Just 60), product_ "kg" 1 (Just 40)]
+                `shouldBe` [Just 50, Just 50]
 
     describe "the matrix" $ do
         it "gives a refused activity no column, and says why" $ do

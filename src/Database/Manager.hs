@@ -2007,6 +2007,9 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
     loadCSV csvFile = do
         reportProgress Info $ "Parsing SimaPro CSV: " <> csvFile
         loaded <- Loader.loadSimaProCSV rlLoadOptions csvFile
+        -- This path reaches the parser directly, so the load's own report of
+        -- what the allocation key refused has to be asked for here.
+        either (const (pure ())) (Loader.reportKeyRefusals rlLoadOptions) loaded
         case loaded of
             Left err -> return $ Left err
             Right linkedDb -> do

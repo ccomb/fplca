@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.Allocation (asAllocated, describeRefusal, massShares)
+import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
@@ -1378,10 +1378,17 @@ getAllProductsForActivity db groupKey =
     case M.lookup groupKey (dbActivityProductsIndex db) of
         Nothing -> []
         Just processIds ->
-            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) $
-                [ maybe (unknownActivitySummary db pid) (mkActivitySummary db pid) (findActivityByProcessId db pid)
-                | pid <- processIds
-                ]
+            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) (dbUnits db) (map described processIds)
+  where
+    {- Each product with the row it was split from, because what a mass key
+    would give this block is read from that row: the property it states if it
+    states one, its amount if the amount is already a mass. Reading the amount
+    alone would answer a different question from the one an @allocation@ key
+    answers, and the two numbers sit next to each other. -}
+    described :: ProcessId -> (ActivitySummary, Maybe Exchange)
+    described pid = case findActivityByProcessId db pid of
+        Nothing -> (unknownActivitySummary db pid, Nothing)
+        Just act -> (mkActivitySummary db pid act, L.find exchangeIsReference (exchanges act))
 
 {- | Fill in what each product of one block would carry under a mass key, to be
 read beside the share its source declared.
@@ -1396,21 +1403,21 @@ nothing to be compared against.
 Left as it is again when the mass cannot serve as a key. The comparison is one
 extra column, so a block whose products are not all stated in a mass has none.
 -}
-withMassAllocationPercent :: UnitConfig -> [ActivitySummary] -> [ActivitySummary]
-withMassAllocationPercent unitCfg summaries
-    | length summaries < 2 = summaries
+withMassAllocationPercent :: UnitConfig -> UnitDB -> [(ActivitySummary, Maybe Exchange)] -> [ActivitySummary]
+withMassAllocationPercent unitCfg unitDB entries
+    | length entries < 2 = summaries
     | not (all (isJust . prsAllocationPercent) summaries) = summaries
-    | otherwise = maybe summaries attachAll (NE.nonEmpty summaries)
+    | otherwise = fromMaybe summaries attached
   where
-    attachAll :: NE.NonEmpty ActivitySummary -> [ActivitySummary]
-    attachAll block =
-        either
-            (const summaries)
-            (NE.toList . NE.zipWith attach block)
-            (massShares unitCfg (NE.map stated block))
+    summaries :: [ActivitySummary]
+    summaries = map fst entries
 
-    stated :: ActivitySummary -> StatedAmount
-    stated s = StatedAmount{saUnit = prsProductUnit s, saAmount = prsProductAmount s}
+    attached :: Maybe [ActivitySummary]
+    attached = do
+        block <- NE.nonEmpty entries
+        rows <- traverse snd block
+        shares <- either (const Nothing) Just (propertyShares WetMass unitDB unitCfg rows)
+        pure (NE.toList (NE.zipWith attach (NE.map fst block) shares))
 
     attach :: ActivitySummary -> Double -> ActivitySummary
     attach s percent = s{prsMassAllocationPercent = Just percent}

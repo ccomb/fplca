@@ -31,6 +31,8 @@ module Database.Allocation (
     allocateAll,
     asAllocated,
     describeRefusal,
+    describePropertyRefusal,
+    propertyKeyRefusals,
     propertyKeyShares,
     scaleExchange,
     PropertyRefusal (..),
@@ -41,7 +43,6 @@ module Database.Allocation (
 ) where
 
 import Control.Applicative ((<|>))
-import Control.Monad (guard)
 import Data.List (partition)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NE
@@ -92,8 +93,8 @@ classification is the activity's with whatever the product row states on top.
 allocate :: Allocating -> Activity -> NonEmpty Activity
 allocate Allocating{alKey = key, alUnitConfig = unitCfg, alUnitDB = unitDB} act =
     fromMaybe (pure normalised) $ do
-        shares <- sharesUnder key
-        NE.nonEmpty (zipWith process products shares)
+        (from, shares) <- plan
+        NE.nonEmpty (zipWith (process from) products shares)
   where
     normalised :: Activity
     normalised = normalise act
@@ -101,34 +102,53 @@ allocate Allocating{alKey = key, alUnitConfig = unitCfg, alUnitDB = unitDB} act 
     products, shared :: [Exchange]
     (products, shared) = partition exchangeIsProductOutput (exchanges normalised)
 
-    sharesUnder :: AllocationKey -> Maybe [Double]
-    sharesUnder Declared = map dsPercent <$> traverse exchangeDeclaredShare products
-    sharesUnder (ByProperty prop) = propertyKeyShares prop unitCfg unitDB products
+    {- Which shares to apply, and whether they replace what the source wrote.
 
-    process :: Exchange -> Double -> Activity
-    process productEx share =
+    A key on a property divides a block between its products, so a block of
+    one product is not something it can answer. Whatever the source declared
+    there -- 51 % of a block whose other outputs the file does not carry -- is
+    the only statement in existence, and a key answering 100 % would hand the
+    process the whole inventory its author had cut in half. -}
+    plan :: Maybe (SharesFrom, [Double])
+    plan = case key of
+        Declared -> (,) FromSource <$> declaredShares
+        ByProperty prop
+            | length products < 2 -> (,) FromSource <$> declaredShares
+            | otherwise -> (,) FromProperty <$> propertyKeyShares prop unitCfg unitDB products
+
+    declaredShares :: Maybe [Double]
+    declaredShares = map dsPercent <$> traverse exchangeDeclaredShare products
+
+    process :: SharesFrom -> Exchange -> Double -> Activity
+    process from productEx share =
         normalised
-            { exchanges = applied share (asReference productEx) : map (scaleExchange (share / 100)) shared
+            { exchanges = applied from share (asReference productEx) : map (scaleExchange (share / 100)) shared
             , activityUnit = getUnitNameForExchange unitDB productEx
             , activityClassification = M.union (exchangeClassification productEx) (activityClassification normalised)
             }
 
     {- The share a split process records is the one that was applied to it.
-    Under the declared key that is already what the row says, formula included.
-    Under a property key it is not: the row's percentage and its formula both
-    describe the key the source chose, and a database whose inventory was
-    divided one way while its rows still claim another exports divided by the
-    wrong factor. -}
-    applied :: Double -> Exchange -> Exchange
-    applied share ex = case key of
-        Declared -> ex
-        ByProperty _ -> withShare share ex
+    Where that is what the row already says, the row is left alone, formula
+    included. Where a property replaced it, the row's percentage and its
+    formula both describe the key the source chose and neither is true any
+    more: a database whose inventory was divided one way while its rows claim
+    another exports divided by the wrong factor. -}
+    applied :: SharesFrom -> Double -> Exchange -> Exchange
+    applied from share ex = case from of
+        FromSource -> ex
+        FromProperty -> withShare share ex
 
     withShare :: Double -> Exchange -> Exchange
     withShare share ex = case ex of
         TechnosphereExchange{} -> ex{techShare = Just (DeclaredShare{dsPercent = share, dsFormula = Nothing})}
         BiosphereExchange{} -> ex
         WasteExchange{} -> ex
+
+-- | Whether the shares a block was split on replace what its source declared.
+data SharesFrom
+    = FromSource
+    | FromProperty
+    deriving (Eq, Show)
 
 {- | The shares a property key gives the products of one block, keeping a
 declared zero at zero.
@@ -139,23 +159,54 @@ an author who cut a residue out of the block on purpose -- and recomputing it
 into a share would undo the decision without saying so. Every other declared
 share is replaced, which is the whole point of naming another key.
 
+A row held at zero is also never weighed. Its mass decides nothing, so
+demanding one would refuse the block on exactly the rows the rule exists to
+protect: a residue stated in cubic metres beside two products in kilograms
+would cost the whole block its column.
+
 'Nothing' where the property cannot decide, because 'allocate' never refuses:
 the block is handed back whole and the gate says why it has no column.
 -}
 propertyKeyShares :: AllocationProperty -> UnitConfig -> UnitDB -> [Exchange] -> Maybe [Double]
 propertyKeyShares prop cfg unitDB products = do
-    block <- NE.nonEmpty products
-    shares <- either (const Nothing) Just (propertyShares prop unitDB cfg block)
-    let kept = NE.toList (NE.zipWith zeroDeclared block shares)
-        total = sum kept
-    guard (total > 0)
-    pure (map (* (100 / total)) kept)
+    weighed <- NE.nonEmpty [numbered | numbered <- zip [0 :: Int ..] products, not (declaresZero (snd numbered))]
+    shares <- either (const Nothing) Just (propertyShares prop unitDB cfg (NE.map snd weighed))
+    let placed = M.fromList (zip (map fst (NE.toList weighed)) (NE.toList shares))
+    -- The rows absent from 'placed' are the ones held at zero, so the default
+    -- is the rule rather than a stand-in for a lookup that failed.
+    pure [M.findWithDefault 0 i placed | i <- [0 .. length products - 1]]
   where
-    zeroDeclared :: Exchange -> Double -> Double
-    zeroDeclared ex share = if declaresZero ex then 0 else share
-
     declaresZero :: Exchange -> Bool
     declaresZero ex = (dsPercent <$> exchangeDeclaredShare ex) == Just 0
+
+-- | Why a property could not decide the shares of a block, in one sentence.
+describePropertyRefusal :: AllocationProperty -> PropertyRefusal -> Text
+describePropertyRefusal prop refusal = propertyName prop <> ": " <> because
+  where
+    because :: Text
+    because = case refusal of
+        NotStated -> "no product of the block states one, and no amount stands in for it"
+        NotAMass unit -> unit <> " is not a mass"
+        NonPositiveMass amount -> "a product weighs " <> T.pack (show amount)
+
+{- | The blocks a property key could not divide, named, with the reason.
+
+'allocate' hands such a block back whole, and the gate then refuses it in the
+words it keeps for a block missing declared shares -- advice its author cannot
+follow, because every share is stated and none of them is the problem. The
+reason lives here instead, to be said once by the load that applied the key.
+-}
+propertyKeyRefusals :: Allocating -> [Activity] -> [(Text, PropertyRefusal)]
+propertyKeyRefusals Allocating{alKey = key, alUnitConfig = cfg, alUnitDB = unitDB} activities = case key of
+    Declared -> []
+    ByProperty prop -> [(activityName act, refusal) | act <- activities, Left refusal <- [weigh prop act]]
+  where
+    -- A block of one product is not something a property key answers, so it
+    -- is not something it can refuse either.
+    weigh :: AllocationProperty -> Activity -> Either PropertyRefusal (NonEmpty Double)
+    weigh prop act = case NE.nonEmpty (filter exchangeIsProductOutput (exchanges act)) of
+        Just block | NE.length block > 1 -> propertyShares prop unitDB cfg block
+        _ -> Right (pure 100)
 
 -- | 'allocate' over a parsed list, in order.
 allocateAll :: Allocating -> [Activity] -> [Activity]
