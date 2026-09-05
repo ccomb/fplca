@@ -199,8 +199,7 @@ data ActivitySummary = ActivitySummary
     {- ^ The source block this process came out of, as a name to compare and
     never to read: the coproducts of one block carry the same one and nothing
     else does. A listing gathers its rows on it, which the process id cannot
-    do -- it names the product, and the activity UUID alone hashes together
-    the SimaPro blocks that share a process name.
+    do: it names the product, not the block it was written in.
     -}
     , prsBlockProducts :: Int
     {- ^ How many products that block holds, which is not the number of rows

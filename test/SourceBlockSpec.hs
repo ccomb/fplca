@@ -3,12 +3,10 @@
 {- | The block name an activity summary carries ('Types.sourceBlockOf').
 
 A listing that wants to show the coproducts of one block together cannot group
-on the process id, which names the product, and must not group on the activity
-UUID alone: a SimaPro export reuses one @Process name@ across unrelated blocks,
-and the UUID minted from a name hashes those into one. The block name renders
-'activityGroupKey', which is the pair that tells them apart, and it travels
-with the count of products the block holds so a page can say when it is
-showing only part of one.
+on the process id, which names the product. The block name renders
+'activityGroupKey', the key a block's coproducts are indexed under, and it
+travels with the count of products the block holds so a page can say when it
+is showing only part of one.
 -}
 module SourceBlockSpec (spec) where
 
@@ -61,8 +59,7 @@ withDatabase csv k = withSystemTempDirectory "source-block" $ \dir -> do
 
 {- | Two blocks written under one process name, each with two coproducts. The
 producer tells them apart by their @Process identifier@ line and nothing else,
-which is the one case where the block name has to say more than the activity
-UUID.
+which is what a block name has to survive.
 -}
 twoBlocksSharingAName :: BS.ByteString
 twoBlocksSharingAName =

@@ -67,8 +67,8 @@
 - An activity summary now names the source block the process came out of, and
   says how many products that block holds. A listing showing the five
   coproducts of one dairy block had no way to gather them: the process id
-  names the product, and the activity UUID alone hashes together the SimaPro
-  blocks that share a truncated process name. The block name is for comparing
+  names the product, not the block it was written in. The block name is for
+  comparing
   and never for reading, and the count is what lets a page say it is showing
   only part of a block rather than the whole of it. Wire revision 20.
 - A flow search can name several kinds at once: `kind=biosphere,waste` keeps

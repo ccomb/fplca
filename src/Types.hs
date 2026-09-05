@@ -671,11 +671,13 @@ data Activity = Activity
     }
     deriving (Generic, NFData, Store)
 
-{- | The coproducts of one source dataset block share this key. A SimaPro CSV
-reuses one @Process name@ across unrelated blocks (it is truncated to 80
-characters, and duplicated outright), so the activity UUID alone over-groups
-them; 'activityNativeId' splits them back apart. Formats without a block
-identifier fall back to grouping by activity UUID, as before.
+{- | The coproducts of one source dataset block share this key: the activity,
+and the block identifier its source published when it published one.
+
+A SimaPro export mints the activity UUID from that identifier, so today the
+second half separates nothing the first does not. It stays because it is what
+says a block, and it is what would tell apart a format that publishes a block
+identifier without minting its UUID from it.
 -}
 activityGroupKey :: UUID -> Activity -> (UUID, Maybe NativeProcessId)
 activityGroupKey actUUID act = (actUUID, activityNativeId act)
@@ -683,9 +685,9 @@ activityGroupKey actUUID act = (actUUID, activityNativeId act)
 {- | The source block one process came out of, as a listing needs to know it.
 
 'sbName' is for comparing, never for reading: every process of one block
-carries the same one and nothing else does. It renders 'activityGroupKey', so
-it tells apart the SimaPro blocks that share a process name where the activity
-UUID alone hashes them together.
+carries the same one and nothing else does. It renders 'activityGroupKey', the
+key a block's coproducts are indexed under, so a row's name and its product
+count are read off one key.
 
 'sbProducts' is how many products the block holds, and it is the second field
 rather than something a reader could count for itself: a page showing the last
@@ -717,7 +719,9 @@ sourceBlockOf db pid act = maybe orphan blockOfRef (processIdToRef db pid)
                   -- separator cannot be read as part of either half and two
                   -- different keys cannot spell one name.
                   sbName = UUID.toText (fst key) <> "/" <> foldMap (\(NativeProcessId native) -> native) (snd key)
-                , sbProducts = max 1 (length (M.findWithDefault [] key (dbActivityProductsIndex db)))
+                , -- A key the index does not know is a block of one, which is
+                  -- what 'orphan' says of a row the table does not know.
+                  sbProducts = maybe 1 length (M.lookup key (dbActivityProductsIndex db))
                 }
 
 {- | Is this dataset filed in its source's obsolete category?
