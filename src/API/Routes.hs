@@ -1495,7 +1495,7 @@ getActivityTree dbName processId = do
     (db, _) <- requireDatabaseByName dbName
     root <- either throwServiceError pure (Service.resolveActivityAndProcessId db processId)
     unitCfg <- liftIO $ getMergedUnitConfig dbManager
-    return $ Service.convertToTreeExport db processId maxTreeDepth (buildLoopAwareTree unitCfg db maxTreeDepth root)
+    return $ Service.convertToTreeExport db maxTreeDepth (buildLoopAwareTree unitCfg db maxTreeDepth root)
 
 {- | Inventory with optional substitutions; goes through the cross-DB
 back-substitution path so dep-DB inventories merge into the response.

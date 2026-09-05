@@ -383,20 +383,6 @@ countPotentialChildren db activity =
         , Just _ <- [childTarget db ex]
         ]
 
--- | Helper to extract compartment from flow category
-extractCompartment :: Text -> Text
-extractCompartment category =
-    let lowerCategory = T.toLower category
-     in if "air" `T.isInfixOf` lowerCategory
-            then "air"
-            else
-                if "water" `T.isInfixOf` lowerCategory || "aquatic" `T.isInfixOf` lowerCategory
-                    then "water"
-                    else
-                        if "soil" `T.isInfixOf` lowerCategory || "ground" `T.isInfixOf` lowerCategory
-                            then "soil"
-                            else "other"
-
 {- | Cap on biosphere flows shown per activity. System processes can declare
 hundreds; we keep the top-N by |amount| to keep graphs renderable.
 -}
@@ -573,11 +559,10 @@ extractNodesAndEdges db tree depth parentId nodeAcc edgeAcc = case tree of
          in (n', edge : e', stats <> s')
 
 -- | Convert LoopAwareTree to TreeExport format for JSON serialization
-convertToTreeExport :: Database -> Text -> Int -> LoopAwareTree -> TreeExport
-convertToTreeExport db _rootProcessId maxDepth tree =
+convertToTreeExport :: Database -> Int -> LoopAwareTree -> TreeExport
+convertToTreeExport db maxDepth tree =
     let (nodes, edges, _stats) = extractNodesAndEdges db tree 0 Nothing M.empty []
-        -- Use the actual root node ID from the tree, not the passed parameter
-        -- This ensures tmRootId always matches a key in the nodes map
+        -- The tree's own root, so tmRootId always names a key in the nodes map.
         actualRootId = getTreeNodeId db tree
         metadata =
             TreeMetadata
@@ -2425,7 +2410,7 @@ goWithSubsAndDeps unitCfg depLookup thisDb thisDbName rootDb solver demands allS
                     else do
                         depResults <-
                             mapConcurrently
-                                (resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth (length scalings'))
+                                (resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth)
                                 allDepDbs
                         pure $ case sequence depResults of
                             Left err -> Left err
@@ -2451,16 +2436,15 @@ resolveDepWithSubs ::
     [DepDemands] ->
     [Substitution] ->
     Int ->
-    Int ->
     Text ->
     IO (Either ServiceError [Maybe SharedSolver.CrossDBSolution])
-resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth k depDbName = do
+resolveDepWithSubs unitCfg depLookup rootDb perRootDepDemands allSubs depth depDbName = do
     depM <- depLookup depDbName
     case depM of
         Nothing ->
             -- Same shape as 'SharedSolver.resolveDep': absent dep DB
             -- contributes 'Nothing' at every root; dropped before merge.
-            pure (Right (replicate k Nothing))
+            pure (Right (replicate (length perRootDepDemands) Nothing))
         Just (depDb, depSolver) ->
             case SharedSolver.prepareDepDemandVecs unitCfg depDbName depDb perRootDepDemands of
                 Left err -> pure (Left (MatrixError err))
@@ -2527,7 +2511,7 @@ The ADT replaces a @(Bool, Bool)@ dispatch on @(fromDb == thisDbName,
 toDb == thisDbName)@: each constructor names what the boolean meant.
 -}
 data Endpoint
-    = Here !ProcessId !(UUID, UUID)
+    = Here !ProcessId
     | Elsewhere !DepRef
 
 -- | An endpoint that lives in a dependency database.
@@ -2723,7 +2707,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
         Endpoint ->
         Either ServiceError RankOneUpdate
     -- Case A: both suppliers in this DB. Symmetric rank-1 on the consumer column.
-    planUpdate sub cPid (Here fromPid _) (Here toPid _) = do
+    planUpdate sub cPid (Here fromPid) (Here toPid) = do
         a <- requireTech sub cPid fromPid
         Right $
             RankOneUpdate
@@ -2732,13 +2716,13 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
                 []
     -- Case B: drop this-DB oldSup, route demand to other-DB newSup.
     -- aRaw = aNorm * normFactor (the cross-DB link stores *raw* coefficients).
-    planUpdate sub cPid (Here fromPid _) (Elsewhere toRef) = do
+    planUpdate sub cPid (Here fromPid) (Elsewhere toRef) = do
         a <- requireTech sub cPid fromPid
         let aRaw = a * activityNormalizationFactor thisDb cPid
             newLk = virtualLinkTo cPid toRef aRaw
         Right $ RankOneUpdate cPid [(fromIntegral fromPid, a)] [newLk]
     -- Case C: cancel existing cross-DB link, pull new this-DB supplier.
-    planUpdate sub cPid (Elsewhere fromRef) (Here toPid _) = do
+    planUpdate sub cPid (Elsewhere fromRef) (Here toPid) = do
         s <- requireStatic sub cPid fromRef
         let aRaw = cdlCoefficient s
             aNorm = aRaw / activityNormalizationFactor thisDb cPid
@@ -2762,8 +2746,8 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     planGlobalUpdate fromEp toEp = case fromEp of
         Elsewhere _ ->
             Left $ MatrixError "global substitution requires the replaced activity (from) to live in the root database"
-        Here fromPid _ -> case toEp of
-            Here toPid _ -> planGlobalWithinDB unitCfg thisDb fromPid toPid
+        Here fromPid -> case toEp of
+            Here toPid -> planGlobalWithinDB unitCfg thisDb fromPid toPid
             Elsewhere toRef -> do
                 v <- requireConsumers thisDb fromPid
                 let links =
@@ -2824,10 +2808,7 @@ applySubstitutionsAt unitCfg depLookup thisDb thisDbObj rootDb solver scalings a
     resolveEndpoint :: Text -> Text -> IO (Either ServiceError Endpoint)
     resolveEndpoint refDb pidText
         | refDb == thisDbName =
-            pure $ case resolveScorable thisDb pidText of
-                Left e -> Left e
-                Right (p, _) ->
-                    Right $ Here p (dbProcessIdTable thisDb V.! fromIntegral p)
+            pure $ Here . fst <$> resolveScorable thisDb pidText
         | otherwise = do
             mPair <- depLookup refDb
             pure $ case mPair of

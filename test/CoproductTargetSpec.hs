@@ -59,7 +59,7 @@ spec = do
             case treeOfConsumer db of
                 Left err -> expectationFailure (show err)
                 Right tree -> do
-                    let export = Service.convertToTreeExport db (pidText consumerProdId) 10 tree
+                    let export = Service.convertToTreeExport db 10 tree
                         missing = [n | n <- M.elems (teNodes export), enNodeType n == MissingNode]
                     map enLoopTarget missing `shouldBe` [Nothing]
                     length (teEdges export) `shouldBe` 1
@@ -71,7 +71,7 @@ spec = do
                 Just root ->
                     -- 2000 g of a flow measured in kg, on an edge that says kg.
                     let tree = buildLoopAwareTree gramsAware db 10 root
-                     in case teEdges (Service.convertToTreeExport db (pidText consumerProdId) 10 tree) of
+                     in case teEdges (Service.convertToTreeExport db 10 tree) of
                             [edge] -> (teQuantity edge, teUnit edge) `shouldBe` (2.0, "kg")
                             other -> expectationFailure ("expected one edge, got " <> show (length other))
 
@@ -160,7 +160,7 @@ rootNodes db = case treeOfConsumer db of
     Left _ -> []
     Right tree ->
         [ n
-        | n <- M.elems (teNodes (Service.convertToTreeExport db (pidText consumerProdId) 10 tree))
+        | n <- M.elems (teNodes (Service.convertToTreeExport db 10 tree))
         , enDepth n == 0
         ]
 
