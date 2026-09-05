@@ -1125,7 +1125,12 @@ initDatabaseManager config noCache = do
 discoverDatabases :: Config -> IO [DatabaseConfig]
 discoverDatabases config = do
     configured <- forM (cfgDatabases config) $ \dbConfig -> do
-        resolvedPath <- resolveDataPath (dcPath dbConfig)
+        {- An archive that will not extract leaves the configuration pointing
+        at it. Say so here, at boot, where an operator can act on it; the load
+        itself refuses later with the same reason. -}
+        resolved <- resolveDataPath (dcPath dbConfig)
+        let resolvedPath = either (const (dcPath dbConfig)) id resolved
+        either (reportError . T.unpack) (const (pure ())) resolved
         format <- Upload.detectDatabaseFormat resolvedPath
         return dbConfig{dcPath = resolvedPath, dcFormat = Just format}
     -- Uploaded databases are self-describing, through their meta.toml
@@ -1676,36 +1681,42 @@ archiveExtensions = [".zip", ".7z", ".gz", ".xz"]
 {- | Resolve a database path: if it's an archive, extract it first.
 Extracts to "{archivePath}.d/" and finds the actual data directory inside.
 Plain files/directories pass through unchanged.
+
+'Left' when a path naming an archive could not be extracted. Handing the
+archive path back instead, as this used to, sent every caller on to report
+whatever it made of a @.zip@: no supported database files found, from the
+database loader, and a diagnosis reconstructed from the extension, in the
+method loader.
 -}
-resolveDataPath :: FilePath -> IO FilePath
+resolveDataPath :: FilePath -> IO (Either Text FilePath)
 resolveDataPath path = do
     isDir <- doesDirectoryExist path
     isFile <- doesFileExist path
     -- A directory, a missing path, or a plain file goes through unchanged, and
     -- the caller reports whatever is wrong with it.
     if isDir || not isFile || map toLower (takeExtension path) `notElem` archiveExtensions
-        then return path
+        then pure (Right path)
         else extractAndFind path
   where
-    extractAndFind :: FilePath -> IO FilePath
+    extractAndFind :: FilePath -> IO (Either Text FilePath)
     extractAndFind archive = do
         let extractDir = archive ++ ".d"
         alreadyExtracted <- hasContent extractDir
         if alreadyExtracted
             then do
                 reportProgress Info $ "Using cached extraction: " <> extractDir
-                Upload.findDataDirectory extractDir
+                Right <$> Upload.findDataDirectory extractDir
             else do
                 createDirectoryIfMissing True extractDir
                 reportProgress Info $ "Extracting archive: " <> archive
                 result <- Upload.extractArchiveFile archive extractDir
                 case result of
-                    Left err -> do
-                        reportError $ "Archive extraction failed: " <> T.unpack err
-                        return archive -- let caller report the meaningful error
+                    Left err ->
+                        pure . Left $
+                            "Archive could not be extracted: " <> T.pack archive <> ": " <> err
                     Right () -> do
                         reportProgress Info "Extraction complete"
-                        Upload.findDataDirectory extractDir
+                        Right <$> Upload.findDataDirectory extractDir
 
     -- A directory that exists and holds at least one entry.
     hasContent :: FilePath -> IO Bool
@@ -1973,8 +1984,10 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
   where
     -- Cache miss or stale: now we need the source. Resolve the archive if any.
     rebuildFromSource :: IO (Either Text (Database, Bool))
-    rebuildFromSource = do
-        path <- resolveDataPath rlSourcePath
+    rebuildFromSource = resolveDataPath rlSourcePath >>= either (pure . Left) fromPath
+
+    fromPath :: FilePath -> IO (Either Text (Database, Bool))
+    fromPath path = do
         isFile <- doesFileExist path
         isDir <- doesDirectoryExist path
         if not isFile && not isDir
@@ -3615,7 +3628,10 @@ loadMethodCollectionFromConfig mc = do
     -- Resolve archives (ZIP → extracted directory). Single .json (openLCA
     -- JSON-LD ImpactCategory) and .csv (SimaPro method export) files are
     -- accepted directly without a wrapping directory or archive.
-    resolvedPath <- resolveDataPath (mcPath mc)
+    resolved <- resolveDataPath (mcPath mc)
+    -- A failed extraction leaves the archive path, which reaches the refusal
+    -- below and carries its own reason there.
+    let resolvedPath = either (const (mcPath mc)) id resolved
     isDir <- doesDirectoryExist resolvedPath
     isFile <- doesFileExist resolvedPath
     let ext = map toLower (takeExtension resolvedPath)
@@ -3623,16 +3639,13 @@ loadMethodCollectionFromConfig mc = do
         isSingleCsv = isFile && ext == ".csv"
         isBareFile = isSingleJson || isSingleCsv
     if not isDir && not isBareFile
-        then
-            return . Left $
-                if not isFile
-                    then "Method path not found: " <> T.pack (mcPath mc)
-                    else
-                        if ext `elem` archiveExtensions
-                            -- resolveDataPath returns the archive path unchanged when
-                            -- extraction failed, so an archive reaching here means that.
-                            then "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
-                            else "Unsupported method file type (expected a directory, archive, .csv, or .json): " <> T.pack (mcPath mc)
+        then return . Left $ case resolved of
+            Left err -> err
+            Right _
+                | not isFile -> "Method path not found: " <> T.pack (mcPath mc)
+                | otherwise ->
+                    "Unsupported method file type (expected a directory, archive, .csv, or .json): "
+                        <> T.pack (mcPath mc)
         else do
             (dir, xmlFiles, csvFiles, jsonFiles) <-
                 if isBareFile

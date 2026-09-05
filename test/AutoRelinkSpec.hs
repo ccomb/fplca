@@ -22,6 +22,7 @@ follow-up.
 module AutoRelinkSpec (spec) where
 
 import Control.Monad (forM_)
+import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import System.Directory (
@@ -110,6 +111,19 @@ spec = do
                 -- Second call: must come back from the cache.
                 r2 <- runRaw dstDir
                 r2 `shouldBe` Right True
+
+        it "reports an unextractable archive rather than an unrecognised format" $
+            withSystemTempDirectory "volca-relink" $ \tmp -> do
+                -- Binary garbage under a .zip name: no known archive format,
+                -- so extraction fails. The old code handed the .zip path back
+                -- and the caller reported "No supported database files found",
+                -- which names the wrong problem.
+                let path = tmp </> "broken.zip"
+                BS.writeFile path (BS.pack [0, 1, 2, 3, 4, 5, 6, 7])
+                result <- runRaw path
+                case result of
+                    Left err -> err `shouldSatisfy` T.isInfixOf "Archive could not be extracted"
+                    Right _ -> expectationFailure "expected a Left for an unextractable .zip"
 
         it "reads the source again when the cache was built with another unit table" $
             withSystemTempDirectory "volca-relink" $ \tmp -> do

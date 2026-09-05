@@ -208,8 +208,8 @@ spec = do
         it "reports an unextractable archive as an extraction failure, not an unsupported type" $
             withSystemTempDirectory "volca-method-load" $ \tmp -> do
                 let path = tmp </> "broken.zip"
-                -- Binary garbage: recognised as no known archive format, so extraction
-                -- fails and resolveDataPath hands the .zip path back unchanged.
+                -- Binary garbage: recognised as no known archive format, so
+                -- extraction fails and resolveDataPath refuses.
                 BL.writeFile path (BL.pack [0, 1, 2, 3, 4, 5, 6, 7])
                 loaded <- loadMethodCollectionFromConfig (bareConfig path)
                 case loaded of
