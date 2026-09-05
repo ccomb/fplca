@@ -33,7 +33,6 @@ module Database.Allocation (
     describeRefusal,
     scaleExchange,
     MassKeyRefusal (..),
-    StatedAmount (..),
     massShares,
 ) where
 
@@ -130,13 +129,6 @@ describeRefusal refusal = case refusal of
             <> " without a declared share: state a share on every product row, or load the dataset already allocated"
     NoSingleReference 0 -> "no reference exchange: one product output must be the reference"
     NoSingleReference k -> T.pack (show k) <> " reference exchanges where exactly one is needed"
-
--- | One product row's amount and the unit it states that amount in.
-data StatedAmount = StatedAmount
-    { saUnit :: !Text
-    , saAmount :: !Double
-    }
-    deriving (Eq, Show)
 
 -- | Why the mass of a block's products cannot serve as a key.
 data MassKeyRefusal

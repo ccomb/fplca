@@ -41,6 +41,7 @@ import Types (
     Unit (..),
     WasteFlow (..),
     mkPedigree,
+    noProperties,
  )
 
 -- ---------------------------------------------------------------------------
@@ -121,6 +122,7 @@ techExchange fid amount role =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 reference :: UUID -> Exchange

@@ -87,6 +87,7 @@ techEx flow amt role link =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 co2Emission :: Double -> Exchange

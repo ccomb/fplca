@@ -30,6 +30,17 @@
   unit to restate it in.
 
 ### Added
+- A technosphere exchange now reports the physical properties its source
+  states of that line, the dry and wet mass (`properties`). EcoSpold 2 writes
+  them per unit of the line, so a board of 1 m3 declaring 614.4 kg of dry
+  matter per m3 is reported as 614.4 kg; a property stated in something that
+  is not a mass keeps its own unit rather than being read as kilograms, and a
+  property this engine has no field for is dropped rather than guessed at.
+  This is the material an allocation key other than the one the source
+  declares is computed from. Wire revision 18.
+
+  Every database cache is rebuilt once on the first load after this release:
+  the cached exchanges say less than the loader now reads.
 - A flow search result now reports how many activities make the flow
   (`producerCount`), which is the number of ways the database offers to
   produce it: one on most of a French agricultural database, up to a few

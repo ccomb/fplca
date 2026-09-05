@@ -66,6 +66,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -520,6 +521,7 @@ milkActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

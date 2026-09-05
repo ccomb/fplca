@@ -96,6 +96,7 @@ import Types (
     exchangeIsReference,
     findProcessIdByActivityUUID,
     getUnitNameForExchange,
+    noProperties,
     parseProcessRef,
  )
 import UnitConversion (UnitConfig, convertUnit, normalizeUnit)
@@ -292,6 +293,7 @@ validateOne ctx a =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                 productFlow =
                     TechnosphereFlow
@@ -638,6 +640,7 @@ resolveOne ctx ex = case ex of
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
     AuthoredWasteOutput provider amount mUnit comment ->
         resolveLinked ctx provider amount mUnit $ \sup unitRef ->

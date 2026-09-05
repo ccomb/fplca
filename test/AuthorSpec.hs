@@ -62,6 +62,7 @@ import Types (
     findProcessId,
     getActivity,
     isTechnosphereExchange,
+    noProperties,
     processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
@@ -731,6 +732,7 @@ importedActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , TechnosphereExchange
                 { techFlowId = coproductId
@@ -744,6 +746,7 @@ importedActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , TechnosphereExchange
                 { techFlowId = supplierProdId
@@ -757,6 +760,7 @@ importedActivity =
                 , techPedigree = Just milkPedigree
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id
@@ -987,6 +991,7 @@ treatmentWithHeat =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                    ]
         }
@@ -1018,6 +1023,7 @@ treatmentActivity =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             ]
         , activityParams = M.empty
@@ -1051,6 +1057,7 @@ supplierActivityAt actId prodId =
                 , techPedigree = Nothing
                 , techShare = Nothing
                 , techClassification = M.empty
+                , techProperties = noProperties
                 }
             , BiosphereExchange
                 { bioFlowId = co2Id

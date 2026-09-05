@@ -61,6 +61,7 @@ import Types (
     UUID,
     Unit (..),
     findProcessId,
+    noProperties,
     processIdToText,
  )
 import UnitConversion (defaultUnitConfig)
@@ -463,6 +464,7 @@ refOut actUUID prodUUID =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 -- | An input exchange linking to a supplier's @(supplierActUUID, supplierProdUUID)@.
@@ -480,6 +482,7 @@ inputFrom supplierActUUID supplierProdUUID =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 {- | A waste output linking to a treatment activity's

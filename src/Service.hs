@@ -30,7 +30,7 @@ import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
-import Database.Allocation (StatedAmount (..), asAllocated, describeRefusal, massShares)
+import Database.Allocation (asAllocated, describeRefusal, massShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport

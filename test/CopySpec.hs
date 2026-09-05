@@ -52,6 +52,7 @@ import Types (
     TechnosphereFlow (..),
     UUID,
     Unit (..),
+    noProperties,
  )
 import UnitConversion (defaultUnitConfig)
 
@@ -273,6 +274,7 @@ supplierDB offset products =
                         , techPedigree = Nothing
                         , techShare = Nothing
                         , techClassification = M.empty
+                        , techProperties = noProperties
                         }
                   act =
                     Activity

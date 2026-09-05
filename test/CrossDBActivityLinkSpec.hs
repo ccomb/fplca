@@ -94,6 +94,7 @@ refEx fid =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 -- | An input for @flowId@, linked to producer activity @linkId@ (nil = unlinked).
@@ -111,6 +112,7 @@ inputEx flowId linkId =
         , techPedigree = Nothing
         , techShare = Nothing
         , techClassification = M.empty
+        , techProperties = noProperties
         }
 
 mkDB :: [((UUID.UUID, UUID.UUID), Activity)] -> [TechnosphereFlow] -> SimpleDatabase

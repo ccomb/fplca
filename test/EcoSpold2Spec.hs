@@ -5,7 +5,10 @@ module EcoSpold2Spec (spec) where
 import qualified Data.ByteString as BS
 import Data.List (isInfixOf)
 import qualified Data.Map as M
+import Data.Maybe (listToMaybe)
+import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -63,6 +66,29 @@ spec = describe "per-exchange comments" $ do
                     `shouldMatchList` [ Nothing -- ex1 has no top-level comment, only property comments
                                       , Just "Adhesive applied during pressing" -- ex2's exchange-level comment, NOT the noisy property comment
                                       ]
+
+    {- The same fixture, read for what those <property> children say rather
+    than for what they must not leak. A property is recorded per unit of the
+    exchange, as the file states it: the glue line is 0.1 kg and declares 1.0,
+    so 1.0 is what is recorded and 0.1 would mean the record had been made to
+    depend on the amount beside it. Its unit is kept as written, so whoever
+    needs a mass can refuse a dimensionless quantity rather than read
+    kilograms into it. "carbon content" names no property this engine holds
+    and is dropped rather than guessed at. -}
+    describe "properties an exchange states" $ do
+        it "reads the dry mass a product declares" $
+            withPropertyFixture $ \act ->
+                propertiesOf "22222222-2222-2222-2222-222222222222" act
+                    `shouldBe` Just noProperties{epDryMass = Just (StatedAmount "kg" 614.4)}
+
+        it "records the property per unit of the line, not per line" $
+            withPropertyFixture $ \act ->
+                propertiesOf "55555555-5555-5555-5555-555555555555" act
+                    `shouldBe` Just noProperties{epDryMass = Just (StatedAmount "dimensionless" 1.0)}
+
+        it "leaves the exchange amounts exactly as the file states them" $
+            withPropertyFixture $ \act ->
+                map exchangeAmount (exchanges act) `shouldMatchList` [1.0, 0.1]
 
     -- Pattern A: elementaryExchange with compartment=inventory indicator
     -- subcompartment=waste must surface as a WasteExchange / WasteFlow,
@@ -441,6 +467,23 @@ noGeographyXml =
     \    </flowData>\n\
     \  </activityDataset>\n\
     \</ecoSpold>\n"
+
+-- | The sawnwood fixture, whose two exchanges carry @\<property\>@ children.
+withPropertyFixture :: (Activity -> IO ()) -> IO ()
+withPropertyFixture k = do
+    result <- streamParseActivityAndFlowsFromFile "test-data/sawnwood-properties_12345678-1234-5678-9abc-12345678aaaa.spold"
+    case result of
+        Left err -> expectationFailure $ "Parse failed: " ++ err
+        Right (act, _, _, _, _) -> k act
+
+-- | The properties recorded on the exchange of a given flow, by flow id.
+propertiesOf :: Text -> Activity -> Maybe ExchangeProperties
+propertiesOf flowId act =
+    listToMaybe
+        [ techProperties ex
+        | ex@TechnosphereExchange{} <- exchanges act
+        , Just (exchangeFlowId ex) == UUID.fromText flowId
+        ]
 
 withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do
