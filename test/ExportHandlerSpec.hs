@@ -17,7 +17,7 @@ import API.Types (BinaryContent, ExportRequest (..))
 import App.Env (AppEnv (..), runApp)
 import Config (defaultConfig)
 import Data.Text (Text)
-import Database.Manager (initDatabaseManager)
+import Database.Manager (CachePolicy (..), initDatabaseManager)
 import Servant (Header, Headers, ServerError, errHTTPCode, runHandler)
 import Test.Hspec
 
@@ -27,7 +27,7 @@ pattern never forces it.
 -}
 runExport :: Text -> Text -> IO (Either ServerError (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent))
 runExport dbName fmt = do
-    dbm <- initDatabaseManager defaultConfig True
+    dbm <- initDatabaseManager defaultConfig NoCache
     let env =
             AppEnv
                 { aeDbManager = dbm

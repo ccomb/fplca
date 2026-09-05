@@ -21,14 +21,14 @@ import Test.Hspec
 
 import API.MCP (mcpApp)
 import Config (defaultConfig)
-import Database.Manager (initDatabaseManager)
+import Database.Manager (CachePolicy (..), initDatabaseManager)
 
 {- | Drive one request of the given method through the endpoint,
 report its status and the methods it says are allowed.
 -}
 answer :: Method -> IO (Int, Maybe ByteString)
 answer m = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     app <- mcpApp manager [] False Nothing Nothing (pure ())
     ref <- newIORef Nothing
     _ <- app defaultRequest{requestMethod = m} $ \resp -> do

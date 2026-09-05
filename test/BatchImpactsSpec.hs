@@ -23,7 +23,7 @@ import API.Routes (collectionNotLoadedMessage)
 import Config (defaultConfig)
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text.Encoding as TE
-import Database.Manager (initDatabaseManager)
+import Database.Manager (CachePolicy (..), initDatabaseManager)
 import Servant (err400, err404, err422, err500, errBody)
 import Test.Hspec
 
@@ -82,7 +82,7 @@ spec = do
 
     describe "runActivityLCIABatch (empty DatabaseManager)" $ do
         it "returns DatabaseNotLoaded when the requested DB is not loaded" $ do
-            dbm <- initDatabaseManager defaultConfig True
+            dbm <- initDatabaseManager defaultConfig NoCache
             res <- runActivityLCIABatch dbm "no-such-db" "no-pid" "no-coll" Nothing IncludeLongTerm
             -- LCIABatchResult has no Show instance, so we pattern-match
             -- rather than rely on 'shouldBe' over the whole Either.
@@ -92,7 +92,7 @@ spec = do
 
     describe "runBatchImpacts (empty DatabaseManager)" $ do
         it "returns DatabaseNotLoaded when the requested DB is not loaded" $ do
-            dbm <- initDatabaseManager defaultConfig True
+            dbm <- initDatabaseManager defaultConfig NoCache
             res <- runBatchImpacts dbm "no-such-db" "no-coll" Nothing IncludeLongTerm ["pidA", "pidB"]
             case res of
                 Left e -> e `shouldBe` DatabaseNotLoaded "no-such-db"

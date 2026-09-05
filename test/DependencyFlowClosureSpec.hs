@@ -147,7 +147,7 @@ the dependency; the dependency owns 'riverWater'.
 -}
 setup :: [BiosphereFlow] -> IO (DM.DatabaseManager, Database)
 setup rootFlows = do
-    manager <- DM.initDatabaseManager defaultConfig True
+    manager <- DM.initDatabaseManager defaultConfig DM.NoCache
     let dep = withOwnFlows [riverWater] (mkDB 1 ["FR"] [])
         root =
             (withOwnFlows rootFlows (mkDB 100 ["FR"] []))

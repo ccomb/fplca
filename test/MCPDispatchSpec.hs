@@ -22,7 +22,7 @@ import Test.Hspec
 
 import API.MCP (RpcRequest (..), callTool, handleInitialize, mcpCountsAsActivity, toolDefinitions, webUrlBase)
 import Config (ClassificationEntry (..), ClassificationPreset (..), DatabaseConfig (..), ReadOnly (..), ServerName (..), defaultConfig)
-import Database.Manager (addDatabase, initDatabaseManager, loadDatabase)
+import Database.Manager (CachePolicy (..), addDatabase, initDatabaseManager, loadDatabase)
 import Types (GeographyPolicy (..))
 
 -- | The tool definition advertised under a given MCP name.
@@ -80,7 +80,7 @@ isError _ = False
 
 call :: Text -> IO Value
 call name = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     callTool manager [] Nothing Nothing Null name (KM.singleton "database" (String "no-such-db"))
 
 {- | Call the edit tool with one line named. An edit that names nothing is
@@ -89,7 +89,7 @@ test is actually about.
 -}
 callEdit :: IO Value
 callEdit = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     callTool manager [] Nothing Nothing Null "edit_exchanges" $
         KM.fromList
             [ ("database", String "no-such-db")
@@ -122,7 +122,7 @@ sampleConfig =
 -- | Call a tool against that fixture, freshly loaded.
 callOnSampleWith :: Text -> [(Key, Value)] -> IO Value
 callOnSampleWith name extraArgs = do
-    manager <- initDatabaseManager defaultConfig True
+    manager <- initDatabaseManager defaultConfig NoCache
     addDatabase manager sampleConfig
     loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
     callTool manager [] Nothing Nothing Null name $
@@ -246,7 +246,7 @@ spec = describe "MCP database load/unload tools" $ do
                     , cpFilters = [ClassificationEntry{ceSystem = "AGB", ceValue = "Agriculture", ceMode = "exact"}]
                     }
             callWithPreset name = do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 callTool manager [configured] Nothing Nothing Null name $
                     KM.fromList
                         [ ("database", String "no-such-db")
@@ -271,7 +271,7 @@ spec = describe "MCP database load/unload tools" $ do
         -- ignoring it answers with the unfiltered set instead.
         describe "a preset that resolves is applied" $ do
             let callOnSample name presetArgs = do
-                    manager <- initDatabaseManager defaultConfig True
+                    manager <- initDatabaseManager defaultConfig NoCache
                     addDatabase manager sampleConfig
                     loadDatabase manager "sample" >>= either (expectationFailure . T.unpack) (const (pure ()))
                     callTool manager [configured] Nothing Nothing Null name $

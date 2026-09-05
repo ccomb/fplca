@@ -113,6 +113,7 @@ module Database.Manager (
     loadDatabaseRawWithCrossDB,
     RawLoad (..),
     LoadSource (..),
+    CachePolicy (..),
 
     -- * Internal (for tests: pure dependency-list builder)
     buildDependencyChoices,
@@ -550,7 +551,7 @@ data DatabaseManager = DatabaseManager
     , -- Reference data: energy densities (mass/volume → energy for energy-denominated CFs)
       dmAvailableEnergyDensities :: !(TVar (Map Text RefDataConfig))
     , dmLoadedEnergyDensities :: !(TVar (Map Text EnergyDensityMap))
-    , dmNoCache :: !Bool -- Caching disabled flag
+    , dmCachePolicy :: !CachePolicy
     , dmGeographies :: !(Map Text (Text, [Text])) -- code → (display_name, parent_codes)
     , dmLocationHierarchy :: !(Map Location [Location])
     {- ^ 'dmGeographies' in the shape the regionalized scoring path and the
@@ -1074,7 +1075,7 @@ data ManagerSeed = ManagerSeed
     { msDatabases :: ![DatabaseConfig]
     , msMethods :: ![MethodConfig]
     , msRefData :: !RefDataSources
-    , msNoCache :: !Bool
+    , msCachePolicy :: !CachePolicy
     , msGeographies :: !(Map Text (Text, [Text]))
     , msChemSynonyms :: !ChemSynonyms
     , msSubstanceEdges :: ![SubstanceEdge]
@@ -1093,8 +1094,8 @@ data RefDataSources = RefDataSources
 Pre-loads databases with load=true at startup
 Also discovers uploaded databases from uploads/ directory
 -}
-initDatabaseManager :: Config -> Bool -> IO DatabaseManager
-initDatabaseManager config noCache = do
+initDatabaseManager :: Config -> CachePolicy -> IO DatabaseManager
+initDatabaseManager config cachePolicy = do
     databases <- discoverDatabases config
     methods <- discoverMethods config
     refData <- discoverRefDataSources config
@@ -1108,7 +1109,7 @@ initDatabaseManager config noCache = do
                 { msDatabases = databases
                 , msMethods = methods
                 , msRefData = refData
-                , msNoCache = noCache
+                , msCachePolicy = cachePolicy
                 , msGeographies = geographies
                 , msChemSynonyms = chemSyns
                 , msSubstanceEdges = substanceEdges
@@ -1270,7 +1271,7 @@ newManager ManagerSeed{..} = do
             , dmLoadedUnitDefs = loadedUnitDefsVar
             , dmAvailableEnergyDensities = availableEnergyDensitiesVar
             , dmLoadedEnergyDensities = loadedEnergyDensitiesVar
-            , dmNoCache = msNoCache
+            , dmCachePolicy = msCachePolicy
             , dmGeographies = msGeographies
             , dmLocationHierarchy = hierarchyFromGeographies msGeographies
             , dmMethodMappingCache = methodMappingCacheVar
@@ -1412,7 +1413,7 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             dbConfig
             llSynonyms
             llUnitConfig
-            (dmNoCache manager)
+            (dmCachePolicy manager)
             llOtherIndexes
             (dmLocationHierarchy manager)
     case result of
@@ -1722,11 +1723,11 @@ loadDatabaseFromConfigWithCrossDB ::
     DatabaseConfig ->
     SynonymDB ->
     UnitConversion.UnitConfig ->
-    Bool -> -- noCache
+    CachePolicy ->
     [IndexedDatabase] -> -- Pre-built indexes from other databases for cross-DB linking
     M.Map Location [Location] -> -- Location hierarchy (empty = use built-in)
     IO (Either Text (LoadedDatabase, LoadSource))
-loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherIndexes locationHier = do
+loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig cachePolicy otherIndexes locationHier = do
     let sourcePath = dcPath dbConfig
         locationAliases = dcLocationAliases dbConfig
     reportProgress Info $ "Loading database from: " <> sourcePath
@@ -1736,7 +1737,7 @@ loadDatabaseFromConfigWithCrossDB dbConfig synonymDB unitConfig noCache otherInd
                 { rlDbName = dcName dbConfig
                 , rlLocationAliases = locationAliases
                 , rlSourcePath = sourcePath
-                , rlNoCache = noCache
+                , rlCachePolicy = cachePolicy
                 , rlSynonymDB = synonymDB
                 , rlUnitConfig = unitConfig
                 , rlOtherIndexes = otherIndexes
@@ -1914,7 +1915,7 @@ data RawLoad = RawLoad
     , rlLocationAliases :: !(M.Map Text Text)
     , rlSourcePath :: !FilePath
     -- ^ Unresolved: the matrix cache is co-located with it.
-    , rlNoCache :: !Bool
+    , rlCachePolicy :: !CachePolicy
     , rlSynonymDB :: !SynonymDB
     , rlUnitConfig :: !UnitConversion.UnitConfig
     , rlOtherIndexes :: ![IndexedDatabase]
@@ -1953,10 +1954,9 @@ loadDatabaseRawWithCrossDB ::
     RawLoad ->
     IO (Either Text (Database, LoadSource))
 loadDatabaseRawWithCrossDB RawLoad{..} = do
-    mCachedDb <-
-        if rlNoCache
-            then return Nothing
-            else Loader.loadCachedDatabaseWithMatrices rlDbName rlSourcePath inputs
+    mCachedDb <- case rlCachePolicy of
+        NoCache -> return Nothing
+        UseCache -> Loader.loadCachedDatabaseWithMatrices rlDbName rlSourcePath inputs
     case cacheVerdict rlOtherIndexes mCachedDb of
         Fresh db -> do
             Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
@@ -2004,7 +2004,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
-                        unless rlNoCache $
+                        when (rlCachePolicy == UseCache) $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath db
                         Loader.reportCrossDBLinkingStats (fromIntegral (dbActivityCount db)) (dbLinkingStats db)
                         return $ Right (db, FromSource)
@@ -2042,7 +2042,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
                                     , dbDependsOn = depDbs
                                     , dbLinkingStats = stats
                                     }
-                        unless rlNoCache $
+                        when (rlCachePolicy == UseCache) $
                             Loader.saveCachedDatabaseWithMatrices rlDbName rlSourcePath dbWithLinks
                         return $ Right (dbWithLinks, FromSource)
 
@@ -2083,6 +2083,13 @@ the matrix cache as it stood, so cross-database linking was NOT run against
 the indexes the caller passed; 'FromSource' means it was.
 -}
 data LoadSource = FromCache | FromSource
+    deriving (Eq, Show)
+
+{- | Whether a load may read and write the matrix cache. 'NoCache' is what
+@--no-cache@ asks for, and what a database whose journal runs ahead of its
+cache gets whatever the flag says.
+-}
+data CachePolicy = UseCache | NoCache
     deriving (Eq, Show)
 
 {- | On a fresh parse 'loadDatabaseRawWithCrossDB' already ran linking against
@@ -2133,7 +2140,7 @@ loadDatabaseSingleFromConfig manager dbName = do
                         dbConfig
                         synonymDB
                         unitConfig
-                        (dmNoCache manager || journalAhead)
+                        (if journalAhead then NoCache else dmCachePolicy manager)
                         (M.elems currentIndexedDbs)
                         (dmLocationHierarchy manager)
         ExceptT $ case eitherResult of

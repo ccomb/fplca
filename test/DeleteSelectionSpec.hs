@@ -41,6 +41,7 @@ import Database.Edit (
     resolveDeleteSelection,
  )
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     LoadedDatabase (..),
     initDatabaseManager,
@@ -199,7 +200,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
 
     describe "deleteActivitiesInDB (filter-driven, in-place)" $ do
         it "deletes the whole filtered set and respects keep" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 600)
             installLoaded manager "edit-me" db
             -- Filter matches the two "food" activities; keep one by its
@@ -222,7 +223,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                         `shouldSatisfy` elem "food-A"
 
         it "fails loudly on an unknown keep process id" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 700)
             installLoaded manager "edit-me-2" db
             r <-
@@ -235,7 +236,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected unknown keep id to fail"
 
         it "fails when the database is not loaded" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             r <- deleteActivitiesInDB manager "ghost" emptyDelete
             fmap doRemoved r `shouldBe` Left "Database not loaded: ghost"
 
@@ -243,7 +244,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
             -- Deleting from "base" would renumber/remove activities that the loaded
             -- "dependent" links to across databases; those links would then silently
             -- drop at solve time. The delete must be refused, mirroring unloadDatabase.
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             base <- buildOrFail (classifiedDB 800)
             installLoaded manager "base" base
             dep <- buildOrFail (classifiedDB 900)
@@ -259,7 +260,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
 
     describe "deleteActivitiesInDB (delete exactly these ids)" $ do
         it "deletes exactly the listed process ids, no base filter" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1000)
             installLoaded manager "by-ids" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1001) (mkUUID 1001))
@@ -275,7 +276,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                         `shouldNotSatisfy` elem "food-A"
 
         it "refuses ids combined with a filter field" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1100)
             installLoaded manager "by-ids-2" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1101) (mkUUID 1101))
@@ -289,7 +290,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected ids+filter to be refused"
 
         it "fails loudly on an unknown id" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1200)
             installLoaded manager "by-ids-3" db
             r <- deleteActivitiesInDB manager "by-ids-3" emptyDelete{drIds = Just ["not-a-real-process-id"]}
@@ -298,7 +299,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected unknown id to fail"
 
         it "refuses ids combined with exact (it would silently do nothing)" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1300)
             installLoaded manager "by-ids-4" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1301) (mkUUID 1301))
@@ -308,7 +309,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Right _ -> expectationFailure "expected ids+exact to be refused"
 
         it "composes ids with keep and extra: (ids ∪ extra) \\ keep" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1400)
             installLoaded manager "by-ids-5" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1401) (mkUUID 1401))
@@ -330,7 +331,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
         it "deletes only the extras when ids is the empty selection" $ do
             -- The official replacement for the old "unsatisfiable filter +
             -- extra" hack: an empty ids selection plus explicit extras.
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             db <- buildOrFail (classifiedDB 1500)
             installLoaded manager "by-ids-6" db
             let foodA = processIdToText db (pidFor2 db (mkUUID 1501) (mkUUID 1501))

@@ -34,7 +34,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
-import Database.Manager (LoadSource (..), RawLoad (..), loadDatabaseRawWithCrossDB)
+import Database.Manager (CachePolicy (..), LoadSource (..), RawLoad (..), loadDatabaseRawWithCrossDB)
 import SynonymDB (emptySynonymDB)
 import Types (GeographyPolicy (..))
 import UnitConversion (UnitConfig, UnitDef (..), defaultUnitConfig, mkUnitConfig, ucDimensionOrder, ucOriginalKeys, ucUnits)
@@ -64,7 +64,7 @@ runRawWith unitConfig locationAliases dstDir = do
                 { rlDbName = "test"
                 , rlLocationAliases = locationAliases
                 , rlSourcePath = dstDir
-                , rlNoCache = False -- cache must be written/read
+                , rlCachePolicy = UseCache -- cache must be written/read
                 , rlSynonymDB = emptySynonymDB
                 , rlUnitConfig = unitConfig
                 , rlOtherIndexes = []

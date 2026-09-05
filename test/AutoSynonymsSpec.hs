@@ -17,6 +17,7 @@ import Test.Hspec
 
 import Config (defaultConfig)
 import Database.Manager (
+    CachePolicy (..),
     DatabaseLoadStatus (..),
     DatabaseManager (..),
     RefDataStatus (..),
@@ -33,7 +34,7 @@ withTempManager action =
     withSystemTempDirectory "volca-auto-syns" $ \tmp -> do
         oldCwd <- getCurrentDirectory
         setCurrentDirectory tmp
-        (initDatabaseManager defaultConfig True >>= action)
+        (initDatabaseManager defaultConfig NoCache >>= action)
             `finally` setCurrentDirectory oldCwd
 
 spec :: Spec

@@ -47,6 +47,7 @@ import Database.Edit (
  )
 import Database.Journal (JournalOp (..), journalPath, readJournal)
 import Database.Manager (
+    CachePolicy (..),
     DatabaseManager (..),
     LoadedDatabase (..),
     addDatabase,
@@ -161,7 +162,7 @@ spec = describe "persisting an edit" $ do
     describe "a database the engine only reads" $ do
         it "says the edit is not saved, and is given no home" $
             withDataDir $ \dataRoot -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "configured" db (configuredConfig "configured")
                 r <- mutateUploadedDatabase manager "configured" dropSecond
@@ -176,7 +177,7 @@ spec = describe "persisting an edit" $ do
     describe "refusals that protect the value" $ do
         it "refuses a second edit while one is in progress" $
             withDataDir $ \_ -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "busy" db (configuredConfig "busy")
                 atomically $ modifyTVar' (dmStagingDbs manager) (Set.insert "busy")
@@ -185,7 +186,7 @@ spec = describe "persisting an edit" $ do
 
         it "refuses while another loaded database depends on this one" $
             withDataDir $ \_ -> do
-                manager <- initDatabaseManager defaultConfig True
+                manager <- initDatabaseManager defaultConfig NoCache
                 db <- buildTwoActivityFixture
                 install manager "background" db (configuredConfig "background")
                 install manager "foreground" db{dbDependsOn = ["background"]} (configuredConfig "foreground")
@@ -223,7 +224,7 @@ withEcoSpold1Database act =
         createDirectoryIfMissing True dataDir
         TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 101)) <> ".xml") (dataset 1 "electricity production, wind")
         TIO.writeFile (dataDir </> "process_" <> T.unpack (UUID.toText (mkUUID 102)) <> ".xml") (dataset 2 "electricity production, solar")
-        manager <- initDatabaseManager defaultConfig False
+        manager <- initDatabaseManager defaultConfig UseCache
         addDatabase manager (uploadedConfig "bafu-like" dataDir)
         loaded <- loadDatabase manager "bafu-like"
         case loaded of

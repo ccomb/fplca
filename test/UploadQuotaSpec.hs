@@ -21,7 +21,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Database.Manager (DatabaseManager (..), initDatabaseManager)
+import Database.Manager (CachePolicy (..), DatabaseManager (..), initDatabaseManager)
 import Test.Hspec
 import Types (GeographyPolicy (..))
 
@@ -115,7 +115,7 @@ spec = describe "hosting database quotas" $ do
 
     describe "the MCP door" $
         it "refuses load_database by the same budget as REST" $ do
-            manager <- initDatabaseManager defaultConfig True
+            manager <- initDatabaseManager defaultConfig NoCache
             atomically $ modifyTVar' (dmAvailableDbs manager) (M.insert "mine" (uploadedEntry "mine"))
             resp <-
                 callTool manager [] (Just (plan 1 0)) Nothing Null "load_database" $

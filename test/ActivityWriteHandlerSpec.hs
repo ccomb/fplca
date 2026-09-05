@@ -48,7 +48,7 @@ import App.Env (AppEnv (..), runApp)
 import Config (DatabaseConfig (..), defaultConfig)
 import Control.Exception (bracket_)
 import Database (buildDatabaseWithMatrices)
-import Database.Manager (DatabaseManager (..), LoadedDatabase (..), initDatabaseManager)
+import Database.Manager (CachePolicy (..), DatabaseManager (..), LoadedDatabase (..), initDatabaseManager)
 import Database.Upload (DatabaseFormat (..))
 import SharedSolver (createSharedSolver)
 import Types (
@@ -364,7 +364,7 @@ withDb mkConfig act =
         bracket_ (setEnv "VOLCA_DATA_DIR" root) (unsetEnv "VOLCA_DATA_DIR") $ do
             let dataDir = root </> "uploads" </> "databases" </> "authored" </> "data"
             createDirectoryIfMissing True dataDir
-            dbm <- initDatabaseManager defaultConfig True
+            dbm <- initDatabaseManager defaultConfig NoCache
             db <- buildFixture
             solver <- createSharedSolver "authored" (triplesOf db) (fromIntegral (dbActivityCount db))
             let config = mkConfig "authored" dataDir
