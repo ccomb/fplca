@@ -1155,10 +1155,7 @@ instance Store Database where
 
 -- | Get activity by ProcessId (direct vector indexing)
 getActivity :: Database -> ProcessId -> Maybe Activity
-getActivity db pid
-    | pid >= 0 && fromIntegral pid < V.length (dbActivities db) =
-        Just $ dbActivities db V.! fromIntegral pid
-    | otherwise = Nothing
+getActivity db pid = dbActivities db V.!? fromIntegral pid
 
 -- | Find ProcessId from UUID pair
 findProcessId :: Database -> UUID -> UUID -> Maybe ProcessId
@@ -1222,10 +1219,10 @@ searchProductsByLocation db loc =
 
 -- | The pair a 'ProcessId' indexes, if the index is in range.
 processIdToRef :: Database -> ProcessId -> Maybe ProcessRef
-processIdToRef db pid
-    | pid >= 0 && fromIntegral pid < V.length (dbProcessIdTable db) =
-        Just $ uncurry ProcessRef $ dbProcessIdTable db V.! fromIntegral pid
-    | otherwise = Nothing
+processIdToRef db pid = refOf <$> dbProcessIdTable db V.!? fromIntegral pid
+  where
+    refOf :: (UUID, UUID) -> ProcessRef
+    refOf (act, prod) = ProcessRef{prActivity = act, prProduct = prod}
 
 {- | The one spelling of a process reference: @activityUUID_productUUID@.
 Everything that writes a reference — the wire, a @.spold@ file name, an ILCD
@@ -1255,7 +1252,7 @@ supplierRefText :: CrossDBLink -> Text
 supplierRefText link =
     qualifyRef
         (cdlSourceDatabase link)
-        (processRefText (ProcessRef (cdlSupplierActUUID link) (cdlSupplierProdUUID link)))
+        (processRefText ProcessRef{prActivity = cdlSupplierActUUID link, prProduct = cdlSupplierProdUUID link})
 
 -- | Text form of the process a 'ProcessId' indexes, for display.
 processIdToText :: Database -> ProcessId -> Text
