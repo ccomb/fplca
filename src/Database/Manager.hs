@@ -65,6 +65,7 @@ module Database.Manager (
 
     -- * Reference Data Operations
     autoCreateFlowSynonyms,
+    SynonymOrigin (..),
     listFlowSynonyms,
     loadFlowSynonyms,
     unloadFlowSynonyms,
@@ -97,8 +98,10 @@ module Database.Manager (
     databaseCoverageReport,
     explainFlowFactor,
     addDependencyToStaged,
+    DependencyEdit (..),
     removeDependencyFromStaged,
     setDataPath,
+    RelativeDataPath (..),
     finalizeDatabase,
 
     -- * Cached flow mapping
@@ -1369,7 +1372,7 @@ loadConfiguredMethods manager config =
                 warnZeroTouchPatches (mcName mc) patchStats
                 warnUnknownGlobalMethods mc collection
                 let !pairs = extractFromILCDFlows flowInfo
-                autoCreateFlowSynonyms manager (mcName mc) ("Auto-extracted from " <> mcName mc) pairs
+                autoCreateFlowSynonyms manager (mcName mc) (SynonymOrigin ("Auto-extracted from " <> mcName mc)) pairs
 
 {- | Surface a 'global-methods' entry that matches no loaded method: the
 de-regionalization is keyed by method name, so a typo or a renamed method
@@ -1444,7 +1447,7 @@ loadOneDatabase manager LoadLevel{..} dbConfig = withLogScope (dcName dbConfig) 
             autoCreateFlowSynonyms
                 manager
                 (dcName dbConfig)
-                ("Auto-extracted from " <> dcDisplayName dbConfig)
+                (SynonymOrigin ("Auto-extracted from " <> dcDisplayName dbConfig))
                 pairs
         Left err ->
             reportError $ "  [FAIL] Failed to load " <> T.unpack (dcName dbConfig) <> ": " <> T.unpack err
@@ -2153,7 +2156,7 @@ loadDatabaseSingleFromConfig manager dbName = do
         autoCreateFlowSynonyms
             manager
             dbName
-            ("Auto-extracted from " <> dcDisplayName dbConfig)
+            (SynonymOrigin ("Auto-extracted from " <> dcDisplayName dbConfig))
             (extractFromEcoSpold2 (dbBioFlows (ldDatabase loaded)))
         when (needsSelfRelink origin) $
             relinkDatabase manager dbName >>= either (warnSelfRelinkFailed dbName) (const (pure ()))
@@ -3308,11 +3311,17 @@ discoverCandidatePaths dbConfig = do
              in if null r then "." else r
         | otherwise = path
 
+{- | Where an upload's data sits under its own directory. Its own type
+because the only other argument it travels with is a database name, and
+'Text' cannot tell a caller which way round they go.
+-}
+newtype RelativeDataPath = RelativeDataPath {unRelativeDataPath :: Text}
+
 {- | Change the data path for an uploaded (staged) database.
 Validates path, updates config + meta.toml, clears staged DB to force re-stage.
 -}
-setDataPath :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-setDataPath manager dbName newRelPath = runExceptT $ do
+setDataPath :: DatabaseManager -> Text -> RelativeDataPath -> IO (Either Text DatabaseSetupInfo)
+setDataPath manager dbName (RelativeDataPath newRelPath) = runExceptT $ do
     availableDbs <- liftIO $ readTVarIO (dmAvailableDbs manager)
     dbConfig <-
         except $
@@ -3422,11 +3431,20 @@ getOrStageDatabase manager dbName = do
                 Just ld -> Right <$> restageLoadedDatabase manager dbName ld
                 Nothing -> return $ Left $ "Database not found: " <> dbName
 
+{- | Which database's dependency set is being changed, and which name is
+being added to or removed from it. Both are database names, so no type can
+tell them apart: only the field names can.
+-}
+data DependencyEdit = DependencyEdit
+    { deDatabase :: !Text
+    , deDependency :: !Text
+    }
+
 {- | Add a dependency to a staged (or partially-linked loaded) database
 Runs cross-DB linking against the new dependency
 -}
-addDependencyToStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-addDependencyToStaged manager dbName depName = do
+addDependencyToStaged :: DatabaseManager -> DependencyEdit -> IO (Either Text DatabaseSetupInfo)
+addDependencyToStaged manager DependencyEdit{deDatabase = dbName, deDependency = depName} = do
     indexedDbs <- readTVarIO (dmIndexedDbs manager)
     stagedResult <- getOrStageDatabase manager dbName
 
@@ -3448,8 +3466,8 @@ addDependencyToStaged manager dbName depName = do
                         }
 
 -- | Remove a dependency from a staged (or partially-linked loaded) database
-removeDependencyFromStaged :: DatabaseManager -> Text -> Text -> IO (Either Text DatabaseSetupInfo)
-removeDependencyFromStaged manager dbName depName = do
+removeDependencyFromStaged :: DatabaseManager -> DependencyEdit -> IO (Either Text DatabaseSetupInfo)
+removeDependencyFromStaged manager DependencyEdit{deDatabase = dbName, deDependency = depName} = do
     stagedResult <- getOrStageDatabase manager dbName
 
     case stagedResult of
@@ -3885,7 +3903,7 @@ loadMethodCollection manager name = do
                             autoCreateFlowSynonyms
                                 manager
                                 name
-                                ("Auto-extracted from " <> name)
+                                (SynonymOrigin ("Auto-extracted from " <> name))
                                 pairs
                             return $ Right ()
 
@@ -4494,6 +4512,10 @@ or stop-word (e.g. @"organic"@), not a true synonym — 'excludeOverFrequentSyno
 drops it. The bound sits in the gap between the class-label hubs (≥187 flows in
 EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
 -}
+
+-- | The sentence a candidate synonym set carries about where it came from.
+newtype SynonymOrigin = SynonymOrigin Text
+
 maxSynonymFlowFrequency :: Int
 maxSynonymFlowFrequency = 25
 
@@ -4505,9 +4527,9 @@ curated registry (data/flows.csv) plus sources the user explicitly activates
 DB-embedded synonyms are a bootstrap input for offline curation, not a runtime
 one. To regenerate a stale candidate, remove the source and reload.
 -}
-autoCreateFlowSynonyms :: DatabaseManager -> Text -> Text -> [(Text, Text)] -> IO ()
+autoCreateFlowSynonyms :: DatabaseManager -> Text -> SynonymOrigin -> [(Text, Text)] -> IO ()
 autoCreateFlowSynonyms _ _ _ [] = return ()
-autoCreateFlowSynonyms manager sourceName description pairs = do
+autoCreateFlowSynonyms manager sourceName (SynonymOrigin description) pairs = do
     let slug = "auto-" <> sourceName
     -- Skip if already registered (persisted candidate from a previous run,
     -- discovered at startup, or extracted earlier this session)

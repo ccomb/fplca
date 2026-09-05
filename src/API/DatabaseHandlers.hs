@@ -169,8 +169,10 @@ import Database.Manager (
     DatabaseManager (..),
     DatabaseSetupInfo (..),
     DatabaseStatus (..),
+    DependencyEdit (..),
     LoadedDatabase (..),
     RefDataStatus (..),
+    RelativeDataPath (..),
     RelinkResult (..),
     SetupError (..),
     addCompartmentMappings,
@@ -1049,7 +1051,7 @@ addDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 addDependencyHandler dbName depName = do
     guardMutation
     dbManager <- asks aeDbManager
-    ioEither400 (addDependencyToStaged dbManager dbName depName)
+    ioEither400 (addDependencyToStaged dbManager (DependencyEdit dbName depName))
 
 {- | Remove a dependency from a staged database
 Re-runs cross-DB linking and returns updated setup info
@@ -1058,7 +1060,7 @@ removeDependencyHandler :: Text -> Text -> AppM DatabaseSetupInfo
 removeDependencyHandler dbName depName = do
     guardMutation
     dbManager <- asks aeDbManager
-    ioEither400 (removeDependencyFromStaged dbManager dbName depName)
+    ioEither400 (removeDependencyFromStaged dbManager (DependencyEdit dbName depName))
 
 -- | Change the data path for an uploaded (staged) database
 setDataPathHandler :: Text -> Value -> AppM DatabaseSetupInfo
@@ -1073,7 +1075,7 @@ setDataPathHandler dbName body = do
             _ -> Nothing
     case mPath of
         Nothing -> throwError $ err400{errBody = "Missing \"path\" field in request body"}
-        Just newPath -> ioEither400 (setDataPath dbManager dbName newPath)
+        Just newPath -> ioEither400 (setDataPath dbManager dbName (RelativeDataPath newPath))
 
 {- | Finalize a staged database
 Builds matrices and makes it ready for queries

@@ -21,6 +21,7 @@ import Database.Manager (
     DatabaseLoadStatus (..),
     DatabaseManager (..),
     RefDataStatus (..),
+    SynonymOrigin (..),
     autoCreateFlowSynonyms,
     initDatabaseManager,
     listFlowSynonyms,
@@ -41,7 +42,7 @@ spec :: Spec
 spec = describe "autoCreateFlowSynonyms" $ do
     it "persists and registers the candidate set but never loads it into matching" $
         withTempManager $ \manager -> do
-            autoCreateFlowSynonyms manager "test-method" "desc" [("alpha", "beta")]
+            autoCreateFlowSynonyms manager "test-method" (SynonymOrigin "desc") [("alpha", "beta")]
             loaded <- readTVarIO (dmLoadedFlowSyns manager)
             M.member "auto-test-method" loaded `shouldBe` False
             statuses <- listFlowSynonyms manager
@@ -53,8 +54,8 @@ spec = describe "autoCreateFlowSynonyms" $ do
 
     it "skips re-extraction when the candidate is already registered" $
         withTempManager $ \manager -> do
-            autoCreateFlowSynonyms manager "test-method" "desc" [("alpha", "beta")]
-            autoCreateFlowSynonyms manager "test-method" "desc" [("gamma", "delta")]
+            autoCreateFlowSynonyms manager "test-method" (SynonymOrigin "desc") [("alpha", "beta")]
+            autoCreateFlowSynonyms manager "test-method" (SynonymOrigin "desc") [("gamma", "delta")]
             -- The persisted CSV must still hold the first extraction: registry
             -- membership alone cannot tell a skip from a silent overwrite.
             readFile ("uploads/flow-synonyms" </> "auto-test-method" </> "data.csv")
