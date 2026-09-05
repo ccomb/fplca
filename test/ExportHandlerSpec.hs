@@ -3,7 +3,7 @@
 
 {- | Tests for the HTTP export handler's error mapping. A failed export must
 surface as the right HTTP status (400 bad format / unexportable data, 404 not
-loaded), never as a 200 body carrying a success flag — the response type (raw
+loaded), never as a 200 body carrying a success flag: the response type (raw
 bytes) cannot represent the latter.
 
 The cheapest fixture that still drives the @Servant.runHandler@ boundary is an

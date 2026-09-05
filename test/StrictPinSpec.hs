@@ -7,7 +7,7 @@ Before the fix, relink re-discovered cross-DB links against *every* loaded
 database and reset 'dbDependsOn' to whatever produced a link. A database
 opened from cache could therefore never have its dependency set reduced:
 each relink re-expanded it (and rewrote the cache). This was the GINKO
-symptom — pinning a consumer to a single Agribalyse version was impossible
+symptom: pinning a consumer to a single Agribalyse version was impossible
 while other versions stayed loaded.
 
 The fix makes 'dbDependsOn' authoritative: relink restricts its candidate
@@ -68,7 +68,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             betaDb <- buildOrFail (supplierDB 200 ["p1", "p2"])
             -- consumer needs both p1 and p2.
             consumerDb0 <- buildOrFail (consumerDB 300 ["p1", "p2"])
-            -- Pin the consumer to alpha only, with no links yet — relink populates them.
+            -- Pin the consumer to alpha only, with no links yet, relink populates them.
             let consumerDb = consumerDb0{dbDependsOn = ["alpha"], dbCrossDBLinks = []}
 
             manager <- initDatabaseManager defaultConfig NoCache
@@ -92,7 +92,7 @@ spec = describe "relinkDatabase strict dependency pin" $ do
             let relinked = ldDatabase (loaded M.! "consumer")
                 linkSources = S.fromList (map cdlSourceDatabase (dbCrossDBLinks relinked))
 
-            -- The pin is preserved exactly — beta is NOT added even though it is
+            -- The pin is preserved exactly: beta is NOT added even though it is
             -- loaded and is the only supplier of p2.
             dbDependsOn relinked `shouldBe` ["alpha"]
             -- Every resolved link points into the pinned DB; beta never leaks in.

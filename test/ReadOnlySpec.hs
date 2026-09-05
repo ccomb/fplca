@@ -5,7 +5,7 @@
 One server can be reached by many unrelated callers. Loading, unloading,
 uploading and deleting all act on process-wide state, so any one caller doing
 them acts on behalf of all the others. These specs pin the refusal on both
-surfaces that reach that state — the REST handlers and the MCP tools — and
+surfaces that reach that state, the REST handlers and the MCP tools, and
 check that analysis is left alone.
 
 The middleware guarding @/api/v1/shutdown@ and @/api/v1/idle-timeout@ lives in

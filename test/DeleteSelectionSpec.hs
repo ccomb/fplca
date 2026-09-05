@@ -9,7 +9,7 @@ Delete is reconstruction over an immutable 'Database':
 * deleting a set of ProcessIds drops exactly those activities and renumbers the
   survivors, rebuilding the interning tables, indexes, and sparse matrices;
 * an exchange in a surviving activity that pointed at a deleted activity is
-  UNLINKED (activity link reset to nil), never silently dropped — the database
+  UNLINKED (activity link reset to nil), never silently dropped: the database
   is left ready for relinking;
 * the selection resolver computes @(filtered ∪ extra) \\ keep@, so the UI's
   "delete the whole filtered set" honours per-row checkbox overrides;
@@ -142,7 +142,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                 Left err -> expectationFailure ("deleteActivities failed: " <> show err)
                 Right db' -> do
                     -- The mid activity kept its input exchange, but the link to
-                    -- the deleted supplier is now nil — ready for relinking.
+                    -- the deleted supplier is now nil, ready for relinking.
                     let midInputLinks =
                             [ (techActivityLinkId ex, techProcessLinkId ex)
                             | act <- V.toList (dbActivities db')
@@ -494,7 +494,7 @@ inputFrom supplierActUUID supplierProdUUID =
         }
 
 {- | A waste output linking to a treatment activity's
-@(treatmentActUUID, treatmentProdUUID)@ — the same @(activityLink, flowId)@
+@(treatmentActUUID, treatmentProdUUID)@, the same @(activityLink, flowId)@
 key resolution a technosphere input uses.
 -}
 wasteOut :: UUID -> UUID -> Exchange

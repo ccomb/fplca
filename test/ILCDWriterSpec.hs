@@ -9,15 +9,15 @@ so the write→parse cycle has a fair fixed point to land on.
 
 Three properties are pinned, exactly as for the SimaPro/Brightway writers:
 
-  (a) idempotence modulo volatile metadata — @write(D)@ then
+  (a) idempotence modulo volatile metadata: @write(D)@ then
       @write(parse(write(D)))@ produce byte-identical output. The only volatile
       fields (export timestamp, generator string) are /omitted/ by
       'defaultWriteOptions', so this holds without any normalization;
 
-  (b) semantic round-trip — @parse(write(D))@ is structurally equal to @D@,
+  (b) semantic round-trip: @parse(write(D))@ is structurally equal to @D@,
       order-insensitively, over activities, exchanges and the flow catalog;
 
-  (c) score-equivalence — @parse(write(D))@ yields the same biosphere inventory
+  (c) score-equivalence: @parse(write(D))@ yields the same biosphere inventory
       (the LCIA-precursor vector; an LCIA score is linear in it) as @D@ within
       tolerance, via the engine's 'computeInventoryMatrix'.
 -}
@@ -421,7 +421,7 @@ spec = describe "ILCD.Writer round-trip" $ do
 
         it "accepts and canonicalises the SimaPro \"resource\" medium to \"natural resource\"" $ do
             -- SimaPro labels natural-resource flows "resource"; the writer maps it
-            -- to ILCD's "natural resource", which the parser reads back — so the
+            -- to ILCD's "natural resource", which the parser reads back, so the
             -- flow is representable rather than rejected.
             checkILCDExportable (bioMediumDb "resource") `shouldBe` Right ()
             db' <- roundTrip (bioMediumDb "resource")
@@ -484,7 +484,7 @@ moProdA = read "aaaaaaaa-0000-4000-8000-0000000000a1"
 moProdB = read "aaaaaaaa-0000-4000-8000-0000000000b2"
 moUnitU = read "11111111-0000-4000-8000-000000000001"
 
-{- | A database where one activity UUID exposes two reference products — the
+{- | A database where one activity UUID exposes two reference products, the
 shape an ES2/SimaPro multi-output activity takes internally, and the shape a
 truncated SimaPro process name gives two unrelated blocks. Each product exports
 as its own ILCD process dataset, under the UUID 'ilcdProcessUUID' derives for
@@ -619,8 +619,8 @@ richDb =
 
 {- | One activity with a single biosphere emission under the given medium.
 A non-canonical medium ("fresh water", …) is what 'checkILCDExportable' must
-reject; a canonical one — or an alias the writer canonicalises, like
-"resource" → "natural resource" — passes.
+reject; a canonical one (or an alias the writer canonicalises, like
+"resource" → "natural resource") passes.
 -}
 bioMediumDb :: Text -> SimpleDatabase
 bioMediumDb medium =

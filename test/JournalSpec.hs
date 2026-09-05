@@ -309,7 +309,7 @@ usedOilOut =
     AuthoredWasteOutput{awProvider = supplierPid, awAmount = 0.2, awUnit = Nothing, awComment = Nothing}
 
 {- | One edit of every kind an inventory edit records, each with the number of
-exchanges it matched — including a selector that named more than one line.
+exchanges it matched, including a selector that named more than one line.
 -}
 editedInventory :: JournalOp
 editedInventory =

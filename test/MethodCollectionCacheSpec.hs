@@ -12,8 +12,8 @@ silently reuses the wrong CF table.
 
 This test drives 'mapMethodToTablesCached' directly with one in-memory database
 and two same-UUID methods that differ only in their UUID-matched CF value. It
-asserts the built 'MethodTables' (specifically 'mtUuidCF') differ per collection
-— which can only hold when the collection is part of the cache key. Without the
+asserts the built 'MethodTables' (specifically 'mtUuidCF') differ per collection,
+which can only hold when the collection is part of the cache key. Without the
 key change, the second lookup returns the first collection's cached tables and
 the assertion fails.
 -}
@@ -30,7 +30,7 @@ import Types (UUID)
 
 import CrossDBRegionalLCIAFixture (flowUUID, mkDB, mkUUID)
 
-{- | Shared method UUID — same in both collections, mirroring the UUIDv5-of-name
+{- | Shared method UUID, same in both collections, mirroring the UUIDv5-of-name
 collision the cache must disambiguate by collection.
 -}
 sharedMethodId :: UUID

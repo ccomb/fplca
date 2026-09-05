@@ -44,7 +44,7 @@ spec = describe "Database.Export dispatcher" $ do
         -- VoLCA's own columnar CSV parses "!…" as an exception and must keep it,
         -- or a round-trip loses it and the category counts what it excepted.
         -- SimaPro has no such notion: the row would land as a characterized flow
-        -- named "!Occupation, sea*" — the sea counted at 1, the exception inverted.
+        -- named "!Occupation, sea*": the sea counted at 1, the exception inverted.
         let mc = MT.MethodCollection [landOccupied] [] [] []
             landOccupied =
                 MT.Method

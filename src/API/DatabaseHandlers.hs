@@ -274,11 +274,11 @@ unloadDatabaseHandler dbName = do
     simpleAction (unloadDatabase dbManager dbName) ("Unloaded database: " <> dbName)
 
 {- | Re-run cross-DB linking for a loaded database. An empty @{}@ body
-re-resolves links within the existing dependency pin (plain relink) — letting
+re-resolves links within the existing dependency pin (plain relink), letting
 the user recover from loads that happened in a suboptimal order without
 reloading. A body carrying both @depDb@ and @mappingCsv@ switches to mapping
 mode: relink against that one dependency using an inline supplier-alias CSV
-(source/target names with optional locations — see "Database.RelinkMapping"),
+(source/target names with optional locations, see "Database.RelinkMapping"),
 so inputs named after one background database resolve against a
 differently-named dependency. A loaded-but-undeclared dependency is
 auto-pinned in-memory rather than rejected. Supplying exactly one of the two
@@ -319,7 +319,7 @@ relinkDatabaseHandler dbName req = do
 
 {- | Supplier-gap report for a loaded or staged database: everything still
 unsupplied after internal resolution and cross-DB linking. The natural
-follow-up read after a relink — POST relink, then GET gap-report.
+follow-up read after a relink: POST relink, then GET gap-report.
 -}
 gapReportHandler :: Text -> Maybe Int -> AppM GapReportAPI
 gapReportHandler dbName mLimit = do
@@ -332,7 +332,7 @@ gapReportHandler dbName mLimit = do
 {- | Project the domain gap report onto its wire shape, keeping at most
 @limit@ gap entries (they are ranked by demanding edges, so a cap keeps the
 biggest gaps). The header counts always cover the full report, so a truncated
-list stays countable — never a silent cap.
+list stays countable, never a silent cap.
 -}
 gapReportToAPI :: Maybe Int -> Loader.GapReport -> GapReportAPI
 gapReportToAPI mLimit r =
@@ -375,7 +375,7 @@ gapReportToAPI mLimit r =
 
 {- | Dataset-soundness report for a loaded or staged database: the structural
 defects a score can't reveal. The methodological counterpart of the
-supplier-gap report — that one says what a database is missing, this one says
+supplier-gap report: that one says what a database is missing, this one says
 what is malformed in it.
 -}
 qualityReportHandler :: Text -> Maybe Int -> AppM QualityReportAPI
@@ -389,7 +389,7 @@ qualityReportHandler dbName mLimit = do
 {- | Project the domain quality report onto its wire shape, keeping at most
 @limit@ findings per check (they are sorted worst-first, so a cap keeps the
 worst ones). Each check's @offenderCount@ always covers its full list, so a
-truncated list stays countable — never a silent cap.
+truncated list stays countable, never a silent cap.
 -}
 qualityReportToAPI :: Maybe Int -> Quality.QualityReport -> QualityReportAPI
 qualityReportToAPI mLimit r =
@@ -417,7 +417,7 @@ qualityReportToAPI mLimit r =
         , qraUnmeasurableAmounts = checkToAPI mLimit (Quality.qrUnmeasurableAmounts r)
         }
 
-{- | Same projection for the computed report — one wire cap, one offender
+{- | Same projection for the computed report: one wire cap, one offender
 shape, shared with the structural report via 'checkToAPI'.
 -}
 computedQualityReportToAPI :: Maybe Int -> CQ.ComputedQualityReport -> ComputedQualityReportAPI
@@ -466,7 +466,7 @@ coverageReportHandler dbName mCollection mLimit = do
 {- | Project the domain coverage report onto its wire shape, keeping at most
 @limit@ bridge groups per collection (sorted by rename target, so a cap is
 stable). Each collection's @bridgeGroupCount@ always covers the full list, so a
-truncated list stays countable — never a silent cap.
+truncated list stays countable, never a silent cap.
 -}
 coverageReportToAPI :: Maybe Int -> Coverage.CoverageReport -> CoverageReportAPI
 coverageReportToAPI mLimit r =
@@ -542,7 +542,7 @@ deleteActivitiesHandler dbName req = do
         -- A present-but-blank filter (e.g. JSON "name":"") is no filter at all.
         -- Collapse it to Nothing so name candidates fall back to "all activities"
         -- instead of a BM25/full-scan path that yields zero (index present) or all
-        -- (index absent) — an index-dependent ALL-vs-NONE divergence.
+        -- (index absent), an index-dependent ALL-vs-NONE divergence.
         nonBlank = mfilter (not . T.null . T.strip)
     result <-
         liftIO $
@@ -577,8 +577,8 @@ deleteActivitiesHandler dbName req = do
 
 The domain decides what is allowed ('Database.Edit.writeActivities'); this
 turns each refusal into the status a client can act on. A key that already
-exists is a 409 — the author is re-describing a row the database holds and
-wants the PUT — and a batch a caller can fix is a 400 carrying every complaint
+exists is a 409 (the author is re-describing a row the database holds and
+wants the PUT) and a batch a caller can fix is a 400 carrying every complaint
 at once, so a ten-line inventory is fixed in one round trip.
 -}
 createActivitiesHandler :: Text -> ActivityWriteRequest -> AppM ActivityWriteResponse
@@ -622,7 +622,7 @@ editExchangesHandler dbName processId req = do
     outcome <- liftIO (editExchanges dbManager dbName processId edits)
     either (\refusal -> writeErr (statusFor refusal) (refusalMessage refusal)) (pure . editReportToAPI) outcome
 
-{- | What an edit answers, on every surface that offers one — so an assistant
+{- | What an edit answers, on every surface that offers one, so an assistant
 and a person reading the API reference are told the same thing.
 -}
 editReportToAPI :: EditReport -> ExchangeEditResponse
@@ -648,15 +648,15 @@ statusFor = \case
 writeErr :: ServerError -> Text -> AppM a
 writeErr status message = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 message)}
 
-{- | Export a loaded database as a raw octet-stream body — the same shape the
+{- | Export a loaded database as a raw octet-stream body: the same shape the
 upload endpoint reads, and the only response cheap enough for a multi-hundred-MB
 archive (a base64 JSON envelope costs +33% and four full copies before the
 first byte leaves). EcoSpold 2 / ILCD multi-file trees are zipped; single-file
 formats carry their bytes directly. Best-effort approximation warnings ride the
 @X-Volca-Export-Warnings@ header, percent-encoded because activity names are
-arbitrary Unicode and joined with newlines. Failures surface as HTTP errors —
+arbitrary Unicode and joined with newlines. Failures surface as HTTP errors:
 400 for an unknown format or data the target format cannot represent, 404 for a
-database that is not loaded — never a 200 with a failure flag.
+database that is not loaded, never a 200 with a failure flag.
 -}
 exportDatabaseHandler :: Text -> ExportRequest -> AppM (Headers '[Header "X-Volca-Export-Warnings" Text] BinaryContent)
 exportDatabaseHandler dbName req = do
@@ -696,7 +696,7 @@ exportErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 
 A negative limit is unlimited and an absent hosting config is local/CLI use,
 where no quota applies. The count is read before the action rather than
 transactionally with it, so two concurrent requests can each take a last
-remaining slot — an off-by-one acceptable for the single-caller instances
+remaining slot, an off-by-one acceptable for the single-caller instances
 this guards.
 
 Pure so the policy can be tested without a server, and shared so the storage
@@ -756,7 +756,7 @@ copyRefusal uploaded loadedUploads mHosting =
     uploadRefusal uploaded mHosting <|> memoryRefusal loadedUploads mHosting
 
 {- | The databases the user brought (as opposed to those the config declares),
-and those of them currently held in memory — the two counts every quota above
+and those of them currently held in memory: the two counts every quota above
 is judged against.
 -}
 quotaCounts :: DatabaseManager -> IO ([Text], [Text])
@@ -766,7 +766,7 @@ quotaCounts dbManager = do
     pure (uploaded, filter (`M.member` loaded) uploaded)
 
 {- | 'loadRefusal' read off the manager's current state. Every surface that
-loads a database — REST and MCP alike — goes through this, so the budget
+loads a database, REST and MCP alike, goes through this, so the budget
 cannot be sidestepped by picking another door.
 -}
 loadQuotaRefusal :: DatabaseManager -> Maybe HostingConfig -> Text -> IO (Maybe Text)
@@ -794,7 +794,7 @@ uploadSizeCap (Just hc) =
 streaming size check ('withStreamedUpload'): only the database and method upload
 routes are bounded, and only when the hosting config sets a positive cap. The
 body is now a raw octet-stream (no base64 inflation, no JSON envelope), so we
-admit the policy limit plus 1 MiB of slack — files between the real limit and
+admit the policy limit plus 1 MiB of slack: files between the real limit and
 that ceiling still reach the handler, which streams and returns the precise
 rejection. Unlimited (-1), disabled (0), and local/CLI (no config) are left
 unbounded here: neither unlimited nor disabled is a size bound, and the handler
@@ -884,7 +884,7 @@ streamToTempFile mCap src = do
                     Just cap | n' > cap -> return (Left (tooLarge cap))
                     _ -> BS.hPut h (unUploadChunk chunk) >> go h n' s
 
--- | Delete a file, swallowing any error — best-effort temp-file cleanup.
+-- | Delete a file, swallowing any error: best-effort temp-file cleanup.
 removeQuietly :: FilePath -> IO ()
 removeQuietly p = void (try (System.Directory.removeFile p) :: IO (Either SomeException ()))
 

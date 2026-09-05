@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-{- | Tests for "API.BatchImpacts" — the typed-error wrappers around the
+{- | Tests for "API.BatchImpacts": the typed-error wrappers around the
 hoisted LCIA batch entry points.
 
 Two layers :

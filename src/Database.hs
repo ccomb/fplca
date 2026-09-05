@@ -228,7 +228,7 @@ bm25DocsMatchingName idx name =
     intersectAll (x : xs) = foldl IS.intersection x xs
 
 {- | Apply geo, product, and classification filters to a pre-built candidate list.
-Does NOT touch the name query — callers (BM25 retrieval or name-candidate lookup)
+Does NOT touch the name query: callers (BM25 retrieval or name-candidate lookup)
 produce the initial list.
 -}
 applyStructuredFilters ::
@@ -362,7 +362,7 @@ by its searchable fields, its own name first ('flowSearchFields' already
 orders them that way).
 
 A filter is not a search, and differs on two points. A query naming no word
-at all — blank, or punctuation only — filters nothing, where a search for
+at all (blank, or punctuation only) filters nothing, where a search for
 nothing finds nothing: an argument that names nothing must not empty the
 answer. And of everything the query matched, only the closest tier is kept
 ('flowNameRelevance'): a search relegates a lookalike to a later page, a

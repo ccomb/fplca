@@ -199,7 +199,7 @@ spec = do
     -- activityLinkId to a background activity it doesn't ship. The matrix
     -- builder drops that input, so a loaded database (which bypasses the
     -- finalize gate) must report as not-ready with 0% completeness and name the
-    -- missing background product — never a green "ready" badge over a silently
+    -- missing background product, never a green "ready" badge over a silently
     -- zero score.
     describe "buildLoadedSetupInfo (partial EcoSpold2 import)" $ do
         it "reports a dangling background link as not ready / 0% / named" $ do
@@ -239,8 +239,8 @@ spec = do
 
     -- The dangling-import shape, but its matching background is loaded as a
     -- dependency: the input resolves cross-DB by activityLinkId, recorded in
-    -- 'dbCrossDBLinks'. Readiness must follow the matrix — ready at 100% with no
-    -- gaps — not keep reporting the now-supplied product as missing.
+    -- 'dbCrossDBLinks'. Readiness must follow the matrix (ready at 100% with no
+    -- gaps) not keep reporting the now-supplied product as missing.
     describe "buildLoadedSetupInfo (partial import + loaded background)" $ do
         it "reports a cross-DB-supplied background link as ready / 100% / no gaps" $ do
             let consumer =

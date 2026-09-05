@@ -411,7 +411,7 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     -}
     , dsiAttributeFallbacks :: ![AttributeFallback]
     {- ^ Source-identity inputs (non-nil 'activityLinkId') matched by attributes
-    because no loaded dependency shipped the exact activity — a likely
+    because no loaded dependency shipped the exact activity, a likely
     cross-version stitch the consumer should verify against the source release.
     -}
     , dsiDataPath :: !Text
@@ -580,7 +580,7 @@ data DatabaseManager = DatabaseManager
     , dmMethodTablesInflight :: !(TVar (Map (Text, CollectionName, UUID) (TMVar (Either SomeException MethodTables))))
     {- ^ Single-flight slots guarding 'dmMethodTablesCache' builds. The first
     caller for a key installs an empty 'TMVar' and runs the (expensive) build;
-    concurrent callers — including the load-time warm-up — await that slot
+    concurrent callers, including the load-time warm-up, await that slot
     instead of each rebuilding the same tables. The slot is removed when the
     build finishes, so a failed build is retried rather than cached.
     -}
@@ -601,7 +601,7 @@ data DatabaseManager = DatabaseManager
     , dmChemSynonyms :: !ChemSynonyms
     {- ^ Vendored PubChem snapshot loaded once at startup. Drives the
     suggester's synonym-expansion signal. Empty when no path is configured
-    or when the file is missing — suggester degrades to plain Jaccard.
+    or when the file is missing: suggester degrades to plain Jaccard.
     -}
     , dmSubstanceEdges :: ![SubstanceEdge]
     {- ^ Typed flow-correspondence edges loaded once at startup from
@@ -653,8 +653,8 @@ dependencyClosure loaded root = go (S.singleton root) (depsOf root)
 
 Scoring reads the merged inventory of the whole cross-database solve, so a
 mapping cascade built on the root's own flows alone leaves every dependency
-flow to the coarse rungs — no synonym bridge, no proxy edge, no regional
-projection — and the score changes without anything reporting a gap.
+flow to the coarse rungs (no synonym bridge, no proxy edge, no regional
+projection) and the score changes without anything reporting a gap.
 -}
 getFlowClosure :: DatabaseManager -> Text -> Database -> IO FlowClosure
 getFlowClosure manager dbName db = atomically $ do
@@ -756,8 +756,8 @@ buildMethodTablesFor manager dbName collection db method = do
     unitConfig <- getMergedUnitConfig manager
     (mFlows, mUnits) <- getMergedFlowMetadata manager
     -- A method listed in its collection's 'global-methods' is scored without
-    -- regionalization: drop its located CFs so the broadcast (global) path — the
-    -- method's own unlocated default CF — is the single answer, matching a
+    -- regionalization: drop its located CFs so the broadcast (global) path, the
+    -- method's own unlocated default CF, is the single answer, matching a
     -- reference distribution that flattened the spatial factors to a global value.
     -- This assumes the method carries such an unlocated default for the flows in
     -- question; a method whose CFs are all region-tagged would be left with none.
@@ -862,7 +862,7 @@ buildMethodTablesFor manager dbName collection db method = do
 caller installs a slot and runs the build; others block on the same result
 rather than duplicating the work. @onSuccess@ runs in the slot-clearing
 transaction, so a built value lands in its cache atomically with the release. A
-failed build clears the slot — the next caller retries — and re-throws.
+failed build clears the slot (the next caller retries) and re-throws.
 
 A cache purge that ran while the build was in flight takes the slot away. The
 value was computed from the state that purge invalidated, so the owner returns
@@ -902,11 +902,11 @@ against @dbName@, so the expensive (regional) build is paid once at load time
 rather than on the first user score. Single-flighting means a request arriving
 mid-warm joins the in-flight build instead of starting a second one.
 
-Methods are built one at a time in a single background thread — deliberately
+Methods are built one at a time in a single background thread, deliberately
 sequential rather than 'mapMethodSetToTablesCached''s concurrent fan-out: the
 heavy regional builds (e.g. AWARE water use) thrash the GC when run in parallel,
 so serial warming is both lower-peak-memory and faster wall-clock here. A
-failure is logged, not fatal — the on-demand path rebuilds and surfaces it.
+failure is logged, not fatal: the on-demand path rebuilds and surfaces it.
 -}
 warmMethodTables :: DatabaseManager -> Text -> Database -> IO ()
 warmMethodTables manager dbName db = void $ forkIO $ withLogScope dbName $ do
@@ -969,7 +969,7 @@ mapMethodSetToTablesCached manager dbName collection db methods = do
 
 {- | Cached method index (CF tokens, by-medium, by-CAS): built once per
 (db, method), reused by the post-scoring suggester. Doesn't depend on the
-'Database' itself — only on the method's CF list — but keyed by (dbName,
+'Database' itself, only on the method's CF list, but keyed by (dbName,
 methodId) to share lifetime semantics with the tables cache.
 -}
 mapMethodToIndexCached :: DatabaseManager -> Text -> CollectionName -> Method -> IO MethodIndex
@@ -987,7 +987,7 @@ mapMethodToIndexCached manager dbName collection method = do
 action, and release it whether the action returns or throws.
 
 @decide@ runs in the same transaction as the claim, so a caller refuses for
-its own reasons — a name already taken, an edit already running — with no
+its own reasons (a name already taken, an edit already running) with no
 window between finding the name free and taking it. That window is the whole
 reason this is one function: two copies of it, written apart, are two chances
 to widen it.
@@ -998,7 +998,7 @@ they contend with each other and not only with their own kind.
 
 'getDatabaseSetupInfo' does not come through here on purpose: it waits for
 whoever holds the name (STM @retry@) instead of refusing, and it has a third
-answer — already staged, nothing to reserve — that this shape has no room for.
+answer (already staged, nothing to reserve) that this shape has no room for.
 -}
 withReservedName ::
     DatabaseManager ->
@@ -1022,7 +1022,7 @@ withReservedName manager dbName decide act = do
                 (atomically $ modifyTVar' (dmStagingDbs manager) (S.delete dbName))
 
 {- | Clear all cached flow mappings (call when databases, methods, or synonyms change).
-Also drops the merged flow/unit snapshots — both caches depend on the loaded-DB set.
+Also drops the merged flow/unit snapshots: both caches depend on the loaded-DB set.
 -}
 clearMethodMappingCache :: DatabaseManager -> IO ()
 clearMethodMappingCache manager = atomically $ do
@@ -1391,7 +1391,7 @@ warnUnknownGlobalMethods mc collection =
                 <> T.unpack (mcName mc)
                 <> ": no method named "
                 <> T.unpack (T.intercalate ", " unknownGlobals)
-                <> " — these stay regionalized; check for a typo."
+                <> ". These stay regionalized; check for a typo."
   where
     unknownGlobals :: [Text]
     unknownGlobals = filter (`S.notMember` knownMethodNames) (Config.mcGlobalMethods mc)
@@ -1539,7 +1539,7 @@ uploadMetaToConfig slug dirPath meta =
 
 The pin otherwise lives in the staging registry and inside the binary matrix
 cache, so a restart between choosing a dependency and finalizing the database
-used to lose it without saying so — the database came back linked to nothing.
+used to lose it without saying so: the database came back linked to nothing.
 Writes 'UploadedDB.umDepends' and keeps the in-memory config in step.
 
 A configured (TOML) database has no meta.toml to write and owns its
@@ -1590,7 +1590,7 @@ configToScoringSet ssc =
 
 {- | Fold a 'MethodConfig's post-parse adjustments into a freshly parsed
 collection: inject the configured scoring sets, then apply the declarative
-CF patches ('Config.mcPatches'). Pure — reapplying the same config to the
+CF patches ('Config.mcPatches'). Pure: reapplying the same config to the
 same source file always yields the same result, so a reload never
 compounds a patch. Also returns, per patch, how many CFs it touched (for
 the zero-touch warning at the call site).
@@ -1613,7 +1613,7 @@ warnZeroTouchPatches collName stats =
                 <> T.unpack collName
                 <> ": \""
                 <> T.unpack (Method.Patch.describePatch patch)
-                <> "\" touched 0 characterization factors — check the selector."
+                <> "\" touched 0 characterization factors. Check the selector."
 
 discoverUploadedMethodConfigs :: IO [MethodConfig]
 discoverUploadedMethodConfigs = do
@@ -2270,7 +2270,7 @@ data RelinkResult = RelinkResult
     , rresLinksChanged :: !Bool
     {- ^ True iff the relink actually changed 'dbCrossDBLinks' (as a set)
     versus the in-memory state before the call. Callers use this to skip
-    redundant work — e.g. the explicit cache write in 'finalizeDatabase'
+    redundant work, e.g. the explicit cache write in 'finalizeDatabase'
     is suppressed when the relink already saved.
     -}
     }
@@ -2375,9 +2375,9 @@ relinkPlan RelinkInputs{..} =
 {- | Re-run cross-DB linking for an already-loaded DB against its pinned
 dependency set ('dbDependsOn'), not the full set of loaded DBs. Updates
 'dbCrossDBLinks' and 'dbLinkingStats' in place in the LoadedDatabase record;
-the dependency set itself is left untouched (strict pin — it changes only via
+the dependency set itself is left untouched (strict pin: it changes only via
 explicit add/remove-dependency). Does NOT rebuild the technosphere matrix or
-invalidate the MUMPS factorization — cross-DB links are consumed only at
+invalidate the MUMPS factorization: cross-DB links are consumed only at
 solve time.
 
 Side-effect: persists the updated 'Database' back to its matrix-cache file
@@ -2395,7 +2395,7 @@ curated supplier-alias map. The aliases let a consumer's input flow name that
 only matches a target supplier (typically in @depDb@) under the mapping still
 link; links to the other pinned dependencies are re-resolved unchanged rather
 than dropped. If @depDb@ is loaded but not yet in the database's declared
-dependency set, it is pinned in-memory first — so an in-memory pipeline
+dependency set, it is pinned in-memory first, so an in-memory pipeline
 (copy → delete → relink) composes without restaging (which would unload the
 live database). Same persistence/no-op semantics as 'relinkDatabase'. Errors
 (DB or dep not loaded) surface as 'Left'.
@@ -2419,7 +2419,7 @@ relinkDatabaseWithMapping manager dbName depDb aliases = withLogScope dbName $ d
             | otherwise -> do
                 -- Declare the dependency in-memory if it isn't already pinned, so an
                 -- in-memory pipeline (copy → delete → relink) composes in one pass
-                -- without restaging — which would unload the live database. The pin
+                -- without restaging, which would unload the live database. The pin
                 -- set on disk is the current one *before* this in-memory addition;
                 -- pass it so 'relinkDatabaseWith' persists the cache when the pin
                 -- diverges from disk even if no new links are discovered.
@@ -2490,7 +2490,7 @@ relinkStaged manager dbName maybeDepDb aliases = withLogScope dbName $ runExcept
 
 {- | Shared relink core. Candidates are the database's full declared pin
 ('dbDependsOn'); relink recomputes the links within it but never grows or
-shrinks the set. @aliases@ feeds 'lcSupplierAliases' — a mapping relink passes
+shrinks the set. @aliases@ feeds 'lcSupplierAliases', a mapping relink passes
 the user's curated map (which retargets a chosen dependency without dropping
 links to the others), a plain relink passes 'emptyAliasMap'. The dependency
 set stored on the database is never mutated here.
@@ -2755,7 +2755,7 @@ stageUploadedDatabase manager dbConfig = withLogScope dbName $ runExceptT $ do
 
 {- | Unload a database from memory (keeps config for reloading).
 Refuses to unload if any currently-loaded database declares this one as a
-dependency — unloading would leave the dependent's cross-DB links dangling.
+dependency: unloading would leave the dependent's cross-DB links dangling.
 -}
 unloadDatabase :: DatabaseManager -> Text -> IO (Either Text ())
 unloadDatabase manager dbName = withLogScope dbName $ do
@@ -2913,7 +2913,7 @@ getStagedDatabase manager dbName = do
     stagedDbs <- readTVarIO (dmStagedDbs manager)
     return $ M.lookup dbName stagedDbs
 
-{- | Supplier-gap report for a loaded or staged database — what is still
+{- | Supplier-gap report for a loaded or staged database: what is still
 missing to fully supply its demands from the pinned dependencies, aggregated
 per (product, location, unit) with the consumers that demand it.
 -}
@@ -2927,7 +2927,7 @@ databaseGapReport manager dbName = do
             Right (Loader.gapReportForStaged dbName (sdSimpleDB staged) (sdLinkingStats staged))
         (Nothing, Nothing) -> Left ("Database not loaded: " <> dbName)
 
-{- | Dataset-soundness report for a loaded or staged database — the structural
+{- | Dataset-soundness report for a loaded or staged database: the structural
 defects a score can't reveal. Both phases reduce to the same pure scan, so a
 maker gets the same answer before and after building the matrices.
 -}
@@ -2946,7 +2946,7 @@ would score as zero. One entry per loaded collection when @mCollection@ is
 'Nothing'; a single named collection otherwise (an error if it isn't loaded).
 
 Needs a built database (the coverage probe reads the method tables), so unlike
-the quality report it is loaded-only — no staged answer. Computed per request
+the quality report it is loaded-only: no staged answer. Computed per request
 on top of the per-method table and mapping caches; if it proves slow at
 ecoinvent scale, the upgrade path is a @(db, collection)@-keyed cache beside
 'mapMethodToTablesCached'.
@@ -3145,7 +3145,7 @@ lcCompleteness lc
         min 100.0 $ 100.0 * fromIntegral (lcInternalLinks lc + lcCrossDBLinks lc) / fromIntegral (lcTotalInputs lc)
     | otherwise = 100.0
 
-{- | Why a database cannot be finalized — 'Nothing' means ready. The setup
+{- | Why a database cannot be finalized: 'Nothing' means ready. The setup
 page's 'dsiIsReady' is the 'isNothing' of this, so the ready badge and the
 finalize gate always agree.
 -}
@@ -3188,7 +3188,7 @@ stagedMissingProducts sdb stats =
         (cdlUnresolvedProducts stats)
         (Loader.collectStagedDanglingProductNames sdb (cdlLinks stats))
 
-{- | Assemble the wire record from the shared tally — the single place the
+{- | Assemble the wire record from the shared tally, the single place the
 completeness, readiness, and linking-stats fields are filled, for both the
 staged and the loaded builder. availablePaths is filled in by
 'buildSetupResult' for uploaded databases (requires IO).
@@ -3985,7 +3985,7 @@ getMergedSynonymDB manager = do
             else mergeSynonymDBs (M.elems loaded)
 
 {- | Surface one-way synonym bridges whose direction constraint is void in the
-(merged) set — re-linked in the opposite view by an untyped transitive chain or
+(merged) set, re-linked in the opposite view by an untyped transitive chain or
 a contradictory row ('reopenedBridges'). 'demoteDuplicates' only drops the exact
 duplicate pair, so this residue would otherwise silently widen a curated
 one-way bridge back to both directions. Called where the merged set is about to
@@ -4160,7 +4160,7 @@ instance FromJSON RefDataStatus where
 -- Generic ref-data operations (shared by flow synonyms, compartment maps, units)
 --------------------------------------------------------------------------------
 
--- | Operations for a ref-data kind — everything that varies between the three.
+-- | Operations for a ref-data kind: everything that varies between the three.
 data RefDataOps a = RefDataOps
     { rdoAvailableVar :: !(DatabaseManager -> TVar (Map Text RefDataConfig))
     , rdoLoadedVar :: !(DatabaseManager -> TVar (Map Text a))
@@ -4270,7 +4270,7 @@ unloadRefDataG ops manager name = do
             return $ Right ()
         else return $ Left $ T.pack (rdoLabel ops) <> " not loaded: " <> name
 
-{- | Drop the merged-ref-data caches. Conservatively clears both — the
+{- | Drop the merged-ref-data caches. Conservatively clears both: the
 flow-metadata and unit-config snapshots are cheap to rebuild lazily, and
 ref-data changes (units, flow synonyms, compartment maps) are rare enough
 that per-kind dispatch adds no observable value.
@@ -4514,7 +4514,7 @@ removeUploadedRefData baseDir name = do
 newtype SynonymOrigin = SynonymOrigin Text
 
 {- | A synonym carried by more distinct flows than this is a classification label
-or stop-word (e.g. @"organic"@), not a true synonym — 'excludeOverFrequentSynonyms'
+or stop-word (e.g. @"organic"@), not a true synonym: 'excludeOverFrequentSynonyms'
 drops it. The bound sits in the gap between the class-label hubs (≥187 flows in
 EF 3.1) and the first genuine flow name used as a synonym (~17 flows).
 -}
@@ -4525,7 +4525,7 @@ maxSynonymFlowFrequency = 25
 Writes CSV to uploads/flow-synonyms/auto-{source}/data.csv and registers it
 inactive. The pairs never enter the matching: flow matching trusts only the
 curated registry (data/flows.csv) plus sources the user explicitly activates
-(activation lasts for the session and only reaches databases loaded after it) —
+(activation lasts for the session and only reaches databases loaded after it);
 DB-embedded synonyms are a bootstrap input for offline curation, not a runtime
 one. To regenerate a stale candidate, remove the source and reload.
 -}
@@ -4577,7 +4577,7 @@ autoCreateFlowSynonyms manager sourceName (SynonymOrigin description) pairs = do
             addFlowSynonyms manager rd
             -- Close the candidate set only to audit its quality: an oversized
             -- class means the transitive closure fused unrelated substances
-            -- through an ambiguous bridge (a junk hub) — surface it so the
+            -- through an ambiguous bridge (a junk hub): surface it so the
             -- curator sees it before ever activating the source.
             forM_ (oversizedClasses 100 keptPairs) $ \cls ->
                 reportProgress Warning $

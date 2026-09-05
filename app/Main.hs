@@ -60,7 +60,7 @@ import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings,
 import Servant (serve)
 import WaiAppStatic.Types (MaxAge (..), ssMaxAge, unsafeToPiece)
 
--- _exit(0) bypasses Haskell RTS teardown — necessary on statically-linked
+-- _exit(0) bypasses Haskell RTS teardown, necessary on statically-linked
 -- glibc builds (notably aarch64) where the threaded RTS's shutdown calls
 -- pthread_cancel, which in turn dlopen()'s libgcc_s.so.1 to find the
 -- stack unwinder and SIGILLs when that returns NULL in a static binary.
@@ -91,7 +91,7 @@ main = do
         _ -> die "--config is required"
 
 {- | Load config or die with error message. Without a path the effective
-config is the built-in defaults (no databases) — 'loadConfigOrDefault'
+config is the built-in defaults (no databases): 'loadConfigOrDefault'
 still validates it and honours VOLCA_DATA_DIR.
 -}
 loadConfigOrDie :: Maybe FilePath -> IO Config
@@ -148,7 +148,7 @@ runReplMode cliConfig cfgFile = do
     rc <- resolveRemoteConfig (globalOptions cliConfig) (Just config)
     runRepl mgr rc (globalOptions cliConfig) cfgFile
 
--- | Run stop without config — resolveRemoteConfig falls back to env vars / defaults
+-- | Run stop without config: resolveRemoteConfig falls back to env vars / defaults
 runStopWithoutConfig :: CLIConfig -> IO ()
 runStopWithoutConfig cliConfig = do
     mgr <- newClientManager
@@ -162,7 +162,7 @@ applyLoadOverride serverOpts config = case serverLoadDbs serverOpts of
     Just dbNames -> config{cfgDatabases = map (overrideLoad dbNames) (cfgDatabases config)}
 
 {- | Warn for each --load name that matches no configured database: the
-override silently loads nothing for it — guaranteed when running on the
+override silently loads nothing for it, guaranteed when running on the
 built-in defaults, which configure no databases at all.
 -}
 warnUnknownLoadNames :: ServerOptions -> Config -> IO ()
@@ -411,7 +411,7 @@ createServerApp env staticDir desktopMode serverName markActivity = do
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
-        reportProgress Info "Frontend not bundled — MCP responses will omit 'web_url'"
+        reportProgress Info "Frontend not bundled. MCP responses will omit 'web_url'"
     mcp <- mcpApp (aeDbManager env) (aeClassificationPresets env) hasFrontend (aeHostingConfig env) serverName markActivity
     let apiApp = serve lcaAPI (lcaServer env)
     pure $ \req respond -> do
@@ -520,7 +520,7 @@ shutdownEndpoint mHosting lastRequestRef idleActiveRef app req respond =
 {- | Background thread that exits the server after the idle timeout (seconds).
 
 Two things count as being in use, because one alone would be wrong. An HTTP
-request proves someone is there — reading a process sheet resolves no matrix,
+request proves someone is there: reading a process sheet resolves no matrix,
 and that reader must not lose the server under them. A matrix solve proves
 expensive work is under way, which may well outlast the request that asked for
 it. So the deadline moves on either, and the solve count is read first: a solve

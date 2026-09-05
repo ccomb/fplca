@@ -5,7 +5,7 @@
 'Database.Edit.replaceActivities').
 
 Authoring is the strict counterpart of importing. Where the loader warns and
-drops a row it cannot resolve, authoring refuses — so most of what follows is
+drops a row it cannot resolve, authoring refuses, so most of what follows is
 one red case per refusal, plus the two properties that make repeated authoring
 safe: identity is a function of what was written (author twice, get the same
 key), and writing then deleting leaves the activity set it started from.
@@ -572,7 +572,7 @@ resolveOrFail db authored = case validateAuthored (contextOf db) [authored] of
 contextOf :: Database -> AuthorContext
 contextOf db = AuthorContext{acDb = db, acDeps = [], acUnitConfig = defaultUnitConfig}
 
--- | The same database with no activities — used to prove a dependency link resolves.
+-- | The same database with no activities, used to prove a dependency link resolves.
 emptyOf :: Database -> Database
 emptyOf db = db{dbActivities = V.empty, dbProcessIdTable = V.empty, dbProcessIdLookup = M.empty}
 
@@ -665,7 +665,7 @@ air = Compartment{compartmentName = "air", compartmentSub = Nothing}
 -- ---------------------------------------------------------------------------
 
 {- | Everything about an activity except its inventory. An edit must carry all
-of it through untouched — and it is exactly what a re-description would lose,
+of it through untouched, and it is exactly what a re-description would lose,
 since an authored activity has none of it to state.
 -}
 type ActivityFacts =
@@ -814,7 +814,7 @@ importedActivity =
 buildFixture :: IO Database
 buildFixture = buildFixtureAt supplierActId supplierProdId
 
-{- | The same fixture with the supplier under chosen UUIDs — high ones sort
+{- | The same fixture with the supplier under chosen UUIDs, high ones sort
 after any authored key, which forces a renumbering on insert.
 -}
 buildFixtureAt :: UUID -> UUID -> IO Database
@@ -867,7 +867,7 @@ buildTwoProductTreatment = do
                 }
     either (fail . show) pure r
 
-{- | A database that declares no biosphere flow at all — bio vocabulary can
+{- | A database that declares no biosphere flow at all, bio vocabulary can
 only come from a dependency.
 -}
 buildBareFixture :: IO Database

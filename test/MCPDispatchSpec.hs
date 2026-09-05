@@ -52,7 +52,7 @@ requiredOf (Object o) = case KM.lookup "inputSchema" o of
 requiredOf _ = []
 
 {- | The text payload of a tool reply (@result.content[0].text@), or 'Nothing'
-when the reply doesn't have that shape — so a malformed reply fails a test
+when the reply doesn't have that shape, so a malformed reply fails a test
 instead of silently passing a @""@ that satisfies any "doesn't contain X".
 -}
 resultText :: Value -> Maybe Text
@@ -267,7 +267,7 @@ spec = describe "MCP database load/unload tools" $ do
         -- The refusal above is enforced in dispatch, so it cannot tell a
         -- handler that reads the preset from one that drops it. These pin the
         -- application: the fixture carries no classification at all, so a
-        -- preset that resolves must narrow the answer to nothing — a handler
+        -- preset that resolves must narrow the answer to nothing, a handler
         -- ignoring it answers with the unfiltered set instead.
         describe "a preset that resolves is applied" $ do
             let callOnSample name presetArgs = do

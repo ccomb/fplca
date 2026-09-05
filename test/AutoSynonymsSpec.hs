@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | Locks the runtime contract of auto-extracted flow synonyms: they are a
-persisted, opt-in CANDIDATE set for offline curation — the engine registers
+persisted, opt-in CANDIDATE set for offline curation: the engine registers
 them but never feeds them into flow matching. Flow matching trusts only the
 curated registry plus explicitly activated sources.
 -}

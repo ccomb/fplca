@@ -4,7 +4,7 @@
 
 Two separate budgets: how many databases of their own a user may keep
 ('uploadRefusal'), and how many of those may sit in memory at once
-('memoryRefusal'). Both count only the user's own databases — the ones a tier
+('memoryRefusal'). Both count only the user's own databases, the ones a tier
 preloads are what an uploaded inventory links against, so counting them would
 make the quota forbid the very thing uploading is for. 'loadRefusal' and
 'copyRefusal' are the exact policies the handlers apply, so a budget wired to

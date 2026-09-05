@@ -433,7 +433,7 @@ emission =
         , beComment = Nothing
         }
 
-{- | The identity the engine will mint for an activity input — the same
+{- | The identity the engine will mint for an activity input, the same
 function 'Database.Author' uses, restated here as the caller's expectation
 rather than borrowed, so a change to the minting rule fails this test loudly.
 -}

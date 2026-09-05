@@ -13,11 +13,11 @@ convention is uniform, so the only realistic way to mix them is
 cross-database: an ecoinvent-style orphan waste OUTPUT resolved to a
 background treatment in another DB via 'findWasteTreatmentAcrossDatabases'.
 That path scores through the dep-demand solve ('accumulateDepDemandsWith'),
-NOT the static technosphere triples — and the dep-demand path applies no
+NOT the static technosphere triples, and the dep-demand path applies no
 input/output sign, only 'cdlCoefficient'.
 
 A correctly treated 3 kg of waste at 2 kg CO2 / kg MUST contribute +6 kg CO2 in
-every case — treating waste adds burden, it never subtracts it.
+every case: treating waste adds burden, it never subtracts it.
 -}
 module WasteTreatmentSignSpec (spec) where
 

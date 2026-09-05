@@ -33,7 +33,7 @@ spec = do
             -- SAMPLE.min3 has no substitution (avoided-burden) rows, so every
             -- input is a real consumption and every tech triplet is positive.
             -- Sources with negative Materials/fuels rows legitimately produce
-            -- negative triplets — see SimaProParserSpec "SimaPro substitutions".
+            -- negative triplets, see SimaProParserSpec "SimaPro substitutions".
             db <- loadSampleDatabase "SAMPLE.min3"
 
             let techTriples = VU.toList (dbTechnosphereTriples db)
@@ -96,7 +96,7 @@ spec = do
 
     describe "Matrix Sparsity" $ do
         it "produces only well above-zero entries on the basic SAMPLE.min3 fixture" $ do
-            -- Sanity check on SAMPLE.min3 — its declared exchanges are all O(0.1..1),
+            -- Sanity check on SAMPLE.min3: its declared exchanges are all O(0.1..1),
             -- so post-normalization triplets sit comfortably above any floating-point
             -- noise floor. Kept as a smoke test that the matrix builder produces sane
             -- magnitudes on a known good fixture. Note: PR #69 dropped the previous
@@ -198,12 +198,12 @@ spec = do
                 Left err -> expectationFailure $ "buildDatabaseWithMatrices failed: " <> T.unpack err
                 Right db -> do
                     let bioTriples = VU.toList (dbBiosphereTriples db)
-                    -- Under the old buggy filter, length would be 0 — the triplet was
+                    -- Under the old buggy filter, length would be 0: the triplet was
                     -- dropped because abs (1e-9 / 3.6e6) < 1e-15.
                     length bioTriples `shouldBe` 1
                     case bioTriples of
                         [SparseTriple _ _ v] -> do
-                            -- The stored magnitude is genuinely below 1e-15 — this is
+                            -- The stored magnitude is genuinely below 1e-15: this is
                             -- exactly the case the new filter must preserve.
                             abs v `shouldSatisfy` (< 1.0e-15)
                             withinTolerance 1.0e-22 expectedValue v `shouldBe` True
@@ -289,7 +289,7 @@ spec = do
         -- sends 3 kg of that waste to treatment must pick up +3× the treatment's
         -- burden, not -3×. Before the activityNormFactor / safeDenom sign fix the
         -- normalization collapsed the -1 reference to +1, flipping every linked
-        -- treatment burden negative — so treating waste spuriously *reduced* impact.
+        -- treatment burden negative, so treating waste spuriously *reduced* impact.
         it "adds the treatment burden with a positive sign to the waste producer" $ do
             let tA = mkUUID "11111111-1111-1111-1111-111111111111"
                 wW = mkUUID "22222222-2222-2222-2222-222222222222"
