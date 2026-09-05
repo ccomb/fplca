@@ -50,7 +50,7 @@ loadSampleDatabaseWithPath path = do
     case loadResult of
         Left err -> error $ "Failed to load test database: " ++ show err
         Right simpleDb -> do
-            dbResult <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) (sdbActivities simpleDb) (sdbTechFlows simpleDb) (sdbBioFlows simpleDb) (sdbWasteFlows simpleDb) (sdbUnits simpleDb)
+            dbResult <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) simpleDb
             case dbResult of
                 Left err -> error $ "Failed to build matrix: " ++ show err
                 Right db -> return db

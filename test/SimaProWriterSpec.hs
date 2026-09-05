@@ -334,7 +334,16 @@ across the round-trip, but keying by name is robust either way).
 inventoryByName :: ([Activity], TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB) -> Text -> IO (M.Map Text Double)
 inventoryByName (acts, tech, bio, waste, units) target = do
     let actMap = M.fromList [(activityKey a, a) | a <- acts]
-    built <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) actMap tech bio waste units
+    built <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty)
+            SimpleDatabase
+                { sdbActivities = actMap
+                , sdbTechFlows = tech
+                , sdbBioFlows = bio
+                , sdbWasteFlows = waste
+                , sdbUnits = units
+                }
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right db -> do

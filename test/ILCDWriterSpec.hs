@@ -200,13 +200,7 @@ named activity, keyed by biosphere flow name.
 inventoryByName :: SimpleDatabase -> Text -> IO (M.Map Text Double)
 inventoryByName db target = do
     built <-
-        buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (sdbActivities db)
-            (sdbTechFlows db)
-            (sdbBioFlows db)
-            (sdbWasteFlows db)
-            (sdbUnits db)
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) db
     case built of
         Left err -> expectationFailure (T.unpack err) >> pure M.empty
         Right d -> do

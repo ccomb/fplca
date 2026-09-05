@@ -50,6 +50,7 @@ import Types (
     Exchange (..),
     LocationSource (..),
     Pedigree (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -821,19 +822,23 @@ buildFixtureAt actId prodId = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            ( M.fromList
-                [ ((actId, prodId), supplierActivityAt actId prodId)
-                , ((treatActId, usedOilId), treatmentActivity)
-                ]
-            )
-            ( M.fromList
-                [ (prodId, milkFlowAt prodId)
-                , (usedOilId, usedOilFlow)
-                ]
-            )
-            (M.singleton co2Id co2Flow)
-            (M.singleton usedOilId usedOilWasteFlow)
-            unitTable
+            SimpleDatabase
+                { sdbActivities =
+                    ( M.fromList
+                        [ ((actId, prodId), supplierActivityAt actId prodId)
+                        , ((treatActId, usedOilId), treatmentActivity)
+                        ]
+                    )
+                , sdbTechFlows =
+                    ( M.fromList
+                        [ (prodId, milkFlowAt prodId)
+                        , (usedOilId, usedOilFlow)
+                        ]
+                    )
+                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbWasteFlows = (M.singleton usedOilId usedOilWasteFlow)
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 {- | The same fixture with a second product on the treatment, so its activity
@@ -845,21 +850,25 @@ buildTwoProductTreatment = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            ( M.fromList
-                [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
-                , ((treatActId, usedOilId), treatmentWithHeat)
-                , ((treatActId, heatId), treatmentWithHeat)
-                ]
-            )
-            ( M.fromList
-                [ (supplierProdId, milkFlowAt supplierProdId)
-                , (usedOilId, usedOilFlow)
-                , (heatId, heatFlow)
-                ]
-            )
-            (M.singleton co2Id co2Flow)
-            (M.singleton usedOilId usedOilWasteFlow)
-            unitTable
+            SimpleDatabase
+                { sdbActivities =
+                    ( M.fromList
+                        [ ((supplierActId, supplierProdId), supplierActivityAt supplierActId supplierProdId)
+                        , ((treatActId, usedOilId), treatmentWithHeat)
+                        , ((treatActId, heatId), treatmentWithHeat)
+                        ]
+                    )
+                , sdbTechFlows =
+                    ( M.fromList
+                        [ (supplierProdId, milkFlowAt supplierProdId)
+                        , (usedOilId, usedOilFlow)
+                        , (heatId, heatFlow)
+                        ]
+                    )
+                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbWasteFlows = (M.singleton usedOilId usedOilWasteFlow)
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 {- | A database that declares no biosphere flow at all — bio vocabulary can
@@ -872,11 +881,13 @@ buildBareFixture = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (supplierActId, supplierProdId) noBio)
-            (M.singleton supplierProdId (milkFlowAt supplierProdId))
-            M.empty
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = (M.singleton (supplierActId, supplierProdId) noBio)
+                , sdbTechFlows = (M.singleton supplierProdId (milkFlowAt supplierProdId))
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID

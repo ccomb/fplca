@@ -413,13 +413,7 @@ writeOk opts sdb =
 buildDb :: SimpleDatabase -> IO Database
 buildDb sdb = do
     result <-
-        DB.buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (sdbActivities sdb)
-            (sdbTechFlows sdb)
-            (sdbBioFlows sdb)
-            (sdbWasteFlows sdb)
-            (sdbUnits sdb)
+        DB.buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) sdb
     case result of
         Left err -> fail ("buildDatabaseWithMatrices failed: " ++ T.unpack err)
         Right db -> pure db

@@ -52,6 +52,7 @@ import Types (
     Database (..),
     Exchange (..),
     LocationSource (..),
+    SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -385,11 +386,13 @@ buildDepFixture = do
     built <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (depActId, depProdId) depActivity)
-            (M.singleton depProdId wheatFlow)
-            M.empty
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = (M.singleton (depActId, depProdId) depActivity)
+                , sdbTechFlows = (M.singleton depProdId wheatFlow)
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure built
 
 buildFixture :: IO Database
@@ -397,11 +400,13 @@ buildFixture = do
     built <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (supplierActId, supplierProdId) supplierActivity)
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = (M.singleton (supplierActId, supplierProdId) supplierActivity)
+                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
+                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure built
 
 mkUUID :: Int -> UUID

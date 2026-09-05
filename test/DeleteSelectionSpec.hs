@@ -56,6 +56,7 @@ import Types (
     GeographyPolicy (..),
     LocationSource (..),
     ProcessId,
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -412,7 +413,16 @@ mkConfig name =
 
 buildOrFail :: SimpleParts -> IO Database
 buildOrFail (SimpleParts acts flows units) = do
-    r <- buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) acts flows M.empty M.empty units
+    r <-
+        buildDatabaseWithMatrices
+            (BuildInputs defaultUnitConfig mempty)
+            SimpleDatabase
+                { sdbActivities = acts
+                , sdbTechFlows = flows
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = units
+                }
     case r of
         Right db -> pure db
         Left err -> fail ("buildDatabaseWithMatrices: " <> show err)

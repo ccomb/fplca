@@ -89,11 +89,13 @@ buildFixture comp = do
     r <-
         DB.buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (actU, prodU) act)
-            (M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing))
-            (M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp)))
-            M.empty
-            (M.singleton unitU (Unit unitU "kg" "kg" ""))
+            SimpleDatabase
+                { sdbActivities = (M.singleton (actU, prodU) act)
+                , sdbTechFlows = (M.singleton prodU (TechnosphereFlow prodU "product" unitU M.empty Nothing Nothing))
+                , sdbBioFlows = (M.singleton co2U (BiosphereFlow co2U "Carbon dioxide" unitU M.empty Nothing Nothing (Just comp)))
+                , sdbWasteFlows = M.empty
+                , sdbUnits = (M.singleton unitU (Unit unitU "kg" "kg" ""))
+                }
     either (fail . ("buildDatabaseWithMatrices: " <>) . T.unpack) pure r
   where
     actU, prodU, co2U, unitU :: UUID

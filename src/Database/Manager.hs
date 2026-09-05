@@ -2000,7 +2000,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
             Left err -> return $ Left err
             Right linkedDb -> do
                 reportProgress Info $ "Building database from " <> show (M.size (sdbActivities linkedDb)) <> " activities"
-                dbResult <- buildDatabaseWithMatrices inputs (sdbActivities linkedDb) (sdbTechFlows linkedDb) (sdbBioFlows linkedDb) (sdbWasteFlows linkedDb) (sdbUnits linkedDb)
+                dbResult <- buildDatabaseWithMatrices inputs linkedDb
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -2024,13 +2024,7 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
             Left err -> return $ Left err
             Right (simpleDb, stats) -> do
                 dbResult <-
-                    buildDatabaseWithMatrices
-                        inputs
-                        (sdbActivities simpleDb)
-                        (sdbTechFlows simpleDb)
-                        (sdbBioFlows simpleDb)
-                        (sdbWasteFlows simpleDb)
-                        (sdbUnits simpleDb)
+                    buildDatabaseWithMatrices inputs simpleDb
                 case dbResult of
                     Left err -> return $ Left err
                     Right db -> do
@@ -3556,11 +3550,7 @@ finalizeDatabase manager dbName = withLogScope dbName $ do
                 ExceptT $
                     buildDatabaseWithMatrices
                         (sdBuiltWith staged)
-                        (sdbActivities (sdSimpleDB staged))
-                        (sdbTechFlows (sdSimpleDB staged))
-                        (sdbBioFlows (sdSimpleDB staged))
-                        (sdbWasteFlows (sdSimpleDB staged))
-                        (sdbUnits (sdSimpleDB staged))
+                        (sdSimpleDB staged)
             -- Freshly built matrices: always persist.
             pure
                 FinalizedBuild

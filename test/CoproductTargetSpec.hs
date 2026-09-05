@@ -234,11 +234,13 @@ buildFixture consumer rows flows = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.insert (consumerActId, consumerProdId) consumer rows)
-            (M.insert consumerProdId (techFlow consumerProdId "cheese") flows)
-            M.empty
-            (M.singleton scrapId (wasteFlow scrapId "scrap"))
-            unitTable
+            SimpleDatabase
+                { sdbActivities = (M.insert (consumerActId, consumerProdId) consumer rows)
+                , sdbTechFlows = (M.insert consumerProdId (techFlow consumerProdId "cheese") flows)
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = (M.singleton scrapId (wasteFlow scrapId "scrap"))
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 supplierRows :: M.Map (UUID, UUID) Activity

@@ -61,6 +61,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -451,11 +452,13 @@ buildFixture = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.singleton (supplierActId, supplierProdId) milkActivity)
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = (M.singleton (supplierActId, supplierProdId) milkActivity)
+                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
+                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID

@@ -39,8 +39,8 @@ Matrix Construction:
   * Self-loop NOT exported as matrix entry (matches Ecoinvent convention)
 - Solver constructs (I-A) by adding identity and negating technosphere triplets
 -}
-buildDatabaseWithMatrices :: BuildInputs -> M.Map (UUID, UUID) Activity -> TechFlowDB -> BioFlowDB -> WasteFlowDB -> UnitDB -> IO (Either Text Database)
-buildDatabaseWithMatrices inputs activityMap techFlowDB bioFlowDB wasteFlowDB unitDB = do
+buildDatabaseWithMatrices :: BuildInputs -> SimpleDatabase -> IO (Either Text Database)
+buildDatabaseWithMatrices inputs SimpleDatabase{sdbActivities = activityMap, sdbTechFlows = techFlowDB, sdbBioFlows = bioFlowDB, sdbWasteFlows = wasteFlowDB, sdbUnits = unitDB} = do
     reportMatrixOperation "Building database with pre-computed sparse matrices"
     let !tables = buildInterningTables activityMap
         !supplierRefUnits = buildSupplierRefUnits unitDB (itActivities tables)

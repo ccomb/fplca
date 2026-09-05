@@ -128,11 +128,13 @@ buildDb acts flows = do
     res <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            (M.fromList acts)
-            (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
-            M.empty
-            M.empty
-            M.empty
+            SimpleDatabase
+                { sdbActivities = (M.fromList acts)
+                , sdbTechFlows = (M.fromList [(fid, minimalFlow fid name) | (fid, name) <- flows])
+                , sdbBioFlows = M.empty
+                , sdbWasteFlows = M.empty
+                , sdbUnits = M.empty
+                }
     case res of
         Left err -> error ("buildDatabaseWithMatrices failed: " <> show err)
         Right db -> pure db

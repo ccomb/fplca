@@ -846,13 +846,7 @@ logicalCells db =
 co2Inventory :: SimpleDatabase -> IO (Either Text (Maybe Double))
 co2Inventory sdb = do
     built <-
-        buildDatabaseWithMatrices
-            (BuildInputs defaultUnitConfig mempty)
-            (sdbActivities sdb)
-            (sdbTechFlows sdb)
-            (sdbBioFlows sdb)
-            (sdbWasteFlows sdb)
-            (sdbUnits sdb)
+        buildDatabaseWithMatrices (BuildInputs defaultUnitConfig mempty) sdb
     case built of
         Left err -> pure (Left err)
         Right db -> do

@@ -152,11 +152,13 @@ buildDB :: T.Text -> M.Map (UUID, UUID) Activity -> IO Database
 buildDB name acts =
     buildDatabaseWithMatrices
         (BuildInputs defaultUnitConfig mempty)
-        acts
-        techFlowDB
-        (M.singleton co2 co2Flow)
-        wasteFlowDB
-        (M.singleton kgU (Unit kgU "kg" "kg" ""))
+        SimpleDatabase
+            { sdbActivities = acts
+            , sdbTechFlows = techFlowDB
+            , sdbBioFlows = (M.singleton co2 co2Flow)
+            , sdbWasteFlows = wasteFlowDB
+            , sdbUnits = (M.singleton kgU (Unit kgU "kg" "kg" ""))
+            }
         >>= either (\e -> fail (T.unpack name <> ": " <> T.unpack e)) pure
 
 co2Of :: M.Map UUID Double -> Double

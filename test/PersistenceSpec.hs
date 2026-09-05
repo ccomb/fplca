@@ -70,6 +70,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -357,11 +358,13 @@ buildFrom activities = do
     r <-
         buildDatabaseWithMatrices
             (BuildInputs defaultUnitConfig mempty)
-            activities
-            (M.singleton supplierProdId milkFlow)
-            (M.singleton co2Id co2Flow)
-            M.empty
-            unitTable
+            SimpleDatabase
+                { sdbActivities = activities
+                , sdbTechFlows = (M.singleton supplierProdId milkFlow)
+                , sdbBioFlows = (M.singleton co2Id co2Flow)
+                , sdbWasteFlows = M.empty
+                , sdbUnits = unitTable
+                }
     either (fail . show) pure r
 
 mkUUID :: Int -> UUID
