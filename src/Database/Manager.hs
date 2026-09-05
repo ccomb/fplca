@@ -2638,110 +2638,113 @@ When a valid cache exists, reconstructs staged state from the cached Database
 without re-parsing, turning a ~90s operation into ~7s.
 -}
 stageUploadedDatabase :: DatabaseManager -> DatabaseConfig -> IO (Either Text ())
-stageUploadedDatabase manager dbConfig = withLogScope (dcName dbConfig) $ do
-    let dbName = dcName dbConfig
-    reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
-
+stageUploadedDatabase manager dbConfig = withLogScope dbName $ runExceptT $ do
+    liftIO $ reportProgress Info $ "[STARTING] Staging: " <> T.unpack (dcDisplayName dbConfig)
     -- Try cache first: if valid, reconstruct StagedDatabase without re-parsing
-    inputs <- currentBuildInputs manager dbConfig
-    mCachedDb <- Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig) inputs
+    inputs <- liftIO $ currentBuildInputs manager dbConfig
+    mCachedDb <- liftIO $ Loader.loadCachedDatabaseWithMatrices dbName (dcPath dbConfig) inputs
+    maybe (parseAndLink inputs) fromCache mCachedDb
+  where
+    dbName :: Text
+    dbName = dcName dbConfig
 
-    case mCachedDb of
-        Just cachedDb -> do
-            -- Cache hit: auto-load dependencies so cross-DB solving works
-            _ <- autoLoadDeps manager (dbDependsOn cachedDb)
-            let staged =
-                    StagedDatabase
-                        { sdSimpleDB = toSimpleDatabase cachedDb
-                        , sdConfig = dbConfig
-                        , sdMissingProducts = []
-                        , sdSelectedDeps = dbDependsOn cachedDb
-                        , sdCrossDBLinks = dbCrossDBLinks cachedDb
-                        , sdLinkingStats = dbLinkingStats cachedDb
-                        , sdBuiltWith = dbBuiltWith cachedDb
-                        , sdCachedDB = Just cachedDb
-                        }
-            atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
-            reportProgress Info $ "  [OK] Staged from cache: " <> T.unpack (dcDisplayName dbConfig)
-            return $ Right ()
-        Nothing -> do
-            -- Cache miss: parse and cross-DB link as before
-            let locationAliases = dcLocationAliases dbConfig
+    fromCache :: Database -> ExceptT Text IO ()
+    fromCache cachedDb = liftIO $ do
+        -- Cache hit: auto-load dependencies so cross-DB solving works
+        _ <- autoLoadDeps manager (dbDependsOn cachedDb)
+        stage "  [OK] Staged from cache: " $
+            StagedDatabase
+                { sdSimpleDB = toSimpleDatabase cachedDb
+                , sdConfig = dbConfig
+                , sdMissingProducts = []
+                , sdSelectedDeps = dbDependsOn cachedDb
+                , sdCrossDBLinks = dbCrossDBLinks cachedDb
+                , sdLinkingStats = dbLinkingStats cachedDb
+                , sdBuiltWith = dbBuiltWith cachedDb
+                , sdCachedDB = Just cachedDb
+                }
 
-            -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
-            path <- Upload.findDataDirectory (dcPath dbConfig)
-
-            -- Look up indexes for cross-DB linking
-            indexedDbs <- readTVarIO (dmIndexedDbs manager)
-            let otherIndexes = M.elems indexedDbs
-
-            -- A CSV export or a workbook names one file; the loader is handed
-            -- that rather than the directory holding it.
-            format <- detectDirectoryFormat path
-            -- Either way the loader gets a path: a source that holds no file of
-            -- its own format is left to produce the error it produces anyway.
-            loadPath <- fromRight path <$> narrowToDataFile format path
-
-            -- Parse and run cross-DB linking (but don't build matrices)
-            synonymDB <- getMergedSynonymDB manager
-            let unitConfig = biUnitConfig inputs
-            loadResult <-
+    parseAndLink :: BuildInputs -> ExceptT Text IO ()
+    parseAndLink inputs = do
+        -- Resolve nested directory structure (e.g. ZIP extracts with multiple subdirs)
+        path <- liftIO $ Upload.findDataDirectory (dcPath dbConfig)
+        indexedDbs <- liftIO $ readTVarIO (dmIndexedDbs manager)
+        {- A CSV export or a workbook names one file; the loader is handed that
+        rather than the directory holding it. Either way the loader gets a
+        path: a source that holds no file of its own format is left to produce
+        the error it produces anyway. -}
+        format <- liftIO $ detectDirectoryFormat path
+        loadPath <- liftIO $ fromRight path <$> narrowToDataFile format path
+        synonymDB <- liftIO $ getMergedSynonymDB manager
+        let unitConfig = biUnitConfig inputs
+        -- Parse and run cross-DB linking (but don't build matrices)
+        (simpleDb, stats) <-
+            ExceptT $
                 Loader.loadDatabaseWithCrossDBLinking
-                    locationAliases
-                    otherIndexes
+                    (dcLocationAliases dbConfig)
+                    (M.elems indexedDbs)
                     synonymDB
                     unitConfig
                     (dmLocationHierarchy manager)
                     (dcGeographyPolicy dbConfig)
                     loadPath
+        let minimalDeps = computeMinimalSelectedDeps (Loader.cdlLinks stats)
+        (finalStats, finalDB) <-
+            liftIO $ minimalCover indexedDbs synonymDB unitConfig minimalDeps simpleDb stats
+        liftIO $
+            stage "  [OK] Staged: " $
+                StagedDatabase
+                    { sdSimpleDB = finalDB
+                    , sdConfig = dbConfig
+                    , sdMissingProducts = stagedMissingProducts finalDB finalStats
+                    , sdSelectedDeps = minimalDeps
+                    , sdCrossDBLinks = Loader.cdlLinks finalStats
+                    , sdLinkingStats = finalStats
+                    , sdBuiltWith = inputs
+                    , sdCachedDB = Nothing
+                    }
 
-            case loadResult of
-                Left err -> return $ Left err
-                Right (simpleDb, stats) -> do
-                    -- Minimal-cover pre-selection: drop DBs whose links are all
-                    -- substitutable by another DB at the same score. If that
-                    -- shrinks the dependency set, re-run linking restricted to
-                    -- the chosen DBs so sdCrossDBLinks stays consistent with
-                    -- sdSelectedDeps (no dangling supplier UUIDs at finalize).
-                    let minimalDeps = computeMinimalSelectedDeps (Loader.cdlLinks stats)
-                        contributingDeps = M.keys (Loader.crossDBBySource stats)
-                    (finalStats, finalDB) <-
-                        if S.fromList minimalDeps == S.fromList contributingDeps
-                            then return (stats, simpleDb)
-                            else do
-                                let selectedSet = S.fromList minimalDeps
-                                    restrictedIndexes =
-                                        [idx | (n, idx) <- M.toList indexedDbs, S.member n selectedSet]
-                                reportProgress Info $
-                                    "  Minimal cover: dropping redundant deps "
-                                        <> show (S.toList (S.fromList contributingDeps `S.difference` selectedSet))
-                                        <> ", re-linking against "
-                                        <> show minimalDeps
-                                (simpleDb', stats') <-
-                                    Loader.fixActivityLinksWithCrossDB
-                                        restrictedIndexes
-                                        synonymDB
-                                        unitConfig
-                                        (dmLocationHierarchy manager)
-                                        (dcGeographyPolicy dbConfig)
-                                        simpleDb
-                                return (stats', simpleDb')
+    {- Drop the dependencies whose links are all substitutable by another at
+    the same score. If that shrinks the set, linking runs again restricted to
+    the chosen ones, so 'sdCrossDBLinks' stays consistent with 'sdSelectedDeps'
+    and finalize sees no dangling supplier UUID. -}
+    minimalCover ::
+        Map Text IndexedDatabase ->
+        SynonymDB ->
+        UnitConversion.UnitConfig ->
+        -- \| the dependencies the cover kept
+        [Text] ->
+        SimpleDatabase ->
+        Loader.CrossDBLinkingStats ->
+        IO (Loader.CrossDBLinkingStats, SimpleDatabase)
+    minimalCover indexedDbs synonymDB unitConfig minimalDeps simpleDb stats
+        | selectedSet == S.fromList contributingDeps = return (stats, simpleDb)
+        | otherwise = do
+            reportProgress Info $
+                "  Minimal cover: dropping redundant deps "
+                    <> show (S.toList (S.fromList contributingDeps `S.difference` selectedSet))
+                    <> ", re-linking against "
+                    <> show minimalDeps
+            (simpleDb', stats') <-
+                Loader.fixActivityLinksWithCrossDB
+                    [idx | (n, idx) <- M.toList indexedDbs, S.member n selectedSet]
+                    synonymDB
+                    unitConfig
+                    (dmLocationHierarchy manager)
+                    (dcGeographyPolicy dbConfig)
+                    simpleDb
+            return (stats', simpleDb')
+      where
+        selectedSet :: S.Set Text
+        selectedSet = S.fromList minimalDeps
 
-                    let staged =
-                            StagedDatabase
-                                { sdSimpleDB = finalDB
-                                , sdConfig = dbConfig
-                                , sdMissingProducts = stagedMissingProducts finalDB finalStats
-                                , sdSelectedDeps = minimalDeps
-                                , sdCrossDBLinks = Loader.cdlLinks finalStats
-                                , sdLinkingStats = finalStats
-                                , sdBuiltWith = inputs
-                                , sdCachedDB = Nothing
-                                }
+        contributingDeps :: [Text]
+        contributingDeps = M.keys (Loader.crossDBBySource stats)
 
-                    atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
-                    reportProgress Info $ "  [OK] Staged: " <> T.unpack (dcDisplayName dbConfig)
-                    return $ Right ()
+    stage :: String -> StagedDatabase -> IO ()
+    stage what staged = do
+        atomically $ modifyTVar' (dmStagedDbs manager) (M.insert dbName staged)
+        reportProgress Info $ what <> T.unpack (dcDisplayName dbConfig)
 
 {- | Unload a database from memory (keeps config for reloading).
 Refuses to unload if any currently-loaded database declares this one as a
