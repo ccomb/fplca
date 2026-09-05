@@ -26,6 +26,7 @@ WRAPPER_OPERATIONS = [
     "list_presets",
     "search_activities",
     "search_flows",
+    "count_search_matches",
     "list_classifications",
     "get_activity",
     "get_supply_chain",

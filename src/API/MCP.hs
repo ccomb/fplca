@@ -44,7 +44,7 @@ import API.MCP.Columnar (resolveSingleScoringSet, toColumnarBatch)
 import API.MCP.Enrich (addWebUrlMaybe, attachMarketHintByName, encodeSegment, filterScoringSets, scoreActivityWebUrl, slimLCIAPanel, webUrlField)
 import API.Routes (collectionNotLoadedMessage)
 import API.Types (ActivityForAPI (..), ActivityInfo (..), ClassificationSystem (..), ExchangeEditRequest (..), ExchangeWithUnit (..), InventoryExport (..), InventoryFlowDetail (..), Perturbation (..), Substitution (..), SubstitutionRequest (..), toExchangeEdits)
-import Control.Monad (unless, when)
+import Control.Monad (mfilter, unless, when)
 import qualified Data.List as L
 import Matrix (applyBiosphereMatrix)
 import qualified Method.Explain as Explain
@@ -54,6 +54,7 @@ import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodColle
 import Network.HTTP.Types.Header (RequestHeaders, hAccept, hAllow, hHost)
 import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
+import qualified Search.Normalize as Normalize
 import qualified Service
 import qualified Service.Aggregate as Agg
 import SharedSolver (SharedSolver, computeInventoryMatrixWithDepsCached, crossDBProcessContributions)
@@ -474,6 +475,7 @@ callTool dbManager presets mHosting mBaseUrl rid name args = case name of
     "list_presets" -> callListPresets presets rid
     "search_activities" -> withDb dbManager rid args $ callSearchActivities presets rid args
     "search_flows" -> withDb dbManager rid args $ callSearchFlows rid args
+    "count_search_matches" -> withDb dbManager rid args $ callCountSearchMatches rid args
     "get_activity" -> withDb dbManager rid args $ callGetActivity rid args
     "get_supply_chain" -> callGetSupplyChain dbManager presets rid args
     "aggregate" -> withDb dbManager rid args $ callAggregate dbManager presets rid args
@@ -761,6 +763,25 @@ callListClassifications rid args (db, _) =
                                 Nothing -> csValues s
                                 Just f -> L.filter (T.isInfixOf (T.toLower f) . T.toLower) (csValues s)
                          in object ["name" .= csName s, "activityCount" .= csActivityCount s, "values" .= vals]
+
+{- | The three tab counts for one query, in one call.
+
+A missing query is an error rather than three zeros: zeros would read as "this
+database has nothing", which is a different answer from "you asked nothing".
+-}
+callCountSearchMatches :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
+callCountSearchMatches rid args (db, _) =
+    case mfilter (not . null . Normalize.queryWords) (textArg "query" args) of
+        Nothing -> return $ toolError rid "query is required: there is nothing to count without one"
+        Just query ->
+            let counts = Service.searchCounts db Service.countAsListed query
+             in return $
+                    toolSuccessJson rid $
+                        object
+                            [ "processes" .= Service.scProcesses counts
+                            , "products" .= Service.scProducts counts
+                            , "flows" .= Service.scFlows counts
+                            ]
 
 callSearchFlows :: Value -> KeyMap Value -> (Database, SharedSolver) -> IO Value
 callSearchFlows rid args (db, _) =

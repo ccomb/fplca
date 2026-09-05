@@ -243,6 +243,17 @@ data FlowSearchResult = FlowSearchResult
     deriving (Generic)
     deriving (ToJSON, ToSchema) via (Stripped FlowSearchResult)
 
+{- | How many of each thing one query finds, for the three tabs of a search
+box. Disjoint, and together they cover the database.
+-}
+data SearchCountsAPI = SearchCountsAPI
+    { scaProcesses :: Int -- Activity rows, what you search, get and score
+    , scaProducts :: Int -- Technosphere flows: what one activity makes and another consumes
+    , scaFlows :: Int -- Biosphere and waste flows: what is exchanged with nature or discarded
+    }
+    deriving (Generic)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SearchCountsAPI)
+
 -- | Inventory export data structures
 data InventoryExport = InventoryExport
     { ieMetadata :: InventoryMetadata

@@ -77,6 +77,7 @@ data Resource
     | ListClassifications
     | GetPathTo
     | GetConsumers
+    | CountSearchMatches
     | CompareImpacts
     | ScoreActivity
     | ScoreActivities
@@ -157,6 +158,7 @@ resourceMutates r = case r of
     ListClassifications -> False
     GetPathTo -> False
     GetConsumers -> False
+    CountSearchMatches -> False
     CompareImpacts -> False
     ScoreActivity -> False
     ScoreActivities -> False
@@ -212,6 +214,7 @@ apiPath r = case r of
     ListClassifications -> Just (GET, ["db", "{dbName}", "classifications"])
     GetPathTo -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "path-to"])
     GetConsumers -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "consumers"])
+    CountSearchMatches -> Just (GET, ["db", "{dbName}", "search-counts"])
     CompareImpacts -> Nothing -- MCP-only audit tool: cross-DB diff, no canonical HTTP route
     ScoreActivity -> Just (GET, ["db", "{dbName}", "activity", "{processId}", "impacts", "{collection}"])
     ScoreActivities -> Just (POST, ["db", "{dbName}", "impacts", "{collection}"])
@@ -260,6 +263,7 @@ mcpName r = case r of
     ListClassifications -> "list_classifications"
     GetPathTo -> "get_path_to"
     GetConsumers -> "get_consumers"
+    CountSearchMatches -> "count_search_matches"
     CompareImpacts -> "compare_impacts"
     ScoreActivity -> "score_activity"
     ScoreActivities -> "score_activities"
@@ -485,6 +489,15 @@ description r = case r of
         \consumer, 2 = consumer of consumer, etc. Useful for tracing downstream \
         \use of a raw material, e.g. finding transformed food products in \
         \Agribalyse that use a raw ingredient."
+    CountSearchMatches ->
+        "LCA / ACV: how many processes, products and flows one query matches in \
+        \a database, in a single call. The three are disjoint and together cover \
+        \the database: a process is an activity row (what you search, get and \
+        \score), a product is a technosphere flow one activity makes and another \
+        \consumes, a flow is what is exchanged with nature or discarded. Use it \
+        \to tell which of the three a query is really about before listing any of \
+        \them: a term matching 2 processes and 300 flows is a substance name, not \
+        \a product."
     CompareImpacts ->
         "LCA / ACV audit: score the same logical activity on two (database, \
         \method) pairs and return the per-impact-category delta plus a per-flow \
@@ -886,6 +899,10 @@ params r = case r of
         [ pDatabase
         , pProcessId
         , Param "target" "string" Required "Case-insensitive name substring to stop at"
+        ]
+    CountSearchMatches ->
+        [ pDatabase
+        , Param "query" "string" Required "The search term to count matches for"
         ]
     GetConsumers ->
         [ pDatabase

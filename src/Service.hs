@@ -930,22 +930,99 @@ paginateSearchResults offsetParam limitParam searchTimeMs project xs =
 carried on 'SearchFilter' itself, so there is no separate positional flag.
 -}
 searchActivities :: Database -> SearchFilter -> IO (Either ServiceError Value)
-searchActivities db sFilter@(SearchFilter core exactMatch) = do
+searchActivities db sFilter@(SearchFilter core _) = do
     startTime <- getCurrentTime
-    let allResults = case tryBm25Retrieve db sFilter of
-            Just ranked ->
-                -- BM25 path: ranked candidates → structured filters → preserve score order.
-                applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core) False ranked
-            Nothing ->
-                -- Non-BM25 path: AND-of-tokens name filter + lex sort.
-                let cmp = activityRowComparator (afcSort core)
-                    ordered = if afcOrder core == Just "desc" then flip cmp else cmp
-                    raw = findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch
-                 in L.sortBy ordered raw
+    let allResults = activityMatches db sFilter
     endTime <- getCurrentTime
     let searchTimeMs = realToFrac (diffUTCTime endTime startTime) * 1000 :: Double
         results = paginateSearchResults (afcOffset core) (afcLimit core) searchTimeMs (uncurry (mkActivitySummary db)) allResults
     pure $ Right $ toJSON results
+
+{- | Every activity row a filter matches, in the order the search presents
+them.
+
+Split out of 'searchActivities' so a caller that only wants how many there
+are counts the same rows the list would show. Two matchers would drift, and a
+tab counter disagreeing with the tab it labels is worse than no counter.
+-}
+activityMatches :: Database -> SearchFilter -> [(ProcessId, Activity)]
+activityMatches db sFilter@(SearchFilter core exactMatch) =
+    case tryBm25Retrieve db sFilter of
+        Just ranked ->
+            -- BM25 path: ranked candidates → structured filters → preserve score order.
+            applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core) False ranked
+        Nothing ->
+            -- Non-BM25 path: AND-of-tokens name filter + lex sort.
+            let cmp = activityRowComparator (afcSort core)
+                ordered = if afcOrder core == Just "desc" then flip cmp else cmp
+                raw = findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch
+             in L.sortBy ordered raw
+
+{- | How many of each thing one query finds, for the three tabs of a search
+box.
+
+The three are disjoint and together cover the database: a process is an
+activity row, a product is a technosphere flow, and a flow is what is
+exchanged with nature or discarded. Answered in one call because three tabs
+should not cost three round trips per keystroke.
+-}
+data SearchCounts = SearchCounts
+    { scProcesses :: !Int
+    , scProducts :: !Int
+    , scFlows :: !Int
+    }
+    deriving (Eq, Show)
+
+{- | How a caller is going to list the processes it is about to count.
+
+Not decoration: 'tryBm25Retrieve' drops to the AND-of-tokens matcher when the
+caller sorts by name or location, or asks for exact matching, and BM25 keeps
+any row matching /one/ token. Counting with different settings from the list
+would label a tab "1200" over a table of nine.
+-}
+data CountAs = CountAs
+    { caSort :: !(Maybe Text)
+    , caExact :: !Bool
+    }
+
+-- | Counted the way the default listing lists.
+countAsListed :: CountAs
+countAsListed = CountAs{caSort = Nothing, caExact = False}
+
+-- | The counts one query finds. The query is required: an empty box has nothing to count.
+searchCounts :: Database -> CountAs -> Text -> SearchCounts
+searchCounts db listedAs query =
+    SearchCounts
+        { scProcesses = length (activityMatches db (nameOnly query))
+        , scProducts = count KindTechnosphere
+        , scFlows = length matchedFlows - count KindTechnosphere
+        }
+  where
+    matchedFlows :: [FlowKind]
+    matchedFlows = findFlowsBySynonym db query
+
+    count :: ExchangeKind -> Int
+    count kind = length (filter ((== kind) . kindOfFlow) matchedFlows)
+
+    -- The tab counters describe one search box, so only the name is filtered
+    -- on; the sort and exactness come from the caller because they decide
+    -- which matcher runs.
+    nameOnly :: Text -> SearchFilter
+    nameOnly q =
+        SearchFilter
+            { sfCore =
+                ActivityFilterCore
+                    { afcName = Just q
+                    , afcLocation = Nothing
+                    , afcProduct = Nothing
+                    , afcClassifications = []
+                    , afcLimit = Nothing
+                    , afcOffset = Nothing
+                    , afcSort = caSort listedAs
+                    , afcOrder = Nothing
+                    }
+            , sfExactMatch = caExact listedAs
+            }
 
 -- | List all classification systems and their distinct values for a database
 getClassifications :: Database -> [ClassificationSystem]
