@@ -1129,7 +1129,7 @@ discoverDatabases config = do
         at it. Say so here, at boot, where an operator can act on it; the load
         itself refuses later with the same reason. -}
         resolved <- resolveDataPath (dcPath dbConfig)
-        let resolvedPath = either (const (dcPath dbConfig)) id resolved
+        let resolvedPath = fromRight (dcPath dbConfig) resolved
         either (reportError . T.unpack) (const (pure ())) resolved
         format <- Upload.detectDatabaseFormat resolvedPath
         return dbConfig{dcPath = resolvedPath, dcFormat = Just format}
@@ -1145,13 +1145,32 @@ discoverMethods config = (cfgMethods config ++) <$> discoverUploadedMethodConfig
 discoverRefDataSources :: Config -> IO RefDataSources
 discoverRefDataSources config =
     RefDataSources
-        <$> withUploads (cfgFlowSynonyms config) "uploads/flow-synonyms"
-        <*> withUploads (cfgCompartmentMappings config) "uploads/compartment-mappings"
-        <*> withUploads (cfgUnits config) "uploads/units"
-        <*> withUploads (cfgEnergyDensities config) "uploads/energy-densities"
+        <$> withUploads "flow synonym" (cfgFlowSynonyms config) "uploads/flow-synonyms"
+        <*> withUploads "compartment mapping" (cfgCompartmentMappings config) "uploads/compartment-mappings"
+        <*> withUploads "unit" (cfgUnits config) "uploads/units"
+        <*> withUploads "energy density" (cfgEnergyDensities config) "uploads/energy-densities"
   where
-    withUploads :: [RefDataConfig] -> FilePath -> IO [RefDataConfig]
-    withUploads configured dir = (configured ++) <$> discoverUploadedRefData dir
+    withUploads :: String -> [RefDataConfig] -> FilePath -> IO [RefDataConfig]
+    withUploads kind configured dir = do
+        combined <- (configured ++) <$> discoverUploadedRefData dir
+        mapM_ (reportProgress Warning . shadowed kind) (repeatedNames combined)
+        pure combined
+
+    {- 'newManager' indexes these by name, so a repeated one keeps the last and
+    drops the rest. An uploaded directory named like a configured source is all
+    it takes, and the configuration checks duplicates for databases and method
+    collections but not for these. Say which source is being ignored. -}
+    shadowed :: String -> Text -> String
+    shadowed kind name =
+        "Reference data: more than one "
+            <> kind
+            <> " source named "
+            <> T.unpack name
+            <> "; the last one wins and the others are ignored"
+
+-- | The names that appear more than once, each reported once.
+repeatedNames :: [RefDataConfig] -> [Text]
+repeatedNames rds = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [(rdName rd, 1) | rd <- rds]))
 
 {- | The location hierarchy this run scores against. Falling back to the
 built-in hierarchy when a named file cannot be read would change every
@@ -3645,7 +3664,7 @@ loadMethodCollectionFromConfig mc = do
     resolved <- resolveDataPath (mcPath mc)
     -- A failed extraction leaves the archive path, which reaches the refusal
     -- below and carries its own reason there.
-    let resolvedPath = either (const (mcPath mc)) id resolved
+    let resolvedPath = fromRight (mcPath mc) resolved
     isDir <- doesDirectoryExist resolvedPath
     isFile <- doesFileExist resolvedPath
     let ext = map toLower (takeExtension resolvedPath)
