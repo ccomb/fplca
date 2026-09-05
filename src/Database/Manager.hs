@@ -142,7 +142,7 @@ import Data.Bifunctor (first)
 import Data.Char (toLower)
 import qualified Data.Csv as Csv
 import Data.Either (fromRight, lefts, partitionEithers, rights)
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.List (intercalate, isPrefixOf, sort, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
@@ -1141,7 +1141,12 @@ initDatabaseManager config cachePolicy = do
 discoverDatabases :: Config -> IO [DatabaseConfig]
 discoverDatabases config = do
     configured <- forM (cfgDatabases config) $ \dbConfig -> do
-        resolvedPath <- resolveDataPath (dcPath dbConfig)
+        {- An archive that will not extract leaves the configuration pointing
+        at it. Say so here, at boot, where an operator can act on it; the load
+        itself refuses later with the same reason. -}
+        resolved <- resolveDataPath (dcPath dbConfig)
+        let resolvedPath = fromRight (dcPath dbConfig) resolved
+        either (reportError . T.unpack) (const (pure ())) resolved
         format <- Upload.detectDatabaseFormat resolvedPath
         return dbConfig{dcPath = resolvedPath, dcFormat = Just format}
     -- Uploaded databases are self-describing, through their meta.toml
@@ -1156,13 +1161,41 @@ discoverMethods config = (cfgMethods config ++) <$> discoverUploadedMethodConfig
 discoverRefDataSources :: Config -> IO RefDataSources
 discoverRefDataSources config =
     RefDataSources
-        <$> withUploads (cfgFlowSynonyms config) "uploads/flow-synonyms"
-        <*> withUploads (cfgCompartmentMappings config) "uploads/compartment-mappings"
-        <*> withUploads (cfgUnits config) "uploads/units"
-        <*> withUploads (cfgEnergyDensities config) "uploads/energy-densities"
+        <$> withUploads "flow synonym" (cfgFlowSynonyms config) "uploads/flow-synonyms"
+        <*> withUploads "compartment mapping" (cfgCompartmentMappings config) "uploads/compartment-mappings"
+        <*> withUploads "unit" (cfgUnits config) "uploads/units"
+        <*> withUploads "energy density" (cfgEnergyDensities config) "uploads/energy-densities"
   where
-    withUploads :: [RefDataConfig] -> FilePath -> IO [RefDataConfig]
-    withUploads configured dir = (configured ++) <$> discoverUploadedRefData dir
+    withUploads :: String -> [RefDataConfig] -> FilePath -> IO [RefDataConfig]
+    withUploads kind configured dir = do
+        combined <- (configured ++) <$> discoverUploadedRefData dir
+        mapM_ (reportProgress Warning) (shadowedSources kind combined)
+        pure combined
+
+{- | One warning per name held by more than one source. 'newManager' indexes
+these by name, so a repeated one keeps the last and drops the rest: an uploaded
+directory named like a configured source is all it takes, and the configuration
+checks duplicates for databases and method collections but not for these. Which
+one wins follows from a concatenation order nothing states, so name the file
+being read as well as the ones being ignored.
+-}
+shadowedSources :: String -> [RefDataConfig] -> [String]
+shadowedSources kind rds =
+    [ "Reference data: more than one "
+        <> kind
+        <> " source named "
+        <> T.unpack name
+        <> "; reading "
+        <> winner
+        <> ", ignoring "
+        <> intercalate ", " (reverse ignored)
+    | (name, winner : ignored@(_ : _)) <- M.toList lastFirst
+    ]
+  where
+    -- 'M.fromListWith' prepends, so a group comes out last source first, and
+    -- that first one is what 'M.fromList' keeps.
+    lastFirst :: Map Text [String]
+    lastFirst = M.fromListWith (++) [(rdName rd, [describeSource (rdSource rd)]) | rd <- rds]
 
 {- | The location hierarchy this run scores against. Falling back to the
 built-in hierarchy when a named file cannot be read would change every
@@ -1690,36 +1723,42 @@ archiveExtensions = [".zip", ".7z", ".gz", ".xz"]
 {- | Resolve a database path: if it's an archive, extract it first.
 Extracts to "{archivePath}.d/" and finds the actual data directory inside.
 Plain files/directories pass through unchanged.
+
+'Left' when a path naming an archive could not be extracted. Handing the
+archive path back instead, as this used to, sent every caller on to report
+whatever it made of a @.zip@: no supported database files found, from the
+database loader, and a diagnosis reconstructed from the extension, in the
+method loader.
 -}
-resolveDataPath :: FilePath -> IO FilePath
+resolveDataPath :: FilePath -> IO (Either Text FilePath)
 resolveDataPath path = do
     isDir <- doesDirectoryExist path
     isFile <- doesFileExist path
     -- A directory, a missing path, or a plain file goes through unchanged, and
     -- the caller reports whatever is wrong with it.
     if isDir || not isFile || map toLower (takeExtension path) `notElem` archiveExtensions
-        then return path
+        then pure (Right path)
         else extractAndFind path
   where
-    extractAndFind :: FilePath -> IO FilePath
+    extractAndFind :: FilePath -> IO (Either Text FilePath)
     extractAndFind archive = do
         let extractDir = archive ++ ".d"
         alreadyExtracted <- hasContent extractDir
         if alreadyExtracted
             then do
                 reportProgress Info $ "Using cached extraction: " <> extractDir
-                Upload.findDataDirectory extractDir
+                Right <$> Upload.findDataDirectory extractDir
             else do
                 createDirectoryIfMissing True extractDir
                 reportProgress Info $ "Extracting archive: " <> archive
                 result <- Upload.extractArchiveFile archive extractDir
                 case result of
-                    Left err -> do
-                        reportError $ "Archive extraction failed: " <> T.unpack err
-                        return archive -- let caller report the meaningful error
+                    Left err ->
+                        pure . Left $
+                            "Archive could not be extracted: " <> T.pack archive <> ": " <> err
                     Right () -> do
                         reportProgress Info "Extraction complete"
-                        Upload.findDataDirectory extractDir
+                        Right <$> Upload.findDataDirectory extractDir
 
     -- A directory that exists and holds at least one entry.
     hasContent :: FilePath -> IO Bool
@@ -1981,8 +2020,10 @@ loadDatabaseRawWithCrossDB RawLoad{..} = do
   where
     -- Cache miss or stale: now we need the source. Resolve the archive if any.
     rebuildFromSource :: IO (Either Text (Database, LoadSource))
-    rebuildFromSource = do
-        path <- resolveDataPath rlSourcePath
+    rebuildFromSource = resolveDataPath rlSourcePath >>= either (pure . Left) fromPath
+
+    fromPath :: FilePath -> IO (Either Text (Database, LoadSource))
+    fromPath path = do
         isFile <- doesFileExist path
         isDir <- doesDirectoryExist path
         if not isFile && not isDir
@@ -3354,28 +3395,43 @@ setDataPath manager dbName (RelativeDataPath newRelPath) = runExceptT $ do
     hasData <- liftIO $ Upload.anyDataFilesIn newFullPath
     unless hasData $ throwE $ "No data files found in: " <> newRelPath
 
+    {- meta.toml carries the same two fields, and it is the only durable copy:
+    the in-memory config is rebuilt from it at every start. Read it before
+    changing anything, so a missing one refuses the whole call rather than
+    leaving a new path that lasts until the next restart. An upload always has
+    one, since that is what 'discoverUploadedDatabases' recognises it by. -}
+    meta <-
+        liftIO (UploadedDB.readUploadMeta uploadRoot)
+            >>= maybe (throwE (noMetaMessage uploadRoot)) pure
+
     newFormat <- liftIO $ Upload.detectDatabaseFormat newFullPath
     liftIO $ do
-        atomically $
+        UploadedDB.writeUploadMeta
+            uploadRoot
+            meta
+                { UploadedDB.umDataPath = T.unpack newRelPath
+                , UploadedDB.umFormat = newFormat
+                }
+        atomically $ do
             modifyTVar'
                 (dmAvailableDbs manager)
                 (M.insert dbName dbConfig{dcPath = newFullPath, dcFormat = Just newFormat})
-
-        -- meta.toml carries the same two fields, when the upload has one
-        mMeta <- UploadedDB.readUploadMeta uploadRoot
-        forM_ mMeta $ \meta ->
-            UploadedDB.writeUploadMeta
-                uploadRoot
-                meta
-                    { UploadedDB.umDataPath = T.unpack newRelPath
-                    , UploadedDB.umFormat = newFormat
-                    }
-
-        -- Clear staged DB to force re-staging with new path
-        atomically $ modifyTVar' (dmStagedDbs manager) (M.delete dbName)
+            -- Clear staged DB to force re-staging with new path
+            modifyTVar' (dmStagedDbs manager) (M.delete dbName)
 
     -- Re-stage and return fresh setup info
     withExceptT setupErrorMessage $ ExceptT (getDatabaseSetupInfo manager dbName)
+
+{- | Why a data path cannot be changed when the upload has lost its meta.toml.
+'UploadedDB.readUploadMeta' answers the same for a file that is absent, one
+that cannot be read and one that does not parse, so the message claims no more
+than it knows.
+-}
+noMetaMessage :: FilePath -> Text
+noMetaMessage uploadRoot =
+    "No readable meta.toml under "
+        <> T.pack uploadRoot
+        <> "; the data path would live in memory only and be lost at restart"
 
 {- | Build the combined list of dependency choices.
 Excludes the current database, tags each remaining DB as selected,
@@ -3464,14 +3520,17 @@ Runs cross-DB linking against the new dependency
 -}
 addDependencyToStaged :: DatabaseManager -> DependencyEdit -> IO (Either Text DatabaseSetupInfo)
 addDependencyToStaged manager DependencyEdit{deDatabase = dbName, deDependency = depName} = do
-    indexedDbs <- readTVarIO (dmIndexedDbs manager)
     stagedResult <- getOrStageDatabase manager dbName
-
+    {- Read after staging, as the removal path does. Staging is the slow step
+    here, and a snapshot taken before it judges whether the dependency is
+    loaded on state that may be older than the answer. -}
+    indexedDbs <- readTVarIO (dmIndexedDbs manager)
     case stagedResult of
         Left err -> return $ Left err
-        Right staged -> case M.lookup depName indexedDbs of
-            Nothing -> return $ Left $ "Dependency database not loaded: " <> depName
-            Just _depIdx ->
+        Right staged
+            | not (M.member depName indexedDbs) ->
+                return $ Left $ "Dependency database not loaded: " <> depName
+            | otherwise ->
                 applyStagedDeps
                     manager
                     dbName
@@ -3693,7 +3752,7 @@ loadMethodCollectionFromConfig mc = runExceptT $ do
     {- Resolve archives (ZIP to extracted directory). Single .json (openLCA
     JSON-LD ImpactCategory) and .csv (SimaPro method export) files are accepted
     directly without a wrapping directory or archive. -}
-    resolvedPath <- liftIO $ resolveDataPath (mcPath mc)
+    resolvedPath <- ExceptT (resolveDataPath (mcPath mc))
     source <- ExceptT $ methodSourceAt resolvedPath
     files <- liftIO $ methodFilesOf source
     when (noMethodFiles files) $
@@ -3717,15 +3776,14 @@ loadMethodCollectionFromConfig mc = runExceptT $ do
             (True, _, _) -> Right (MethodDirectory resolvedPath)
             (_, True, ".json") -> Right (BareMethodFile resolvedPath)
             (_, True, ".csv") -> Right (BareMethodFile resolvedPath)
-            _ -> Left (unusableMethodPath isFile ext)
+            _ -> Left (unusableMethodPath isFile)
 
-    -- resolveDataPath returns the archive path unchanged when extraction
-    -- failed, so an archive reaching here means that.
-    unusableMethodPath :: Bool -> String -> Text
-    unusableMethodPath isFile ext
+    {- An archive that would not extract never reaches here: 'resolveDataPath'
+    refuses it with the reason, rather than handing back the archive path for
+    this to guess at from the extension. -}
+    unusableMethodPath :: Bool -> Text
+    unusableMethodPath isFile
         | not isFile = "Method path not found: " <> T.pack (mcPath mc)
-        | ext `elem` archiveExtensions =
-            "Archive could not be extracted (see log above): " <> T.pack (mcPath mc)
         | otherwise =
             "Unsupported method file type (expected a directory, archive, .csv, or .json): "
                 <> T.pack (mcPath mc)
