@@ -63,7 +63,6 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, make
 import System.FilePath ((</>))
 
 import Config (DatabaseConfig (..))
-import Database (applyStructuredFilters, findActivitiesByFields)
 import Database.Author (
     AuthorContext (..),
     AuthoredActivity,
@@ -106,7 +105,7 @@ import qualified Database.UploadedDatabase as UploadedDB
 import Matrix (clearCachedSolver)
 import Progress (ProgressLevel (..), reportProgress)
 import qualified Search.BM25 as BM25
-import Service (bm25Retrieve)
+import Service (ActivityFilterCore (..), SearchFilter (..), activityMatches)
 import Types (
     AllocationKey,
     Database (..),
@@ -860,20 +859,16 @@ resolveDeleteSelection sel =
     toSet = IS.fromList . map fromIntegral
 
 {- | Resolve a filter to the full set of matching 'ProcessId's, ignoring
-pagination. Mirrors the set 'Service.searchActivities' displays so that the
-UI's "delete the whole filtered set" button removes exactly the rows the user
-saw: no more, no fewer.
+pagination.
 
-A non-exact name filter therefore takes the BM25 OR-over-tokens retrieval
-(via 'bm25Retrieve') followed by the structured filters, exactly as
-'searchActivities' does on its BM25 branch. Using the AND-over-token-groups
-name lookup (the lex-sort fallback path) here would silently under-delete a
-multi-word @--name@: it returns a subset of the displayed set, so the count
-would be reported too low. We fall back to the structured field lookup only
-when there is no name filter, the match is exact, or the query tokenizes to
-nothing (in which case 'bm25Retrieve' yields 'Nothing' and there is no
-displayed BM25 set to honour). Order is irrelevant: the result is consumed
-as a set.
+It is 'Service.activityMatches', the same funnel the listing and its tab
+counters go through, with pagination and ordering left off: that is what makes
+the UI's "delete the whole filtered set" button remove exactly the rows the
+user saw, no more and no fewer. Answering the question a second way here would
+mean every tier added to the search had to be remembered twice, and the day one
+was not, the button would delete rows the table never showed.
+
+Order is irrelevant: the result is consumed as a set.
 -}
 filteredProcessIds ::
     Database ->
@@ -884,13 +879,20 @@ filteredProcessIds ::
     Bool -> -- exact name match
     [ProcessId]
 filteredProcessIds db nameP geoP prodP classFilters exactMatch =
-    map fst $ case bm25Candidates of
-        Just ranked -> applyStructuredFilters db geoP prodP classFilters False ranked
-        Nothing -> findActivitiesByFields db nameP geoP prodP classFilters exactMatch
+    map fst (activityMatches db (SearchFilter core exactMatch))
   where
-    bm25Candidates = do
-        name <- nameP
-        if exactMatch || T.null (T.strip name) then Nothing else bm25Retrieve db name
+    core :: ActivityFilterCore
+    core =
+        ActivityFilterCore
+            { afcName = nameP
+            , afcLocation = geoP
+            , afcProduct = prodP
+            , afcClassifications = classFilters
+            , afcLimit = Nothing
+            , afcOffset = Nothing
+            , afcSort = Nothing
+            , afcOrder = Nothing
+            }
 
 -- ---------------------------------------------------------------------------
 -- Effectful entry point (registry swap)

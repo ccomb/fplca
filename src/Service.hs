@@ -29,7 +29,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
+import Database (IdentifierReach (..), activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
@@ -937,16 +937,40 @@ tab counter disagreeing with the tab it labels is worse than no counter.
 -}
 activityMatches :: Database -> SearchFilter -> [(ProcessId, Activity)]
 activityMatches db sFilter@(SearchFilter core exactMatch) =
-    case tryBm25Retrieve db sFilter of
-        Just ranked ->
-            -- BM25 path: ranked candidates → structured filters → preserve score order.
-            applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core) False ranked
+    identified ++ filter (not . alreadyIdentified) searched
+  where
+    -- The blocks the query names by identifier, ahead of the search rather than
+    -- instead of it: a database whose identifiers are bare numbers would
+    -- otherwise let one of them swallow a perfectly ordinary query for that
+    -- number. Their own order is the answer (named outright, then named in
+    -- part), so the caller's sort no more applies here than on the BM25 branch.
+    identified :: [(ProcessId, Activity)]
+    identified = structured exactMatch (foldMap (activitiesIdentifiedBy reach (dbActivities db)) (afcName core))
+
+    reach :: IdentifierReach
+    reach = if exactMatch then WholeIdentifier else WholeOrFragment
+
+    alreadyIdentified :: (ProcessId, Activity) -> Bool
+    alreadyIdentified (pid, _) = IS.member (fromIntegral pid) identifiedPids
+
+    identifiedPids :: IS.IntSet
+    identifiedPids = IS.fromList [fromIntegral pid | (pid, _) <- identified]
+
+    searched :: [(ProcessId, Activity)]
+    searched = case tryBm25Retrieve db sFilter of
+        -- BM25 path: ranked candidates → structured filters → preserve score order.
+        Just ranked -> structured False ranked
+        -- Non-BM25 path: AND-of-tokens name filter + lex sort.
         Nothing ->
-            -- Non-BM25 path: AND-of-tokens name filter + lex sort.
-            let cmp = activityRowComparator (afcSort core)
-                ordered = if afcOrder core == Just "desc" then flip cmp else cmp
-                raw = findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch
-             in L.sortBy ordered raw
+            L.sortBy ordered (findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch)
+
+    structured :: Bool -> [(ProcessId, Activity)] -> [(ProcessId, Activity)]
+    structured = applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core)
+
+    ordered :: (ProcessId, Activity) -> (ProcessId, Activity) -> Ordering
+    ordered
+        | afcOrder core == Just "desc" = flip (activityRowComparator (afcSort core))
+        | otherwise = activityRowComparator (afcSort core)
 
 {- | How many of each thing one query finds, for the three tabs of a search
 box.
