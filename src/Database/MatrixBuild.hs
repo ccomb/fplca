@@ -43,7 +43,6 @@ data InterningTables = InterningTables
     { itProcessIdTable :: !(V.Vector (UUID, UUID))
     , itProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId)
     , itActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId))
-    , itActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId])
     , itActivities :: !(V.Vector Activity)
     , itActivityCount :: !Int32
     }
@@ -53,12 +52,11 @@ buildInterningTables activityMap =
     InterningTables
         { itProcessIdTable = V.fromList [k | (_, k, _) <- indexed]
         , itProcessIdLookup = M.fromList [(k, pid) | (pid, k, _) <- indexed]
-        , -- One activity, every row it was written as: an allocated activity is
+        , -- One activity, every row it was written as, which is also the
+          -- products of the block it came out of: an allocated activity is
           -- written once per coproduct, and 'M.fromList' would have kept
           -- whichever row came last.
           itActivityUUIDIndex = M.fromListWith (flip (<>)) [(actUUID, pid :| []) | (pid, (actUUID, _), _) <- indexed]
-        , itActivityProductsIndex =
-            M.fromListWith (++) [(activityGroupKey actUUID act, [pid]) | (pid, (actUUID, _), act) <- indexed]
         , itActivities = V.fromList [act | (_, _, act) <- indexed]
         , itActivityCount = fromIntegral (length indexed)
         }

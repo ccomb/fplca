@@ -80,7 +80,6 @@ buildDatabaseWithMatrices inputs SimpleDatabase{sdbActivities = activityMap, sdb
                         { dbProcessIdTable = itProcessIdTable tables
                         , dbProcessIdLookup = itProcessIdLookup tables
                         , dbActivityUUIDIndex = itActivityUUIDIndex tables
-                        , dbActivityProductsIndex = itActivityProductsIndex tables
                         , dbProductIndex = productIndex
                         , dbActivities = itActivities tables
                         , dbTechFlows = techFlowDB

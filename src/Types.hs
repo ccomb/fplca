@@ -671,23 +671,12 @@ data Activity = Activity
     }
     deriving (Generic, NFData, Store)
 
-{- | The coproducts of one source dataset block share this key: the activity,
-and the block identifier its source published when it published one.
-
-A SimaPro export mints the activity UUID from that identifier, so today the
-second half separates nothing the first does not. It stays because it is what
-says a block, and it is what would tell apart a format that publishes a block
-identifier without minting its UUID from it.
--}
-activityGroupKey :: UUID -> Activity -> (UUID, Maybe NativeProcessId)
-activityGroupKey actUUID act = (actUUID, activityNativeId act)
-
 {- | The source block one process came out of, as a listing needs to know it.
 
 'sbName' is for comparing, never for reading: every process of one block
-carries the same one and nothing else does. It renders 'activityGroupKey', the
-key a block's coproducts are indexed under, so a row's name and its product
-count are read off one key.
+carries the same one and nothing else does. It is the activity UUID, because
+that is what a block is: a block is written as one row per product, and those
+rows differ by their product, never by their activity.
 
 'sbProducts' is how many products the block holds, and it is the second field
 rather than something a reader could count for itself: a page showing the last
@@ -705,24 +694,20 @@ A process no longer in the table is its own block of one, named the way
 'processIdToText' names it: it is not grouped with anything, which is the
 truth about a row nothing resolves.
 -}
-sourceBlockOf :: Database -> ProcessId -> Activity -> SourceBlock
-sourceBlockOf db pid act = maybe orphan blockOfRef (processIdToRef db pid)
+sourceBlockOf :: Database -> ProcessId -> SourceBlock
+sourceBlockOf db pid = maybe orphan blockOfRef (processIdToRef db pid)
   where
     orphan :: SourceBlock
     orphan = SourceBlock{sbName = processIdToText db pid, sbProducts = 1}
 
     blockOfRef :: ProcessRef -> SourceBlock
     blockOfRef ref =
-        let key = activityGroupKey (prActivity ref) act
-         in SourceBlock
-                { -- The UUID is 36 characters whatever it holds, so the
-                  -- separator cannot be read as part of either half and two
-                  -- different keys cannot spell one name.
-                  sbName = UUID.toText (fst key) <> "/" <> foldMap (\(NativeProcessId native) -> native) (snd key)
-                , -- A key the index does not know is a block of one, which is
-                  -- what 'orphan' says of a row the table does not know.
-                  sbProducts = maybe 1 length (M.lookup key (dbActivityProductsIndex db))
-                }
+        SourceBlock
+            { sbName = UUID.toText (prActivity ref)
+            , -- An activity the index does not know is a block of one, which
+              -- is what 'orphan' says of a row the table does not know.
+              sbProducts = maybe 1 NE.length (M.lookup (prActivity ref) (dbActivityUUIDIndex db))
+            }
 
 {- | Is this dataset filed in its source's obsolete category?
 
@@ -1102,8 +1087,7 @@ data Database = Database
     { -- UUID interning tables for ProcessId ↔ (UUID, UUID) conversion
       dbProcessIdTable :: !(V.Vector (UUID, UUID)) -- ProcessId (Int32) → (activityUUID, productUUID)
     , dbProcessIdLookup :: !(M.Map (UUID, UUID) ProcessId) -- reverse lookup
-    , dbActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId)) -- Activity UUID → the rows that activity was written as
-    , dbActivityProductsIndex :: !(M.Map (UUID, Maybe NativeProcessId) [ProcessId]) -- 'activityGroupKey' → the ProcessIds of one source block (its coproducts)
+    , dbActivityUUIDIndex :: !(M.Map UUID (NonEmpty ProcessId)) -- Activity UUID → the rows that activity was written as, which is also the products of one source block
     , dbProductIndex :: !ProductIndex -- Product flow → ProcessId lookups (for SimaPro links & product search)
     , dbActivities :: !ActivityDB -- Vector of activities indexed by ProcessId
     , dbTechFlows :: !TechFlowDB -- Technosphere flows by UUID
@@ -1144,7 +1128,6 @@ instance Store Database where
         getSize (dbProcessIdTable db)
             + getSize (dbProcessIdLookup db)
             + getSize (dbActivityUUIDIndex db)
-            + getSize (dbActivityProductsIndex db)
             + getSize (dbProductIndex db)
             + getSize (dbActivities db)
             + getSize (dbTechFlows db)
@@ -1167,7 +1150,6 @@ instance Store Database where
         poke (dbProcessIdTable db)
         poke (dbProcessIdLookup db)
         poke (dbActivityUUIDIndex db)
-        poke (dbActivityProductsIndex db)
         poke (dbProductIndex db)
         poke (dbActivities db)
         poke (dbTechFlows db)
@@ -1193,7 +1175,6 @@ instance Store Database where
         processIdTable <- peek
         processIdLookup <- peek
         activityUUIDIndex <- peek
-        activityProductsIndex <- peek
         productIndex <- peek
         activities <- peek
         techFlows <- peek
@@ -1216,7 +1197,6 @@ instance Store Database where
                 { dbProcessIdTable = processIdTable
                 , dbProcessIdLookup = processIdLookup
                 , dbActivityUUIDIndex = activityUUIDIndex
-                , dbActivityProductsIndex = activityProductsIndex
                 , dbProductIndex = productIndex
                 , dbActivities = activities
                 , dbTechFlows = techFlows

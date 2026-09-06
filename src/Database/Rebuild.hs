@@ -182,7 +182,6 @@ rebuildFromActivities unitConfig db activities =
                         { dbProcessIdTable = itProcessIdTable tables
                         , dbProcessIdLookup = itProcessIdLookup tables
                         , dbActivityUUIDIndex = itActivityUUIDIndex tables
-                        , dbActivityProductsIndex = itActivityProductsIndex tables
                         , dbProductIndex = productIndex
                         , dbActivities = itActivities tables
                         , dbIndexes = indexes

@@ -287,7 +287,7 @@ convertToInventoryExport db bioFlowDB unitDB processId rootActivity inventory =
                     M.fromListWith (+) [(ifdCategory f, 1) | f <- flowDetails]
 
         !(prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) unitDB rootActivity
-        !rootBlock = sourceBlockOf db processId rootActivity
+        !rootBlock = sourceBlockOf db processId
 
         !metadata =
             InventoryMetadata
@@ -1121,7 +1121,7 @@ Note: This function requires the ProcessId to get the activity UUID
 convertActivityForAPI :: Database -> ProcessId -> Activity -> ActivityForAPI
 convertActivityForAPI db processId activity =
     let allProducts = case processIdToRef db processId of
-            Just ref -> getAllProductsForActivity db (activityGroupKey (prActivity ref) activity)
+            Just ref -> getAllProductsForActivity db (prActivity ref)
             Nothing -> []
         (refProdName, refProdAmount, refProdUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
         linkMap = buildCrossDBLinkMap db processId
@@ -1325,7 +1325,7 @@ cross-DB unit DB build the record by hand.
 mkActivitySummary :: Database -> ProcessId -> Activity -> ActivitySummary
 mkActivitySummary db processId activity =
     let (prodName, prodAmount, prodUnit) = getReferenceProductInfo (dbTechFlows db) (dbUnits db) activity
-        block = sourceBlockOf db processId activity
+        block = sourceBlockOf db processId
      in ActivitySummary
             { prsProcessId = processIdToText db processId
             , prsActivityName = activityName activity
@@ -1363,15 +1363,14 @@ unknownActivitySummary db pid =
         }
 
 {- | The coproducts of one source dataset block, as 'ActivitySummary'. Keyed on
-'activityGroupKey', not on the activity UUID alone: SimaPro reuses one process
-name across unrelated blocks, which the UUID hashes to a single value.
+the activity, which is what a block is: its rows differ by their product.
 -}
-getAllProductsForActivity :: Database -> (UUID, Maybe NativeProcessId) -> [ActivitySummary]
-getAllProductsForActivity db groupKey =
-    case M.lookup groupKey (dbActivityProductsIndex db) of
+getAllProductsForActivity :: Database -> UUID -> [ActivitySummary]
+getAllProductsForActivity db actUUID =
+    case M.lookup actUUID (dbActivityUUIDIndex db) of
         Nothing -> []
         Just processIds ->
-            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) (dbUnits db) (map described processIds)
+            withMassAllocationPercent (biUnitConfig (dbBuiltWith db)) (dbUnits db) (map described (NE.toList processIds))
   where
     {- Each product with the row it was split from, because what a mass key
     would give this block is read from that row: the property it states if it
@@ -1922,7 +1921,7 @@ buildSupplyChainFromScalingVector db dbName processId supplyVec scf =
                 (RootLevel processId)
                 supplyVec
                 scf
-        rootBlock = sourceBlockOf db processId rootActivity
+        rootBlock = sourceBlockOf db processId
         rootSummary =
             ActivitySummary
                 { prsProcessId = processIdToText db processId
@@ -1975,7 +1974,7 @@ buildSupplyChainFromScalingVectorCrossDB ::
 buildSupplyChainFromScalingVectorCrossDB unitCfg depLookup rootDb rootDbName rootPid rootScaling extraLinks scf = do
     let rootActivity = dbActivities rootDb V.! fromIntegral rootPid
         rootRefAmount = getReferenceProductAmount rootActivity
-        rootBlock = sourceBlockOf rootDb rootPid rootActivity
+        rootBlock = sourceBlockOf rootDb rootPid
         rootCollected =
             collectSupplyChainEntries
                 rootDb

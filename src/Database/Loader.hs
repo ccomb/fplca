@@ -296,6 +296,9 @@ History of manual bumps:
 - 22: the payload records the allocation key the database was divided under
      ('dbBuiltWith'), so a cache of one key is not served to a load asking for
      another. Old caches end before the field.
+- 23: the index of a block's products is gone, the activity UUID index being
+     the same map: the payload has one field fewer, and every field after it
+     would be read at the wrong offset.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -303,7 +306,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 22
+     in hi `xor` lo `xor` 23
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
