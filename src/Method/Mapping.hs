@@ -97,6 +97,7 @@ module Method.Mapping (
     -- * Matching strategies
     MatchStrategy (..),
     strategyToText,
+    provenanceStrategyText,
     findFlowByUUID,
     findFlowByName,
     findFlowByNameComp,
@@ -109,7 +110,7 @@ module Method.Mapping (
     -- * Statistics
     MappingStats (..),
     computeMappingStats,
-    strategyPriority,
+    entryPriority,
 ) where
 
 import Control.Applicative ((<|>))
@@ -164,8 +165,6 @@ data MatchStrategy
       direct match so an explicit CF always wins.
       -}
       ByProxy
-    | -- | No match found
-      NoMatch
     deriving (Eq, Show)
 
 {- | Per-strategy mapping counters. Forms a 'Monoid' (field-wise sum, all-zero
@@ -538,7 +537,13 @@ strategyToText ByCAS = "cas"
 strategyToText ByName = "name"
 strategyToText BySynonym = "synonym"
 strategyToText ByProxy = "proxy"
-strategyToText NoMatch = "none"
+
+{- | How an entry was attached, as every surface that reports it words the
+answer. An entry no build-side resolution reached reads @"none"@: it is filed
+under the name the method itself uses, and the read cascade may still serve it.
+-}
+provenanceStrategyText :: BuildProvenance -> Text
+provenanceStrategyText = maybe "none" strategyToText . bpStrategy
 
 -- ──────────────────────────────────────────────
 -- Low-level matching functions (used by built-in MapperHandles)
@@ -698,9 +703,6 @@ computeMappingStats = foldMap (tally . fmap snd . snd)
     tally (Just ByName) = one{msByName = 1}
     tally (Just BySynonym) = one{msBySynonym = 1}
     tally (Just ByProxy) = one{msByProxy = 1}
-    -- 'NoMatch' is not produced by the current matchers; this row exists only
-    -- to keep the match exhaustive. Counts as unmatched if ever introduced.
-    tally (Just NoMatch) = one{msUnmatched = 1}
 
 {- | The unit a CF value is denominated in ('mcfUnit' as parsed — a flow
 reference unit like @"kg"@, or an impact-result expression like @"kg CO2 eq"@).
@@ -724,12 +726,11 @@ data CF = CF
 so keeping provenance in the tables costs a few words per entry.
 -}
 data BuildProvenance = BuildProvenance
-    { bpStrategy :: !MatchStrategy
-    {- ^ 'ByUUID' \/ 'ByName' \/ 'BySynonym' \/ 'ByCAS' \/ 'ByProxy' when a
-    build-side resolution attached the line to a database flow; 'NoMatch'
-    when the entry is keyed under the method's own flow name because no
-    database flow resolved at build time (the read-time cascade can still
-    serve it to a flow arriving at that key).
+    { bpStrategy :: !(Maybe MatchStrategy)
+    {- ^ The bridge a build-side resolution took to attach the line to a
+    database flow; 'Nothing' when the entry is keyed under the method's own
+    flow name because no database flow resolved at build time (the read-time
+    cascade can still serve it to a flow arriving at that key).
     -}
     , bpSource :: !MethodCF
     -- ^ The method line that authored the entry.
@@ -1306,8 +1307,8 @@ data SubMatch = ExactSub | MediumLevelSub
 
 {- | Cascade-order rank of a match strategy (UUID → name → synonym → CAS →
 heuristic/expanded): when two CFs collide on one flow or table key, the lower
-rank — the more discriminating match — wins. Exported so diagnostics dedup
-with the same preference the score tables use.
+rank — the more discriminating match — wins. What the score tables actually
+compare is 'entryPriority', which also ranks an entry no resolution reached.
 -}
 strategyPriority :: MatchStrategy -> Int
 strategyPriority ByUUID = 0
@@ -1315,7 +1316,16 @@ strategyPriority ByName = 1
 strategyPriority BySynonym = 2
 strategyPriority ByCAS = 3
 strategyPriority ByProxy = 4
-strategyPriority NoMatch = 4
+
+{- | Cascade rank of a table entry. One no build-side resolution reached ranks
+with 'ByProxy', the least discriminating match, so the two tie here and the
+entry is chosen on the rungs below: the raw-name rank first, then the factor.
+
+Exported so a consumer ranking entries outside this module reaches the same
+verdict as the score tables do.
+-}
+entryPriority :: BuildProvenance -> Int
+entryPriority = maybe (strategyPriority ByProxy) strategyPriority . bpStrategy
 
 {- | The medium and subcompartment a characterization factor keys on, or
 'Nothing' when it states no compartment at all.
@@ -1559,7 +1569,7 @@ buildMethodTables methodFamily cmap energyDensities mappings =
   where
     cfOf cf = CF (mcfValue cf) (CFUnit (mcfUnit cf))
 
-    entryOf cf mflow = TableEntry (cfOf cf) (BuildProvenance (matchStrategy mflow) cf)
+    entryOf cf mflow = TableEntry (cfOf cf) (BuildProvenance (snd <$> mflow) cf)
 
     -- The Bool rode along only for 'preferBetter''s raw-name rank.
     dropRank = M.map fst
@@ -1695,16 +1705,12 @@ buildMethodTables methodFamily cmap energyDensities mappings =
         | cfValue (teCF ea) >= cfValue (teCF eb) = a
         | otherwise = b
       where
-        p1 = strategyPriority (bpStrategy (teProvenance ea))
-        p2 = strategyPriority (bpStrategy (teProvenance eb))
+        p1 = entryPriority (teProvenance ea)
+        p2 = entryPriority (teProvenance eb)
 
     rawNameMatches cf mflow = case mflow of
         Just (flow, _) -> T.toLower (T.strip (mcfFlowName cf)) == T.toLower (T.strip (bfName flow))
         Nothing -> False
-
-    matchStrategy mflow = case mflow of
-        Just (_, s) -> s
-        Nothing -> NoMatch
 
     -- Use matched flow's name only for name/synonym/proxy matches: those key
     -- the CF under the database flow it resolved to, not the method CF's own name.

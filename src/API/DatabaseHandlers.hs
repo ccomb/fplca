@@ -231,7 +231,7 @@ import Database.Upload (
 import qualified Database.UploadedDatabase as UploadedDB
 import qualified Method.Coverage as Coverage
 import qualified Method.Explain as Explain
-import Method.Mapping (BuildProvenance (..), CF (..), CFUnit (..), MatchStrategy (..), strategyToText)
+import Method.Mapping (BuildProvenance (..), CF (..), CFUnit (..), provenanceStrategyText, strategyToText)
 import Method.Types (Method (..), MethodCF (..))
 import Types (
     AllocationKey (..),
@@ -499,17 +499,8 @@ coverageReportToAPI mLimit r =
     flowToAPI f =
         BridgedFlowAPI
             { cvfFlowName = Coverage.brfFlowName f
-            , cvfStrategy = strategyLabel (Coverage.brfStrategy f)
+            , cvfStrategy = strategyToText (Coverage.brfStrategy f)
             }
-
--- | Wire label for the bridge that reached a flow (only bridge strategies occur).
-strategyLabel :: MatchStrategy -> Text
-strategyLabel ByCAS = "cas"
-strategyLabel BySynonym = "synonym"
-strategyLabel ByProxy = "proxy"
-strategyLabel ByName = "name"
-strategyLabel ByUUID = "uuid"
-strategyLabel NoMatch = "none"
 
 {- | Copy a loaded database under a new name. The copy is an independent
 in-memory database registered under @newName@; the source is untouched.
@@ -1411,7 +1402,7 @@ explainCFToAPI db method flow explanation =
                 , emaCfUnit = unit
                 , emaMethodFlowName = mcfFlowName (bpSource provenance)
                 , emaMethodCas = mcfCAS (bpSource provenance)
-                , emaMatchStrategy = strategyToText (bpStrategy provenance)
+                , emaMatchStrategy = provenanceStrategyText provenance
                 , emaUnitConversion = Nothing
                 , emaRefusal = Nothing
                 }

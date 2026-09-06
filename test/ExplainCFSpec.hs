@@ -110,7 +110,7 @@ flowDBOf flows = M.fromList [(bfId f, f) | f <- flows]
 
 -- | Any match will do where only the outcome's name is under test.
 sampleMatch :: CFMatch
-sampleMatch = CFMatch RungExactName (CF 1 (CFUnit "kg")) (BuildProvenance ByName (cfLine "Methane, fossil" "" "kg" 1))
+sampleMatch = CFMatch RungExactName (CF 1 (CFUnit "kg")) (BuildProvenance (Just ByName) (cfLine "Methane, fossil" "" "kg" 1))
 
 resultsFor :: CFExplanation -> [(RungId, StepResult)]
 resultsFor e = [(stRung s, stResult s) | s <- ceTrail e]
@@ -123,22 +123,29 @@ spec = do
             matchIn unit rung strat = CFMatch rung (CF 29.8 (CFUnit unit)) (provenance strat)
 
         it "a direct name match reads as one" $
-            renderResolution (Characterized (match RungExactName ByName) UnitsIdentical)
+            renderResolution (Characterized (match RungExactName (Just ByName)) UnitsIdentical)
                 `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
                            , "The factor applied is 29.8 per kg."
                            ]
 
         it "names the synonym bridge that attached the line" $
-            renderResolution (Characterized (match RungExactName BySynonym) UnitsIdentical)
+            renderResolution (Characterized (match RungExactName (Just BySynonym)) UnitsIdentical)
                 `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
                            , "That line was tied to this flow's name through a known synonym when the method was loaded."
+                           , "The factor applied is 29.8 per kg."
+                           ]
+
+        it "says a line no database flow claimed is filed under the method's own name" $
+            renderResolution (Characterized (match RungExactName Nothing) UnitsIdentical)
+                `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
+                           , "No database flow claimed that line when the method was loaded; it is filed under the name the method itself uses."
                            , "The factor applied is 29.8 per kg."
                            ]
 
         it "spells out the energy content that bridges the units" $
             renderResolution
                 ( Characterized
-                    (matchIn "MJ" RungEnergyResource ByName)
+                    (matchIn "MJ" RungEnergyResource (Just ByName))
                     (EnergyBridged (EnergyDensity 18.0 "MJ" "kg") DensityForward)
                 )
                 `shouldBe` [ "No factor carries this flow's name. The flow is an energy resource, so its family's factor per unit of energy, from \"Methane, fossil\", applies."
@@ -150,14 +157,14 @@ spec = do
         -- ("kg CO2 eq"): the factor yields that much per base unit, so the
         -- sentence must not read "per kg CO2 eq" — that is the factor backwards.
         it "states a result-expression factor on the flow's base unit" $
-            renderResolution (Characterized (matchIn "kg CO2 eq" RungExactName ByName) (NormalizedToBase "kg"))
+            renderResolution (Characterized (matchIn "kg CO2 eq" RungExactName (Just ByName)) (NormalizedToBase "kg"))
                 `shouldBe` [ "The factor line \"Methane, fossil\" matches this flow's name and compartment."
                            , "The factor is written per kg, so the amount was brought to kg first."
                            , "The factor applied is 29.8 kg CO2 eq per kg."
                            ]
 
         it "says why a refused conversion scores nothing" $
-            renderResolution (ConversionRefused (match RungCasBridge ByCAS) (DimensionalMismatch "kg" "m3"))
+            renderResolution (ConversionRefused (match RungCasBridge (Just ByCAS)) (DimensionalMismatch "kg" "m3"))
                 `shouldBe` [ "No factor carries this flow's name. \"Methane, fossil\" describes the same substance in the same compartment, so its factor applies."
                            , "That line was tied to this flow by CAS number when the method was loaded."
                            , "The factor is written per m3, which does not measure the same thing as this flow's kg. The engine refuses to convert between them, so the flow adds nothing to the score."
@@ -169,7 +176,7 @@ spec = do
 
         it "gives every rung a sentence of its own" $ do
             let sentences =
-                    [ renderResolution (Characterized (match rung ByName) UnitsIdentical)
+                    [ renderResolution (Characterized (match rung (Just ByName)) UnitsIdentical)
                     | rung <- [minBound .. maxBound]
                     ]
             length sentences `shouldBe` length [minBound .. maxBound :: RungId]
