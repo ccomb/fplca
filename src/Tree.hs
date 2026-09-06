@@ -102,7 +102,7 @@ buildNode cfg pid activity visited depth = do
 with its converted amount and recursing. Bails out early when the node
 budget runs out so the tree stays within the 300-node envelope.
 -}
-buildChildren :: TreeConfig -> [Exchange] -> S.Set ProcessId -> Int -> State Int [(Double, TechnosphereFlow, LoopAwareTree)]
+buildChildren :: TreeConfig -> [Exchange] -> S.Set ProcessId -> Int -> State Int [TreeChild]
 buildChildren _ [] _ _ = pure []
 buildChildren cfg (ex : exs) visited depth = do
     budget <- get
@@ -113,7 +113,7 @@ buildChildren cfg (ex : exs) visited depth = do
                 let amount = getConvertedExchangeAmount (tcUnitConfig cfg) db ex (childUnit db flow target)
                 subtree <- buildTarget cfg target visited depth
                 rest <- buildChildren cfg exs visited depth
-                pure ((amount, flow, subtree) : rest)
+                pure (TreeChild{childAmount = amount, childFlow = flow, childSubtree = subtree} : rest)
             _ -> buildChildren cfg exs visited depth
   where
     db = tcDatabase cfg

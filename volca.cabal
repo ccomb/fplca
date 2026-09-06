@@ -345,6 +345,7 @@ test-suite lca-tests
                      , JournalSpec
                      , ActivityWriteHandlerSpec
                      , PersistenceSpec
+                     , CacheLayoutSpec
                      , DeleteSelectionSpec
                      , ExportSpec
                      , ExportHandlerSpec
@@ -382,6 +383,7 @@ test-suite lca-tests
                      , toml-reader
                      , openapi3
                      , lens
+                     , store
   build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010

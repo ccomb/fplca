@@ -245,6 +245,7 @@ import Types (
     UUID,
     Unit (..),
     UnitDB,
+    UnresolvedProduct (..),
     allocationKeyText,
     bfCompartmentName,
     bfCompartmentSub,
@@ -298,8 +299,8 @@ data StagedDatabase = StagedDatabase
     -- ^ Parsed data (activities, flows, units)
     , sdConfig :: !DatabaseConfig
     -- ^ Configuration
-    , sdMissingProducts :: ![(Text, Int, LinkBlocker)]
-    -- ^ (product name, count, reason)
+    , sdMissingProducts :: ![(Text, UnresolvedProduct)]
+    -- ^ Product name, and the demands it left unsupplied
     , sdSelectedDeps :: ![Text]
     -- ^ Selected dependency database names
     , sdCrossDBLinks :: ![CrossDBLink]
@@ -3241,25 +3242,25 @@ carry the rich blockers the attribute matcher produced; dangling non-nil gaps
 are tagged 'NoNameMatch'. The two sets are disjoint (nil vs non-nil), so the
 concatenation never duplicates.
 -}
-rankMissingProducts :: Map Text (Int, LinkBlocker) -> Map Text Int -> [(Text, Int, LinkBlocker)]
+rankMissingProducts :: Map Text UnresolvedProduct -> Map Text Int -> [(Text, UnresolvedProduct)]
 rankMissingProducts blocked dangling =
     sortOn
-        (\(_, cnt, _) -> Down cnt)
-        ( [(name, cnt, blocker) | (name, (cnt, blocker)) <- M.toList blocked]
-            <> [(name, cnt, NoNameMatch) | (name, cnt) <- M.toList dangling]
+        (Down . upDemands . snd)
+        ( M.toList blocked
+            <> [(name, UnresolvedProduct{upDemands = cnt, upBlocker = NoNameMatch}) | (name, cnt) <- M.toList dangling]
         )
 
 -- | Project one ranked missing product onto its wire shape.
-blockerToMissingSupplier :: (Text, Int, LinkBlocker) -> MissingSupplier
-blockerToMissingSupplier (name, cnt, blocker) =
-    let reason = blockerReason blocker
-     in MissingSupplier name cnt Nothing (brReason reason) (brDetail reason)
+blockerToMissingSupplier :: (Text, UnresolvedProduct) -> MissingSupplier
+blockerToMissingSupplier (name, unresolved) =
+    let reason = blockerReason (upBlocker unresolved)
+     in MissingSupplier name (upDemands unresolved) Nothing (brReason reason) (brDetail reason)
 
 {- | Missing-supplier list for a staged database: rich blockers from the
 linking stats plus dangling background links a partial import leaves behind
 ('Loader.collectStagedDanglingProductNames'), ranked by demand.
 -}
-stagedMissingProducts :: SimpleDatabase -> CrossDBLinkingStats -> [(Text, Int, LinkBlocker)]
+stagedMissingProducts :: SimpleDatabase -> CrossDBLinkingStats -> [(Text, UnresolvedProduct)]
 stagedMissingProducts sdb stats =
     rankMissingProducts
         (cdlUnresolvedProducts stats)
@@ -3279,7 +3280,7 @@ data SetupSource = SetupSource
     { ssConfig :: !DatabaseConfig
     , ssCounts :: !LinkCounts
     , ssStats :: !CrossDBLinkingStats
-    , ssMissing :: ![(Text, Int, LinkBlocker)]
+    , ssMissing :: ![(Text, UnresolvedProduct)]
     , ssDependencies :: ![DependencyChoice]
     , ssOrigin :: !SetupOrigin
     }

@@ -43,14 +43,14 @@ spec = do
         it "descends into the coproduct the input asks for" $ do
             db <- twoCoproductFixture
             case treeOfConsumer db of
-                Right (TreeNode _ _ [(_, _, TreeLeaf pid _)]) -> processIdToText db pid `shouldBe` pidText milkId
+                Right (TreeNode _ _ [TreeChild{childSubtree = TreeLeaf pid _}]) -> processIdToText db pid `shouldBe` pidText milkId
                 Right other -> expectationFailure ("unexpected tree shape: " <> show (shapeOf other))
                 Left err -> expectationFailure (show err)
 
         it "keeps a declared link no row satisfies as a visible node" $ do
             db <- danglingLinkFixture
             case treeOfConsumer db of
-                Right (TreeNode _ _ [(_, _, TreeMissing uuid _ _)]) -> uuid `shouldBe` ghostActId
+                Right (TreeNode _ _ [TreeChild{childSubtree = TreeMissing uuid _ _}]) -> uuid `shouldBe` ghostActId
                 Right other -> expectationFailure ("unexpected tree shape: " <> show (shapeOf other))
                 Left err -> expectationFailure (show err)
 
@@ -169,7 +169,7 @@ shapeOf :: LoopAwareTree -> [Text]
 shapeOf (TreeLeaf _ _) = ["leaf"]
 shapeOf (TreeLoop{}) = ["loop"]
 shapeOf (TreeMissing{}) = ["missing"]
-shapeOf (TreeNode _ _ children) = "node" : concatMap (\(_, _, t) -> shapeOf t) children
+shapeOf (TreeNode _ _ children) = "node" : concatMap (shapeOf . childSubtree) children
 
 consumerRow :: Database -> Maybe (ProcessId, Activity)
 consumerRow db = do

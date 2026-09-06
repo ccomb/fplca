@@ -625,7 +625,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
             [] -> CrossDBNotLinked (AliasTargetMissing targetName (Just targetLoc))
             atLoc@((_, firstSe) : _) ->
                 case filter (\(_, se) -> unitsAreCompatible lcUnitConfig unit (seUnit se)) atLoc of
-                    [] -> CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
+                    [] -> CrossDBNotLinked UnitIncompatible{uiQueryUnit = unit, uiSupplierUnit = seUnit firstSe}
                     compatible@(_ : _) ->
                         let scored = map (scoreEntry effectiveLocation) compatible
                             !best = maximumBy (comparing cdbScore) scored
@@ -642,7 +642,7 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                  in if null unitCompatible
                         then
                             -- All candidates failed unit check — report the first supplier's unit
-                            CrossDBNotLinked (UnitIncompatible unit (seUnit firstSe))
+                            CrossDBNotLinked UnitIncompatible{uiQueryUnit = unit, uiSupplierUnit = seUnit firstSe}
                         else
                             -- Filter candidates geographically via policy, then rank survivors
                             let accepted = mapMaybe (classifyEntry effectiveLocation) unitCompatible
@@ -653,7 +653,12 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
                                         -- from "policy rejected an otherwise valid match".
                                         case rejectionReason effectiveLocation unitCompatible of
                                             Just (bestLoc, bestKind) ->
-                                                CrossDBNotLinked (LocationRejectedByPolicy effectiveLocation bestLoc bestKind)
+                                                CrossDBNotLinked
+                                                    LocationRejectedByPolicy
+                                                        { lrRequested = effectiveLocation
+                                                        , lrBestCandidate = bestLoc
+                                                        , lrBestKind = bestKind
+                                                        }
                                             Nothing ->
                                                 CrossDBNotLinked (LocationUnavailable effectiveLocation)
                                     _ ->

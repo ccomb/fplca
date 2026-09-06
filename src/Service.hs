@@ -568,8 +568,8 @@ extractNodesAndEdges db tree depth parentId acc = case tree of
   where
     insertNode :: Text -> ExportNode -> TreeBuild -> TreeBuild
     insertNode nodeId node built = built{tbNodes = M.insert nodeId node (tbNodes built)}
-    processChild :: Text -> (Double, TechnosphereFlow, LoopAwareTree) -> TreeBuild -> TreeBuild
-    processChild parentPid (quantity, flow, subtree) built =
+    processChild :: Text -> TreeChild -> TreeBuild -> TreeBuild
+    processChild parentPid TreeChild{childAmount = quantity, childFlow = flow, childSubtree = subtree} built =
         let childBuilt = extractNodesAndEdges db subtree (depth + 1) (Just parentPid) built
             edge = mkTechnosphereTreeEdge (dbUnits db) parentPid (getTreeNodeId db subtree) quantity flow
          in childBuilt{tbEdges = edge : tbEdges childBuilt}

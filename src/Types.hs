@@ -733,9 +733,18 @@ only node with no row to name.
 -}
 data LoopAwareTree
     = TreeLeaf !ProcessId !Activity
-    | TreeNode !ProcessId !Activity ![(Double, TechnosphereFlow, LoopAwareTree)] -- Row + activity + (quantity, child product flow, subtree)
+    | TreeNode !ProcessId !Activity ![TreeChild] -- Row + activity + what it consumes
     | TreeLoop !ProcessId !Text !Int -- Already visited, or depth/budget spent: row + ActivityName + Depth
     | TreeMissing !UUID !Text !Int -- Declared link no row satisfies: activity UUID + name + Depth
+
+{- | One branch under a 'TreeNode': how much the parent consumes, the product
+flow the edge is labelled with, and the subtree that supplies it.
+-}
+data TreeChild = TreeChild
+    { childAmount :: !Double
+    , childFlow :: !TechnosphereFlow
+    , childSubtree :: !LoopAwareTree
+    }
 
 -- | Technosphere flow database (deduplicated by UUID)
 type TechFlowDB = M.Map UUID TechnosphereFlow
@@ -1534,14 +1543,19 @@ toSimpleDatabase db =
 data LinkBlocker
     = -- | Product not found at all
       NoNameMatch
-    | -- | queryUnit, supplierUnit
-      UnitIncompatible !Text !Text
+    | -- | The supplier ships that product under a unit the demand cannot use.
+      UnitIncompatible
+        { uiQueryUnit :: !Text
+        , uiSupplierUnit :: !Text
+        }
     | -- | requestedLoc (no fallback found above threshold)
       LocationUnavailable !Text
-    | {- | requestedLoc, bestCandidateLoc, bestCandidateKind — match existed but the database's
-      geography_policy rejected it
-      -}
-      LocationRejectedByPolicy !Text !Text !LocationKind
+    | -- | A match existed and the database's geography_policy rejected it.
+      LocationRejectedByPolicy
+        { lrRequested :: !Text
+        , lrBestCandidate :: !Text
+        , lrBestKind :: !LocationKind
+        }
     | {- | targetName, targetLocation — a relink-mapping row designated a supplier
       that no pinned dependency ships ('Nothing' when the name matches nowhere,
       'Just' the pinned location when the name exists but not there). A curated
@@ -1671,9 +1685,10 @@ surfaces can never name the same blocker differently.
 blockerReason :: LinkBlocker -> BlockerReason
 blockerReason blocker = case blocker of
     NoNameMatch -> BlockerReason "no_name_match" Nothing
-    UnitIncompatible q s -> BlockerReason "unit_incompatible" (Just (q <> " vs " <> s))
+    UnitIncompatible{uiQueryUnit = q, uiSupplierUnit = s} ->
+        BlockerReason "unit_incompatible" (Just (q <> " vs " <> s))
     LocationUnavailable loc -> BlockerReason "location_unavailable" (Just loc)
-    LocationRejectedByPolicy req act kind ->
+    LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = act, lrBestKind = kind} ->
         BlockerReason "location_rejected" (Just (req <> " ↛ " <> act <> " (" <> locationKindCode kind <> ")"))
     AliasTargetMissing name mLoc ->
         BlockerReason "alias_target_missing" (Just (name <> maybe "" (" @ " <>) mLoc))
@@ -1786,14 +1801,31 @@ data AttributeFallback = AttributeFallback
     deriving (Show, Eq, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped AttributeFallback)
 
+{- | One product no dependency supplies: how many activities asked for it,
+and what stopped the first of them.
+
+The single blocker is a known gap, not a decision: merging two linking runs
+sums the demands and keeps the first blocker, so a product blocked for two
+different reasons is counted under both and named after one. Widening it to a
+count per blocker changes what the setup page and the load log display, so it
+is issue #391 rather than a field of this record.
+-}
+data UnresolvedProduct = UnresolvedProduct
+    { upDemands :: !Int
+    -- ^ Activities that asked for this product
+    , upBlocker :: !LinkBlocker
+    -- ^ What stopped the first of them
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+
 {- | Statistics from cross-database linking
 Only essential state is stored; counts are derived via accessor functions.
 -}
 data CrossDBLinkingStats = CrossDBLinkingStats
     { cdlLinks :: ![CrossDBLink]
     -- ^ Resolved cross-DB links (technosphere + waste)
-    , cdlUnresolvedProducts :: !(M.Map Text (Int, LinkBlocker))
-    -- ^ Product name -> (count, reason)
+    , cdlUnresolvedProducts :: !(M.Map Text UnresolvedProduct)
+    -- ^ Product name -> the demands it left unsupplied
     , cdlUnknownUnits :: !(S.Set Text)
     -- ^ Unknown units from sdbUnits
     , cdlLocationFallbacks :: ![LocationFallback]
@@ -1815,8 +1847,7 @@ data CrossDBLinkingStats = CrossDBLinkingStats
 
 {- | Field-wise '<>'. On unresolved-product collision counts are summed
 and the first 'LinkBlocker' wins (tiebreaker). Hand-written: bare 'Int'
-has no canonical 'Monoid', and the @(Int, LinkBlocker)@ map value is
-not itself a 'Monoid'.
+has no canonical 'Monoid', and 'UnresolvedProduct' is not one either.
 -}
 instance Semigroup CrossDBLinkingStats where
     s1 <> s2 =
@@ -1833,7 +1864,7 @@ instance Semigroup CrossDBLinkingStats where
             , cdlCutoffWasteCount = cdlCutoffWasteCount s1 + cdlCutoffWasteCount s2
             }
       where
-        mergeUnresolved (c1, b) (c2, _) = (c1 + c2, b)
+        mergeUnresolved u1 u2 = u1{upDemands = upDemands u1 + upDemands u2}
 
 instance Monoid CrossDBLinkingStats where
     mempty =
@@ -1880,7 +1911,7 @@ crossDBLinksCount = length . cdlLinks
 
 -- | Number of unresolved inputs
 unresolvedCount :: CrossDBLinkingStats -> Int
-unresolvedCount = sum . map fst . M.elems . cdlUnresolvedProducts
+unresolvedCount = sum . map upDemands . M.elems . cdlUnresolvedProducts
 
 -- | Cross-DB links grouped by source database
 crossDBBySource :: CrossDBLinkingStats -> M.Map Text Int
