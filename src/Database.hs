@@ -211,6 +211,14 @@ fullScanNameMatches :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
 fullScanNameMatches actVec name =
     [pair | pair@(_, a) <- allActivities actVec, allWordsMatch name (\a' -> [activityName a']) a]
 
+{- | How much of an identifier a query is allowed to be. A caller asking for an
+exact name match asked for equality, so it gets the blocks its query is the
+whole identifier of and no others; the ordinary caller also gets the ones it is
+only a part of, because nobody types an identifier whole.
+-}
+data IdentifierReach = WholeIdentifier | WholeOrFragment
+    deriving (Eq, Show)
+
 {- | The rows of the source blocks a query names by their identifier, the ones
 it names outright before the ones it only names part of. Which formats publish
 an identifier, and which have nothing to publish because they name a dataset by
@@ -235,11 +243,14 @@ rows before an ordinary search rather than instead of it.
 Every product of a block carries the block's identifier, so the answer is the
 whole block, which is what someone holding a source file open is looking for.
 -}
-activitiesIdentifiedBy :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
-activitiesIdentifiedBy actVec query
+activitiesIdentifiedBy :: IdentifierReach -> V.Vector Activity -> Text -> [(ProcessId, Activity)]
+activitiesIdentifiedBy reach actVec query
     | T.null wanted = []
-    | T.length wanted < shortestFragment = named (== wanted)
-    | otherwise = named (== wanted) ++ named containsWanted
+    | otherwise = case reach of
+        WholeIdentifier -> named (== wanted)
+        WholeOrFragment
+            | T.length wanted < shortestFragment -> named (== wanted)
+            | otherwise -> named (== wanted) ++ named containsWanted
   where
     wanted :: Text
     wanted = T.toCaseFold (T.strip query)

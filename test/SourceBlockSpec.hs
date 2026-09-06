@@ -99,6 +99,15 @@ spec = do
             withDatabase blocksWhoseIdentifiersNest $ \db ->
                 productsFound db "3103728" `shouldBe` ["Butter", "Cream"]
 
+        {- A caller asking for an exact match asked for equality, so a fragment
+        is not one. Without this the stamp every identifier shares would answer
+        with the whole database under the flag that exists to narrow it.
+        -}
+        it "reads only whole identifiers when the caller asked for an exact match" $
+            withDatabase twoBlocksSharingAName $ \db -> do
+                exactProductsFound db "AGRIBALU" `shouldBe` []
+                exactProductsFound db "AGRIBALU000000003103728" `shouldMatchList` ["Cheese", "Whey"]
+
 -- | Every process of a SimaPro file, loaded and built the way a served one is.
 withDatabase :: BS.ByteString -> (Database -> IO ()) -> IO ()
 withDatabase csv k = withSystemTempDirectory "source-block" $ \dir -> do
@@ -117,8 +126,16 @@ summaries db = [mkActivitySummary db pid act | (pid, act) <- zip [0 ..] (V.toLis
 funnel a listing and its tab counter both use.
 -}
 productsFound :: Database -> Text -> [Text]
-productsFound db query =
-    [prsProductName (mkActivitySummary db pid act) | (pid, act) <- activityMatches db (SearchFilter (nameOnly query) False)]
+productsFound db = productsMatching db False
+
+-- | 'productsFound' with the exact-match flag the caller can set on a search.
+exactProductsFound :: Database -> Text -> [Text]
+exactProductsFound db = productsMatching db True
+
+-- | Both of the above, carrying the exact-match flag a 'SearchFilter' holds.
+productsMatching :: Database -> Bool -> Text -> [Text]
+productsMatching db exact query =
+    [prsProductName (mkActivitySummary db pid act) | (pid, act) <- activityMatches db (SearchFilter (nameOnly query) exact)]
   where
     nameOnly :: Text -> ActivityFilterCore
     nameOnly q =

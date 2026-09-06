@@ -29,7 +29,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Database (activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
+import Database (IdentifierReach (..), activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
@@ -945,7 +945,10 @@ activityMatches db sFilter@(SearchFilter core exactMatch) =
     -- number. Their own order is the answer (named outright, then named in
     -- part), so the caller's sort no more applies here than on the BM25 branch.
     identified :: [(ProcessId, Activity)]
-    identified = structured exactMatch (foldMap (activitiesIdentifiedBy (dbActivities db)) (afcName core))
+    identified = structured exactMatch (foldMap (activitiesIdentifiedBy reach (dbActivities db)) (afcName core))
+
+    reach :: IdentifierReach
+    reach = if exactMatch then WholeIdentifier else WholeOrFragment
 
     alreadyIdentified :: (ProcessId, Activity) -> Bool
     alreadyIdentified (pid, _) = IS.member (fromIntegral pid) identifiedPids
