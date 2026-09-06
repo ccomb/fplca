@@ -782,7 +782,7 @@ params r = case r of
     ListPresets -> []
     SearchActivities ->
         [ pDatabase
-        , Param "name" "string" Required "Name substring to search for (or exact name if exact=true)"
+        , Param "name" "string" Required "Name substring to search for (or exact name if exact=true). The whole identifier a source file gave a dataset (a SimaPro 'Process identifier') instead returns that dataset's products and nothing else; part of one is read as a name."
         , Param "geo" "string" Optional "Geography/location filter (e.g. 'FR', 'DE', 'GLO')"
         , Param "product" "string" Optional "Product name filter"
         , Param "exact" "boolean" Optional "If true, name and geo must match exactly (case-insensitive equality) instead of substring search"

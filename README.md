@@ -358,7 +358,7 @@ Available tools — auto-derived at runtime from the single resource registry (`
 | `list_geographies` | List geographies present in a database |
 | `list_classifications` | List classification systems and values for a database |
 | `list_methods` | List loaded impact assessment methods |
-| `search_activities` | Search by name, geography, product, classification, or preset |
+| `search_activities` | Search by name or source identifier, geography, product, classification, or preset |
 | `search_flows` | Search flows, filtered by kind |
 | `get_activity` | Activity details and exchanges (with comments) |
 | `aggregate` | SQL-style group/filter on exchanges, supply chain, biosphere, or consumption edges |

@@ -938,9 +938,10 @@ tab counter disagreeing with the tab it labels is worse than no counter.
 activityMatches :: Database -> SearchFilter -> [(ProcessId, Activity)]
 activityMatches db sFilter@(SearchFilter core exactMatch) =
     case (afcName core >>= activitiesIdentifiedBy (dbActivities db), tryBm25Retrieve db sFilter) of
-        -- The query is the identifier of a source block: it names one block and
-        -- there is nothing to rank, so neither matcher below is asked.
-        (Just block, _) -> structured exactMatch (NE.toList block)
+        -- The query is the identifier of a source block: it names one block, so
+        -- neither matcher below is asked. There is no relevance to preserve
+        -- here, unlike the BM25 branch, so the caller's sort is honoured.
+        (Just block, _) -> L.sortBy ordered (structured exactMatch (NE.toList block))
         -- BM25 path: ranked candidates → structured filters → preserve score order.
         (Nothing, Just ranked) -> structured False ranked
         -- Non-BM25 path: AND-of-tokens name filter + lex sort.

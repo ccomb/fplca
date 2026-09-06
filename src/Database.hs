@@ -213,8 +213,9 @@ fullScanNameMatches actVec name =
     [pair | pair@(_, a) <- allActivities actVec, allWordsMatch name (\a' -> [activityName a']) a]
 
 {- | The rows of the source block a query names outright, when the query is the
-identifier a source gave one ('activityNativeId': SimaPro's @Process
-identifier@, an EcoSpold 1 dataset's number).
+identifier a source gave one. Which formats publish one, and which have nothing
+to publish because they name a dataset by the activity UUID itself, is
+'activityNativeId'.
 
 An identifier is a key, not a word. Either the query is one, and there is
 exactly one block to show and nothing to rank, or it is not, and this says so
