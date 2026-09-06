@@ -387,39 +387,3 @@ test-suite lca-tests
   build-tool-depends:  hspec-discover:hspec-discover
 
   default-language:    Haskell2010
-
-benchmark volca-bench
-  import:              warnings
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      bench
-  main-is:             Main.hs
-  other-modules:       Fixtures
-                     , Bench.Json
-                     , Bench.Helpers
-                     , Bench.Parsers
-                     , Bench.Loader
-                     , Bench.Solve
-                     , Bench.Lcia
-  ghc-options:         -threaded -rtsopts "-with-rtsopts=-N -A32m"
-  default-extensions:  NumericUnderscores
-                     , OverloadedStrings
-                     , BangPatterns
-  build-depends:       base >=4.14 && <5
-                     , volca
-                     , aeson
-                     , aeson-pretty
-                     , async
-                     , bytestring
-                     , containers
-                     , criterion
-                     , criterion-measurement
-                     , deepseq
-                     , directory
-                     , filepath
-                     , process
-                     , random
-                     , text
-                     , time
-                     , uuid
-                     , vector
-  default-language:    Haskell2010
