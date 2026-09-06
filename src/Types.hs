@@ -579,10 +579,15 @@ data NativeActivityType
     deriving (Show, Eq, Generic, NFData, Store)
 
 {- | The identifier a source format gives the dataset block an activity was read
-from (SimaPro's @Process identifier@ header). Two blocks that happen to share a
-name and a location are still two activities, and 'activityUUID' — a hash of
-name and location — cannot tell them apart; this can. 'Nothing' when the source
-format has no such field, which restores grouping by 'activityUUID' alone.
+from: SimaPro's @Process identifier@ header, EcoSpold 1's @number@ attribute on
+the dataset. It is what the SimaPro parser mints the activity UUID from, so it
+is also what keeps two blocks apart where their name and location would not, and
+it is what a reader copies to find the dataset back in its source file.
+
+'Nothing' when the source format has no such field, and also when EcoSpold 2 or
+ILCD name a dataset: there the identifier /is/ the activity UUID, already
+spelled out in every process id, and repeating it here would give one fact two
+homes.
 
 Not a 'ProcessId': that one is a matrix row index, minted by 'buildInterningTables'.
 This is the source's own string, opaque to us and stable only within one release

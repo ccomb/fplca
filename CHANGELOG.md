@@ -35,6 +35,13 @@
   unit to restate it in.
 
 ### Added
+- An activity now reports the identifier its source file gave it, beside its
+  location: SimaPro's `Process identifier`, which on Agribalyse reads
+  `AGRIBALU000000003103728`, and the number an EcoSpold 1 dataset is published
+  under. It is what a reader copies to find the dataset back in the file it
+  came from. EcoSpold 2 and ILCD name a dataset by a UUID, which is already the
+  first half of every process id, so they report nothing new here. Wire
+  revision 22.
 - A database can now be asked for another allocation key without editing the
   configuration file: `POST /api/v1/db/{name}/derive/{newName}?allocation=wet
   mass`, the `derive_database` tool, and `Client.derive_database` in pyvolca.

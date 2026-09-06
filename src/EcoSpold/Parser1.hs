@@ -664,6 +664,17 @@ documentationSections d =
     otherSources = IM.elems (IM.delete (ddPublishedSource d) (ddSources d))
     reviewer = maybe "" (\p -> "(" <> p <> ")") (IM.lookup (ddValidator d) (ddPersons d) >>= nonEmptyText)
 
+{- | The number a dataset is published under, as the identifier its source gave
+it. It is what an EcoSpold 1 file prints beside a process and what its own
+exchanges name to reach it, so it is the string a reader has in hand.
+
+Zero is 'psDatasetNumber' saying the dataset declared no number, or one that
+would not parse, rather than a dataset numbered zero.
+-}
+datasetIdentifier :: Int -> Maybe NativeProcessId
+datasetIdentifier 0 = Nothing
+datasetIdentifier n = Just (NativeProcessId (T.pack (show n)))
+
 -- | Build the final per-dataset result, applying the cut-off strategy.
 buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
 buildResult st =
@@ -693,7 +704,7 @@ buildResult st =
                 , activityParams = M.empty
                 , activityParamExprs = M.empty
                 , activityNativeType = Nothing
-                , activityNativeId = Nothing
+                , activityNativeId = datasetIdentifier (psDatasetNumber st)
                 , activityFormulaCheck = Nothing
                 }
         pack act =
