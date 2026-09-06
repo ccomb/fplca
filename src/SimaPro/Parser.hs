@@ -213,8 +213,10 @@ emptyProcessBlock =
 -- Parser State Machine
 -- ============================================================================
 
--- | Section types within a process block
-data SectionType
+{- | A section of the process block being read. Each one owns one list of
+'ProcessBlock', and 'addRowToBlock' is the only thing that reads it.
+-}
+data BlockSection
     = SecProducts
     | SecAvoidedProducts
     | SecMaterials
@@ -227,12 +229,32 @@ data SectionType
     | SecFinalWaste
     | SecInputParams
     | SecCalcParams
-    | SecDbInputParams
+    deriving (Show, Eq)
+
+{- | A section of the file rather than of a block: the four parameter tables in
+scope for every process it declares, and the trailing @name;unit;cas;comment@
+substance registry. Each one owns one field of 'ParseAcc'.
+-}
+data FileSection
+    = SecDbInputParams
     | SecDbCalcParams
     | SecProjInputParams
     | SecProjCalcParams
-    | SecSubstanceRegistry -- trailing name;unit;cas;comment substance list
-    | SecNone
+    | SecSubstanceRegistry
+    deriving (Show, Eq)
+
+{- | What a recognised section header opens.
+
+The split is what keeps the two functions that route a row from wildcarding
+over each other's half: a block section can only reach 'addRowToBlock', a file
+section can only reach the accumulator, and neither match has anything left to
+cover. 'SecIgnored' is a header read on purpose and dropped; it still opens a
+section, so the rows under it are swallowed rather than read as metadata.
+-}
+data SectionType
+    = InBlock BlockSection
+    | FileLevel FileSection
+    | SecIgnored
     deriving (Show, Eq)
 
 -- | Parser state
@@ -334,26 +356,26 @@ updateConfigFromHeader cfg key value = case BS8.map toLower key of
 -- | Detect section type from line (ByteString)
 detectSection :: BS.ByteString -> Maybe SectionType
 detectSection line = case BS8.strip line of
-    "Products" -> Just SecProducts
-    "Waste treatment" -> Just SecProducts
-    "Avoided products" -> Just SecAvoidedProducts
-    "Materials/fuels" -> Just SecMaterials
-    "Electricity/heat" -> Just SecElectricity
-    "Waste to treatment" -> Just SecWasteToTreatment
-    "Resources" -> Just SecResources
-    "Emissions to air" -> Just SecEmissionsAir
-    "Emissions to water" -> Just SecEmissionsWater
-    "Emissions to soil" -> Just SecEmissionsSoil
-    "Final waste flows" -> Just SecFinalWaste
-    "Input parameters" -> Just SecInputParams
-    "Calculated parameters" -> Just SecCalcParams
-    "Database Input parameters" -> Just SecDbInputParams
-    "Database Calculated parameters" -> Just SecDbCalcParams
-    "Project Input parameters" -> Just SecProjInputParams
-    "Project Calculated parameters" -> Just SecProjCalcParams
-    "Non material emissions" -> Just SecNone -- Ignore
-    "Social issues" -> Just SecNone
-    "Economic issues" -> Just SecNone
+    "Products" -> Just (InBlock SecProducts)
+    "Waste treatment" -> Just (InBlock SecProducts)
+    "Avoided products" -> Just (InBlock SecAvoidedProducts)
+    "Materials/fuels" -> Just (InBlock SecMaterials)
+    "Electricity/heat" -> Just (InBlock SecElectricity)
+    "Waste to treatment" -> Just (InBlock SecWasteToTreatment)
+    "Resources" -> Just (InBlock SecResources)
+    "Emissions to air" -> Just (InBlock SecEmissionsAir)
+    "Emissions to water" -> Just (InBlock SecEmissionsWater)
+    "Emissions to soil" -> Just (InBlock SecEmissionsSoil)
+    "Final waste flows" -> Just (InBlock SecFinalWaste)
+    "Input parameters" -> Just (InBlock SecInputParams)
+    "Calculated parameters" -> Just (InBlock SecCalcParams)
+    "Database Input parameters" -> Just (FileLevel SecDbInputParams)
+    "Database Calculated parameters" -> Just (FileLevel SecDbCalcParams)
+    "Project Input parameters" -> Just (FileLevel SecProjInputParams)
+    "Project Calculated parameters" -> Just (FileLevel SecProjCalcParams)
+    "Non material emissions" -> Just SecIgnored
+    "Social issues" -> Just SecIgnored
+    "Economic issues" -> Just SecIgnored
     _ -> Nothing
 
 {- | Classify a section header, resolving the two names a SimaPro file reuses
@@ -369,7 +391,7 @@ as before).
 -}
 classifyHeader :: Bool -> BS.ByteString -> Maybe SectionType
 classifyHeader inProcess line
-    | not inProcess, BS8.strip line `elem` registryHeaders = Just SecSubstanceRegistry
+    | not inProcess, BS8.strip line `elem` registryHeaders = Just (FileLevel SecSubstanceRegistry)
     | otherwise = detectSection line
   where
     registryHeaders =
@@ -646,26 +668,13 @@ processLine acc@ParseAcc{..} line
     -- Section detection (trailer registry blocks resolve against paInProcess)
     | Just sec <- classifyHeader paInProcess line =
         acc{paState = InSection sec}
-    -- In a section, parse row (route db/project params to ParseAcc, process params to block)
+    -- In a section, parse row (file-level sections to ParseAcc, block sections to the block)
     | InSection sec <- paState
     , not (BS.null (BS8.strip line)) =
         case sec of
-            SecDbInputParams -> case parseParamRow paConfig line of
-                Just p -> acc{paDbInputParams = p : paDbInputParams}
-                Nothing -> acc
-            SecDbCalcParams -> case parseParamRow paConfig line of
-                Just p -> acc{paDbCalcParams = p : paDbCalcParams}
-                Nothing -> acc
-            SecProjInputParams -> case parseParamRow paConfig line of
-                Just p -> acc{paProjInputParams = p : paProjInputParams}
-                Nothing -> acc
-            SecProjCalcParams -> case parseParamRow paConfig line of
-                Just p -> acc{paProjCalcParams = p : paProjCalcParams}
-                Nothing -> acc
-            SecSubstanceRegistry -> case parseSubstanceRow paConfig line of
-                Just nc -> acc{paSubstanceCAS = nc : paSubstanceCAS}
-                Nothing -> acc
-            _ -> acc{paCurrentBlock = addRowToBlock paConfig sec line paCurrentBlock}
+            FileLevel f -> addFileRow paConfig f line acc
+            InBlock b -> acc{paCurrentBlock = addRowToBlock paConfig b line paCurrentBlock}
+            SecIgnored -> acc
     -- Metadata key-value pairs
     | paState == BetweenBlocks || isMetadataKey (BS8.strip line) =
         if isMetadataKey (BS8.strip line)
@@ -685,8 +694,24 @@ processLine acc@ParseAcc{..} line
             }
     | otherwise = acc{paLineNum = paLineNum + 1}
 
+{- | Add a row of a file-level section to the accumulator field it belongs to.
+The four parameter tables are in scope for every process the file declares;
+the registry is the trailing substance list every name draws its CAS from.
+-}
+addFileRow :: SimaProConfig -> FileSection -> BS.ByteString -> ParseAcc -> ParseAcc
+addFileRow cfg sec line acc = case sec of
+    SecDbInputParams -> withParam $ \p -> acc{paDbInputParams = p : paDbInputParams acc}
+    SecDbCalcParams -> withParam $ \p -> acc{paDbCalcParams = p : paDbCalcParams acc}
+    SecProjInputParams -> withParam $ \p -> acc{paProjInputParams = p : paProjInputParams acc}
+    SecProjCalcParams -> withParam $ \p -> acc{paProjCalcParams = p : paProjCalcParams acc}
+    SecSubstanceRegistry ->
+        maybe acc (\nc -> acc{paSubstanceCAS = nc : paSubstanceCAS acc}) (parseSubstanceRow cfg line)
+  where
+    withParam :: ((Text, Text) -> ParseAcc) -> ParseAcc
+    withParam k = maybe acc k (parseParamRow cfg line)
+
 -- | Add a row to the appropriate list in the block (ByteString)
-addRowToBlock :: SimaProConfig -> SectionType -> BS.ByteString -> ProcessBlock -> ProcessBlock
+addRowToBlock :: SimaProConfig -> BlockSection -> BS.ByteString -> ProcessBlock -> ProcessBlock
 addRowToBlock cfg sec line block = case sec of
     SecProducts -> case parseProductRow cfg line of
         Just row -> block{pbProducts = row : pbProducts block}
@@ -724,7 +749,6 @@ addRowToBlock cfg sec line block = case sec of
     SecCalcParams -> case parseParamRow cfg line of
         Just p -> block{pbCalcParams = p : pbCalcParams block}
         Nothing -> block
-    _ -> block
 
 -- | Set metadata field in block (ByteString key, decode value to Text)
 setMetadata :: BS.ByteString -> BS.ByteString -> ProcessBlock -> ProcessBlock
