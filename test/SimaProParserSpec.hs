@@ -811,6 +811,24 @@ spec = do
             -- Raw material amount should be lbtokg = 0.453592
             techInputAmounts act `shouldContain` [0.453592]
 
+        it "reads all four file-level parameter tables" $ do
+            (activities, _, _, _, _) <- parseAllParamCSV
+            let act = head activities
+            -- dbin, dbin*3, projin, projin*7
+            techInputAmounts act `shouldMatchList` [2.0, 6.0, 5.0, 35.0]
+
+    describe "SimaPro sections read and dropped" $ do
+        it "adds nothing from a section the parser recognises and ignores" $ do
+            (activities, _, _, _, _) <- parseIgnoredSectionCSV
+            let act = head activities
+            -- the reference product and the one air emission, nothing else
+            length (exchanges act) `shouldBe` 2
+
+        it "does not read a row under an ignored header as metadata" $ do
+            (activities, _, _, _, _) <- parseIgnoredSectionCSV
+            let act = head activities
+            activityLocation act `shouldBe` "FR"
+
     describe "SimaPro yield chain formulas" $ do
         it "resolves chained division (weight_g/1000/yield1/yield2)" $ do
             (activities, _, _, _, _) <- parseYieldChainCSV
@@ -1894,6 +1912,114 @@ noProcessNameCSV =
 parseNoProcessNameCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
 parseNoProcessNameCSV = withSystemTempFile "no-process-name.csv" $ \path handle -> do
     BS.hPut handle noProcessNameCSV
+    hClose handle
+    parseOrFail defaultUnitConfig path
+
+{- | A block carrying the three headers the parser recognises and drops, one of
+them followed by a line that is also a metadata key.
+
+Those rows are consumed as section rows: the header opens a section, and every
+row under it is swallowed by the section routing. Were a header to stop opening
+a section, @Geography@ would reach the metadata arm instead and the line after
+it would become the activity's location.
+-}
+ignoredSectionCSV :: BS.ByteString
+ignoredSectionCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Ignored section probe"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Geography"
+        , "FR"
+        , ""
+        , "Products"
+        , "Probe product;kg;1;100;not defined;material;"
+        , ""
+        , "Emissions to air"
+        , "Carbon dioxide;;kg;2.5;;;;"
+        , ""
+        , "Non material emissions"
+        , "Noise;;kg;7;;;;"
+        , ""
+        , "Social issues"
+        , "Geography"
+        , "XX"
+        , ""
+        , "Economic issues"
+        , "Revenue;;EUR;9;;;;"
+        , ""
+        , "End"
+        ]
+
+parseIgnoredSectionCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseIgnoredSectionCSV = withSystemTempFile "ignored-section.csv" $ \path handle -> do
+    BS.hPut handle ignoredSectionCSV
+    hClose handle
+    parseOrFail defaultUnitConfig path
+
+{- | The four file-level parameter tables, each used by one exchange amount, so
+every one of them is read back through a number rather than only through its
+header being recognised.
+-}
+allParamTestCSV :: BS.ByteString
+allParamTestCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: .}"
+        , ""
+        , "Database Input parameters"
+        , "dbin;2;Undefined;0;0;No;"
+        , ""
+        , "Database Calculated parameters"
+        , "dbcalc;dbin*3;;"
+        , ""
+        , "Project Input parameters"
+        , "projin;5;Undefined;0;0;No;"
+        , ""
+        , "Project Calculated parameters"
+        , "projcalc;projin*7;;"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Every parameter table"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Assembled product;kg;1;100;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "From database input;kg;dbin;Undefined;;;;;;"
+        , "From database calculated;kg;dbcalc;Undefined;;;;;;"
+        , "From project input;kg;projin;Undefined;;;;;;"
+        , "From project calculated;kg;projcalc;Undefined;;;;;;"
+        , ""
+        , "End"
+        ]
+
+parseAllParamCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseAllParamCSV = withSystemTempFile "all-param.csv" $ \path handle -> do
+    BS.hPut handle allParamTestCSV
     hClose handle
     parseOrFail defaultUnitConfig path
 
