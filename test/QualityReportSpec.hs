@@ -302,9 +302,12 @@ spec = do
             let db = dbOf [((actA, prodA), allocated "block" (Just (0 / 0)) (Just "b1"))]
             length (qcOffenders (qrAllocationSums (qualityReport "testdb" db))) `shouldBe` 1
 
-        it "keeps same-named blocks with distinct identifiers apart" $ do
+        it "keeps same-named blocks under different activities apart" $ do
             -- Both blocks are internally complete at 100%. Merging them by name
-            -- would sum to 200% and invent two findings.
+            -- would sum to 200% and invent two findings. Their identifiers are
+            -- what earns them two activities: the parser mints the UUID from
+            -- the identifier, so only a block publishing none falls back to a
+            -- name that another block may share.
             let db = dbOf [((actA, prodA), allocated "truncated name" (Just 100) (Just "b1")), ((actB, prodB), allocated "truncated name" (Just 100) (Just "b2"))]
             qcOffenders (qrAllocationSums (qualityReport "testdb" db)) `shouldBe` []
 

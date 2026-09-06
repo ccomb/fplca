@@ -666,7 +666,7 @@ data Activity = Activity
     , activityParams :: !(M.Map Text Double) -- Resolved dataset parameter values (SimaPro parameters, EcoSpold2 <parameter> variables)
     , activityParamExprs :: !(M.Map Text Text) -- Raw parameter expressions/formulas keyed like activityParams (for inspection and re-evaluation)
     , activityNativeType :: !(Maybe NativeActivityType) -- Source-format-native activity type (ecospold @activityType, SimaPro Type, ILCD processType); Nothing when source format lacks the field
-    , activityNativeId :: !(Maybe NativeProcessId) -- Source dataset block this activity was read from; groups the coproducts of one block. Nothing when the source format lacks the field
+    , activityNativeId :: !(Maybe NativeProcessId) -- Source dataset block this activity was read from: what the SimaPro parser mints the activity UUID from, and what its writer writes back. Nothing when the source format lacks the field
     , activityFormulaCheck :: !(Maybe FormulaCheck) -- Outcome of the mathematicalRelation consistency check; Nothing when the dataset has no formulas or the format has none
     }
     deriving (Generic, NFData, Store)
