@@ -6,7 +6,6 @@ module Database where
 
 import qualified Data.IntSet as IS
 import Data.List.NonEmpty (NonEmpty (..))
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -212,33 +211,59 @@ fullScanNameMatches :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
 fullScanNameMatches actVec name =
     [pair | pair@(_, a) <- allActivities actVec, allWordsMatch name (\a' -> [activityName a']) a]
 
-{- | The rows of the source block a query names outright, when the query is the
-identifier a source gave one. Which formats publish one, and which have nothing
-to publish because they name a dataset by the activity UUID itself, is
-'activityNativeId'.
+{- | The rows of the source blocks a query names by their identifier, the ones
+it names outright before the ones it only names part of. Which formats publish
+an identifier, and which have nothing to publish because they name a dataset by
+the activity UUID itself, is 'activityNativeId'.
 
-An identifier is a key, not a word. Either the query is one, and there is
-exactly one block to show and nothing to rank, or it is not, and this says so
-rather than offering the blocks whose identifier is nearly it. That is why it
-is equality on the whole string and not a prefix: the codes of one database
-share their prefix, so anything looser would answer half the database to a
-query that named one dataset.
+An identifier is a key, not a word, so this is equality and containment and
+never the fuzzy matching a word gets: the codes of one database differ by a
+digit, and a matcher tolerant of a digit would answer with the neighbours of
+the dataset that was asked for.
+
+Nobody types one whole. Measured on the SimaPro export of ecoinvent 3.9.1, all
+21 456 identifiers are 23 characters of which the first 18 are the same on
+every one of them, and the last five are already unique across the export; the
+WFLDB and Ginko exports have the same shape. So a fragment is what a reader has
+in hand, and 'shortestFragment' is where a fragment starts to name something.
+
+A fragment taken from the part every identifier shares (@MTE0@, @0000@) names
+them all, which is the honest answer to a fragment that distinguishes nothing.
+It costs the order of a page and not the answer, because a caller puts these
+rows before an ordinary search rather than instead of it.
 
 Every product of a block carries the block's identifier, so the answer is the
 whole block, which is what someone holding a source file open is looking for.
 -}
-activitiesIdentifiedBy :: V.Vector Activity -> Text -> Maybe (NonEmpty (ProcessId, Activity))
+activitiesIdentifiedBy :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
 activitiesIdentifiedBy actVec query
-    | T.null wanted = Nothing
-    | otherwise = NE.nonEmpty [pair | pair@(_, a) <- allActivities actVec, carriesWanted a]
+    | T.null wanted = []
+    | T.length wanted < shortestFragment = named (== wanted)
+    | otherwise = named (== wanted) ++ named containsWanted
   where
     wanted :: Text
     wanted = T.toCaseFold (T.strip query)
 
-    carriesWanted :: Activity -> Bool
-    carriesWanted a = case activityNativeId a of
-        Nothing -> False
-        Just (NativeProcessId nativeId) -> T.toCaseFold nativeId == wanted
+    containsWanted :: Text -> Bool
+    containsWanted nativeId = wanted `T.isInfixOf` nativeId && nativeId /= wanted
+
+    named :: (Text -> Bool) -> [(ProcessId, Activity)]
+    named matches = [pair | pair@(_, a) <- allActivities actVec, maybe False matches (identifierOf a)]
+
+    identifierOf :: Activity -> Maybe Text
+    identifierOf a = (\(NativeProcessId nativeId) -> T.toCaseFold nativeId) <$> activityNativeId a
+
+{- | How many characters a query needs before it is read as a fragment of an
+identifier rather than as a word.
+
+Measured on the two SimaPro exports 'activitiesIdentifiedBy' cites: below four
+characters nothing is ever selective, a three-character fragment naming 41
+datasets at the median and never a single one. At four, nine fragments in ten
+name exactly one dataset on one export and eight in ten name at most five on
+the other.
+-}
+shortestFragment :: Int
+shortestFragment = 4
 
 {- | Docs whose BM25 postings cover every query token (AND), allowing any
 fuzzy expansion of a token to satisfy that token (OR within a token).

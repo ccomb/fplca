@@ -937,17 +937,30 @@ tab counter disagreeing with the tab it labels is worse than no counter.
 -}
 activityMatches :: Database -> SearchFilter -> [(ProcessId, Activity)]
 activityMatches db sFilter@(SearchFilter core exactMatch) =
-    case (afcName core >>= activitiesIdentifiedBy (dbActivities db), tryBm25Retrieve db sFilter) of
-        -- The query is the identifier of a source block: it names one block, so
-        -- neither matcher below is asked. There is no relevance to preserve
-        -- here, unlike the BM25 branch, so the caller's sort is honoured.
-        (Just block, _) -> L.sortBy ordered (structured exactMatch (NE.toList block))
-        -- BM25 path: ranked candidates → structured filters → preserve score order.
-        (Nothing, Just ranked) -> structured False ranked
-        -- Non-BM25 path: AND-of-tokens name filter + lex sort.
-        (Nothing, Nothing) ->
-            L.sortBy ordered (findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch)
+    identified ++ filter (not . alreadyIdentified) searched
   where
+    -- The blocks the query names by identifier, ahead of the search rather than
+    -- instead of it: a database whose identifiers are bare numbers would
+    -- otherwise let one of them swallow a perfectly ordinary query for that
+    -- number. Their own order is the answer (named outright, then named in
+    -- part), so the caller's sort no more applies here than on the BM25 branch.
+    identified :: [(ProcessId, Activity)]
+    identified = structured exactMatch (foldMap (activitiesIdentifiedBy (dbActivities db)) (afcName core))
+
+    alreadyIdentified :: (ProcessId, Activity) -> Bool
+    alreadyIdentified (pid, _) = IS.member (fromIntegral pid) identifiedPids
+
+    identifiedPids :: IS.IntSet
+    identifiedPids = IS.fromList [fromIntegral pid | (pid, _) <- identified]
+
+    searched :: [(ProcessId, Activity)]
+    searched = case tryBm25Retrieve db sFilter of
+        -- BM25 path: ranked candidates → structured filters → preserve score order.
+        Just ranked -> structured False ranked
+        -- Non-BM25 path: AND-of-tokens name filter + lex sort.
+        Nothing ->
+            L.sortBy ordered (findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch)
+
     structured :: Bool -> [(ProcessId, Activity)] -> [(ProcessId, Activity)]
     structured = applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core)
 

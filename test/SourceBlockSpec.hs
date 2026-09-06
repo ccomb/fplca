@@ -55,30 +55,49 @@ spec = do
                 map (T.null . prsBlock) (summaries db) `shouldBe` [False]
 
     describe "finding a source block by its identifier" $ do
-        it "answers the whole block the identifier names, and only it" $
+        it "answers the whole block an identifier names, and only it" $
             withDatabase twoBlocksSharingAName $ \db ->
-                productsFound db "P-1" `shouldBe` ["Cheese", "Whey"]
-
-        it "does not answer the block whose identifier only resembles it" $
-            withDatabase twoBlocksSharingAName $ \db ->
-                productsFound db "P-2" `shouldBe` ["Slag", "Steel"]
+                productsFound db "AGRIBALU000000003103728" `shouldMatchList` ["Cheese", "Whey"]
 
         -- An identifier is read off a page and pasted, so it arrives with
         -- whatever the copy picked up, and SimaPro writes its own in upper case.
         it "reads an identifier pasted with its surrounding spaces, in any case" $
             withDatabase twoBlocksSharingAName $ \db ->
-                productsFound db "  p-1 " `shouldBe` ["Cheese", "Whey"]
+                productsFound db "  agribalu000000003103728 " `shouldMatchList` ["Cheese", "Whey"]
 
-        {- A fragment names no block, so the query is a query again: these two
-        blocks share their name, so searching that name finds all four rows.
-        Answering a fragment with the blocks whose identifier starts that way
-        would answer half a database to someone who named one dataset, since the
-        codes of one database share their prefix.
+        {- Eighteen of the twenty-three characters are the same on every dataset
+        of a real export, so what a reader has in hand is the tail.
         -}
-        it "falls back to the ordinary search for a query that names no block" $
+        it "answers a fragment of an identifier that names one block" $
+            withDatabase twoBlocksSharingAName $ \db ->
+                productsFound db "3103728" `shouldMatchList` ["Cheese", "Whey"]
+
+        {- The part every identifier of a database shares distinguishes nothing,
+        so it answers with every block carrying it. Which is honest, and costs
+        the order of a page rather than the answer, the ordinary search still
+        being underneath.
+        -}
+        it "answers a fragment every identifier shares with all of them" $
+            withDatabase twoBlocksSharingAName $ \db ->
+                productsFound db "AGRIBALU" `shouldMatchList` ["Cheese", "Whey", "Steel", "Slag"]
+
+        {- Below four characters nothing is ever selective: measured on a real
+        export, a three character fragment names 41 datasets at the median and
+        never a single one. So it is a word, and only the ordinary search reads
+        it, which here finds nothing.
+        -}
+        it "reads a fragment too short to name anything as a word" $
+            withDatabase twoBlocksSharingAName $ \db ->
+                productsFound db "728" `shouldBe` []
+
+        it "leaves an ordinary search alone" $
             withDatabase twoBlocksSharingAName $ \db ->
                 productsFound db "One name for two blocks"
-                    `shouldBe` ["Cheese", "Slag", "Steel", "Whey"]
+                    `shouldMatchList` ["Cheese", "Slag", "Steel", "Whey"]
+
+        it "puts the block a query names outright before the one it is only part of" $
+            withDatabase blocksWhoseIdentifiersNest $ \db ->
+                productsFound db "3103728" `shouldBe` ["Butter", "Cream"]
 
 -- | Every process of a SimaPro file, loaded and built the way a served one is.
 withDatabase :: BS.ByteString -> (Database -> IO ()) -> IO ()
@@ -94,12 +113,12 @@ withDatabase csv k = withSystemTempDirectory "source-block" $ \dir -> do
 summaries :: Database -> [ActivitySummary]
 summaries db = [mkActivitySummary db pid act | (pid, act) <- zip [0 ..] (V.toList (dbActivities db))]
 
-{- | The products a query brings back, sorted, through the funnel a listing and
-its tab counter both use.
+{- | The products a query brings back, in the order it brings them, through the
+funnel a listing and its tab counter both use.
 -}
 productsFound :: Database -> Text -> [Text]
 productsFound db query =
-    sort [prsProductName (mkActivitySummary db pid act) | (pid, act) <- activityMatches db (SearchFilter (nameOnly query) False)]
+    [prsProductName (mkActivitySummary db pid act) | (pid, act) <- activityMatches db (SearchFilter (nameOnly query) False)]
   where
     nameOnly :: Text -> ActivityFilterCore
     nameOnly q =
@@ -116,19 +135,32 @@ productsFound db query =
 
 {- | Two blocks written under one process name, each with two coproducts. The
 producer tells them apart by their @Process identifier@ line and nothing else,
-which is what a block name has to survive, and their two identifiers differ by
-one character, which is what a fuzzy matcher would confuse them on.
+which is what a block name has to survive. The two identifiers are shaped like
+the ones a real SimaPro export carries: a long stamp every block of the
+database shares, then the few characters that actually say which block, here
+differing by one, which is what a fuzzy matcher would confuse them on.
 -}
 twoBlocksSharingAName :: BS.ByteString
 twoBlocksSharingAName =
     simaProFile
-        ( block "P-1" ["Cheese;kg;1;60;not defined;material;", "Whey;kg;3;40;not defined;material;"]
-            ++ block "P-2" ["Steel;kg;1;70;not defined;material;", "Slag;kg;2;30;not defined;material;"]
+        ( block "AGRIBALU000000003103728" ["Cheese;kg;1;60;not defined;material;", "Whey;kg;3;40;not defined;material;"]
+            ++ block "AGRIBALU000000003103729" ["Steel;kg;1;70;not defined;material;", "Slag;kg;2;30;not defined;material;"]
+        )
+
+{- | Two blocks of one product whose identifiers nest: the first is the whole of
+what the second ends with. One query therefore names one of them outright and
+is part of the other, which is the only way to see which comes first.
+-}
+blocksWhoseIdentifiersNest :: BS.ByteString
+blocksWhoseIdentifiersNest =
+    simaProFile
+        ( block "3103728" ["Butter;kg;1;100;not defined;material;"]
+            ++ block "AGRIBALU000000003103728" ["Cream;kg;1;100;not defined;material;"]
         )
 
 -- | One block, one product: it is still a block, and it holds one product.
 oneBlockOneProduct :: BS.ByteString
-oneBlockOneProduct = simaProFile (block "P-1" ["Cheese;kg;1;100;not defined;material;"])
+oneBlockOneProduct = simaProFile (block "AGRIBALU000000003103728" ["Cheese;kg;1;100;not defined;material;"])
 
 -- | One SimaPro process block under a fixed name, identified by @identifier@.
 block :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]

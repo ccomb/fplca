@@ -48,6 +48,15 @@
   resembles it. Half an identifier names no dataset and searches as it always
   did, because the codes of one database share their prefix and answering half
   the database to somebody who named one dataset would be no answer at all.
+- Searching a process by the identifier its source file gave it now brings that
+  dataset to the top: type a SimaPro `Process identifier` into the search, whole
+  or just the part that tells it apart, and the block it names comes first, all
+  of its products, ahead of the ordinary results rather than instead of them.
+  Nobody types one whole, so four characters are enough: on the SimaPro export
+  of ecoinvent 3.9.1, all 21 456 identifiers are 23 characters of which the
+  first 18 are identical, and the last five are already unique. A fragment
+  shorter than four characters is read as a word, since below that nothing ever
+  singles out a dataset.
 - A database can now be asked for another allocation key without editing the
   configuration file: `POST /api/v1/db/{name}/derive/{newName}?allocation=wet
   mass`, the `derive_database` tool, and `Client.derive_database` in pyvolca.
