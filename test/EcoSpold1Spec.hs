@@ -53,6 +53,15 @@ minimalXml =
         , "</ecoSpold>"
         ]
 
+-- | 'minimalXml' with the @number@ attribute taken off its dataset element.
+unnumberedXml :: BC.ByteString
+unnumberedXml = BC.unlines (map withoutNumber (BC.lines minimalXml))
+  where
+    withoutNumber :: BC.ByteString -> BC.ByteString
+    withoutNumber line
+        | "  <dataset number=" `BC.isPrefixOf` line = "  <dataset>"
+        | otherwise = line
+
 {- | The same two elementary flows as 'minimalXml', in another dataset written
 by another author. The @<person number>@ sits where EcoSpold1 metadata really
 carries one: under @<dataset>@, after the dataset's own number. The reference
@@ -452,6 +461,20 @@ spec = do
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right (_, _, _, _, _, num, _) -> num `shouldBe` 42
+
+        it "keeps the dataset number as the identifier the source gave it" $
+            case parseWithXeno minimalXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) ->
+                    activityNativeId act `shouldBe` Just (NativeProcessId "42")
+
+        -- A missing or unparseable number is read as 0, which is the loader
+        -- saying the dataset published none. Displaying that as the identifier
+        -- would put a number on a dataset that never had one.
+        it "gives no identifier to a dataset that publishes no number" $
+            case parseWithXeno unnumberedXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) -> activityNativeId act `shouldBe` Nothing
 
         it "produces 4 exchanges" $
             case parseWithXeno minimalXml of

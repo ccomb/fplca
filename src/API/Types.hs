@@ -34,7 +34,7 @@ import Database.Author (
  )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), WasteRole (..), exchangeKindName)
+import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), NativeProcessId (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), WasteRole (..), exchangeKindName)
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -1614,6 +1614,7 @@ data ActivityForAPI = ActivityForAPI
     , pfaAllProducts :: [ActivitySummary] -- All products from same activityUUID
     , pfaExchanges :: [ExchangeWithUnit] -- Exchanges with unit names
     , pfaNativeType :: Maybe NativeActivityType -- Source-native activity type
+    , pfaNativeId :: Maybe NativeProcessId -- The identifier the source gave the dataset block this came out of (SimaPro's "Process identifier", EcoSpold 1's dataset number); Nothing when the format has none, and when the format's identifier is the activity UUID the process id already spells
     }
     deriving (Generic)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped ActivityForAPI)
@@ -1861,6 +1862,20 @@ instance ToSchema NativeActivityType where
                             , ("special_label", Inline nullableTextSchema)
                             ]
                     & required .~ ["source", "label"]
+
+{- | A native identifier reaches the wire as the bare string the source wrote,
+because that is the only form it has: we neither parse it nor compare it to
+anything but itself, and a reader is going to paste it back into the file it
+came from.
+-}
+instance ToJSON NativeProcessId where
+    toJSON (NativeProcessId nativeId) = toJSON nativeId
+
+instance FromJSON NativeProcessId where
+    parseJSON = fmap NativeProcessId . parseJSON
+
+instance ToSchema NativeProcessId where
+    declareNamedSchema _ = declareNamedSchema (Proxy :: Proxy Text)
 
 instance ToJSON NodeType
 instance ToJSON EdgeType

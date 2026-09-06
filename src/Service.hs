@@ -1140,6 +1140,7 @@ convertActivityForAPI db processId activity =
             , pfaAllProducts = allProducts
             , pfaExchanges = map (toExchangeWithUnit db linkMap) (exchanges activity)
             , pfaNativeType = activityNativeType activity
+            , pfaNativeId = activityNativeId activity
             }
 
 {- | Resolved target activity for a technosphere or waste exchange. Either all

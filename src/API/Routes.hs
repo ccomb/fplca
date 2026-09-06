@@ -1318,7 +1318,9 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 21: the @block@ an activity summary carries, and the
+(revision 22: the @nativeId@ an activity carries, the identifier its source
+file gave the dataset block it was read from;
+revision 21: the @block@ an activity summary carries, and the
 @blockProducts@ beside it, so a listing can gather the coproducts of one
 source block and say when it is showing only part of one;
 revision 20: the @derive@ route, which reads a source again under another
@@ -1358,7 +1360,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 21
+currentWireVersion = 22
 
 getVersion :: AppM Value
 getVersion = do
