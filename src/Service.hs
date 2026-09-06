@@ -29,7 +29,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Database (applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
+import Database (activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
 import Matrix (DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
@@ -937,16 +937,23 @@ tab counter disagreeing with the tab it labels is worse than no counter.
 -}
 activityMatches :: Database -> SearchFilter -> [(ProcessId, Activity)]
 activityMatches db sFilter@(SearchFilter core exactMatch) =
-    case tryBm25Retrieve db sFilter of
-        Just ranked ->
-            -- BM25 path: ranked candidates → structured filters → preserve score order.
-            applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core) False ranked
-        Nothing ->
-            -- Non-BM25 path: AND-of-tokens name filter + lex sort.
-            let cmp = activityRowComparator (afcSort core)
-                ordered = if afcOrder core == Just "desc" then flip cmp else cmp
-                raw = findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch
-             in L.sortBy ordered raw
+    case (afcName core >>= activitiesIdentifiedBy (dbActivities db), tryBm25Retrieve db sFilter) of
+        -- The query is the identifier of a source block: it names one block and
+        -- there is nothing to rank, so neither matcher below is asked.
+        (Just block, _) -> structured exactMatch (NE.toList block)
+        -- BM25 path: ranked candidates → structured filters → preserve score order.
+        (Nothing, Just ranked) -> structured False ranked
+        -- Non-BM25 path: AND-of-tokens name filter + lex sort.
+        (Nothing, Nothing) ->
+            L.sortBy ordered (findActivitiesByFields db (afcName core) (afcLocation core) (afcProduct core) (afcClassifications core) exactMatch)
+  where
+    structured :: Bool -> [(ProcessId, Activity)] -> [(ProcessId, Activity)]
+    structured = applyStructuredFilters db (afcLocation core) (afcProduct core) (afcClassifications core)
+
+    ordered :: (ProcessId, Activity) -> (ProcessId, Activity) -> Ordering
+    ordered
+        | afcOrder core == Just "desc" = flip (activityRowComparator (afcSort core))
+        | otherwise = activityRowComparator (afcSort core)
 
 {- | How many of each thing one query finds, for the three tabs of a search
 box.

@@ -63,7 +63,7 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, make
 import System.FilePath ((</>))
 
 import Config (DatabaseConfig (..))
-import Database (applyStructuredFilters, findActivitiesByFields)
+import Database (activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields)
 import Database.Author (
     AuthorContext (..),
     AuthoredActivity,
@@ -864,7 +864,10 @@ pagination. Mirrors the set 'Service.searchActivities' displays so that the
 UI's "delete the whole filtered set" button removes exactly the rows the user
 saw: no more, no fewer.
 
-A non-exact name filter therefore takes the BM25 OR-over-tokens retrieval
+A name that is the identifier of a source block therefore names that block and
+nothing else, ahead of both matchers, exactly as 'Service.activityMatches' does.
+
+Otherwise a non-exact name filter takes the BM25 OR-over-tokens retrieval
 (via 'bm25Retrieve') followed by the structured filters, exactly as
 'searchActivities' does on its BM25 branch. Using the AND-over-token-groups
 name lookup (the lex-sort fallback path) here would silently under-delete a
@@ -884,9 +887,10 @@ filteredProcessIds ::
     Bool -> -- exact name match
     [ProcessId]
 filteredProcessIds db nameP geoP prodP classFilters exactMatch =
-    map fst $ case bm25Candidates of
-        Just ranked -> applyStructuredFilters db geoP prodP classFilters False ranked
-        Nothing -> findActivitiesByFields db nameP geoP prodP classFilters exactMatch
+    map fst $ case (nameP >>= activitiesIdentifiedBy (dbActivities db), bm25Candidates) of
+        (Just block, _) -> applyStructuredFilters db geoP prodP classFilters exactMatch (NE.toList block)
+        (Nothing, Just ranked) -> applyStructuredFilters db geoP prodP classFilters False ranked
+        (Nothing, Nothing) -> findActivitiesByFields db nameP geoP prodP classFilters exactMatch
   where
     bm25Candidates = do
         name <- nameP

@@ -341,6 +341,7 @@ test-suite lca-tests
                      , CopySpec
                      , DeriveSpec
                      , SourceBlockSpec
+                     , NativeIdSearchSpec
                      , AuthorSpec
                      , JournalSpec
                      , ActivityWriteHandlerSpec

@@ -42,6 +42,12 @@
   came from. EcoSpold 2 and ILCD name a dataset by a UUID, which is already the
   first half of every process id, so they report nothing new here. Wire
   revision 22.
+- Searching a process by the identifier its source file gave it now lands on
+  that dataset alone: type a SimaPro `Process identifier` into the search and
+  you get the block it names, every product of it, and nothing that merely
+  resembles it. Half an identifier names no dataset and searches as it always
+  did, because the codes of one database share their prefix and answering half
+  the database to somebody who named one dataset would be no answer at all.
 - A database can now be asked for another allocation key without editing the
   configuration file: `POST /api/v1/db/{name}/derive/{newName}?allocation=wet
   mass`, the `derive_database` tool, and `Client.derive_database` in pyvolca.

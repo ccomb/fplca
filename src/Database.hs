@@ -6,6 +6,7 @@ module Database where
 
 import qualified Data.IntSet as IS
 import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -210,6 +211,33 @@ exactNameMatches actVec name =
 fullScanNameMatches :: V.Vector Activity -> Text -> [(ProcessId, Activity)]
 fullScanNameMatches actVec name =
     [pair | pair@(_, a) <- allActivities actVec, allWordsMatch name (\a' -> [activityName a']) a]
+
+{- | The rows of the source block a query names outright, when the query is the
+identifier a source gave one ('activityNativeId': SimaPro's @Process
+identifier@, an EcoSpold 1 dataset's number).
+
+An identifier is a key, not a word. Either the query is one, and there is
+exactly one block to show and nothing to rank, or it is not, and this says so
+rather than offering the blocks whose identifier is nearly it. That is why it
+is equality on the whole string and not a prefix: the codes of one database
+share their prefix, so anything looser would answer half the database to a
+query that named one dataset.
+
+Every product of a block carries the block's identifier, so the answer is the
+whole block, which is what someone holding a source file open is looking for.
+-}
+activitiesIdentifiedBy :: V.Vector Activity -> Text -> Maybe (NonEmpty (ProcessId, Activity))
+activitiesIdentifiedBy actVec query
+    | T.null wanted = Nothing
+    | otherwise = NE.nonEmpty [pair | pair@(_, a) <- allActivities actVec, carriesWanted a]
+  where
+    wanted :: Text
+    wanted = T.toCaseFold (T.strip query)
+
+    carriesWanted :: Activity -> Bool
+    carriesWanted a = case activityNativeId a of
+        Nothing -> False
+        Just (NativeProcessId nativeId) -> T.toCaseFold nativeId == wanted
 
 {- | Docs whose BM25 postings cover every query token (AND), allowing any
 fuzzy expansion of a token to satisfy that token (OR within a token).
