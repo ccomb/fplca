@@ -111,7 +111,6 @@ mkDB locsAndEmissions =
             { dbProcessIdTable = V.fromList [(actUUID i, mkUUID 0) | i <- [0 .. n - 1]]
             , dbProcessIdLookup = M.empty
             , dbActivityUUIDIndex = M.empty
-            , dbActivityProductsIndex = M.empty
             , dbProductIndex = emptyProductIndex
             , dbActivities = activities
             , dbTechFlows = M.empty

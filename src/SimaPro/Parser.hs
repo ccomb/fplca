@@ -1068,10 +1068,11 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     descriptionLines = maybeToList (nonEmptyText pbComment)
     nativeType = SimaProProcessType <$> nonEmptyText pbType
 
-    -- Block identity. The products' processes share it, so they group together
-    -- even though the activity UUID (a hash of name and location) is not unique:
-    -- a SimaPro "Process name" is truncated to 80 characters and reused verbatim
-    -- across unrelated blocks.
+    -- Block identity, and what 'generateActivityUUID' mints the activity from
+    -- when the block publishes one. That is what keeps two blocks apart where
+    -- their name would not: a SimaPro "Process name" is truncated to 80
+    -- characters and reused verbatim across unrelated blocks, so blocks with no
+    -- identifier fall back to name and location and can still collide there.
     nativeId = NativeProcessId <$> nonEmptyText pbIdentifier
 
     block :: ProductRow -> [ProductRow] -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])

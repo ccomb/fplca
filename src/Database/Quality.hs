@@ -61,7 +61,6 @@ import Types (
     Unit (..),
     WasteFlow (..),
     activityDeclaredShares,
-    activityGroupKey,
     activityIsObsolete,
     exchangeAmount,
     exchangeFlowId,
@@ -293,16 +292,16 @@ qualityReport dbName db =
         , n /= 1
         ]
 
-    -- The coproducts of one source block share an 'activityGroupKey'. A block
-    -- whose source format has no identifier falls back to grouping by activity
-    -- UUID alone: two SimaPro blocks whose names collide after the format's
-    -- 80-character truncation would then merge, and their percentages sum to
-    -- ~200%. That is the same over-grouping 'Database.MatrixBuild' accepts.
+    -- The coproducts of one source block share an activity. Two SimaPro blocks
+    -- whose names collide after the format's 80-character truncation, and which
+    -- publish no identifier to be told apart by, hash to one activity and merge
+    -- here: their percentages then sum to ~200%. That is the same over-grouping
+    -- 'Database.MatrixBuild' accepts.
     allocationApplicable = any (any isJust . activityDeclaredShares) acts
     allocationGroups =
         M.fromListWith
             (<>)
-            [ (activityGroupKey actUUID act, [(key, act)])
+            [ (actUUID, [(key, act)])
             | (key@(actUUID, _productUUID), act) <- entries
             ]
     allocationOffenders = concatMap allocationGroupOffenders (M.elems allocationGroups)

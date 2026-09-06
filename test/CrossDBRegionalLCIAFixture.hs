@@ -138,7 +138,6 @@ mkDB offset locs bioTriples =
             { dbProcessIdTable = procIds
             , dbProcessIdLookup = procIdLookup
             , dbActivityUUIDIndex = M.empty
-            , dbActivityProductsIndex = M.empty
             , dbProductIndex = emptyProductIndex
             , dbActivities = activities
             , dbTechFlows = M.empty

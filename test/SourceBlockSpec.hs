@@ -3,10 +3,9 @@
 {- | The block name an activity summary carries ('Types.sourceBlockOf').
 
 A listing that wants to show the coproducts of one block together cannot group
-on the process id, which names the product. The block name renders
-'activityGroupKey', the key a block's coproducts are indexed under, and it
-travels with the count of products the block holds so a page can say when it
-is showing only part of one.
+on the process id, which names the product. The block name is the activity the
+products were written under, and it travels with the count of products the
+block holds so a page can say when it is showing only part of one.
 -}
 module SourceBlockSpec (spec) where
 

@@ -50,6 +50,8 @@ import Control.Concurrent.STM (STM, atomically, modifyTVar', readTVar, readTVarI
 import Control.Exception (SomeException, try)
 import Control.Monad (when)
 import qualified Data.IntSet as IS
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as S
@@ -108,7 +110,6 @@ import Service (bm25Retrieve)
 import Types (
     AllocationKey,
     Database (..),
-    NativeProcessId,
     ProcessId,
     allocationKeyText,
     findProcessIdByActivityUUID,
@@ -237,12 +238,12 @@ loadDerived manager slug srcConfig key =
 
 {- | Why the key divided nothing worth keeping, when it did.
 
-The coproducts a key divided share an 'activityGroupKey', so a block it
-divided is several processes under one key and a block it could not is the
-single process it came in as. Counting the first is the only measure of what a
-key did to a database, and both numbers are named: @0 of 4087@ says the source
-carries blocks and none of them could be weighed, where @0 of 0@ would say it
-carries none at all.
+The coproducts a key divided share an activity, so a block it divided is
+several processes under one activity and a block it could not is the single
+process it came in as. Counting the first is the only measure of what a key did
+to a database, and both numbers are named: @0 of 4087@ says the source carries
+blocks and none of them could be weighed, where @0 of 0@ would say it carries
+none at all.
 -}
 dividedRefusal :: AllocationKey -> Text -> Database -> Maybe Text
 dividedRefusal key srcName db
@@ -256,11 +257,11 @@ dividedRefusal key srcName db
                 <> srcName
                 <> ": the result would be that database under another name"
   where
-    blocks :: M.Map (UUID.UUID, Maybe NativeProcessId) [ProcessId]
-    blocks = dbActivityProductsIndex db
+    blocks :: M.Map UUID.UUID (NonEmpty ProcessId)
+    blocks = dbActivityUUIDIndex db
 
     divided :: Int
-    divided = length (filter ((> 1) . length) (M.elems blocks))
+    divided = length (filter ((> 1) . NE.length) (M.elems blocks))
 
 {- | Undo a derivation that will not be kept: unload it, then take its home
 and its cache with 'removeDatabase', which refuses a loaded database.

@@ -57,7 +57,7 @@ spec = around_ withScratchDataDir $ describe "Database.Edit.deriveDatabase" $ do
             derived <- deriveDatabase manager source "cheese-wet" (ByProperty WetMass)
             db <- either (fail . show) (pure . ldDatabase . fst) derived
             V.length (dbActivities db) `shouldBe` 2
-            M.size (dbActivityProductsIndex db) `shouldBe` 1
+            M.size (dbActivityUUIDIndex db) `shouldBe` 1
             -- The source declares 51 / 49 and would put 5.1 kg of milk behind
             -- the cheese. 1 kg of cheese beside 3 kg of whey is 25 / 75, and
             -- the whole inventory follows the key that divided the block.
