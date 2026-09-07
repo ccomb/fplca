@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Fixed
+- A Brightway Excel export can now be opened by the tools it is written for.
+  The `.xlsx` was missing the manifest a spreadsheet reader looks up before
+  anything else, so openpyxl, bw2io and Excel all refused the file even though
+  the sheet inside it was complete. VoLCA's own importer reads the sheet
+  directly and never needed the manifest, which is why the file looked fine
+  from here.
 - An EcoSpold 2 dataset whose block a key divides into several processes now
   says that only one of them will be kept. A process is identified by its file
   name there, which names a single product, so the coproducts a key had just
