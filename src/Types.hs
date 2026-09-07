@@ -103,6 +103,16 @@ when neither the source nor the medium recorded one.
 bfCompartmentSub :: BiosphereFlow -> Maybe Text
 bfCompartmentSub = compartmentSub <=< bfCompartment
 
+{- | The medium of an inventory indicator: an elementary flow that counts what
+an activity accounts for rather than naming a substance exchanged with the
+environment, so that a method can characterize the total. It is neither an
+emission to a medium nor an extraction from one, which is why the readers and
+writers that bucket a flow by its medium all need to recognise it. Compared
+lowercased and stripped, as sources vary in spacing and case.
+-}
+inventoryIndicatorMedium :: Text
+inventoryIndicatorMedium = "inventory indicator"
+
 {- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
 biosphere side also gets named variants instead of a load-bearing 'Bool'.
 

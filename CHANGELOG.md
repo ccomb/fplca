@@ -9,6 +9,17 @@
   the sheet inside it was complete. VoLCA's own importer reads the sheet
   directly and never needed the manifest, which is why the file looked fine
   from here.
+- An EcoSpold 2 database no longer reports supplier gaps that cannot exist.
+  A source of that format declares a handful of inventory indicators, which
+  are elementary flows recording how much waste an activity accounts for so
+  that a method can characterize the total. The loader read the word "waste"
+  in their compartment and moved them to the technosphere waste side, where a
+  dataset that writes one as an input reads as a process demanding a supplier
+  no activity can be. Two of them are written that way throughout, which was
+  enough to leave thousands of unsupplied edges on a database that is in fact
+  complete. They are elementary flows again: they appear in the inventory
+  where a method can characterize them, and the gap report is empty. Caches
+  built before this are rebuilt on the next load.
 - An EcoSpold 2 dataset whose block a key divides into several processes now
   says that only one of them will be kept. A process is identified by its file
   name there, which names a single product, so the coproducts a key had just
