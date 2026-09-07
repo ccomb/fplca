@@ -53,7 +53,6 @@ import Method.Mapping (LCIAOutcome (..), MappingStats (..), SimilarCF (..), Simi
 import qualified Method.Mapping as Mapping
 import Method.Types (FlowDirection (..), Method (..), MethodCF (..), MethodCollection (..), ScoringSet (..))
 import Network.HTTP.Types.Header (RequestHeaders, hAccept, hAllow, hHost)
-import Numeric (showFFloat)
 import Progress (ProgressLevel (Warning), reportProgress)
 import qualified Search.Normalize as Normalize
 import qualified Service
@@ -1174,9 +1173,8 @@ data ImpactsResult = ImpactsResult
     , irContribs :: ![(BiosphereFlow, Double, Double)]
     -- ^ Sorted descending by absolute contribution.
     , irUnknownUuids :: ![UUID.UUID]
-    , irRefProductName :: !Text
-    , irRefProductAmount :: !Double
-    , irRefProductUnit :: !Text
+    , irFunctionalUnit :: !Text
+    -- ^ What one score is reported against, per 'Service.functionalUnitOf'.
     }
 
 {- | Run a fully resolved LCA request: solve inventory, map flows, score.
@@ -1223,7 +1221,7 @@ runImpactsRequest dbManager args req = do
         baseOutcome = computeLCIAScoreFromTables unitCfg mUnits mFlows inventory tables
         (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
         contribs = L.sortOn (\(_, _, c) -> negate (abs c)) rawContribs
-        (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits (raActivity ra)
+        functionalUnit = Service.functionalUnitOf (dbTechFlows db) mUnits (raActivity ra)
     -- Diagnostics path: opt-in via include_diagnostics. Skips the suggester
     -- work entirely when not requested, so the hot path stays bit-identical
     -- to runs without the flag.
@@ -1251,9 +1249,7 @@ runImpactsRequest dbManager args req = do
             , irTables = tables
             , irContribs = contribs
             , irUnknownUuids = unknownUuids
-            , irRefProductName = prodName
-            , irRefProductAmount = prodAmount
-            , irRefProductUnit = prodUnit
+            , irFunctionalUnit = functionalUnit
             }
 
 {- | Handler for the 'get_impacts' MCP tool (computes LCIA score).
@@ -1273,12 +1269,7 @@ callGetImpacts dbManager mBaseUrl rid args =
             ra = lrResolved req
             score = loScore (irOutcome ir)
             stats = irMappingStats ir
-            functionalUnit =
-                T.pack (showFFloat (Just 2) (irRefProductAmount ir) "")
-                    <> " "
-                    <> irRefProductUnit ir
-                    <> " of "
-                    <> irRefProductName ir
+            functionalUnit = irFunctionalUnit ir
             contribs = irContribs ir
             topFlows = take topN contribs
             webUrlPair = webUrlField mBaseUrl ("/db/" <> dbName <> "/activity/" <> raText ra <> "/impacts/" <> encodeSegment (DM.unCollectionName (lrCollection req)) <> "/" <> lrMethodIdText req)

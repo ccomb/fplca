@@ -1341,6 +1341,22 @@ getReferenceProductInfo flows units activity =
         , getUnitNameForExchange units ex
         )
 
+{- | The functional unit a score is reported against: one unit of the
+activity's reference product, named in the unit its matrix column was
+normalised to.
+
+Never the amount the source declared. "Database.MatrixBuild" divides every
+coefficient of a column by that amount, so a coproduct a source states at
+0.0686462 kg is still scored per kilogram, and a reference product ingested
+as 3.6 mj is still scored per megajoule. Reporting the declared amount here
+described the block, not the number beside it.
+-}
+functionalUnitOf :: TechFlowDB -> UnitDB -> Activity -> Text
+functionalUnitOf flows units activity = "1.00 " <> prodUnit <> " of " <> prodName
+  where
+    prodName, prodUnit :: Text
+    (prodName, _, prodUnit) = getReferenceProductInfo flows units activity
+
 {- | Build an 'ActivitySummary' from a (ProcessId, Activity) pair. Encapsulates
 the reference-product + allocation + native-type projection shared by
 search results, supply-chain entries, inventory metadata, and exchange-target
