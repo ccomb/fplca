@@ -690,6 +690,42 @@ spec = do
             scoreVia cmap USEtoxFamily "Iron(2+)" (Just "7439-89-6") "ground-, long-term" `shouldReturn` 0.0
             scoreVia cmap OtherCFFamily "Iron(2+)" (Just "7439-89-6") "ground-, long-term" `shouldReturn` 2108.5
 
+    describe "final waste flows and inventory indicators meet the same factor" $ do
+        -- A method writing an ecofactor for landfilled waste puts "Waste" in
+        -- its compartment column. One format files that flow under a medium
+        -- of the same name; another files it as an inventory indicator whose
+        -- subcompartment is "waste". Both must reach the factor, or the same
+        -- waste scores differently depending on where the database came from.
+        -- The bridge is compartments.csv, so the shipped file is what runs.
+        cmap <- runIO $ do
+            csv <- BL.readFile "data/compartments.csv"
+            either (fail . ("compartments.csv: " <>)) pure (buildCompartmentMapFromCSV csv)
+        let cf = mkCFComp "Landfilled waste mass" "waste" "" 24.0
+            scoreOf medium msub = do
+                fid <- nextRandom
+                let flow = mkFlow fid "Landfilled waste mass" medium msub
+                    tables = buildMethodTables OtherCFFamily cmap M.empty [(cf, Nothing)]
+                pure . loScore $
+                    computeLCIAScoreFromTables
+                        defaultUnitConfig
+                        M.empty
+                        (M.singleton fid flow)
+                        (M.singleton fid 1.0)
+                        tables
+
+        it "characterizes a flow filed under the medium the method names" $
+            scoreOf "waste" Nothing `shouldReturn` 24.0
+
+        it "characterizes an inventory indicator whose subcompartment is waste" $
+            scoreOf "inventory indicator" (Just "waste") `shouldReturn` 24.0
+
+        it "leaves the indicators that are not waste alone" $ do
+            -- The same compartment name also covers secondary materials and
+            -- exported energy. A rule keyed on the medium alone would hand
+            -- them a waste factor; this one is keyed on the pair.
+            scoreOf "inventory indicator" (Just "resource use") `shouldReturn` 0.0
+            scoreOf "inventory indicator" (Just "output flow") `shouldReturn` 0.0
+
     describe "inventoryContributions" $ do
         -- Regression: same fallback bug as computeLCIAScoreFromTables.
         it "yields zero contribution when unit conversion fails" $ do

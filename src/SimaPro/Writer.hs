@@ -298,9 +298,9 @@ checkSimaProExportable db =
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbBioFlows db)]
         , let medium = T.toLower (bfCompartmentName flow)
         , not (T.null medium)
-        , -- An inventory indicator is not an emission to a medium; it has its own
+        , -- A final waste flow is not an emission to a medium; it has its own
         -- section ('SecWaste'), so it is not held to the emission media.
-        medium /= inventoryIndicatorMedium
+        medium `notElem` [wasteMedium, inventoryIndicatorMedium]
         , medium `notElem` ["air", "water", "soil"]
         ]
     amountOffenders =
@@ -594,13 +594,14 @@ wasteLine _ BiosphereExchange{} = Nothing
 compartment name. SimaPro splits biosphere rows into five sections keyed on
 the medium: Resources, Emissions to air/water/soil, and Final waste flows.
 Resources are the 'Resource' direction; emissions are bucketed by compartment
-name. An inventory indicator counts what the activity sends away rather than
-naming a substance, and the same source's own SimaPro export files all of them
-under Final waste flows, so its medium decides before its direction does.
+name. A final waste flow and an inventory indicator both count what the
+activity sends away rather than naming a substance exchanged with a medium, so
+they belong to Final waste flows whatever their direction says: their medium
+decides first.
 -}
 bioSection :: Catalogs -> Exchange -> Maybe BioSec
 bioSection cats ex@BiosphereExchange{bioDirection = dir}
-    | medium == Just inventoryIndicatorMedium = Just SecWaste
+    | medium `elem` [Just wasteMedium, Just inventoryIndicatorMedium] = Just SecWaste
     | otherwise = case dir of
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a

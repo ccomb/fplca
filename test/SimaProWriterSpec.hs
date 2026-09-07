@@ -185,7 +185,7 @@ noTypeCSV =
         , "End"
         ]
 
--- | A process with a @Final waste flows@ section, exercising the waste path.
+-- | A process with a @Final waste flows@ section, whose rows are elementary.
 wasteCSV :: BS.ByteString
 wasteCSV =
     BS.intercalate
@@ -494,10 +494,14 @@ spec = describe "SimaPro.Writer round-trip" $ do
         f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         shapeSet reparsed `shouldBe` shapeSet original
-        -- Guard against a vacuous pass: the original must actually carry a waste
-        -- exchange, so the structural equality above is pinning something.
-        let kinds = [esKind ex | ash <- S.toList (shapeSet original), ex <- asExchanges ash]
-        kinds `shouldSatisfy` elem "waste"
+        -- Guard against a vacuous pass: the original must actually carry the
+        -- section's flow, so the structural equality above is pinning
+        -- something. A final waste flow is elementary, filed under its own
+        -- medium, and the section is what the writer has to find it again by.
+        let (_, _, bioFlows, wasteFlows, _) = original
+        map bfCompartment (M.elems bioFlows)
+            `shouldBe` [Just (Compartment "waste" Nothing)]
+        M.size wasteFlows `shouldBe` 0
 
     describe "checkSimaProExportable (emission-medium guard)" $ do
         it "accepts air / water / soil emissions" $
@@ -528,6 +532,10 @@ spec = describe "SimaPro.Writer round-trip" $ do
                     firstRow "Final waste flows"
                         `shouldBe` ["Some emission;waste;kg;0.5;Undefined;;;;;;"]
                     firstRow "Emissions to air" `shouldBe` []
+
+        it "accepts a final waste flow, whose medium is the section's own name" $
+            checkSimaProExportable (emissionDb (Compartment "waste" Nothing))
+                `shouldBe` Right ()
 
     describe "checkSimaProExportable (round-trip guards)" $ do
         it "refuses an activity whose product rows carry no share: each row would claim the whole" $

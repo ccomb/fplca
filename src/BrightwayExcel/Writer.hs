@@ -188,7 +188,7 @@ orphanWaste :: Exchange -> Bool
 orphanWaste ex = isWasteExchange ex && not (linkedWaste ex)
 
 {- | Best-effort export note for a database with /orphan/ waste exchanges —
-end-of-life waste outputs that carry no producer link. Brightway has no waste
+waste rows that name no producer at all. Brightway has no waste
 type, so 'exchangeRow' writes each as a technosphere flow. Such an exchange never
 participates in the technosphere matrix ('Database.MatrixBuild.findProducer'
 returns 'Nothing'), so the rewrite is inventory-neutral; only the waste

@@ -308,6 +308,10 @@ History of manual bumps:
      type, so a cache written just before this would pass the fingerprint and
      go on holding those flows on the waste axis - invisible to every method,
      and demanding a supplier no activity can be.
+- 26: a SimaPro "Final waste flows" row is an elementary flow of medium
+     "waste", not a waste exchange. Nothing changes type, so a cache written
+     just before this would pass the fingerprint and keep those flows on an
+     axis no method reads.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -315,7 +319,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 25
+     in hi `xor` lo `xor` 26
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1574,9 +1578,8 @@ resolve in 'Database.MatrixBuild.techTriple'.
 Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
 @(I-A)@ and are skipped by the matrix builder, so a treatment process's
 'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
-completeness below 100% for a perfectly solvable database. Waste *outputs* (the
-typical SimaPro 'Final waste flows' case) are end-of-life markers, also not
-demands; only waste/technosphere *inputs* remain.
+completeness below 100% for a perfectly solvable database. Waste *outputs* are
+generated, not demanded; only waste/technosphere *inputs* remain.
 -}
 isSupplierDemand :: Exchange -> Bool
 isSupplierDemand ex =

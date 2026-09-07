@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Fixed
+- Waste that leaves a system with no treatment modelled for it is now
+  characterized. A SimaPro CSV files such waste in a section of its own, and a
+  method that scores it writes the same word in its compartment column. The
+  loader was putting those rows on the technosphere waste side instead, where
+  no method looks and where a row with no producer never reaches an inventory
+  at all: a database could carry thousands of them and still score zero on a
+  waste category the method covers. They are elementary flows now, of the
+  medium the section is named after, and the exports that have a section for
+  them still write them there. The same factor also reaches the equivalent
+  flows of an EcoSpold 2 source, whose compartment table gained one line
+  (data version 4) pairing its waste indicators with that medium; its
+  indicators that count recovered energy or secondary materials are left where
+  they are, being nothing of the kind. On a database read from those formats
+  these rows now appear as inventory flows rather than waste exchanges, so a
+  waste-flow search no longer returns them and a cut-off report no longer
+  counts them. Caches built before this are rebuilt on the next load.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though

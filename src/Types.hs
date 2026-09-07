@@ -113,6 +113,17 @@ lowercased and stripped, as sources vary in spacing and case.
 inventoryIndicatorMedium :: Text
 inventoryIndicatorMedium = "inventory indicator"
 
+{- | The medium of a final waste flow: waste that leaves the system with no
+treatment modelled for it, so no activity produces or consumes it. SimaPro
+files these in their own section and a method characterizes them under this
+name (the compartment column of an ecofactor for landfilled waste reads
+@Waste@), which is why they are elementary flows rather than a demand on the
+technosphere. Waste that IS sent to treatment keeps its producer and stays on
+the technosphere side. Compared lowercased and stripped.
+-}
+wasteMedium :: Text
+wasteMedium = "waste"
+
 {- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
 biosphere side also gets named variants instead of a load-bearing 'Bool'.
 
@@ -321,7 +332,8 @@ data Exchange
         , waUnitId :: !UUID -- Unit of measurement
         , waIsInput :: !Bool
         {- ^ True when consumed by a treatment activity; False when generated
-        by the activity (the typical SimaPro 'Final waste flows' case).
+        by it. Waste with no treatment modelled at all is not on this axis:
+        it is an elementary flow of medium 'wasteMedium'.
         -}
         , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
         , waProcessLinkId :: !(Maybe ProcessId) -- Target process ID (matches techProcessLinkId)
