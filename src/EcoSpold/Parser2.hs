@@ -781,7 +781,7 @@ parseWithXeno xmlContent processId = do
                         -- Negative inputs (e.g. wastewater discharge) are never reference products.
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
                         -- The one waste marker EcoSpold2 carries: an intermediateExchange
-                        -- classified (System='By-product classification', Value='Waste') — a waste
+                        -- classified (System='By-product classification', Value='Waste'), a waste
                         -- output that consumers treat via a treatment activity.
                         isWasteFlow = M.lookup "By-product classification" (idClassifications idata) == Just "Waste"
                         (flowUUID, flowWarn) = parseUUID (idFlowId idata)
@@ -861,12 +861,21 @@ parseWithXeno xmlContent processId = do
                             (Nothing, Just _) -> Nothing -- sub without medium is meaningless; drop
                             -- Biosphere direction: prefer inputGroup/outputGroup, else fall back to the
                             -- compartment heuristic (natural-resource flows are extractions).
+                            -- An inventory indicator is the exception: it counts what the activity
+                            -- sends away, and a source writes the same indicator under both groups
+                            -- from one dataset to the next, so the group is not information. Reading
+                            -- it would make the direction of a flow depend on which dataset one
+                            -- happens to look at, and cost the writers that reconstruct direction
+                            -- from the compartment their round-trip.
                         direction
+                            | isInventoryIndicator = Emission
                             | not (T.null finalInputGroup) = Resource
                             | not (T.null finalOutputGroup) = Emission
                             | otherwise = case edCompartments edata of
                                 (comp : _) | T.toLower comp == "natural resource" -> Resource
                                 _ -> Emission
+                        isInventoryIndicator =
+                            maybe False ((== inventoryIndicatorMedium) . T.toLower . T.strip) mCompName
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
                         warns =

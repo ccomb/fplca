@@ -105,6 +105,15 @@ spec = describe "per-exchange comments" $ do
                 -- the indicator input joins the genuine CO2 emission
                 map bfName bios
                     `shouldMatchList` ["Carbon dioxide", "Waste mass placed in landfill"]
+        -- The fixture writes the indicator with inputGroup 4, which would
+        -- otherwise read as Resource. A source writes the same indicator under
+        -- both groups from one dataset to the next, so the group says nothing;
+        -- recording one direction is what lets a writer that reconstructs
+        -- direction from the compartment round-trip the flow.
+        it "records an inventory indicator as an output whichever group it carries" $
+            withWastePatternsFixture $ \(act, _, _, _, _) ->
+                [bioDirection e | e@BiosphereExchange{} <- exchanges act]
+                    `shouldBe` [Emission, Emission]
         it "routes an intermediate classified 'By-product:Waste' to WasteExchange" $
             withWastePatternsFixture $ \(act, _, _, _, _) -> do
                 let wasteInputs = [e | e@WasteExchange{waIsInput = True} <- exchanges act]

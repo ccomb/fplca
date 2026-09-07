@@ -31,6 +31,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import Data.Word (Word32)
@@ -508,6 +509,25 @@ spec = describe "SimaPro.Writer round-trip" $ do
             -- "Emissions to air" and re-parse as air; reject it loudly instead.
             checkSimaProExportable (emissionDb (Compartment "raw" Nothing))
                 `shouldSatisfy` either (const True) (const False)
+
+        -- An inventory indicator is neither an emission to a medium nor an
+        -- extraction from one. It has a section of its own, so the medium guard
+        -- must let it through and the writer must file it there: under
+        -- "Emissions to air" it would re-parse as an emission to air, and the
+        -- guard alone would refuse every database carrying one.
+        it "accepts an inventory indicator and files it under Final waste flows" $ do
+            let db = emissionDb (Compartment "inventory indicator" (Just "waste"))
+            checkSimaProExportable db `shouldBe` Right ()
+            case serializeSimaProCSV defaultWriterConfig db of
+                Left err -> expectationFailure (T.unpack err)
+                Right out -> do
+                    -- the writer joins with CRLF; drop the carriage returns
+                    let ls = map (T.dropWhileEnd (== '\r')) (T.lines (TE.decodeUtf8 out))
+                        after header = drop 1 (dropWhile (/= header) ls)
+                        firstRow header = take 1 (takeWhile (not . T.null) (after header))
+                    firstRow "Final waste flows"
+                        `shouldBe` ["Some emission;waste;kg;0.5;Undefined;;;;;;"]
+                    firstRow "Emissions to air" `shouldBe` []
 
     describe "checkSimaProExportable (round-trip guards)" $ do
         it "refuses an activity whose product rows carry no share: each row would claim the whole" $

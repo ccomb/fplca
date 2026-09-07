@@ -298,6 +298,9 @@ checkSimaProExportable db =
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbBioFlows db)]
         , let medium = T.toLower (bfCompartmentName flow)
         , not (T.null medium)
+        , -- An inventory indicator is not an emission to a medium; it has its own
+        -- section ('SecWaste'), so it is not held to the emission media.
+        medium /= inventoryIndicatorMedium
         , medium `notElem` ["air", "water", "soil"]
         ]
     amountOffenders =
@@ -588,20 +591,27 @@ wasteLine _ TechnosphereExchange{} = Nothing
 wasteLine _ BiosphereExchange{} = Nothing
 
 {- | The medium a biosphere exchange belongs to, derived from the flow's
-compartment name. SimaPro splits biosphere rows into four sections keyed on
-the medium: Resources, Emissions to air/water/soil. Resources are the
-'Resource' direction; emissions are bucketed by compartment name.
+compartment name. SimaPro splits biosphere rows into five sections keyed on
+the medium: Resources, Emissions to air/water/soil, and Final waste flows.
+Resources are the 'Resource' direction; emissions are bucketed by compartment
+name. An inventory indicator counts what the activity sends away rather than
+naming a substance, and the same source's own SimaPro export files all of them
+under Final waste flows, so its medium decides before its direction does.
 -}
 bioSection :: Catalogs -> Exchange -> Maybe BioSec
-bioSection cats ex@BiosphereExchange{bioDirection = dir} =
-    case dir of
+bioSection cats ex@BiosphereExchange{bioDirection = dir}
+    | medium == Just inventoryIndicatorMedium = Just SecWaste
+    | otherwise = case dir of
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
         -- section only when it also keeps a row (the two are paired in
         -- 'serializeActivity'); no dead "unknown → air" arm.
-        Emission -> sectionForMedium . bfCompartmentName <$> M.lookup (exchangeFlowId ex) (catBio cats)
+        Emission -> sectionForMedium <$> medium
   where
-    sectionForMedium name = case T.toLower name of
+    medium :: Maybe Text
+    medium = T.toLower . bfCompartmentName <$> M.lookup (exchangeFlowId ex) (catBio cats)
+    sectionForMedium :: Text -> BioSec
+    sectionForMedium name = case name of
         "water" -> SecWater
         "soil" -> SecSoil
         -- air, unspecified, or any other medium → air. 'checkSimaProExportable'
@@ -611,7 +621,7 @@ bioSection cats ex@BiosphereExchange{bioDirection = dir} =
 bioSection _ TechnosphereExchange{} = Nothing
 bioSection _ WasteExchange{} = Nothing
 
-data BioSec = SecRes | SecAir | SecWater | SecSoil
+data BioSec = SecRes | SecAir | SecWater | SecSoil | SecWaste
     deriving (Eq)
 
 {- | Output rows (@name;unit;amount;allocation;waste_type;category;comment@) for
@@ -757,7 +767,9 @@ serializeActivity cats act@Activity{..} =
             , withBlank (section "Emissions to air" bioRowText (bioByName SecAir))
             , withBlank (section "Emissions to water" bioRowText (bioByName SecWater))
             , withBlank (section "Emissions to soil" bioRowText (bioByName SecSoil))
-            , withBlank (section "Final waste flows" bioRowText wasteLines)
+            , -- Both kinds of final waste flow: the waste axis, and the inventory
+              -- indicators the biosphere axis carries ('bioSection').
+              withBlank (section "Final waste flows" bioRowText (bioByName SecWaste ++ wasteLines))
             , ["End", ""]
             ]
   where
