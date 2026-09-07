@@ -780,9 +780,9 @@ parseWithXeno xmlContent processId = do
                         -- normal production (positive amount) and waste treatment (negative amount).
                         -- Negative inputs (e.g. wastewater discharge) are never reference products.
                         isReferenceProduct = isOutput && finalOutputGroup == "0"
-                        -- Pattern B: intermediateExchange tagged Waste via classification
-                        -- (System='By-product classification', Value='Waste') — a waste output that
-                        -- consumers treat via a treatment activity.
+                        -- The one waste marker EcoSpold2 carries: an intermediateExchange
+                        -- classified (System='By-product classification', Value='Waste') — a waste
+                        -- output that consumers treat via a treatment activity.
                         isWasteFlow = M.lookup "By-product classification" (idClassifications idata) == Just "Waste"
                         (flowUUID, flowWarn) = parseUUID (idFlowId idata)
                         (unitUUID, unitWarn) = parseUUID (idUnitId idata)
@@ -867,14 +867,6 @@ parseWithXeno xmlContent processId = do
                             | otherwise = case edCompartments edata of
                                 (comp : _) | T.toLower comp == "natural resource" -> Resource
                                 _ -> Emission
-                        -- Pattern A: compartment="inventory indicator" / subcompartment="waste".
-                        -- Surfaced through the elementary axis but semantically technosphere waste —
-                        -- route to WasteExchange instead of BiosphereExchange.
-                        isInventoryIndicatorWaste = case (mCompName, subCompartment) of
-                            (Just c, Just s) ->
-                                T.toLower (T.strip c) == "inventory indicator"
-                                    && T.toLower (T.strip s) == "waste"
-                            _ -> False
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
                         warns =
@@ -893,24 +885,9 @@ parseWithXeno xmlContent processId = do
                                 , bioPedigree = Nothing
                                 }
                         bioFlow = BiosphereFlow flowUUID resolvedFlowName unitUUID (edSynonyms edata) (edCAS edata) Nothing compartment
-                        wasteExchange =
-                            WasteExchange
-                                { waFlowId = flowUUID
-                                , waAmount = edAmount edata
-                                , waUnitId = unitUUID
-                                , waIsInput = not (T.null finalInputGroup)
-                                , waActivityLinkId = UUID.nil
-                                , waProcessLinkId = Nothing
-                                , waLocation = ""
-                                , waComment = snd <$> edComment edata
-                                , waPedigree = Nothing
-                                }
-                        wasteFlow = WasteFlow flowUUID resolvedFlowName unitUUID (edSynonyms edata) (edCAS edata) Nothing
                         formula = ExchangeFormula (nonEmptyText (edVariableName edata)) (nonEmptyText (edMathRel edata))
                         base = finishExchange unit warns state
-                     in if isInventoryIndicatorWaste
-                            then addExchange wasteExchange formula (addWasteFlow wasteFlow base)
-                            else addExchange bioExchange formula (addBioFlow bioFlow base)
+                     in addExchange bioExchange formula (addBioFlow bioFlow base)
         | isElement tagName "text" =
             if inGeneralComment state
                 then

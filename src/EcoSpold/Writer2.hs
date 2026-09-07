@@ -408,7 +408,7 @@ renderTechnosphere env ex =
         ReferenceInput -> techAmount ex
 
 {- | Waste exchange → @intermediateExchange@ tagged with the
-@By-product classification = Waste@ classification (parser "Pattern B"). The
+@By-product classification = Waste@ classification. The
 @waIsInput@ flag picks the group so direction round-trips: an input takes
 @inputGroup 5@ (from technosphere), an output the @outputGroup 2@ (by-product) —
 the only output groups EcoSpold2 defines for an intermediate exchange besides the

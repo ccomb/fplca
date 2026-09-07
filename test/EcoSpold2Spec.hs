@@ -90,24 +90,27 @@ spec = describe "per-exchange comments" $ do
             withPropertyFixture $ \act ->
                 map exchangeAmount (exchanges act) `shouldMatchList` [1.0, 0.1]
 
-    -- Pattern A: elementaryExchange with compartment=inventory indicator
-    -- subcompartment=waste must surface as a WasteExchange / WasteFlow,
-    -- not a BiosphereExchange. Pattern B: intermediateExchange with
-    -- classification (By-product classification=Waste) likewise.
+    -- The waste axis has exactly one EcoSpold2 marker: an intermediateExchange
+    -- classified By-product classification=Waste. Elementary exchanges stay
+    -- biosphere whatever their compartment reads - a flow in the "inventory
+    -- indicator" compartment is an accounting total a method characterizes, not
+    -- a demand. Routing it to the waste axis both hid it from every LCIA method
+    -- and, since such a flow is commonly written with inputGroup 4, invented a
+    -- supplier demand no activity can meet.
     describe "waste flow detection" $ do
-        it "routes Pattern A (elementary 'inventory indicator/waste') to WasteExchange" $
+        it "keeps an elementary 'inventory indicator/waste' input on the biosphere axis" $
             withWastePatternsFixture $ \(act, _, bios, wastes, _) -> do
-                let waste = [e | e@WasteExchange{} <- exchanges act]
-                length waste `shouldBe` 2 -- one Pattern A + one Pattern B
-                length wastes `shouldBe` 2 -- WasteFlow registry populated
-                length bios `shouldBe` 1 -- the genuine CO2 emission stays biosphere
-        it "routes Pattern B (intermediate classification 'By-product:Waste') to WasteExchange" $
+                length [e | e@WasteExchange{} <- exchanges act] `shouldBe` 1
+                length wastes `shouldBe` 1
+                -- the indicator input joins the genuine CO2 emission
+                map bfName bios
+                    `shouldMatchList` ["Carbon dioxide", "Waste mass placed in landfill"]
+        it "routes an intermediate classified 'By-product:Waste' to WasteExchange" $
             withWastePatternsFixture $ \(act, _, _, _, _) -> do
                 let wasteInputs = [e | e@WasteExchange{waIsInput = True} <- exchanges act]
                     wasteOutputs = [e | e@WasteExchange{waIsInput = False} <- exchanges act]
-                -- Pattern B sample is an input; Pattern A sample is an output.
                 length wasteInputs `shouldBe` 1
-                length wasteOutputs `shouldBe` 1
+                length wasteOutputs `shouldBe` 0
 
     -- Regression: e17dc21 established "all 25,412 ecoinvent .spold parse"; the
     -- WasteFlow axis (#83) silently re-broke it. A treatment / market-for-waste
@@ -494,11 +497,13 @@ withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> 
         Left err -> expectationFailure $ "Parse failed: " ++ err
         Right res -> k res
 
-{- | Synthetic fixture exercising both EcoSpold2 waste patterns:
-  - Pattern A: elementary exchange with compartment "inventory indicator"
-    / "waste" (waste output surfaced through the elementary axis)
-  - Pattern B: intermediate exchange tagged via classification
-    (System="By-product classification", Value="Waste")
+{- | Synthetic fixture separating the one real EcoSpold2 waste marker from the
+look-alike that is not one:
+  - an intermediate exchange tagged via classification
+    (System="By-product classification", Value="Waste") - the waste axis
+  - an elementary exchange with compartment "inventory indicator" / "waste",
+    written the way such an indicator usually is (inputGroup 4) - the
+    biosphere axis
 Plus one genuine biosphere emission and the mandatory reference output.
 -}
 wastePatternsXml :: BS.ByteString
@@ -520,7 +525,7 @@ wastePatternsXml =
     \        <unitName xml:lang=\"en\">kg</unitName>\n\
     \        <outputGroup>0</outputGroup>\n\
     \      </intermediateExchange>\n\
-    \      <!-- Pattern B: intermediate exchange with By-product:Waste classification (treated as INPUT)-->\n\
+    \      <!-- Intermediate exchange with By-product:Waste classification (treated as INPUT)-->\n\
     \      <intermediateExchange id=\"pat-b\" unitId=\"unit-kg\" amount=\"0.4\"\n\
     \                           intermediateExchangeId=\"cccccccc-cccc-cccc-cccc-cccccccccccc\">\n\
     \        <name xml:lang=\"en\">Spent solvent for treatment</name>\n\
@@ -531,16 +536,16 @@ wastePatternsXml =
     \          <classificationValue xml:lang=\"en\">Waste</classificationValue>\n\
     \        </classification>\n\
     \      </intermediateExchange>\n\
-    \      <!-- Pattern A: elementary exchange with compartment=inventory indicator / waste -->\n\
-    \      <elementaryExchange id=\"pat-a\" unitId=\"unit-kg\" amount=\"0.2\"\n\
+    \      <!-- Inventory indicator: elementary, compartment=inventory indicator / waste -->\n\
+    \      <elementaryExchange id=\"indicator\" unitId=\"unit-kg\" amount=\"0.2\"\n\
     \                         elementaryExchangeId=\"dddddddd-dddd-dddd-dddd-dddddddddddd\">\n\
-    \        <name xml:lang=\"en\">Hazardous waste, to inventory</name>\n\
+    \        <name xml:lang=\"en\">Waste mass placed in landfill</name>\n\
     \        <unitName xml:lang=\"en\">kg</unitName>\n\
     \        <compartment>\n\
     \          <compartment xml:lang=\"en\">inventory indicator</compartment>\n\
     \          <subcompartment xml:lang=\"en\">waste</subcompartment>\n\
     \        </compartment>\n\
-    \        <outputGroup>4</outputGroup>\n\
+    \        <inputGroup>4</inputGroup>\n\
     \      </elementaryExchange>\n\
     \      <!-- Genuine biosphere emission for contrast -->\n\
     \      <elementaryExchange id=\"bio\" unitId=\"unit-kg\" amount=\"0.1\"\n\

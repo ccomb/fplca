@@ -303,6 +303,11 @@ History of manual bumps:
      under, in a field that already existed and was already stored. Nothing
      changes type, so a cache written just before this would pass the
      fingerprint and go on reporting that those datasets have no identifier.
+- 25: an EcoSpold 2 elementary exchange in the "inventory indicator"
+     compartment is a biosphere flow again, not a waste one. Nothing changes
+     type, so a cache written just before this would pass the fingerprint and
+     go on holding those flows on the waste axis - invisible to every method,
+     and demanding a supplier no activity can be.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -310,7 +315,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 24
+     in hi `xor` lo `xor` 25
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1114,8 +1119,7 @@ loadEcoSpoldDirectory opts dir = do
         -- Parse all files for this worker using appropriate parser.
         -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int).
         -- For EcoSpold2: dataset number = 0, supplier links = empty. WasteFlows now flow
-        -- through (Pattern A: elementaryExchange compartment=inventory indicator/waste;
-        -- Pattern B: intermediateExchange classification=By-product:Waste).
+        -- through (intermediateExchange classified By-product:Waste).
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
