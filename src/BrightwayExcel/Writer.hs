@@ -40,7 +40,9 @@ depends on ambient state (timestamps, tool version, machine).
 An @.xlsx@ is a zip of XML parts. We mirror the parser's toolchain exactly
 (@zip-archive@ + hand-built SpreadsheetML, the same shape openpyxl/bw2io emit),
 rather than pulling in a new dependency: one worksheet @xl/worksheets/sheet1.xml@
-of inline-string / numeric cells, wired through @xl/workbook.xml@ and its rels.
+of inline-string / numeric cells, wired through @xl/workbook.xml@ and its rels,
+and announced by the OPC package manifest (@[Content_Types].xml@ and
+@_rels/.rels@) that every reader but our own parser opens the archive through.
 Inline strings (@t="inlineStr"@) are used throughout, so no shared-string table
 is needed — and the parser already resolves either form.
 
@@ -127,7 +129,9 @@ renderWorkbook cfg db = do
     checkBrightwayExportable db
     pure $
         zipFiles
-            [ ("xl/workbook.xml", enc workbookXml)
+            [ ("[Content_Types].xml", enc contentTypesXml)
+            , ("_rels/.rels", enc packageRelsXml)
+            , ("xl/workbook.xml", enc workbookXml)
             , ("xl/_rels/workbook.xml.rels", enc relsXml)
             , ("xl/worksheets/sheet1.xml", enc (sheetXml (sheetRows cfg db)))
             ]
@@ -528,6 +532,34 @@ formatAmount d
 -- ---------------------------------------------------------------------------
 -- SpreadsheetML emitter (hand-built, mirrors the parser's reader)
 -- ---------------------------------------------------------------------------
+
+{- | The OPC package manifest. Our parser reads @xl/worksheets/sheet1.xml@
+straight out of the zip, but openpyxl (and so @bw2io@, and Excel) resolves parts
+through this map of extension and part name to content type, and fails with a
+plain @KeyError@ when the archive has none.
+-}
+contentTypesXml :: Text
+contentTypesXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        <> "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        <> "<Default Extension=\"rels\""
+        <> " ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        <> "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        <> "<Override PartName=\"/xl/workbook.xml\""
+        <> " ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+        <> "<Override PartName=\"/xl/worksheets/sheet1.xml\""
+        <> " ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        <> "</Types>"
+
+-- | Package-level relationships: which part is the workbook.
+packageRelsXml :: Text
+packageRelsXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        <> "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        <> "<Relationship Id=\"rId1\""
+        <> " Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\""
+        <> " Target=\"xl/workbook.xml\"/>"
+        <> "</Relationships>"
 
 workbookXml :: Text
 workbookXml =

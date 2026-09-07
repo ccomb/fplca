@@ -36,6 +36,7 @@ import BrightwayExcel.Writer (
     renderWorkbook,
     wasteManifest,
  )
+import Codec.Archive.Zip (filesInArchive, toArchive)
 import Control.Monad ((>=>))
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft, isRight)
@@ -77,6 +78,23 @@ spec = describe "BrightwayExcel.Writer" $ do
             renderCategories (Just (Compartment "air" Nothing)) `shouldBe` "air"
         it "emits empty for no recorded compartment" $
             renderCategories Nothing `shouldBe` ""
+
+    describe "package" $
+        it "carries the OPC manifest every xlsx reader opens the archive through" $
+            -- openpyxl (so bw2io, so Excel) resolves parts through
+            -- [Content_Types].xml and fails with a bare KeyError without it;
+            -- our own parser reads the sheet straight out of the zip and would
+            -- never notice.
+            case renderWorkbook defaultWriterConfig fixtureDb of
+                Left err -> expectationFailure (T.unpack err)
+                Right bytes ->
+                    filesInArchive (toArchive bytes)
+                        `shouldBe` [ "[Content_Types].xml"
+                                   , "_rels/.rels"
+                                   , "xl/workbook.xml"
+                                   , "xl/_rels/workbook.xml.rels"
+                                   , "xl/worksheets/sheet1.xml"
+                                   ]
 
     describe "round-trip" $ do
         it "(b) parse (write D) is structurally equal to D" $
