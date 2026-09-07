@@ -558,7 +558,7 @@ data LCIAResult = LCIAResult
     , lrNormalizedScore :: Maybe Double -- score * normalization factor
     , lrWeightedScore :: Maybe Double -- normalized * weight (in Pt)
     , lrMappedFlows :: Int -- Number of flows successfully mapped
-    , lrFunctionalUnit :: Text -- e.g. "1.0 kg of Butter, unsalted"
+    , lrFunctionalUnit :: Text -- What the score is per: one unit of the reference product, e.g. "1.00 kg of Butter, unsalted"
     , lrTopContributors :: [FlowContributionEntry] -- Top contributing elementary flows
     }
     deriving (Generic)

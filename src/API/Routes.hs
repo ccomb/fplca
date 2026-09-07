@@ -715,8 +715,7 @@ computeCategoryResult dbManager dbName collection db sol activity topFlows preco
         Right score -> buildResult unitCfg mFlows mUnits inventory tables stats score
   where
     buildResult unitCfg mFlows mUnits inventory tables stats score = do
-        let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
-            functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+        let functionalUnit = Service.functionalUnitOf (dbTechFlows db) mUnits activity
             (rawContribs, unknownUuids) = inventoryContributions unitCfg mUnits mFlows inventory tables
             contribs = sortOn (\(_, _, c) -> negate (abs c)) rawContribs
             topContribs = take topFlows contribs
@@ -807,8 +806,7 @@ buildLCIABatchResultCached dbManager dbName collectionName db actPid activity co
         if topFlows > 0
             then Just <$> getMergedUnitConfig dbManager
             else pure Nothing
-    let (prodName, prodAmount, prodUnit) = Service.getReferenceProductInfo (dbTechFlows db) mUnits activity
-        functionalUnit = T.pack (showFFloat (Just 2) prodAmount "") <> " " <> prodUnit <> " of " <> prodName
+    let functionalUnit = Service.functionalUnitOf (dbTechFlows db) mUnits activity
         mkResultIO ctx = do
             let method = mctxMethod ctx
             case resolveBatchedScore method scoreMap of

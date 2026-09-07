@@ -167,6 +167,16 @@ spec = do
             let substituting = activity [productRow cheeseId 1.0 ReferenceProduct (Just 50) M.empty, avoided 2.0]
             concatMap avoidedAmounts (allocate declaredOn substituting) `shouldBe` [1.0]
 
+    {- The question a user of a multi-output block asks first, and the one the
+    functional unit used to answer wrongly: a coproduct row states 3 kg where
+    its block states 1 kg of cheese, and the matrix column is divided by that
+    3, so the score beside it is per kilogram. -}
+    describe "the functional unit of a split process" $ do
+        it "names one unit of the product, not the amount the block states" $ do
+            let processes = NE.toList (allocate declaredOn block)
+            map (Service.functionalUnitOf flows units) processes
+                `shouldBe` ["1.00 kg of cheese", "1.00 MJ of whey", "1.00 kg of cream"]
+
     describe "allocate normalises first, as the EcoSpold parsers used to" $ do
         it "drops a zero-amount coproduct the source states no share for" $ do
             let act = activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty, productRow wheyId 0.0 Coproduct Nothing M.empty]
@@ -450,6 +460,13 @@ activity exs =
 
 units :: UnitDB
 units = M.fromList [(kgId, Unit kgId "kg" "kg" ""), (mjId, Unit mjId "MJ" "MJ" "")]
+
+flows :: TechFlowDB
+flows =
+    M.fromList
+        [ (fid, TechnosphereFlow fid name kgId M.empty Nothing Nothing)
+        | (fid, name) <- [(cheeseId, "cheese"), (wheyId, "whey"), (creamId, "cream")]
+        ]
 
 inputAmounts, bioAmounts, avoidedAmounts :: Activity -> [Double]
 inputAmounts act = [techAmount ex | ex@TechnosphereExchange{techRole = Input} <- exchanges act]

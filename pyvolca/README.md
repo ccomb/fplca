@@ -1296,10 +1296,14 @@ and is what you pass to every detail endpoint (`Client.get_activity`,
 `Client.get_supply_chain`, `Client.get_impacts`, …).
 ``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
 ``product_name`` is the reference output product (e.g. ``"wheat flour"``);
-``product_amount`` and ``product_unit`` describe the functional unit
-(typically ``1.0`` of ``"kg"`` / ``"mj"`` / etc.; a database imported from
-SimaPro or Brightway Excel states it in the canonical unit of its
-dimension, so a 1 kWh reference product reads ``3.6`` of ``"mj"``).
+``product_amount`` and ``product_unit`` are what the source says this
+process produces (typically ``1.0`` of ``"kg"`` / ``"mj"`` / etc.; a
+database imported from SimaPro or Brightway Excel states it in the
+canonical unit of its dimension, so a 1 kWh reference product reads
+``3.6`` of ``"mj"``, and a coproduct its block states at 0.0686462 kg
+reads that). It is not the basis a score or an inventory is reported
+against: those are always per **one** ``product_unit``, whatever the
+amount here.
 ``location`` is the
 geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
 its own; compose a label from ``activity_name`` + ``product_name``.
@@ -2093,6 +2097,10 @@ LCIA score for one impact category on one activity.
 
 Returned directly by `Client.get_impacts`, and nested inside
 `LCIABatchResult.results` (one entry per impact category).
+
+``functional_unit`` is the basis ``score`` is reported against, and it is
+always one unit of the reference product (``"1.00 kg of cream"``) however
+much of it the source says the process produces.
 
 | Field | Type | Default |
 |-------|------|---------|

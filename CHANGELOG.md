@@ -20,6 +20,17 @@
   complete. They are elementary flows again: they appear in the inventory
   where a method can characterize them, and the gap report is empty. Caches
   built before this are rebuilt on the next load.
+- The functional unit reported beside a score now says what the score is
+  actually per: one unit of the reference product. It used to repeat the
+  amount the source declares the process produces, which for a coproduct is
+  rarely one: the cream of an Agribalyse cheese block is stated at
+  0.0686462 kg, so the score came back labelled `0.07 kg of cream` while the
+  number itself was per kilogram, every coefficient of the column having been
+  divided by that amount. The same applies to a reference product ingested in
+  a canonical unit, a 1 kWh product read as 3.6 mj and scored per megajoule.
+  The Python client's documentation said the same thing wrongly and now
+  states that `product_amount` describes what the block produces, not the
+  basis of the score.
 - An EcoSpold 2 dataset whose block a key divides into several processes now
   says that only one of them will be kept. A process is identified by its file
   name there, which names a single product, so the coproducts a key had just
