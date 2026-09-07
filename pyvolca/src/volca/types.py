@@ -538,12 +538,13 @@ class Activity(FromJson):
     ``activity_name`` is the activity name (e.g. ``"wheat flour, at plant"``);
     ``product_name`` is the reference output product (e.g. ``"wheat flour"``);
     ``product_amount`` and ``product_unit`` are what the source says this
-    process produces, in the canonical unit of its dimension (typically
-    ``1.0`` of ``"kg"`` / ``"mj"``; a 1 kWh reference product imported from
-    SimaPro or Brightway Excel reads ``3.6`` of ``"mj"``, and a coproduct a
-    block states at 0.0686462 kg reads that). It is not the basis a score or
-    an inventory is reported against: those are always per **one**
-    ``product_unit``, whatever the amount here.
+    process produces (typically ``1.0`` of ``"kg"`` / ``"mj"`` / etc.; a
+    database imported from SimaPro or Brightway Excel states it in the
+    canonical unit of its dimension, so a 1 kWh reference product reads
+    ``3.6`` of ``"mj"``, and a coproduct its block states at 0.0686462 kg
+    reads that). It is not the basis a score or an inventory is reported
+    against: those are always per **one** ``product_unit``, whatever the
+    amount here.
     ``location`` is the
     geography code (``"FR"``, ``"GLO"``, ``"RoW"``…). A process has no name of
     its own; compose a label from ``activity_name`` + ``product_name``.
