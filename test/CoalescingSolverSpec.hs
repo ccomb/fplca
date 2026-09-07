@@ -15,6 +15,7 @@ import Control.Concurrent.Async (concurrently, mapConcurrently)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as U
 import Matrix (
+    Demand (..),
     Vector,
     buildDemandVectorFromIndex,
     clearCachedSolver,
@@ -57,7 +58,7 @@ spec = do
     describe "single-RHS regression (batch of 1)" $ do
         it "submitOne path produces the oracle result" $ do
             (_solver, fact, db) <- min3CachedSolver
-            let demand = buildDemandVectorFromIndex (dbActivityIndex db) 0
+            let demand = unDemand (buildDemandVectorFromIndex (dbActivityIndex db) 0)
             expected <- oracleSolve db demand
             actual <- solveSparseLinearSystemWithFactorization fact demand
             U.toList actual `shouldSatisfy` closeTo (U.toList expected)
@@ -91,7 +92,7 @@ spec = do
     describe "solve counter" $ do
         it "moves on the cached path, the batch path and the fresh path" $ do
             (_solver, fact, db) <- min3CachedSolver
-            let demand = buildDemandVectorFromIndex (dbActivityIndex db) 0
+            let demand = unDemand (buildDemandVectorFromIndex (dbActivityIndex db) 0)
             before <- readSolveCounter
             _ <- solveSparseLinearSystemWithFactorization fact demand
             afterSingle <- readSolveCounter
@@ -105,7 +106,7 @@ spec = do
     describe "clean shutdown" $ do
         it "clearCachedSolver lets the next request fall back without deadlock" $ do
             (_solver, fact, db) <- min3CachedSolver
-            let demand = buildDemandVectorFromIndex (dbActivityIndex db) 0
+            let demand = unDemand (buildDemandVectorFromIndex (dbActivityIndex db) 0)
             expected <- oracleSolve db demand
             clearCachedSolver cacheKey
             -- After clear, the cache lookup misses and we fall back to a fresh
@@ -141,7 +142,7 @@ Repeating these via 'cycle' gives us many varied (but reproducible) inputs.
 -}
 basicDemands :: Database -> [Vector]
 basicDemands db =
-    let n = U.length (buildDemandVectorFromIndex (dbActivityIndex db) 0)
+    let n = U.length (unDemand (buildDemandVectorFromIndex (dbActivityIndex db) 0))
      in [ unitOn n 0
         , unitOn n 1
         , unitOn n 2

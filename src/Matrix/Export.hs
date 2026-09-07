@@ -14,7 +14,7 @@ module Matrix.Export (
 ) where
 
 import Database (filterByName, flowSearchFields)
-import Matrix (applySparseMatrix, buildDemandVectorFromIndex, solveSparseLinearSystem, toList)
+import Matrix (Demand (..), applySparseMatrix, buildDemandVectorFromIndex, solveSparseLinearSystem, toList)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
 
@@ -66,7 +66,7 @@ extractMatrixDebugInfo database targetProcessId flowFilter = do
         activityCount = dbActivityCount database
         bioFlowCount = dbBiosphereCount database
 
-        demandVec = buildDemandVectorFromIndex activityIndexVec targetProcessId
+        demandVec = unDemand (buildDemandVectorFromIndex activityIndexVec targetProcessId)
         demandList = toList demandVec
 
         techTriplesInt = [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples]

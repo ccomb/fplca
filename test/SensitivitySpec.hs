@@ -19,7 +19,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector.Unboxed as U
-import Matrix (applyShermanMorrison, buildDemandVectorFromIndex, perturbA, solveSparseLinearSystem)
+import Matrix (Demand (..), applyShermanMorrison, buildDemandVectorFromIndex, perturbA, solveSparseLinearSystem)
 import Service (computeSensitivities)
 import SharedSolver (getFactorization, solveWithSharedSolver)
 import Test.Hspec
@@ -188,7 +188,7 @@ spec = do
                     | SparseTriple i j v <- techTriples
                     ]
                 n = fromIntegral (dbActivityCount db)
-                demand = buildDemandVectorFromIndex (dbActivityIndex db) 0
+                demand = unDemand (buildDemandVectorFromIndex (dbActivityIndex db) 0)
             xRef <- solveSparseLinearSystem scaledTriples n demand
 
             -- Compare element-wise within tight numerical tolerance.

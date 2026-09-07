@@ -43,6 +43,7 @@ module SharedSolver (
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar, withMVar)
 import Control.Exception (SomeException, try)
+import Data.Coerce (coerce)
 import Data.List (transpose)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
@@ -51,6 +52,7 @@ import Data.Maybe (catMaybes)
 import qualified Data.Set as S
 import Data.Text (Text)
 import Matrix (
+    Demand (..),
     DepDemands,
     Inventory,
     Vector,
@@ -110,8 +112,8 @@ computeAndStoreFactorization solver = do
     pure fact
 
 -- | Solve using shared solver. On first call, triggers lazy factorization.
-solveWithSharedSolver :: SharedSolver -> Vector -> IO Vector
-solveWithSharedSolver solver demandVector =
+solveWithSharedSolver :: SharedSolver -> Demand -> IO Vector
+solveWithSharedSolver solver (Demand demandVector) =
     withMVar (solverLock solver) $ \_ ->
         readMVar (solverFactorizationVar solver) >>= \case
             Just fact -> do
@@ -141,10 +143,10 @@ ensureFactorization solver = withMVar (solverLock solver) $ \_ ->
 {- | Solve with multiple RHS vectors in one MUMPS call, using the cached factorization.
 Forces factorization on first call. Subsequent calls reuse the cached LU.
 -}
-solveMultiWithSharedSolver :: SharedSolver -> [Vector] -> IO [Vector]
+solveMultiWithSharedSolver :: SharedSolver -> [Demand] -> IO [Vector]
 solveMultiWithSharedSolver solver demandVecs = do
     fact <- ensureFactorization solver
-    solveSparseLinearSystemWithFactorizationMulti fact demandVecs
+    solveSparseLinearSystemWithFactorizationMulti fact (coerce demandVecs)
 
 {- | Compute the scaling vector for @pid@, routing through the shared solver's
 lazy factorization cache. Same shape as 'Matrix.computeScalingVector' but
@@ -276,7 +278,7 @@ goWithDeps ::
     Text ->
     SharedSolver ->
     -- | K demand vectors, length = dbActivityCount db
-    [Vector] ->
+    [Demand] ->
     -- | recursion depth
     Int ->
     IO (Either Text [CrossDBSolution])
@@ -365,7 +367,7 @@ vectors, performing unit conversion. Picks out @depDbName@'s share of each
 root's demands. Shared by every dep resolver (inventory, contributions, and
 the substitution-aware path in 'Service').
 -}
-prepareDepDemandVecs :: UnitConfig -> Text -> Database -> [DepDemands] -> Either Text [Vector]
+prepareDepDemandVecs :: UnitConfig -> Text -> Database -> [DepDemands] -> Either Text [Demand]
 prepareDepDemandVecs unitConfig depDbName depDb =
     traverse (depDemandsToVector unitConfig depDbName depDb . M.findWithDefault M.empty depDbName)
 
@@ -435,7 +437,7 @@ crossDBProcessContributions unitConfig unitDB flowDB depLookup rootDb rootName r
         Database ->
         Text ->
         SharedSolver ->
-        [Vector] ->
+        [Demand] ->
         Int ->
         IO (Either Text (M.Map (Text, ProcessId) Double))
     go db dbName solver demands depth = do
