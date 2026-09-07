@@ -45,6 +45,7 @@ indexedWith name n =
         , idbBySynonymGroup = M.empty
         , idbWasteTreatmentByFlowUUID = M.empty
         , idbWasteTreatmentByCanonicalName = M.empty
+        , idbByActivityAndProductName = M.empty
         , idbByActivityProduct = M.empty
         }
   where

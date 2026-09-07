@@ -288,6 +288,7 @@ validateOne ctx a =
                           -- reference products.
                           techActivityLinkId = fst key
                         , techProcessLinkId = Nothing
+                        , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
@@ -635,6 +636,7 @@ resolveOne ctx ex = case ex of
                 , techRole = Input
                 , techActivityLinkId = prActivity (supKey sup)
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = comment
                 , techPedigree = Nothing

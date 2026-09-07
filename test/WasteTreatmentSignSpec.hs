@@ -82,6 +82,7 @@ techEx flow amt role link =
         , techRole = role
         , techActivityLinkId = link
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing

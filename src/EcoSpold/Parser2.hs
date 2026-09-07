@@ -804,6 +804,7 @@ parseWithXeno xmlContent processId = do
                                 , techRole = techRoleFor
                                 , techActivityLinkId = linkUUID
                                 , techProcessLinkId = Nothing
+                                , techSupplierActivity = Nothing
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing

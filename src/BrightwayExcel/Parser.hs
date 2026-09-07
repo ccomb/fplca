@@ -33,8 +33,10 @@ so there is usually no shared-string table; we still resolve one if present.
 
 Domain construction reuses the SimaPro helpers (UUID generation, compartment
 normalization, unit canonicalization) so Brightway activities, flows and units
-hash identically to the other importers and link through the same name-based
-cross-database pass.
+hash identically to the other importers and link through the same
+cross-database pass. This is the one format that names the supplier activity in
+a column apart from its product, so a technosphere row keeps that name
+('techSupplierActivity') for the linker to match on ahead of the product name.
 -}
 module BrightwayExcel.Parser (
     parseBrightwayExcel,
@@ -387,6 +389,7 @@ productRowOut cfg meta isRef f =
             , techRole = if isRef then ReferenceProduct else Coproduct
             , techActivityLinkId = UUID.nil
             , techProcessLinkId = Nothing
+            , techSupplierActivity = Nothing -- an output of this activity, not a reference to another
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
@@ -414,6 +417,11 @@ key 'Database.Loader.buildSupplierIndexByName' matches against), with the
 supplier location preserved for geography-aware cross-DB linking: an 'Input'
 for a @technosphere@ row, an 'AvoidedProduct' for a @substitution@ row.
 Zero-amount rows are dropped (parity with the SimaPro importer).
+
+The @name@ column, which holds the supplier /activity/, is kept alongside in
+'techSupplierActivity'. It is what tells @market group for electricity, medium
+voltage@ from the 26 other ecoinvent activities whose reference product is also
+@electricity, medium voltage@ in GLO.
 -}
 technosphereRowOut :: UC.UnitConfig -> TechRole -> Text -> M.Map Text CellValue -> RowOut
 technosphereRowOut cfg role actName f
@@ -433,6 +441,7 @@ technosphereRowOut cfg role actName f
             , techRole = role
             , techActivityLinkId = UUID.nil
             , techProcessLinkId = Nothing
+            , techSupplierActivity = supplierActivity
             , techLocation = fromMaybe "" (fieldText f "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
@@ -442,6 +451,15 @@ technosphereRowOut cfg role actName f
             }
     flow = TechnosphereFlow flowUUID name unitUUID M.empty Nothing Nothing
     unit = Unit unitUUID unitName' unitName' ""
+
+    {- The supplier this row names, kept only where it says something the product
+    name does not: with no @reference product@ column the @name@ cell /is/ the
+    product, and a row that repeats the product in both has nothing to add. -}
+    supplierActivity :: Maybe Text
+    supplierActivity = do
+        rowName <- fieldText f "name"
+        _ <- fieldText f "reference product"
+        if rowName == name then Nothing else Just rowName
 
 {- | A biosphere exchange. @categories@ (split on @::@) becomes the compartment;
 a @natural resource@ compartment is read as an extraction ('Resource'),

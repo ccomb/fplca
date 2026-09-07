@@ -717,6 +717,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techRole = techRoleFor
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
+                        , techSupplierActivity = Nothing
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
                         , techPedigree = Nothing

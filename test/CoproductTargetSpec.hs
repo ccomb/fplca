@@ -306,6 +306,7 @@ techExchange flowId amount role link =
         , techRole = role
         , techActivityLinkId = link
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing

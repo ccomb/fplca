@@ -11,9 +11,12 @@ Agribalyse 3.2), this module provides functions to resolve supplier references
 by searching across all loaded databases.
 
 The matching algorithm uses:
-1. Product name matching (exact → synonym)
-2. Location matching with hierarchy fallback
-3. Unit compatibility checking
+1. The supplier activity the source names, where it names one apart from the
+   product (Brightway Excel does; SimaPro folds it into the product name and
+   EcoSpold 2 gives a UUID)
+2. Product name matching (exact → synonym)
+3. Location matching with hierarchy fallback
+4. Unit compatibility checking
 
 A candidate must score above a threshold to be automatically linked.
 
@@ -31,6 +34,7 @@ module Database.CrossLinking (
     LocationKind (..),
     IndexedDatabase (..),
     SupplierEntry (..),
+    SupplierQuery (..),
 
     -- * Supplier aliases (relink mapping)
     AliasKey (..),
@@ -49,7 +53,6 @@ module Database.CrossLinking (
     supplierLocations,
 
     -- * Main Functions
-    findSupplierAcrossDatabases,
     findSupplierInIndexedDBs,
     findSupplierByActivityProduct,
     findWasteTreatmentAcrossDatabases,
@@ -122,6 +125,13 @@ data IndexedDatabase = IndexedDatabase
     {- ^ normalizeText (wfName) → same set, for the name-based fallback when
     two databases use different UUIDs for the same canonical waste flow.
     -}
+    , idbByActivityAndProductName :: !(M.Map (Text, Text) [SupplierEntry])
+    {- ^ (normalized activity name, normalized product name) → suppliers. What a
+    demand that names its supplier activity is matched on first, before the
+    product name alone: in ecoinvent 3.12 cut-off, @electricity, medium voltage@
+    in GLO is the reference product of 27 different activities, and the product
+    name alone cannot say which of them the source meant.
+    -}
     , idbByActivityProduct :: !(M.Map (UUID, UUID) SupplierEntry)
     {- ^ (activityUUID, productUUID) → supplier. The exact-identity index for
     EcoSpold2↔EcoSpold2 linking: an input's @(activityLinkId, flowId)@ is the
@@ -140,6 +150,13 @@ data SupplierEntry = SupplierEntry
     , seLocation :: !Text
     , seUnit :: !Text
     , seProductName :: !Text -- Product name for display/debugging
+    , seActivityName :: !Text
+    {- ^ Name of the activity that produces it. What separates
+    @market group for electricity, medium voltage@ from the 26 other ecoinvent
+    activities whose reference product is @electricity, medium voltage@ in GLO,
+    for the one import format that names the supplier activity apart from its
+    product.
+    -}
     , seRefSign :: !Double
     {- ^ Sign of the supplier's reference production: @+1@ for a normal product
     output, @-1@ for a negative-output waste treatment (the EcoSpold2
@@ -148,6 +165,27 @@ data SupplierEntry = SupplierEntry
     solve drives the treatment in its waste-removing direction regardless of
     which reference convention the supplier database uses.
     -}
+    }
+
+{- | What one demand asks a dependency for. Four fields, three of them 'Text':
+as positional arguments a caller could transpose the product name, the location
+and the unit and the compiler would say nothing.
+-}
+data SupplierQuery = SupplierQuery
+    { sqProductName :: !Text
+    -- ^ Product the consumer asks for
+    , sqSupplierActivity :: !(Maybe Text)
+    {- ^ Activity the source names as its supplier, where it names one apart
+    from the product ('Types.techSupplierActivity'). Matched first. A name no
+    dependency carries falls through to the product name, so a foreground
+    written against another release still links; a name that is carried, but
+    not where the demand needs it, is refused as any other demand would be
+    rather than answered by a different activity that happens to sit closer.
+    -}
+    , sqLocation :: !Text
+    -- ^ Location of the consumer
+    , sqUnit :: !Text
+    -- ^ Unit of the exchange
     }
 
 -- | Context for cross-database linking (with pre-built indexes)
@@ -350,12 +388,14 @@ buildIndexedDatabase dbName synDB db =
         wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
         wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
         byActProd = indexByActivityProduct entries
+        byActAndProdName = indexByActivityAndProductName entries
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
             , idbWasteTreatmentByFlowUUID = wasteByUUID
             , idbWasteTreatmentByCanonicalName = wasteByName
+            , idbByActivityAndProductName = byActAndProdName
             , idbByActivityProduct = byActProd
             }
 
@@ -368,19 +408,66 @@ indexByActivityProduct :: [(Text, SupplierEntry)] -> M.Map (UUID, UUID) Supplier
 indexByActivityProduct entries =
     M.fromList [((seActivityUUID e, seProductUUID e), e) | (_, e) <- entries]
 
+{- | Index supplier entries by their @(activity name, product name)@ pair, both
+normalized. Unlike the UUID index above the key does not determine the value —
+one activity name can be borne by several location variants — so the entries
+stay in a list and the geography policy chooses among them as it does for a
+product-name match.
+-}
+indexByActivityAndProductName :: [(Text, SupplierEntry)] -> M.Map (Text, Text) [SupplierEntry]
+indexByActivityAndProductName entries =
+    M.fromListWith
+        (++)
+        [ ((normalizeText (seActivityName e), normalizeText prodName), [e])
+        | (prodName, e) <- entries
+        , not (T.null (normalizeText (seActivityName e)))
+        , not (T.null (normalizeText prodName))
+        ]
+
 {- | Build supplier entries from a SimpleDatabase. Reference exchanges of
 production processes are always technosphere outputs, so the supplier flow
 lives in `sdbTechFlows`.
 -}
 buildSupplierEntries :: SimpleDatabase -> [(Text, SupplierEntry)]
 buildSupplierEntries db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow) 1.0)
+    [ (tfName flow, productEntry act actUUID prodUUID loc (tfName flow))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
     , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
     , loc <- supplierLocations act ex
     ]
+
+{- | A supplier entry for an activity's product output. Shared by the two index
+builders so the field order is stated once: four of the fields are 'Text' and a
+positional constructor is one transposition away from a wrong answer.
+-}
+productEntry :: Activity -> UUID -> UUID -> Text -> Text -> SupplierEntry
+productEntry act actUUID prodUUID loc prodName =
+    SupplierEntry
+        { seActivityUUID = actUUID
+        , seProductUUID = prodUUID
+        , seLocation = loc
+        , seUnit = activityUnit act
+        , seProductName = prodName
+        , seActivityName = activityName act
+        , seRefSign = 1.0
+        }
+
+{- | A supplier entry for a waste-treatment activity, whose reference product is
+the waste flow it removes and whose sign says which direction that is.
+-}
+treatmentEntry :: Activity -> UUID -> UUID -> Text -> SupplierEntry
+treatmentEntry act actUUID prodUUID wasteName =
+    SupplierEntry
+        { seActivityUUID = actUUID
+        , seProductUUID = prodUUID
+        , seLocation = activityLocation act
+        , seUnit = activityUnit act
+        , seProductName = wasteName
+        , seActivityName = activityName act
+        , seRefSign = signum (activityNormFactor act (actUUID, prodUUID))
+        }
 
 {- | Treatment-activity entries from a SimpleDatabase: an activity is a waste
 treatment supplier iff its reference exchange's flow is in 'sdbWasteFlows'
@@ -389,7 +476,7 @@ product). One tuple per (waste flow UUID, waste flow name, entry).
 -}
 buildWasteTreatmentEntries :: SimpleDatabase -> [(UUID, Text, SupplierEntry)]
 buildWasteTreatmentEntries db =
-    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow) (signum (activityNormFactor act (actUUID, prodUUID))))
+    [ (wfId flow, wfName flow, treatmentEntry act actUUID prodUUID (wfName flow))
     | ((actUUID, prodUUID), act) <- M.toList (sdbActivities db)
     , ex <- exchanges act
     , exchangeIsReference ex
@@ -423,12 +510,14 @@ buildIndexedDatabaseFromDB dbName synDB db =
         wasteByUUID = M.fromListWith (++) [(uuid, [entry]) | (uuid, _, entry) <- wasteEntries]
         wasteByName = M.fromListWith (++) [(normalizeText name, [entry]) | (_, name, entry) <- wasteEntries, not (T.null (normalizeText name))]
         byActProd = indexByActivityProduct entries
+        byActAndProdName = indexByActivityAndProductName entries
      in IndexedDatabase
             { idbName = dbName
             , idbByProductName = byName
             , idbBySynonymGroup = bySynonym
             , idbWasteTreatmentByFlowUUID = wasteByUUID
             , idbWasteTreatmentByCanonicalName = wasteByName
+            , idbByActivityAndProductName = byActAndProdName
             , idbByActivityProduct = byActProd
             }
 
@@ -437,7 +526,7 @@ buildIndexedDatabaseFromDB dbName synDB db =
 -}
 buildSupplierEntriesFromDB :: Database -> [(Text, SupplierEntry)]
 buildSupplierEntriesFromDB db =
-    [ (tfName flow, SupplierEntry actUUID prodUUID loc (activityUnit act) (tfName flow) 1.0)
+    [ (tfName flow, productEntry act actUUID prodUUID loc (tfName flow))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
@@ -467,7 +556,7 @@ supplierLocations act ex =
 -- | Treatment-activity entries from a full Database. Mirrors 'buildWasteTreatmentEntries'.
 buildWasteTreatmentEntriesFromDB :: Database -> [(UUID, Text, SupplierEntry)]
 buildWasteTreatmentEntriesFromDB db =
-    [ (wfId flow, wfName flow, SupplierEntry actUUID prodUUID (activityLocation act) (activityUnit act) (wfName flow) (signum (activityNormFactor act (actUUID, prodUUID))))
+    [ (wfId flow, wfName flow, treatmentEntry act actUUID prodUUID (wfName flow))
     | (pid, (actUUID, prodUUID)) <- zip ([0 ..] :: [Int]) (V.toList (dbProcessIdTable db))
     , Just act <- [getActivity db (fromIntegral pid)]
     , ex <- exchanges act
@@ -564,16 +653,8 @@ findWasteTreatmentByActivity LinkingContext{lcIndexedDatabases} actUUID flowUUID
 {- | Find a supplier across all loaded databases (using pre-built indexes)
 This is the fast O(1) lookup version
 -}
-findSupplierInIndexedDBs ::
-    LinkingContext ->
-    -- | Product name to find
-    Text ->
-    -- | Location of the consumer
-    Text ->
-    -- | Unit of the exchange
-    Text ->
-    CrossDBLinkResult
-findSupplierInIndexedDBs LinkingContext{..} productName location unit =
+findSupplierInIndexedDBs :: LinkingContext -> SupplierQuery -> CrossDBLinkResult
+findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = productName, sqSupplierActivity = supplierActivity, sqLocation = location, sqUnit = unit} =
     -- An alias row preempts the direct cascade: the curator's designation is
     -- a stronger statement of intent than a generic name match — otherwise a
     -- row answering "which supplier replaces this input?" could be silently
@@ -582,18 +663,33 @@ findSupplierInIndexedDBs LinkingContext{..} productName location unit =
     case lookupAlias lcSupplierAliases productName effectiveLocation of
         Just target -> resolveDesignated target
         Nothing ->
-            -- Three priority-ordered match strategies; take the first
-            -- non-empty result via 'firstNonEmpty':
-            --   1. Exact product-name match across all indexed DBs.
-            --   2. Synonym-group match if exact yielded nothing.
+            -- Priority-ordered match strategies; take the first non-empty
+            -- result via 'firstNonEmpty':
+            --   1. The (supplier activity, product) pair, when the source named
+            --      the activity: the only key that separates the 27 ecoinvent
+            --      activities whose reference product is "electricity, medium
+            --      voltage" in GLO.
+            --   2. Exact product-name match across all indexed DBs.
+            --   3. Synonym-group match if exact yielded nothing.
             resolveCandidates $
                 firstNonEmpty
-                    [ concatMap (lookupExact (normalizeText productName)) lcIndexedDatabases
+                    [ byActivityAndProduct
+                    , concatMap (lookupExact (normalizeText productName)) lcIndexedDatabases
                     , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
                         Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                         Nothing -> []
                     ]
   where
+    byActivityAndProduct :: [(Text, SupplierEntry)]
+    byActivityAndProduct =
+        [ (idbName idb, entry)
+        | activity <- maybe [] pure supplierActivity
+        , idb <- lcIndexedDatabases
+        , entry <-
+            fromMaybe [] $
+                M.lookup (normalizeText activity, normalizeText productName) (idbByActivityAndProductName idb)
+        ]
+
     -- Effective location: if raw location is empty, try extracting from compound name
     effectiveLocation =
         if T.null location
@@ -781,18 +877,6 @@ findSupplierByActivityProduct idbs actUUID prodUUID =
     | idb <- idbs
     , Just entry <- [M.lookup (actUUID, prodUUID) (idbByActivityProduct idb)]
     ]
-
--- | Legacy function for backward compatibility (slower, builds indexes on the fly)
-findSupplierAcrossDatabases ::
-    LinkingContext ->
-    -- | Product name to find
-    Text ->
-    -- | Location of the consumer
-    Text ->
-    -- | Unit of the exchange
-    Text ->
-    CrossDBLinkResult
-findSupplierAcrossDatabases = findSupplierInIndexedDBs
 
 {- | Match product names (simplified - just for scoring display)
 Actual matching is done via index lookup

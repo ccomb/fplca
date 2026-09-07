@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Fixed
+- A Brightway Excel inventory now links to the supplier activity its rows name.
+  A workbook of that format names each supplier on two columns, the activity
+  and the product it makes, and only the product was kept. In ecoinvent 3.12
+  cut-off, "electricity, medium voltage" in GLO is the reference product of 27
+  different activities, so the product name alone could not say which one a row
+  meant and the ranking returned whichever it happened to return. Most of the
+  others are cut-off co-outputs that carry no burden, so a wrong pick was quiet
+  as well as wrong. The activity name is now read, matched first, and written
+  back out on export. Caches built before this are rebuilt on the next load.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though

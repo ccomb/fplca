@@ -49,6 +49,7 @@ mkRefOutput fid =
         , techRole = ReferenceProduct
         , techActivityLinkId = nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing

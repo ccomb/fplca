@@ -141,12 +141,13 @@ import Database.CrossLinking (
     LinkWarning (..),
     LinkingContext (..),
     SupplierEntry (..),
+    SupplierQuery (..),
     WasteTreatmentMatch (..),
     defaultLinkingThreshold,
     emptyAliasMap,
     extractBracketedLocation,
-    findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
+    findSupplierInIndexedDBs,
     findWasteTreatmentAcrossDatabases,
     findWasteTreatmentByActivity,
     locationHierarchy,
@@ -309,13 +310,17 @@ History of manual bumps:
      go on holding those flows on the waste axis - invisible to every method,
      and demanding a supplier no activity can be.
 
+- 26: a technosphere line carries the supplier activity its source names apart
+     from the product ('techSupplierActivity'). Cached exchanges end before the
+     field, and every field after it would be read at the wrong offset.
+
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
 -}
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 25
+     in hi `xor` lo `xor` 26
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -2035,7 +2040,9 @@ cascade:
    dataset author's own disambiguation, no guessing. Nil-link inputs skip this
    tier (they carry no identity).
 2. __Attribute matching__ — name / location / unit scoring
-   ('findSupplierAcrossDatabases'), the matcher every other cross-link uses.
+   ('findSupplierInIndexedDBs'), the matcher every other cross-link uses. It
+   narrows on the supplier activity the source named, where it named one apart
+   from the product, before falling back to the product name alone.
    When a *non-nil* input falls through to here its source activity was absent
    from every dependency, so the match is a likely cross-version stitch,
    recorded in 'cdlAttributeFallbacks' for the consumer to verify.
@@ -2096,8 +2103,16 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                                 flowUnitName
                      in mempty{cdlLinks = [crossLink]}
                 [] -> attributeMatch flow flowUnitName
+    supplierQuery :: TechnosphereFlow -> T.Text -> SupplierQuery
+    supplierQuery flow flowUnitName =
+        SupplierQuery
+            { sqProductName = tfName flow
+            , sqSupplierActivity = exchangeSupplierActivity ex
+            , sqLocation = loc
+            , sqUnit = flowUnitName
+            }
     attributeMatch flow flowUnitName =
-        case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
+        case findSupplierInIndexedDBs ctx (supplierQuery flow flowUnitName) of
             result@CrossDBLinked{} ->
                 let !crossLink =
                         mkTechLink

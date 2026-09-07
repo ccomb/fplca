@@ -99,6 +99,22 @@ spec = describe "BrightwayExcel.Parser" $ do
                     let gas = listToMaybe [ex | ex <- inputExchanges elec, flowName techDB ex == Just "natural gas, high pressure"]
                     fmap techAmount gas `shouldBe` Just 8.5
 
+        it "keeps the supplier activity the row names apart from its product" $ withFixture $ \path -> do
+            parseBrightwayExcel defaultUnitConfig path >>= \case
+                Left err -> expectationFailure (T.unpack err)
+                Right (acts, techDB, _, _, _) -> do
+                    elec <- requireActivity acts "Electricity production, natural gas"
+                    let gas = listToMaybe [ex | ex <- inputExchanges elec, flowName techDB ex == Just "natural gas, high pressure"]
+                    (techSupplierActivity =<< gas) `shouldBe` Just "natural gas, burned >100kW"
+
+        it "names no supplier activity on a production row" $ withFixture $ \path -> do
+            parseBrightwayExcel defaultUnitConfig path >>= \case
+                Left err -> expectationFailure (T.unpack err)
+                Right (acts, _, _, _, _) -> do
+                    elec <- requireActivity acts "Electricity production, natural gas"
+                    let refs = [techSupplierActivity ex | ex@TechnosphereExchange{} <- exchanges elec, exchangeIsReference ex]
+                    refs `shouldBe` [Nothing]
+
         it "splits biosphere categories into compartment + sub and direction" $ withFixture $ \path -> do
             parseBrightwayExcel defaultUnitConfig path >>= \case
                 Left err -> expectationFailure (T.unpack err)

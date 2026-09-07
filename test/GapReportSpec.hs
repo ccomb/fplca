@@ -120,6 +120,7 @@ techInput fid amount =
         , techRole = Input
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing

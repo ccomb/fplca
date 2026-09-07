@@ -70,7 +70,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -414,16 +414,18 @@ isReferenceInput = \case
 {- | Render one exchange to a data row aligned to 'exchangeHeader'. Returns
 'Nothing' for an exchange whose flow or unit is missing from the database (it
 cannot be written faithfully, so it is dropped rather than emitted with blanks
-that would re-parse into a different flow). The @name@ and @reference product@
-columns both carry the flow name so the parser reconstructs the same flow UUID.
+that would re-parse into a different flow). The @reference product@ column
+carries the flow name, from which the parser reconstructs the same flow UUID;
+@name@ carries the supplier activity where the source named one, and repeats the
+flow name where it did not.
 -}
 exchangeRow :: WriterConfig -> SimpleDatabase -> Exchange -> Maybe [Cell]
 exchangeRow cfg db = \case
-    ex@TechnosphereExchange{techAmount = amt, techRole = role, techLocation = loc} -> do
+    ex@TechnosphereExchange{techAmount = amt, techRole = role, techLocation = loc, techSupplierActivity = supplier} -> do
         name <- flowNameOf db ex
         unit <- unitNameOf (exchangeUnitId ex) db
         Just
-            [ CText name
+            [ CText (fromMaybe name supplier)
             , CNum amt
             , CText name
             , locCell loc

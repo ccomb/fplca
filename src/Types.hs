@@ -299,6 +299,16 @@ data Exchange
         , techRole :: !TechRole -- Role within the activity
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
+        , techSupplierActivity :: !(Maybe Text)
+        {- ^ The supplier activity the source names /by name/, when it names one.
+        EcoSpold 2 and ILCD designate theirs by identifier ('techActivityLinkId'),
+        SimaPro folds it into the product name, and Brightway Excel puts it in a
+        column of its own — the one source whose designation used to be dropped,
+        leaving the linker to pick between the 27 ecoinvent activities whose
+        reference product is "electricity, medium voltage" in GLO. Records what
+        the source said and is never rewritten by linking, unlike
+        'techActivityLinkId', which the load overwrites with what it resolved to.
+        -}
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
@@ -418,6 +428,14 @@ exchangeActivityLinkId TechnosphereExchange{techActivityLinkId = linkId} =
 exchangeActivityLinkId BiosphereExchange{} = Nothing
 exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} =
     if linkId == UUID.nil then Nothing else Just linkId
+
+{- | The supplier activity the source named, for the one format that names it
+apart from the product. 'Nothing' for every other exchange kind and source.
+-}
+exchangeSupplierActivity :: Exchange -> Maybe Text
+exchangeSupplierActivity TechnosphereExchange{techSupplierActivity = a} = a
+exchangeSupplierActivity BiosphereExchange{} = Nothing
+exchangeSupplierActivity WasteExchange{} = Nothing
 
 -- | Get process link ID (new field)
 exchangeProcessLinkId :: Exchange -> Maybe ProcessId
