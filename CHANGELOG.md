@@ -12,6 +12,12 @@
   others are cut-off co-outputs that carry no burden, so a wrong pick was quiet
   as well as wrong. The activity name is now read, matched first, and written
   back out on export. Caches built before this are rebuilt on the next load.
+- A cross-database link whose candidates tie inside one dependency now says so.
+  Several activities scoring the same means nothing in the data chose between
+  them, and until now the load said nothing while picking one. The load report
+  lists those inputs, the activity it linked to and how many tied, so the
+  supplier meant can be named. Ties across two dependencies were already
+  reported; this is the tie inside one.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though

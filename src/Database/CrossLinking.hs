@@ -18,7 +18,9 @@ The matching algorithm uses:
 3. Location matching with hierarchy fallback
 4. Unit compatibility checking
 
-A candidate must score above a threshold to be automatically linked.
+A candidate must score above a threshold to be automatically linked. Several
+candidates of one database at the same score answer nothing, so the link
+carries an 'AmbiguousSupplier' warning saying how many tied.
 
 Performance: Uses pre-built indexes for O(1) product name lookup instead of
 O(n) linear scans.
@@ -278,6 +280,8 @@ data CrossDBCandidate = CrossDBCandidate
     -- ^ Location of the activity
     , cdbProductName :: !Text
     -- ^ Product name for display/debugging
+    , cdbActivityName :: !Text
+    -- ^ Name of the activity that produces it, for display and for ambiguity reports
     }
 
 -- | Result of cross-database linking attempt
@@ -301,6 +305,13 @@ data CrossDBLinkResult
 data LinkWarning
     = -- | requestedLoc, actualLoc, kind (e.g. FR → RER, ParentLoc)
       UpperLocationUsed !Text !Text !LocationKind
+    | {- | Several activities of the /same/ database tie for the best score, so
+      the demand does not say which of them it meant and the winner is the one
+      the ranking happened to return: chosen activity name, number tied.
+      'cdlrTiedDatabases' reports the same across databases; this is the tie
+      inside one, which used to pass in silence.
+      -}
+      AmbiguousSupplier !Text !Int
     deriving (Show, Eq)
 
 -- | LinkBlocker is defined in Types and re-exported here
@@ -725,7 +736,7 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
                     compatible@(_ : _) ->
                         let scored = map (scoreEntry effectiveLocation) compatible
                             !best = maximumBy (comparing cdbScore) scored
-                         in mkLinked best [] (tiedDatabases best scored)
+                         in mkLinked best (sameDatabaseTies best scored) (tiedDatabases best scored)
 
     -- Pipeline once the candidate set is fixed: unit filter, geography
     -- policy, then rank the survivors against the score threshold.
@@ -764,11 +775,30 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
                                                 then
                                                     mkLinked
                                                         bestCand
-                                                        [ UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind
-                                                        | not (T.null location || bestKind == ExactLoc)
-                                                        ]
+                                                        ( [ UpperLocationUsed effectiveLocation (cdbLocation bestCand) bestKind
+                                                          | not (T.null location || bestKind == ExactLoc)
+                                                          ]
+                                                            ++ sameDatabaseTies bestCand (map fst scored)
+                                                        )
                                                         (tiedDatabases bestCand (map fst scored))
                                                 else CrossDBNotLinked (LocationUnavailable effectiveLocation)
+
+    {- Distinct suppliers of the winner's /own/ database that tie its score.
+    Which of them wins is whichever the ranking returned, so the demand has not
+    been answered, only closed: say so instead of letting it pass. Cheap because
+    a tie is rare — the list is walked only to count the winners. -}
+    sameDatabaseTies :: CrossDBCandidate -> [CrossDBCandidate] -> [LinkWarning]
+    sameDatabaseTies winner scored =
+        [ AmbiguousSupplier (cdbActivityName winner) tied
+        | let tied =
+                length . nub $
+                    [ (cdbActivityUUID c, cdbProductUUID c)
+                    | c <- scored
+                    , cdbScore c == cdbScore winner
+                    , cdbDatabaseName c == cdbDatabaseName winner
+                    ]
+        , tied > 1
+        ]
 
     -- Other databases whose surviving best candidate ties the winner's
     -- score. Dedup by DB name to ignore intra-DB ties.
@@ -857,6 +887,7 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
                 , cdbScore = totalScore
                 , cdbLocation = seLocation
                 , cdbProductName = seProductName
+                , cdbActivityName = seActivityName
                 }
 
 {- | Resolve a supplier by exact @(activityUUID, productUUID)@ identity across

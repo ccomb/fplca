@@ -311,8 +311,10 @@ History of manual bumps:
      and demanding a supplier no activity can be.
 
 - 26: a technosphere line carries the supplier activity its source names apart
-     from the product ('techSupplierActivity'). Cached exchanges end before the
-     field, and every field after it would be read at the wrong offset.
+     from the product ('techSupplierActivity'), and the linking stats carry the
+     inputs several activities of one dependency answered equally well. Cached
+     exchanges end before the field, and every field after it would be read at
+     the wrong offset.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -2143,10 +2145,24 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                             }
                         | linkId /= UUID.nil
                         ]
+                    -- Several activities of the supplier database answered this
+                    -- input equally well: the winner is the ranking's, not the
+                    -- data's.
+                    ambiguities =
+                        [ SupplierAmbiguity
+                            { saProduct = tfName flow
+                            , saRequested = loc
+                            , saChosen = chosen
+                            , saCandidates = candidates
+                            , saSourceDatabase = cdlrDatabaseName result
+                            }
+                        | AmbiguousSupplier chosen candidates <- cdlrWarnings result
+                        ]
                  in mempty
                         { cdlLinks = [crossLink]
                         , cdlLocationFallbacks = locFallbacks
                         , cdlAttributeFallbacks = attrFallbacks
+                        , cdlSupplierAmbiguities = ambiguities
                         }
             CrossDBNotLinked blocker
                 -- Nil-link inputs report a rich blocker; a non-nil dangling input
@@ -2340,6 +2356,25 @@ reportCrossDBLinkingStats nActivities stats = do
                     (T.unpack afRequested)
                     (T.unpack afMatched)
                     (T.unpack afSourceDatabase)
+
+    -- Ambiguous suppliers: several activities of one dependency tied for the
+    -- same input, so the winner is the ranking's and not the data's.
+    let !uniqueAmbiguities = deduplicateSupplierAmbiguities (cdlSupplierAmbiguities stats)
+        !nAmbiguities = length uniqueAmbiguities
+    when (nAmbiguities > 0) $ do
+        reportProgress Warning $
+            printf
+                "%d input(s) several activities of one dependency answer equally well - name the supplier meant, by its activity name or a relink mapping"
+                nAmbiguities
+        forM_ uniqueAmbiguities $ \SupplierAmbiguity{saProduct, saRequested, saChosen, saCandidates, saSourceDatabase} ->
+            reportProgress Warning $
+                printf
+                    "  - %s [%s] - %d candidates in %s, linked to %s"
+                    (T.unpack saProduct)
+                    (T.unpack saRequested)
+                    saCandidates
+                    (T.unpack saSourceDatabase)
+                    (T.unpack saChosen)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"

@@ -366,6 +366,18 @@ spec = do
                     CrossDBNotLinked reason ->
                         expectationFailure $ "Expected a link for " ++ show name ++ " but got: " ++ show reason
 
+        it "warns that the suppliers tied when the demand names none" $
+            case findSupplierInIndexedDBs ctx (query electricity "GLO" "kWh") of
+                CrossDBLinked{cdlrWarnings = warnings} ->
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` [2]
+                CrossDBNotLinked reason -> expectationFailure $ "Expected a link but got: " ++ show reason
+
+        it "does not warn once the demand names its supplier" $
+            case findSupplierInIndexedDBs ctx (queryFrom (fst marketActivity) electricity "GLO" "kWh") of
+                CrossDBLinked{cdlrWarnings = warnings} ->
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` []
+                CrossDBNotLinked reason -> expectationFailure $ "Expected a link but got: " ++ show reason
+
         it "falls back to the product name when no dependency ships the named activity" $
             case findSupplierInIndexedDBs ctx (queryFrom "market for electricity, from another release" electricity "GLO" "kWh") of
                 CrossDBLinked{cdlrProductName = linked} -> linked `shouldBe` electricity
