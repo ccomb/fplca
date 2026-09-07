@@ -11,6 +11,8 @@ we test:
    cross-DB links reduces exactly to the local-only batch variant.
 3. that 'depDemandsToVector' honours the supplier's reference unit and
    fails hard on unknown unit pairs.
+4. that 'prepareDepDemandVecs' answers one vector per root, and picks out
+   this dep's share of each root's demands rather than another dep's.
 -}
 module CrossDBInventorySpec (spec) where
 
@@ -22,7 +24,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Matrix (accumulateDepDemands, depDemandsToVector)
+import Matrix (DepDemands, accumulateDepDemands, depDemandsToVector)
 import Method.Mapping (CF (..), CFUnit (..), MethodTables (..), inventoryContributions)
 import qualified Method.Mapping as Mapping
 import Method.Types (CFFamily (..), FlowDirection (..), MethodCF (..))
@@ -95,6 +97,32 @@ spec = do
                         Left err -> do
                             err `shouldSatisfy` T.isInfixOf "Unknown unit conversion"
                             err `shouldSatisfy` T.isInfixOf "dep-test"
+
+    describe "prepareDepDemandVecs" $ do
+        it "returns one vector per root, each as long as the dep DB" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            let n = fromIntegral (dbActivityCount db) :: Int
+                perRoot = [M.empty, M.empty, M.empty] :: [DepDemands]
+            case SharedSolver.prepareDepDemandVecs defaultUnitConfig "SAMPLE.min3" db perRoot of
+                Right vecs -> do
+                    length vecs `shouldBe` 3
+                    map U.length vecs `shouldBe` replicate 3 n
+                Left err -> expectationFailure (T.unpack err)
+
+        it "gives an all-zero vector for a root that demands nothing of this dep" $ do
+            db <- loadSampleDatabase "SAMPLE.min3"
+            case firstActivityWithRefUnit db of
+                Nothing -> pendingWith "SAMPLE.min3 has no activity with a reference output unit"
+                Just (supplierKey, supplierIdx, refUnit) -> do
+                    -- Two roots: the first demands of another dep, the second of this one.
+                    let otherDep = M.singleton "some-other-db" (M.singleton supplierKey (7.5, refUnit))
+                        thisDep = M.singleton "SAMPLE.min3" (M.singleton supplierKey (7.5, refUnit))
+                    case SharedSolver.prepareDepDemandVecs defaultUnitConfig "SAMPLE.min3" db [otherDep, thisDep] of
+                        Right [absent, present] -> do
+                            U.all (== 0.0) absent `shouldBe` True
+                            present U.! supplierIdx `shouldBe` 7.5
+                        Right _ -> expectationFailure "expected one vector per root"
+                        Left err -> expectationFailure (T.unpack err)
 
     describe "computeInventoryMatrixBatchWithDepsCached" $ do
         it "matches local-only batch for a DB with no cross-DB links" $ do
