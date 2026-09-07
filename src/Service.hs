@@ -32,7 +32,7 @@ import qualified Data.Vector.Unboxed as U
 import Database (IdentifierReach (..), activitiesIdentifiedBy, applyStructuredFilters, findActivitiesByFields, findFlowsBySynonym, flowNameRelevance)
 import Database.Allocation (asAllocated, describeRefusal, propertyShares)
 import Database.MatrixBuild (findProducer, linkedProducer)
-import Matrix (DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
+import Matrix (Demand (..), DepDemands, Inventory, SupplierDemands, accumulateDepDemandsWith, activityNormalizationFactor, applyBiosphereMatrix, buildDemandVectorFromIndex, computeInventoryMatrix, depDemandsToVector, perturbA, perturbABatch, perturbGlobal, toList)
 import qualified Matrix.Export as MatrixExport
 import qualified Progress
 import qualified Search.BM25 as BM25
@@ -2432,7 +2432,7 @@ goWithSubsAndDeps ::
     -- | THIS DB's cached solver
     SharedSolver ->
     -- | demand vectors at this level
-    [U.Vector Double] ->
+    [Demand] ->
     -- | full sub list (filtered per level)
     [Substitution] ->
     -- | recursion depth

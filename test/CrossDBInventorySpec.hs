@@ -24,7 +24,7 @@ import qualified Data.Text as T
 import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
-import Matrix (DepDemands, accumulateDepDemands, depDemandsToVector)
+import Matrix (Demand (..), DepDemands, accumulateDepDemands, depDemandsToVector)
 import Method.Mapping (CF (..), CFUnit (..), MethodTables (..), inventoryContributions)
 import qualified Method.Mapping as Mapping
 import Method.Types (CFFamily (..), FlowDirection (..), MethodCF (..))
@@ -59,7 +59,7 @@ spec = do
             db <- loadSampleDatabase "SAMPLE.min3"
             let n = fromIntegral (dbActivityCount db) :: Int
             case depDemandsToVector defaultUnitConfig "SAMPLE.min3" db M.empty of
-                Right vec -> do
+                Right (Demand vec) -> do
                     U.length vec `shouldBe` n
                     U.all (== 0.0) vec `shouldBe` True
                 Left err -> expectationFailure (T.unpack err)
@@ -70,7 +70,7 @@ spec = do
                 fakeSupplier = (UUID.nil, UUID.nil)
                 demands = M.singleton fakeSupplier (42.0, "kg")
             case depDemandsToVector defaultUnitConfig "SAMPLE.min3" db demands of
-                Right vec -> do
+                Right (Demand vec) -> do
                     U.length vec `shouldBe` n
                     U.all (== 0.0) vec `shouldBe` True
                 Left err -> expectationFailure (T.unpack err)
@@ -82,7 +82,7 @@ spec = do
                 Just (supplierKey, supplierIdx, refUnit) -> do
                     let demands = M.singleton supplierKey (7.5, refUnit)
                     case depDemandsToVector defaultUnitConfig "SAMPLE.min3" db demands of
-                        Right vec -> vec U.! supplierIdx `shouldBe` 7.5
+                        Right (Demand vec) -> vec U.! supplierIdx `shouldBe` 7.5
                         Left err -> expectationFailure (T.unpack err)
 
         it "fails hard when the unit pair is unknown" $ do
@@ -106,7 +106,7 @@ spec = do
             case SharedSolver.prepareDepDemandVecs defaultUnitConfig "SAMPLE.min3" db perRoot of
                 Right vecs -> do
                     length vecs `shouldBe` 3
-                    map U.length vecs `shouldBe` replicate 3 n
+                    map (U.length . unDemand) vecs `shouldBe` replicate 3 n
                 Left err -> expectationFailure (T.unpack err)
 
         it "gives an all-zero vector for a root that demands nothing of this dep" $ do
@@ -118,7 +118,7 @@ spec = do
                     let otherDep = M.singleton "some-other-db" (M.singleton supplierKey (7.5, refUnit))
                         thisDep = M.singleton "SAMPLE.min3" (M.singleton supplierKey (7.5, refUnit))
                     case SharedSolver.prepareDepDemandVecs defaultUnitConfig "SAMPLE.min3" db [otherDep, thisDep] of
-                        Right [absent, present] -> do
+                        Right [Demand absent, Demand present] -> do
                             U.all (== 0.0) absent `shouldBe` True
                             present U.! supplierIdx `shouldBe` 7.5
                         Right _ -> expectationFailure "expected one vector per root"

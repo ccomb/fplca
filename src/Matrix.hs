@@ -33,6 +33,7 @@ Performance characteristics:
 -}
 module Matrix (
     Vector,
+    Demand (..),
     Inventory,
     SupplierDemands,
     DepDemands,
@@ -81,6 +82,7 @@ import Control.Concurrent.STM (
  )
 import Control.Exception (SomeException, catch, evaluate, throwIO, toException, try)
 import Control.Monad (forM_, unless, void, when)
+import Data.Coerce (coerce)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
 import qualified Data.Map as M
@@ -99,6 +101,13 @@ import qualified UnitConversion
 
 -- | Simple vector operations (replacing hmatrix dependency)
 type Vector = U.Vector Double
+
+{- | The right-hand side @d@ of @(I - A) x = d@: what a functional unit asks
+of the system, one entry per activity column. The solution @x@ it produces
+is a plain 'Vector', which is what keeps the two from being confused: a
+demand can be solved, and nothing else accepts one.
+-}
+newtype Demand = Demand {unDemand :: Vector}
 
 -- | Final inventory vector mapping biosphere flow UUIDs to quantities.
 type Inventory = M.Map UUID Double
@@ -477,7 +486,7 @@ computeInventoryMatrixBatch _ _ [] = pure []
 computeInventoryMatrixBatch db fact pids = do
     let activityIndex = dbActivityIndex db
         demandVecs = map (buildDemandVectorFromIndex activityIndex) pids
-    scalingVecs <- solveSparseLinearSystemWithFactorizationMulti fact demandVecs
+    scalingVecs <- solveSparseLinearSystemWithFactorizationMulti fact (coerce demandVecs)
     mapConcurrently (\x -> evaluate $! applyBiosphereMatrix db x) scalingVecs
 
 {- |
@@ -546,7 +555,7 @@ computeScalingVector db rootProcessId = do
         techTriples = dbTechnosphereTriples db
         activityIndex = dbActivityIndex db
         demandVec = buildDemandVectorFromIndex activityIndex rootProcessId
-    solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) demandVec
+    solveSparseLinearSystem [(fromIntegral i, fromIntegral j, v) | SparseTriple i j v <- U.toList techTriples] (fromIntegral activityCount) (unDemand demandVec)
 
 {- |
 Apply the biosphere matrix to a scaling vector: g = B * x.
@@ -904,12 +913,12 @@ depDemandsToVector ::
     Text ->
     Database ->
     SupplierDemands ->
-    Either Text Vector
+    Either Text Demand
 depDemandsToVector unitConfig depDbName depDb demands = do
     converted <- traverse convertEntry (M.toList demands)
     let n = fromIntegral (dbActivityCount depDb) :: Int
         entries = catMaybes converted
-    Right $ U.accum (+) (U.replicate n 0.0) entries
+    Right $ Demand $ U.accum (+) (U.replicate n 0.0) entries
   where
     actIdx = dbActivityIndex depDb
     procLookup = dbProcessIdLookup depDb
@@ -952,14 +961,14 @@ The demand vector represents external demand for products from each activity:
 - f[i] = 1.0 for the root activity (functional unit)
 - f[i] = 0.0 for all other activities
 -}
-buildDemandVectorFromIndex :: V.Vector Int32 -> ProcessId -> Vector
+buildDemandVectorFromIndex :: V.Vector Int32 -> ProcessId -> Demand
 buildDemandVectorFromIndex activityIndex rootProcessId =
     let n = V.length activityIndex
         rootIndex =
             if fromIntegral rootProcessId >= (0 :: Int) && fromIntegral rootProcessId < n
                 then fromIntegral $ activityIndex V.! fromIntegral rootProcessId
                 else error $ "FATAL: ProcessId not found in activity index: " ++ show rootProcessId
-     in fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1 :: Int]]
+     in Demand $ fromList [if i == rootIndex then 1.0 else 0.0 | i <- [0 .. n - 1 :: Int]]
 
 {- |
 Pre-compute matrix factorization for concurrent inventory calculations.
