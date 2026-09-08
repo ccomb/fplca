@@ -538,8 +538,9 @@ renderPedigree Pedigree{..} =
 only inputs. 'Nothing' for every other role, and for an input whose flow is
 unknown to the tech-flow catalogue.
 
-Each of the other roles is an output with a section of its own: the reference
-and the coproducts go to @Products@, a substitution to @Avoided products@.
+Each of the other roles has a section of its own: the reference, product or
+treatment input, and the coproducts go to @Products@, a substitution to
+@Avoided products@.
 Writing one here as well puts it in the file twice, and a reader then sees two
 exchanges where the source had one. On a substitution that is not a duplicate
 but a cancellation: the credit meets an equal input, and the activity loses the

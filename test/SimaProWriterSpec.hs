@@ -125,14 +125,13 @@ fixtureCSV =
         , "End"
         ]
 
-{- | A single process with one reference product and one coproduct (in the
-@Avoided products@ section, which the parser reads back as a 'Coproduct').
--}
-
 -- | How many lines of a written file start with the given prefix.
 countOf :: BS.ByteString -> BS.ByteString -> Int
 countOf prefix written = length (filter (BS.isPrefixOf prefix) (BS.split 10 written))
 
+{- | A single process with one reference product and one substitution, in the
+@Avoided products@ section the parser reads back as an 'AvoidedProduct'.
+-}
 coproductCSV :: BS.ByteString
 coproductCSV =
     BS.intercalate
