@@ -2,9 +2,13 @@
 
 module MatrixExportSpec (spec) where
 
+import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.UUID as UUID
+import Database (buildDatabaseWithMatrices)
 import Matrix.Export (
     MatrixDebugInfo (..),
     escapeCsvField,
@@ -16,7 +20,9 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import TestHelpers
+import Text.Read (readMaybe)
 import Types
+import UnitConversion (defaultUnitConfig)
 
 spec :: Spec
 spec = do
@@ -93,6 +99,26 @@ spec = do
                 -- Check header and 2 flows (CO2, Zinc)
                 let lines = T.lines indexContent
                 length lines `shouldBe` 3 -- header + 2 flows
+        it "publishes a waste treatment's column in the format's own sign convention" $ do
+            db <- treatmentDatabase
+            withSystemTempDirectory "acv-matrix-sign" $ \tmpDir -> do
+                exportUniversalMatrixFormat tmpDir db
+                columns <- indexByName (tmpDir </> "ie_index.csv")
+                technosphere <- cells (tmpDir </> "A_public.csv")
+                biosphere <- cells (tmpDir </> "B_public.csv")
+                case (lookup "treatment of waste W" columns, lookup "producer of Y" columns) of
+                    (Just treatment, Just producer) -> do
+                        -- The waste it treats: consumed, so negative, and the rest of the
+                        -- column has to read in the convention the diagonal announces.
+                        lookup (treatment, treatment) technosphere `shouldBe` Just (-1.0)
+                        -- What it consumes to do the treating stays an input, not a product.
+                        lookup (producer, treatment) technosphere `shouldBe` Just (-0.5)
+                        -- What it emits stays an emission. Treating waste adds burden.
+                        lookup (0, treatment) biosphere `shouldBe` Just 2.0
+                        -- An ordinary activity is untouched by any of this.
+                        lookup (producer, producer) technosphere `shouldBe` Just 1.0
+                    _ -> expectationFailure ("ie_index names " <> show (map fst columns))
+
     describe "Export CSV Format Validation" $ do
         it "uses semicolon as delimiter" $ do
             db <- loadSampleDatabase "SAMPLE.min3"
@@ -210,3 +236,150 @@ targetRow :: Database -> ProcessId
 targetRow db =
     let targetUUID = read "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" :: UUID
      in fromMaybe 0 (findProcessIdByActivityUUID db targetUUID)
+
+-- --------------------------------------------------------------------------- --
+-- A database with one waste treatment in it
+-- --------------------------------------------------------------------------- --
+
+{- | Two activities: an ordinary producer of Y, and a treatment of waste W in the
+convention EcoSpold 2 uses, where the treated waste is the reference product and its
+amount is negative. The treatment consumes half a Y and emits 2 kg of CO2.
+
+Everything the export has to get right about signs is visible in four coefficients, which
+is why this is built here rather than loaded from a fixture: a sample file would have to
+be read first to know what the answer should be.
+-}
+treatmentDatabase :: IO Database
+treatmentDatabase =
+    buildDatabaseWithMatrices
+        (BuildInputs defaultUnitConfig mempty Declared)
+        SimpleDatabase
+            { sdbActivities =
+                M.fromList
+                    [ ((producerUUID, productY), producerOfY)
+                    , ((treatmentUUID, wasteW), treatmentOfW)
+                    ]
+            , sdbTechFlows =
+                M.fromList
+                    [ (productY, TechnosphereFlow productY "product Y" kilogram M.empty Nothing Nothing)
+                    , (wasteW, TechnosphereFlow wasteW "waste W" kilogram M.empty Nothing Nothing)
+                    ]
+            , sdbBioFlows =
+                M.singleton
+                    carbonDioxide
+                    ( BiosphereFlow
+                        carbonDioxide
+                        "carbon dioxide"
+                        kilogram
+                        M.empty
+                        Nothing
+                        Nothing
+                        (Just (Compartment "air" Nothing))
+                    )
+            , sdbWasteFlows = M.empty
+            , sdbUnits = M.singleton kilogram (Unit kilogram "kg" "kg" "")
+            }
+        >>= either (fail . T.unpack) pure
+
+producerUUID, treatmentUUID, productY, wasteW, carbonDioxide, kilogram :: UUID
+producerUUID = testUUID "11111111-1111-1111-1111-111111111111"
+treatmentUUID = testUUID "22222222-2222-2222-2222-222222222222"
+productY = testUUID "33333333-3333-3333-3333-333333333333"
+wasteW = testUUID "44444444-4444-4444-4444-444444444444"
+carbonDioxide = testUUID "55555555-5555-5555-5555-555555555555"
+kilogram = testUUID "66666666-6666-6666-6666-666666666666"
+
+testUUID :: String -> UUID
+testUUID = fromMaybe UUID.nil . UUID.fromString
+
+producerOfY :: Activity
+producerOfY = blankActivity "producer of Y" [reference productY 1.0]
+
+treatmentOfW :: Activity
+treatmentOfW =
+    blankActivity
+        "treatment of waste W"
+        [ reference wasteW (-1.0)
+        , consumesFrom producerUUID productY 0.5
+        , BiosphereExchange
+            { bioFlowId = carbonDioxide
+            , bioAmount = 2.0
+            , bioUnitId = kilogram
+            , bioDirection = Emission
+            , bioLocation = ""
+            , bioComment = Nothing
+            , bioPedigree = Nothing
+            }
+        ]
+
+blankActivity :: Text -> [Exchange] -> Activity
+blankActivity name exs =
+    Activity
+        { activityName = name
+        , activityDescription = []
+        , activityDocumentation = []
+        , activitySynonyms = M.empty
+        , activityClassification = M.empty
+        , activityLocation = "GLO"
+        , activityLocationSource = LocationDeclared
+        , activityUnit = "kg"
+        , exchanges = exs
+        , activityParams = M.empty
+        , activityParamExprs = M.empty
+        , activityNativeType = Nothing
+        , activityNativeId = Nothing
+        , activityFormulaCheck = Nothing
+        }
+
+-- | The activity's own product, in the amount its dataset records. Negative for a treatment.
+reference :: UUID -> Double -> Exchange
+reference flow amount = technosphere flow amount ReferenceProduct UUID.nil
+
+-- | An input taken from a named producer.
+consumesFrom :: UUID -> UUID -> Double -> Exchange
+consumesFrom supplier flow amount = technosphere flow amount Input supplier
+
+technosphere :: UUID -> Double -> TechRole -> UUID -> Exchange
+technosphere flow amount role supplier =
+    TechnosphereExchange
+        { techFlowId = flow
+        , techAmount = amount
+        , techUnitId = kilogram
+        , techRole = role
+        , techActivityLinkId = supplier
+        , techProcessLinkId = Nothing
+        , techLocation = "GLO"
+        , techComment = Nothing
+        , techPedigree = Nothing
+        , techShare = Nothing
+        , techClassification = M.empty
+        , techProperties = noProperties
+        }
+
+-- | Activity name -> the column it was given, read back out of the index the export wrote.
+indexByName :: FilePath -> IO [(Text, Int)]
+indexByName path = do
+    rows <- drop 1 . T.lines <$> TIO.readFile path
+    pure (concatMap entry rows)
+  where
+    entry :: Text -> [(Text, Int)]
+    entry row = case T.splitOn ";" row of
+        (name : _geography : _product : _unit : position : _) ->
+            [(name, i) | Just i <- [readMaybe (T.unpack position)]]
+        _ -> []
+
+-- | (row, column) -> coefficient, from one of the sparse matrix files.
+cells :: FilePath -> IO [((Int, Int), Double)]
+cells path = do
+    rows <- drop 1 . T.lines <$> TIO.readFile path
+    pure (concatMap cell rows)
+  where
+    cell :: Text -> [((Int, Int), Double)]
+    cell line = case T.splitOn ";" line of
+        (r : c : v : _) ->
+            [ ((i, j), x)
+            | Just i <- [readMaybe (T.unpack r)]
+            , Just j <- [readMaybe (T.unpack c)]
+            , Just x <- [readMaybe (T.unpack v)]
+            ]
+        _ -> []
