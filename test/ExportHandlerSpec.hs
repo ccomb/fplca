@@ -12,11 +12,12 @@ empty 'Database.Manager.DatabaseManager' (no databases loaded), exactly as
 -}
 module ExportHandlerSpec (spec) where
 
-import API.DatabaseHandlers (exportDatabaseHandler)
+import API.DatabaseHandlers (encodeExportWarnings, exportDatabaseHandler)
 import API.Types (BinaryContent, ExportRequest (..))
 import App.Env (AppEnv (..), runApp)
 import Config (defaultConfig)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Manager (CachePolicy (..), initDatabaseManager)
 import Servant (Header, Headers, ServerError, errHTTPCode, runHandler)
 import Test.Hspec
@@ -40,15 +41,33 @@ runExport dbName fmt = do
     runHandler (runApp env (exportDatabaseHandler dbName (ExportRequest fmt)))
 
 spec :: Spec
-spec = describe "exportDatabaseHandler (HTTP error mapping)" $ do
-    it "returns 404 when the database is not loaded" $ do
-        res <- runExport "no-such-db" "simapro"
-        case res of
-            Left e -> errHTTPCode e `shouldBe` 404
-            Right _ -> expectationFailure "expected a 404, got a successful export"
+spec = do
+    describe "exportDatabaseHandler (HTTP error mapping)" $ do
+        it "returns 404 when the database is not loaded" $ do
+            res <- runExport "no-such-db" "simapro"
+            case res of
+                Left e -> errHTTPCode e `shouldBe` 404
+                Right _ -> expectationFailure "expected a 404, got a successful export"
 
-    it "returns 400 for an unknown export format" $ do
-        res <- runExport "no-such-db" "not-a-format"
-        case res of
-            Left e -> errHTTPCode e `shouldBe` 400
-            Right _ -> expectationFailure "expected a 400, got a successful export"
+        it "returns 400 for an unknown export format" $ do
+            res <- runExport "no-such-db" "not-a-format"
+            case res of
+                Left e -> errHTTPCode e `shouldBe` 400
+                Right _ -> expectationFailure "expected a 400, got a successful export"
+
+    describe "encodeExportWarnings" $ do
+        it "carries a short list whole" $ do
+            let encoded = encodeExportWarnings ["first thing", "second thing"]
+            T.isInfixOf "first" encoded `shouldBe` True
+            T.isInfixOf "second" encoded `shouldBe` True
+            T.isInfixOf "further" encoded `shouldBe` False
+
+        it "stays small enough to be a header when a writer has thousands to say" $ do
+            let plenty = [T.pack ("approximated activity number " <> show n) | n <- [1 :: Int .. 20000]]
+            T.length (encodeExportWarnings plenty) `shouldSatisfy` (< 4096)
+
+        it "says how many it left out rather than dropping them in silence" $ do
+            let plenty = [T.pack ("warning " <> show n) | n <- [1 :: Int .. 20000]]
+                encoded = encodeExportWarnings plenty
+            T.isInfixOf "warning%201%0A" encoded `shouldBe` True
+            T.isInfixOf "further%20warnings" encoded `shouldBe` True
