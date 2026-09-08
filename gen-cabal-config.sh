@@ -30,8 +30,33 @@ VOLCA_OPT_LEVEL="${VOLCA_OPT_LEVEL:-2}"
 # which copy only volca.cabal + mumps-hs/ into the build context and write a
 # minimal cabal.project without `packages: .` machinery — still get jobs +
 # RTS allocation area + per-module GHC parallelism.
+#
+# shared / executable-dynamic sit here for the same reason: they apply to
+# every mode, not one. On a dynamic GHC, which is what ghcup installs for
+# macOS and for glibc Linux, cabal builds our library both ways unless told
+# not to, and every module is compiled twice. The CI log shows it plainly: a
+# `.dyn_o` next to the `.o` on every macOS Compiling line, where the Alpine
+# leg shows the `.o` alone. It buys nothing anywhere here, since no module in
+# this tree uses TemplateHaskell and the packaged binaries are standalone, so
+# a dynamic copy of our own library is never loaded.
+#
+# Both fields are needed, not one. Up to cabal-install 3.12 they are combined
+# with `liftM2 (||)`, so `shared: False` with the other unset is Nothing and
+# the compiler's own default wins - True, on a dynamic GHC. 3.14 honours
+# `shared` alone. Setting both makes the pair definite on either version.
+#
+# The price is `cabal repl` on a GHC that is itself dynamic: the interpreter
+# loads packages the dynamic way only, so a repl on exe:volca or on the test
+# suite, both of which depend on the library, can no longer link it. Nothing
+# here runs a repl, and HLS is unaffected because it loads local components
+# from source. If you want one, build that invocation with --enable-shared.
+# In a checkout built before this line existed, delete dist-newstyle first:
+# the stale .so is still there, and a repl would quietly load it.
 cat > "$OUTPUT" << 'EOF'
 jobs: $ncpus
+
+shared: False
+executable-dynamic: False
 
 program-options
   ghc-options: -j +RTS -A128m -RTS
@@ -87,7 +112,6 @@ EOF
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
-shared: False
 executable-static: True
 
 extra-lib-dirs: $MUMPS_LIB_DIR
