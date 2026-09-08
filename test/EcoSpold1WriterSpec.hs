@@ -287,7 +287,7 @@ carrying it has no resolvable dataset number, a dangling link. Distinct from
 danglingLink :: UUID
 danglingLink = read "99999999-0000-4000-8000-000000000099"
 
-{- | All supplier-dataset-number values recorded across a parser round-trip of
+{- | Every supplier dataset number read back across a parser round-trip of
 @sdb@. 'EcoSpold.Parser1.closeExchange' fills 'psSupplierLinks' (the 7th tuple
 slot) for every technosphere input whose @number@ attribute is non-zero, i.e.
 the supplier dataset number the writer must re-emit. A surviving link therefore
@@ -301,7 +301,11 @@ roundTripSupplierLinks sdb =
             case parseAllWithXeno (TE.encodeUtf8 txt) of
                 Left err -> Left err
                 Right results ->
-                    concatMap (\ParsedDataset{pdSupplierLinks = links} -> M.elems links) <$> sequence results
+                    concatMap claimedNumbers <$> sequence results
+  where
+    claimedNumbers :: ParsedDataset -> [Int]
+    claimedNumbers ParsedDataset{pdActivity = act} =
+        [n | TechnosphereExchange{techSupplierClaim = ClaimByDatasetNumber n} <- exchanges act]
 
 -- ---------------------------------------------------------------------------
 -- Order-insensitive observable projection of an activity, for semantic equality

@@ -194,7 +194,6 @@ data ParseState = ParseState
     , psPath :: ![BS.ByteString]
     , psContext :: !ElementContext
     , psTextAccum :: ![BS.ByteString]
-    , psSupplierLinks :: !(M.Map UUID Int) -- flowId → supplier dataset number (technosphere inputs)
     , psDocs :: !DatasetDocs -- Provenance the dataset states about itself
     , psCompletedActivities :: ![Either String ParsedDataset]
     }
@@ -217,7 +216,6 @@ initialParseState =
         , psPath = []
         , psContext = Other
         , psTextAccum = []
-        , psSupplierLinks = M.empty
         , psDocs = emptyDatasetDocs
         , psCompletedActivities = []
         }
@@ -472,13 +470,6 @@ closeExchange :: ParseState -> ParseState
 closeExchange state = case psContext state of
     InExchange edata ->
         let (exchange, parsedFlow, unit) = buildExchange (psLocation state) edata
-            !supplierLinks = case exchange of
-                TechnosphereExchange{techRole = Input}
-                    | exNumber edata /= 0 ->
-                        M.insert (exchangeFlowId exchange) (exNumber edata) (psSupplierLinks state)
-                TechnosphereExchange{} -> psSupplierLinks state
-                BiosphereExchange{} -> psSupplierLinks state
-                WasteExchange{} -> psSupplierLinks state
             (techs, bios) = case parsedFlow of
                 ParsedTech tf -> (tf : psTechFlows state, psBioFlows state)
                 ParsedBio bf -> (psTechFlows state, bf : psBioFlows state)
@@ -487,7 +478,6 @@ closeExchange state = case psContext state of
                 , psTechFlows = techs
                 , psBioFlows = bios
                 , psUnits = unit : psUnits state
-                , psSupplierLinks = supplierLinks
                 , psContext = Other
                 }
     InInputGroup _ -> popPath state
@@ -523,7 +513,6 @@ resetDataset state =
         , psUnits = []
         , psContext = Other
         , psTextAccum = []
-        , psSupplierLinks = M.empty
         , psDocs = emptyDatasetDocs
         }
 
@@ -736,7 +725,6 @@ buildResult st =
                   pdWasteFlows = []
                 , pdUnits = reverse (psUnits st)
                 , pdDatasetNumber = psDatasetNumber st
-                , pdSupplierLinks = psSupplierLinks st
                 , pdWarnings = placeholdersUsed st
                 }
      in -- A file that yields no exchange at all is not a dataset: a stray or

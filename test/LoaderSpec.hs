@@ -148,6 +148,10 @@ es1Xml datasets =
             <> "    </flowData>\n"
             <> "  </dataset>\n"
 
+-- | An input naming the dataset number its supplier is published under.
+buyingDataset :: Int -> Exchange -> Exchange
+buyingDataset n ex = ex{techSupplierClaim = ClaimByDatasetNumber n}
+
 -- | An input linked (non-nil) to producer activity @actId@ producing @prodId@.
 linkedInput :: UUID.UUID -> UUID.UUID -> Exchange
 linkedInput actId prodId = (inputExchange prodId "GLO"){techActivityLinkId = actId}
@@ -628,11 +632,11 @@ spec = do
             wheatLink = inputLinksIn . sdbActivities
 
         it "leaves an unlocated input unlinked when the product name covers several geographies" $ do
-            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, wheatDE, bread] flowNames)
+            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty (simpleDBOf [wheatFR, wheatDE, bread] flowNames)
             wheatLink fixed `shouldBe` [UUID.nil]
 
         it "links an unlocated input when the product name covers one dataset" $ do
-            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
+            fixed <- fixEcoSpold1ActivityLinks M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
             wheatLink fixed `shouldBe` [actUUID1]
 
         -- BAFU 2026 v1 has power plants whose gas input carries the number of
@@ -642,13 +646,37 @@ spec = do
             gasRER = ((actUUID2, flowUUID2), minimalActivity "gas supply" "RER" [refExchange flowUUID2])
             plantDeclaring loc =
                 ( (consumerUUID, breadUUID)
-                , minimalActivity "power plant" "BG" [refExchange breadUUID, inputExchange flowUUID1 loc]
+                , minimalActivity "power plant" "BG" [refExchange breadUUID, buyingDataset 300474 (inputExchange flowUUID1 loc)]
                 )
             gasNames = [(flowUUID1, "Natural gas"), (flowUUID2, "Natural gas"), (breadUUID, "Heat")]
             linkPlantDeclaring loc =
                 let db = simpleDBOf [gasBG, gasRER, plantDeclaring loc] gasNames
-                    ctx = ecoSpold1LinkContext M.empty (M.singleton 300474 (actUUID1, flowUUID1)) (M.singleton flowUUID1 300474) db
+                    ctx = ecoSpold1LinkContext M.empty (M.singleton 300474 (actUUID1, flowUUID1)) db
                  in fixAllActivities ctx (sdbActivities db)
+
+        -- The number is on the row that carries it. Held in one map per
+        -- database keyed by the flow, it said the same thing (the flow
+        -- identifier is minted from that very number), but a reader had to
+        -- know that to trust it.
+        it "gives each consumer of one product the supplier its own number names" $ do
+            let plantBuying n loc =
+                    minimalActivity ("power plant " <> loc) loc [refExchange breadUUID, buyingDataset n (inputExchange flowUUID1 "")]
+                plantBG = ((consumerUUID, breadUUID), plantBuying 1 "BG")
+                plantRER = ((missingActUUID, flowUUID2), plantBuying 2 "RER")
+                db = simpleDBOf [gasBG, gasRER, plantBG, plantRER] gasNames
+                ctx =
+                    ecoSpold1LinkContext
+                        M.empty
+                        (M.fromList [(1, (actUUID1, flowUUID1)), (2, (actUUID2, flowUUID2))])
+                        db
+                (acts, _) = fixAllActivities ctx (sdbActivities db)
+                supplierOf key =
+                    [ link
+                    | Just act <- [M.lookup key acts]
+                    , TechnosphereExchange{techRole = Input, techActivityLinkId = link} <- exchanges act
+                    ]
+            supplierOf (consumerUUID, breadUUID) `shouldBe` [actUUID1]
+            supplierOf (missingActUUID, flowUUID2) `shouldBe` [actUUID2]
 
         it "follows the dataset number over the declared location, and records the override" $ do
             let (acts, summary) = linkPlantDeclaring "RER"

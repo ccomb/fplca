@@ -1063,7 +1063,6 @@ parseWithXeno xmlContent processId = do
                             , -- This format addresses a supplier by UUID, so it
                               -- numbers no dataset and links none by number.
                               pdDatasetNumber = 0
-                            , pdSupplierLinks = M.empty
                             , pdWarnings = map T.pack (reverse (psWarnings st)) ++ placeholdersUsed st
                             }
 
