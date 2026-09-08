@@ -30,8 +30,25 @@ VOLCA_OPT_LEVEL="${VOLCA_OPT_LEVEL:-2}"
 # which copy only volca.cabal + mumps-hs/ into the build context and write a
 # minimal cabal.project without `packages: .` machinery — still get jobs +
 # RTS allocation area + per-module GHC parallelism.
+#
+# shared / executable-dynamic sit here for the same reason: they apply to
+# every mode, not one. On a dynamic GHC, which is what ghcup installs for
+# macOS and for glibc Linux, cabal builds our library both ways unless told
+# not to, and every module is compiled twice. The CI log shows it plainly: a
+# `.dyn_o` next to the `.o` on every macOS Compiling line, where the Alpine
+# leg shows the `.o` alone. It buys nothing anywhere here, since no module in
+# this tree uses TemplateHaskell and the packaged binaries are standalone, so
+# a dynamic copy of our own library is never loaded.
+#
+# Both fields are needed, not one. Up to cabal-install 3.12 they are combined
+# with `liftM2 (||)`, so `shared: False` with the other unset is Nothing and
+# the compiler's own default wins - True, on a dynamic GHC. 3.14 honours
+# `shared` alone. Setting both makes the pair definite on either version.
 cat > "$OUTPUT" << 'EOF'
 jobs: $ncpus
+
+shared: False
+executable-dynamic: False
 
 program-options
   ghc-options: -j +RTS -A128m -RTS
@@ -87,7 +104,6 @@ EOF
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
-shared: False
 executable-static: True
 
 extra-lib-dirs: $MUMPS_LIB_DIR
@@ -183,27 +199,9 @@ EOF
             DARWIN_NUMERIC_FLAGS=" -optl-L${OPENBLAS_PREFIX}/lib -optl-lopenblas -optl-L${GFORTRAN_LIB_DIR} -optl-lgfortran -optl-lquadmath"
         fi
         DARWIN_LINK_FLAGS="$DARWIN_MUMPS_FLAGS$DARWIN_NUMERIC_FLAGS $DARWIN_TAIL_FLAGS"
-        # shared: False, for the same reason musl mode sets it. Left to itself,
-        # cabal builds the library both ways on aarch64-darwin, and every
-        # module is compiled twice: the CI log shows a `.dyn_o` next to the
-        # `.o` on every line, where the Linux leg shows the `.o` alone. It buys
-        # nothing here - no module in this tree uses TemplateHaskell, and the
-        # packaged macOS binary is standalone, so a dynamic copy of our own
-        # library is never loaded.
-        #
-        # executable-dynamic: False is not redundant, it is what makes the line
-        # above bite on every cabal. Up to cabal-install 3.12 the two fields are
-        # combined with `liftM2 (||)`, so `shared: False` with the other unset
-        # is `Nothing` and the compiler's own default wins - and on a dynamic
-        # GHC, which is what ghcup installs for macOS, that default is True.
-        # 3.14 honours `shared` alone. Setting both makes the pair definite
-        # either way, so a developer on an older cabal gets the same build as
-        # CI instead of silently keeping the double compile.
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
-shared: False
-executable-dynamic: False
 
 extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
