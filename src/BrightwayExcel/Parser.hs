@@ -421,6 +421,8 @@ not an empty row.
 technosphereRowOut :: UC.UnitConfig -> TechRole -> Text -> M.Map Text CellValue -> RowOut
 technosphereRowOut cfg role actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped technosphere row with no name"]}
+    | isNothing (fieldNum f "amount") =
+        emptyRowOut{roWarn = ["activity '" <> actName <> "', row '" <> name <> "': skipped, its amount cell holds no number"]}
     | otherwise = RowOut (Just exch) [flow] [] [unit] []
   where
     name = fromMaybe "" (fieldText f "reference product" <|> fieldText f "name")
