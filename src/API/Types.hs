@@ -43,7 +43,6 @@ import Types (
     Exchange,
     ExchangeKind (..),
     FlowKind (..),
-    Medium,
     NativeActivityType (..),
     NativeProcessId (..),
     Pedigree,

@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import Data.Either (lefts, rights)
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
