@@ -206,12 +206,12 @@ mergeBioFlows a b =
         , bfCAS = bfCAS a <|> bfCAS b
         }
 
--- | 9-element unzip helper (Data.List ships 7-tuple as max).
-unzip9 :: [(a, b, c, d, e, f, g, h, i)] -> ([a], [b], [c], [d], [e], [f], [g], [h], [i])
-unzip9 = foldr step ([], [], [], [], [], [], [], [], [])
+-- | 8-element unzip helper (Data.List ships 7-tuple as max).
+unzip8 :: [(a, b, c, d, e, f, g, h)] -> ([a], [b], [c], [d], [e], [f], [g], [h])
+unzip8 = foldr step ([], [], [], [], [], [], [], [])
   where
-    step (a, b, c, d, e, f, g, h, i) (as, bs, cs, ds, es, fs, gs, hs, is) =
-        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs, i : is)
+    step (a, b, c, d, e, f, g, h) (as, bs, cs, ds, es, fs, gs, hs) =
+        (a : as, b : bs, c : cs, d : ds, e : es, f : fs, g : gs, h : hs)
 
 {- |
 Schema signature of the cache payload.
@@ -681,9 +681,9 @@ contradicts the declared location is reported, not overruled.
 Unlinked exchanges stay unlinked so that cross-DB linking can resolve them.
 Location aliases map wrongLocation → correctLocation (e.g., "ENTSO" → "ENTSO-E")
 -}
-fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> IO SimpleDatabase
-fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks db = do
-    let ctx = ecoSpold1LinkContext locationAliases dsIndex supplierLinks db
+fixEcoSpold1ActivityLinks :: M.Map T.Text T.Text -> DatasetNumberIndex -> SimpleDatabase -> IO SimpleDatabase
+fixEcoSpold1ActivityLinks locationAliases dsIndex db = do
+    let ctx = ecoSpold1LinkContext locationAliases dsIndex db
         (fixedActivities, summary) = fixAllActivities ctx (sdbActivities db)
     reportProgress Info $
         printf
@@ -745,21 +745,19 @@ data ExchangeLinkContext = ExchangeLinkContext
     , elcSupplierIndex :: !SupplierIndex
     , elcNameIndex :: !SupplierByNameWithLocation
     , elcDatasetIndex :: !DatasetNumberIndex
-    , elcSupplierLinks :: !(M.Map UUID.UUID Int)
     , elcFlowDB :: !TechFlowDB
     , elcActivities :: !ActivityMap
     }
 
 -- | The lookup tables 'fixAllActivities' links an EcoSpold1 database with.
-ecoSpold1LinkContext :: M.Map T.Text T.Text -> DatasetNumberIndex -> M.Map UUID.UUID Int -> SimpleDatabase -> ExchangeLinkContext
-ecoSpold1LinkContext locationAliases dsIndex supplierLinks db =
+ecoSpold1LinkContext :: M.Map T.Text T.Text -> DatasetNumberIndex -> SimpleDatabase -> ExchangeLinkContext
+ecoSpold1LinkContext locationAliases dsIndex db =
     ExchangeLinkContext
         { elcLocationAliases = locationAliases
         , elcSupplierIndex = buildSupplierIndex (sdbActivities db) (sdbTechFlows db)
         , -- Name-only index, with location, for exchanges missing the location attribute
           elcNameIndex = buildSupplierIndexByNameWithLocation (sdbActivities db) (sdbTechFlows db)
         , elcDatasetIndex = dsIndex
-        , elcSupplierLinks = supplierLinks
         , elcFlowDB = sdbTechFlows db
         , elcActivities = sdbActivities db
         }
@@ -786,7 +784,7 @@ Unlinked exchanges stay unlinked for cross-DB resolution.
 Returns (fixed exchange, UnlinkedSummary)
 -}
 fixExchangeLink :: ExchangeLinkContext -> Activity -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlowId = fid, techRole = role, techSupplierClaim = claim, techLocation = loc}
     | role == Input || role == ReferenceInput =
         let linked overrides actUUID prodUUID =
                 ( ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
@@ -798,7 +796,7 @@ fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlo
          in case M.lookup fid elcFlowDB of
                 Just flow ->
                     -- Tier 1: dataset-number lookup with name validation
-                    case M.lookup fid elcSupplierLinks >>= \dsNum -> (,) dsNum <$> M.lookup dsNum elcDatasetIndex of
+                    case claimedNumber claim >>= \dsNum -> (,) dsNum <$> M.lookup dsNum elcDatasetIndex of
                         Just (dsNum, (actUUID, prodUUID))
                             | Just supplierFlow <- M.lookup prodUUID elcFlowDB
                             , normalizeText (tfName supplierFlow) == normalizeText (tfName flow) ->
@@ -1145,6 +1143,14 @@ fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
 fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
 
+-- | The dataset number a claim names, when it names one.
+claimedNumber :: SupplierClaim -> Maybe Int
+claimedNumber = \case
+    ClaimByDatasetNumber n -> Just n
+    ClaimByProduct -> Nothing
+    ClaimById _ -> Nothing
+    ClaimByName _ -> Nothing
+
 -- | The supplier activity a claim names, when it names one by name.
 claimedName :: SupplierClaim -> Maybe T.Text
 claimedName = \case
@@ -1264,14 +1270,13 @@ loadEcoSpoldDirectory opts dir = do
             (firstErr : _) -> return $ Left firstErr
             [] -> do
                 let successResults = rights results
-                let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes, supplierLinksLists) = unzip9 successResults
+                let (procMaps, techFlowMaps, bioFlowMaps, wasteFlowMaps, unitMaps, rawFlowCounts, rawUnitCounts, dsIndexes) = unzip8 successResults
                 let !finalProcMap = M.unions procMaps
                 let !finalTechFlowMap = MS.unionsWith mergeTechFlows techFlowMaps
                 let !finalBioFlowMap = MS.unionsWith mergeBioFlows bioFlowMaps
                 let !finalWasteFlowMap = M.unions wasteFlowMaps
                 let !finalUnitMap = M.unions unitMaps
                 let !finalDsIndex = M.unions dsIndexes
-                let !finalSupplierLinks = M.unions supplierLinksLists
 
                 endTime <- getCurrentTime
                 let totalDuration = realToFrac $ diffUTCTime endTime startTime
@@ -1303,11 +1308,11 @@ loadEcoSpoldDirectory opts dir = do
                 -- For EcoSpold1: fix activity links using supplier lookup table
                 let simpleDb = SimpleDatabase finalProcMap finalTechFlowMap finalBioFlowMap finalWasteFlowMap finalUnitMap
                 if isEcoSpold1
-                    then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex finalSupplierLinks simpleDb
+                    then Right <$> fixEcoSpold1ActivityLinks locationAliases finalDsIndex simpleDb
                     else return $ Right simpleDb
 
     -- Process one worker's share of files
-    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB, Int, Int, DatasetNumberIndex, M.Map UUID.UUID Int))
+    processWorker :: UTCTime -> Bool -> (Int, [FilePath]) -> IO (Either T.Text (ActivityMap, TechFlowDB, BioFlowDB, WasteFlowDB, UnitDB, Int, Int, DatasetNumberIndex))
     processWorker _startTime isEcoSpold1 (workerNum, workerFiles) = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
@@ -1334,7 +1339,6 @@ loadEcoSpoldDirectory opts dir = do
             wasteLists = map pdWasteFlows okResults
             unitLists = map pdUnits okResults
             dsNums = map pdDatasetNumber okResults
-            supplierLinksList = map pdSupplierLinks okResults
         let !allTechs = concat techLists
         let !allBios = concat bioLists
         let !allWastes = concat wasteLists
@@ -1353,7 +1357,6 @@ loadEcoSpoldDirectory opts dir = do
                 let !dsIndex =
                         M.fromList
                             [(n, key) | (n, Right (key, _)) <- zip dsNums procEntries, n /= 0]
-                let !allSupplierLinks = M.unions supplierLinksList
 
                 workerEndTime <- getCurrentTime
                 let workerDuration = realToFrac $ diffUTCTime workerEndTime workerStartTime
@@ -1371,7 +1374,7 @@ loadEcoSpoldDirectory opts dir = do
                         (formatDuration workerDuration)
                         filesPerSec
 
-                return $ Right (procMap, techFlowMap, bioFlowMap, wasteFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex, allSupplierLinks)
+                return $ Right (procMap, techFlowMap, bioFlowMap, wasteFlowMap, unitMap, rawFlowCount, rawUnitCount, dsIndex)
 
     -- Build a single process entry, returning Either for error handling
     buildProcEntry :: Bool -> FilePath -> Activity -> Either T.Text ((UUID, UUID), Activity)
@@ -1420,7 +1423,6 @@ loadSingleEcoSpold1File opts filepath = do
         !dsIndex =
             M.fromList
                 [(pdDatasetNumber r, key) | (r, (key, _)) <- zip results expanded, pdDatasetNumber r /= 0]
-        !supplierLinks = M.unions (map pdSupplierLinks results)
         simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap wasteFlowMap unitMap
 
     let totalTechs = sum (map (length . pdTechFlows) results)
@@ -1431,7 +1433,7 @@ loadSingleEcoSpold1File opts filepath = do
     reportProgress Info $ printf "  Flows: %d tech + %d bio + %d waste (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (M.size wasteFlowMap) (totalTechs + totalBios + totalWastes)
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
-    Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
+    Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex simpleDb
   where
     buildProcEntryFromResult :: Maybe UUID.UUID -> ParsedDataset -> ((UUID.UUID, UUID.UUID), Activity)
     buildProcEntryFromResult fileUUID parsed =

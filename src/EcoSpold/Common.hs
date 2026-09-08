@@ -23,22 +23,21 @@ module EcoSpold.Common (
 import Amount (readAmount)
 import qualified Data.ByteString as BS
 import Data.Char (chr)
-import qualified Data.Map as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import Numeric (showFFloat)
-import Types (Activity, BiosphereFlow, DocSection (..), TechnosphereFlow, UUID, Unit, WasteFlow)
+import Types (Activity, BiosphereFlow, DocSection (..), TechnosphereFlow, Unit, WasteFlow)
 
 {- | One dataset as a reader read it: the activity, the flows and units it
 names, and whatever the reader has to say about the reading.
 
-'pdDatasetNumber' and 'pdSupplierLinks' are EcoSpold 1's: that format numbers
-its datasets and points an exchange at the numbered dataset that supplies it,
-where EcoSpold 2 addresses a supplier by UUID. A reader with nothing to say
-there leaves them empty.
+'pdDatasetNumber' is EcoSpold 1's: that format numbers its datasets, and an
+exchange points at the numbered dataset that supplies it on its own row, where
+EcoSpold 2 addresses a supplier by UUID. A reader with nothing to say there
+leaves it empty.
 -}
 data ParsedDataset = ParsedDataset
     { pdActivity :: !Activity
@@ -47,7 +46,6 @@ data ParsedDataset = ParsedDataset
     , pdWasteFlows :: ![WasteFlow]
     , pdUnits :: ![Unit]
     , pdDatasetNumber :: !Int
-    , pdSupplierLinks :: !(M.Map UUID Int)
     , pdWarnings :: ![Text]
     -- ^ What the reader could not make sense of, for the caller to report.
     }
