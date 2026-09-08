@@ -2,6 +2,7 @@
 
 module LoaderSpec (spec) where
 
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -70,6 +71,7 @@ refExchange fid =
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -87,6 +89,7 @@ inputExchange fid loc =
         , techRole = Input
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = loc
         , techComment = Nothing
         , techPedigree = Nothing
@@ -98,6 +101,29 @@ inputExchange fid loc =
 actUUID2, missingActUUID :: UUID.UUID
 actUUID2 = read "cccccccc-0000-0000-0000-000000000002"
 missingActUUID = read "dddddddd-0000-0000-0000-000000000099"
+
+-- | A name-only index holding one producer of one product name.
+oneProducer :: Text -> UUID.UUID -> UUID.UUID -> Text -> NameOnlyIndex
+oneProducer key actId prodId unit = M.singleton key (namedProducerOf "producer" actId prodId unit NE.:| [])
+
+-- | A producer of a product, named, in no location and in service.
+namedProducerOf :: Text -> UUID.UUID -> UUID.UUID -> Text -> NameProducer
+namedProducerOf name actId prodId unit =
+    NameProducer
+        { npActivityUUID = actId
+        , npProductUUID = prodId
+        , npActivityName = name
+        , npLocation = ""
+        , npObsolete = False
+        , npReferenceUnit = unit
+        }
+
+-- | The producer the index ranks first, as (activity, product, reference unit).
+firstProducer :: Text -> NameOnlyIndex -> Maybe (UUID.UUID, UUID.UUID, Text)
+firstProducer key = fmap (triple . NE.head) . M.lookup key
+  where
+    triple :: NameProducer -> (UUID.UUID, UUID.UUID, Text)
+    triple p = (npActivityUUID p, npProductUUID p, npReferenceUnit p)
 
 {- | A minimal EcoSpold1 document, one @<dataset>@ per (name, location) pair.
 Each dataset declares "<name> production" as its activity and @name@ as its
@@ -313,21 +339,21 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "UnlinkedSummary Monoid" $ do
         it "sums all counters via (<>)" $ do
-            let s1 = UnlinkedSummary M.empty 10 8 2 []
-                s2 = UnlinkedSummary M.empty 5 3 2 []
+            let s1 = UnlinkedSummary M.empty 10 8 2 [] []
+                s2 = UnlinkedSummary M.empty 5 3 2 [] []
                 m = s1 <> s2
             usTotalLinks m `shouldBe` 15
             usFoundLinks m `shouldBe` 11
             usMissingLinks m `shouldBe` 4
 
         it "unions activity maps via (<>)" $ do
-            let s1 = UnlinkedSummary (M.singleton "actA" []) 1 0 1 []
-                s2 = UnlinkedSummary (M.singleton "actB" []) 1 0 1 []
+            let s1 = UnlinkedSummary (M.singleton "actA" []) 1 0 1 [] []
+                s2 = UnlinkedSummary (M.singleton "actB" []) 1 0 1 [] []
                 m = s1 <> s2
             M.size (usActivities m) `shouldBe` 2
 
         it "mempty is the identity" $ do
-            let s = UnlinkedSummary M.empty 3 2 1 []
+            let s = UnlinkedSummary M.empty 3 2 1 [] []
                 m = s <> mempty
             usTotalLinks m `shouldBe` 3
             usFoundLinks m `shouldBe` 2
@@ -373,7 +399,7 @@ spec = do
                 flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Wheat Production")]
                 idx = buildSupplierIndexByName M.empty acts flows
             -- empty UnitDB → reference unit resolves to the "unknown" sentinel
-            M.lookup "wheat production" idx `shouldBe` Just (actUUID1, flowUUID1, "unknown")
+            firstProducer "wheat production" idx `shouldBe` Just (actUUID1, flowUUID1, "unknown")
 
         it "picks a duplicate producer by name, never by identifier" $ do
             -- The typo pair: two blocks exported under names differing by one
@@ -390,7 +416,7 @@ spec = do
                         , (flowUUID2, minimalFlow flowUUID2 "Pork, bone")
                         ]
             -- "whitout" sorts before "without", and holds flowUUID2.
-            M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
+            firstProducer "pork, bone" (buildSupplierIndexByName M.empty acts flows)
                 `shouldBe` Just (actUUID2, flowUUID2, "unknown")
 
         it "lets the block the source retired lose the tie" $ do
@@ -407,7 +433,7 @@ spec = do
                         [ (flowUUID1, minimalFlow flowUUID1 "Pork, bone")
                         , (flowUUID2, minimalFlow flowUUID2 "Pork, bone")
                         ]
-            M.lookup "pork, bone" (buildSupplierIndexByName M.empty acts flows)
+            firstProducer "pork, bone" (buildSupplierIndexByName M.empty acts flows)
                 `shouldBe` Just (actUUID1, flowUUID1, "unknown")
 
         it "does not index a prefix of a product name" $ do
@@ -436,7 +462,7 @@ spec = do
     describe "fixExchangeLinkByName" $ do
         it "resolves input exchange when supplier in index" $ do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
-                idx = M.fromList [("wheat", (actUUID1, flowUUID2, ""))]
+                idx = oneProducer "wheat" actUUID1 flowUUID2 ""
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` actUUID1
@@ -456,7 +482,7 @@ spec = do
             -- unit process the export does not carry. Answering with the
             -- Chinese market because both start with "Urea" is not an answer.
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "Urea {RoW}| urea production | Cut-off, S")]
-                idx = M.fromList [("urea", (actUUID1, flowUUID2, ""))]
+                idx = oneProducer "urea" actUUID1 flowUUID2 ""
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil
@@ -472,7 +498,7 @@ spec = do
 
         it "does not touch output reference exchanges" $ do
             let flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
-                idx = M.fromList [("wheat", (actUUID1, flowUUID2, ""))]
+                idx = oneProducer "wheat" actUUID1 flowUUID2 ""
                 ex = refExchange flowUUID1
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "producer" ex
             techActivityLinkId fixed `shouldBe` UUID.nil -- unchanged
@@ -510,7 +536,7 @@ spec = do
                         ]
                 flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "pump")]
                 -- supplier indexed with a mass (kg) reference unit
-                idx = M.fromList [("pump", (actUUID1, flowUUID2, "kg"))]
+                idx = oneProducer "pump" actUUID1 flowUUID2 "kg"
                 -- consumer wants the pump by the piece (item)
                 ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitItemUUID}
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
@@ -521,11 +547,66 @@ spec = do
             let unitKgUUID = read "dddddddd-0000-0000-0000-00000000000b" :: UUID.UUID
                 unitDB = M.fromList [(unitKgUUID, Unit unitKgUUID "kg" "kg" "")]
                 flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "pump")]
-                idx = M.fromList [("pump", (actUUID1, flowUUID2, "kg"))]
+                idx = oneProducer "pump" actUUID1 flowUUID2 "kg"
                 ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitKgUUID}
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
             techActivityLinkId fixed `shouldBe` actUUID1
             usFoundLinks summary `shouldBe` 1
+
+        -- A Brightway Excel workbook names the activity each input buys from,
+        -- and 51 of the products in one real inventory are made by more than
+        -- one activity. The name is what tells them apart.
+        let twoProducers =
+                M.singleton
+                    "electricity"
+                    ( namedProducerOf "coal power plant" actUUID1 flowUUID2 ""
+                        NE.:| [namedProducerOf "wind power plant" actUUID2 flowUUID2 ""]
+                    )
+            electricity = M.fromList [(flowUUID1, minimalFlow flowUUID1 "electricity")]
+            buying supplier = (inputExchange flowUUID1 "GLO"){techSupplierActivity = supplier}
+
+        it "links to the activity the input names, not the ranked first" $ do
+            let (fixed, summary) =
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (Just "Wind power plant"))
+            techActivityLinkId fixed `shouldBe` actUUID2
+            usAmbiguousProducers summary `shouldBe` []
+
+        it "reports the tie when the input names no activity" $ do
+            let (fixed, summary) =
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying Nothing)
+            techActivityLinkId fixed `shouldBe` actUUID1
+            map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
+            map apChosen (usAmbiguousProducers summary) `shouldBe` ["coal power plant"]
+
+        it "leaves the input for the cross-database linker when it names an activity this database has not" $ do
+            -- A row can name an activity of a database this one only depends
+            -- on. Answering it with a local producer of the same product would
+            -- link it here and the cross-database linker, whose index answers
+            -- on the pair, would never see it.
+            let (fixed, summary) =
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (Just "gas power plant"))
+            techActivityLinkId fixed `shouldBe` UUID.nil
+            usMissingLinks summary `shouldBe` 1
+
+        it "reports the tie when several activities carry the name the input gives" $ do
+            -- Two plants of the same name in two locations: the name narrowed
+            -- the field and did not close it, so the ranking chose and says so.
+            let sameName =
+                    M.singleton
+                        "electricity"
+                        ( namedProducerOf "wind power plant" actUUID1 flowUUID2 ""
+                            NE.:| [namedProducerOf "Wind Power Plant" actUUID2 flowUUID2 ""]
+                        )
+                (fixed, summary) =
+                    fixExchangeLinkByName defaultUnitConfig M.empty sameName electricity "consumer" (buying (Just "wind power plant"))
+            techActivityLinkId fixed `shouldBe` actUUID1
+            map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
+
+        it "reports no tie when one activity produces the name" $ do
+            let idx = oneProducer "wheat" actUUID1 flowUUID2 ""
+                flows = M.fromList [(flowUUID1, minimalFlow flowUUID1 "wheat")]
+                (_, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" (inputExchange flowUUID1 "GLO")
+            usAmbiguousProducers summary `shouldBe` []
 
     -- -----------------------------------------------------------------------
     -- fixEcoSpold1ActivityLinks (name-only fallback, EcoSpold1 style)
@@ -668,6 +749,7 @@ spec = do
                     , techRole = role
                     , techActivityLinkId = UUID.nil
                     , techProcessLinkId = Nothing
+                    , techSupplierActivity = Nothing
                     , techLocation = ""
                     , techComment = Nothing
                     , techPedigree = Nothing

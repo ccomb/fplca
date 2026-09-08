@@ -189,6 +189,21 @@ spec = describe "BrightwayExcel.Writer" $ do
                                 `shouldBe` [Just "emission note"]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
 
+        it "round-trips the supplier activity an input names apart from its product" $
+            -- The name column carries the supplier activity, the reference
+            -- product column the product: the parser reads its flow from the
+            -- latter, so the two must not be written as one.
+            withWritten supplierNamedDb $
+                parseBrightwayExcel defaultUnitConfig >=> \case
+                    Left err -> expectationFailure (T.unpack err)
+                    Right (acts, techDB, _, _, _) -> case acts of
+                        [a] -> do
+                            [techSupplierActivity ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a]
+                                `shouldBe` [Just "market for natural gas, high pressure"]
+                            [tfName f | ex@TechnosphereExchange{techRole = Input} <- exchanges a, Just f <- [M.lookup (techFlowId ex) techDB]]
+                                `shouldBe` ["natural gas, high pressure"]
+                        other -> expectationFailure ("expected one activity, got " <> show (length other))
+
         it "(i) canonicalizes a non-canonical reference unit, then is a fixed point" $
             -- The parser normalizes a reference product's unit to canonical at
             -- ingest (g→kg here, scaling 1000→1). So parse(write D) ≠ D for a
@@ -299,6 +314,7 @@ prodExch =
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -316,6 +332,7 @@ gasExch =
         , techRole = Input
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "RoW"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -393,6 +410,7 @@ specialAct =
                 , techRole = ReferenceProduct
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -407,6 +425,7 @@ specialAct =
                 , techRole = Input
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = "RoW"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -488,6 +507,7 @@ refInputAct =
                 , techRole = ReferenceInput
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -519,6 +539,21 @@ commentDb =
         TechnosphereExchange{techRole = Input} -> ex{techComment = Just "input note"}
         TechnosphereExchange{} -> ex
         BiosphereExchange{} -> ex{bioComment = Just "emission note"}
+        WasteExchange{} -> ex
+
+{- | The base fixture whose technosphere input names its supplier activity, as a
+Brightway workbook's @name@ column does when @reference product@ holds the
+product.
+-}
+supplierNamedDb :: SimpleDatabase
+supplierNamedDb =
+    fixtureDb{sdbActivities = M.singleton (generateActivityUUID a, getReferenceProductUUID a) a}
+  where
+    a = elec{exchanges = map named (exchanges elec)}
+    named ex = case ex of
+        TechnosphereExchange{techRole = Input} -> ex{techSupplierActivity = Just "market for natural gas, high pressure"}
+        TechnosphereExchange{} -> ex
+        BiosphereExchange{} -> ex
         WasteExchange{} -> ex
 
 -- | The base fixture carrying a single-paragraph activity-level description.
@@ -573,6 +608,7 @@ kgProduction flow role amount =
         , techRole = role
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -661,6 +697,7 @@ gramRefDb =
                     , techRole = ReferenceProduct
                     , techActivityLinkId = UUID.nil
                     , techProcessLinkId = Nothing
+                    , techSupplierActivity = Nothing
                     , techLocation = "GLO"
                     , techComment = Nothing
                     , techPedigree = Nothing

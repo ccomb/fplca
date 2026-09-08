@@ -85,6 +85,9 @@ module Database.Loader (
     indexActivities,
     UnlinkedSummary (..),
     LocationOverride (..),
+    AmbiguousProducer (..),
+    NameOnlyIndex,
+    NameProducer (..),
     ecoSpold1LinkContext,
     fixAllActivities,
     buildSupplierIndex,
@@ -141,12 +144,13 @@ import Database.CrossLinking (
     LinkWarning (..),
     LinkingContext (..),
     SupplierEntry (..),
+    SupplierQuery (..),
     WasteTreatmentMatch (..),
     defaultLinkingThreshold,
     emptyAliasMap,
     extractBracketedLocation,
-    findSupplierAcrossDatabases,
     findSupplierByActivityProduct,
+    findSupplierInIndexedDBs,
     findWasteTreatmentAcrossDatabases,
     findWasteTreatmentByActivity,
     locationHierarchy,
@@ -319,6 +323,11 @@ History of manual bumps:
 - 28: a compartment's medium is a 'Types.Medium', not text. The stored shape
      changes and the resource flows of a SimaPro-sourced database change
      identity, since the medium is hashed into it.
+- 29: a technosphere line carries the supplier activity its source names apart
+     from the product ('techSupplierActivity'), and the linking stats carry the
+     inputs several activities of one dependency answered equally well. Cached
+     exchanges end before the field, and every field after it would be read at
+     the wrong offset.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -326,7 +335,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 28
+     in hi `xor` lo `xor` 29
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -404,13 +413,28 @@ indexActivities activities =
 -- | Type alias for supplier lookup index (with location)
 type SupplierIndex = M.Map (T.Text, T.Text) (UUID.UUID, UUID.UUID)
 
-{- | Type alias for name-only supplier lookup (for SimaPro)
-Maps normalizedProductName → (activityUUID, productUUID, referenceProductUnit).
+{- | One activity of this database producing a given product name.
+
 The reference-product unit lets the linker reject a candidate whose unit is
 dimensionally incompatible with the consumer exchange (which the matrix builder
-could not convert), instead of forming a link that aborts the whole load.
+could not convert), instead of forming a link that aborts the whole load. The
+activity name is what an input naming its supplier is matched against.
 -}
-type NameOnlyIndex = M.Map T.Text (UUID.UUID, UUID.UUID, T.Text)
+data NameProducer = NameProducer
+    { npActivityUUID :: !UUID.UUID
+    , npProductUUID :: !UUID.UUID
+    , npActivityName :: !T.Text
+    , npLocation :: !T.Text
+    , npObsolete :: !Bool
+    , npReferenceUnit :: !T.Text
+    }
+    deriving (Eq, Show)
+
+{- | Type alias for name-only supplier lookup (for SimaPro and Brightway Excel)
+Maps normalizedProductName → every activity producing it, ranked by
+'producerOrder' so the head is the one the tie-break picks.
+-}
+type NameOnlyIndex = M.Map T.Text (NE.NonEmpty NameProducer)
 
 {- | Name-only supplier lookup for EcoSpold1, mapping a normalized product name
 to every dataset producing it as @(activityUUID, productUUID, location)@.
@@ -446,6 +470,25 @@ data LocationOverride = LocationOverride
     }
     deriving (Eq, Ord, Show)
 
+{- | One input several activities of this database answer equally well.
+
+The winner is then the tie-break's, not the data's: it reads the file's own
+ranking (a block filed under an obsolete category supplies nothing, then
+activity name, then location) and the identifier breaks the last tie. An input
+that names its supplier narrows the field to the activities carrying that name,
+and is counted here only when several of them do. Reported so a modeller can
+say which one was meant.
+-}
+data AmbiguousProducer = AmbiguousProducer
+    { apProduct :: !T.Text
+    -- ^ Product name several activities produce
+    , apChosen :: !T.Text
+    -- ^ Activity the tie-break returned
+    , apCandidates :: !Int
+    -- ^ How many activities answered
+    }
+    deriving (Eq, Ord, Show)
+
 {- | Summary of unlinked exchanges grouped by consumer activity, and of the
 linked ones worth a word.
 'Monoid' is hand-written: bare 'Int' has no canonical instance, and using
@@ -457,19 +500,63 @@ data UnlinkedSummary = UnlinkedSummary
     , usFoundLinks :: !Int
     , usMissingLinks :: !Int
     , usLocationOverrides :: ![LocationOverride]
+    , usAmbiguousProducers :: ![AmbiguousProducer]
     }
     deriving (Show)
 
 instance Semigroup UnlinkedSummary where
-    UnlinkedSummary a1 t1 f1 m1 o1 <> UnlinkedSummary a2 t2 f2 m2 o2 =
-        UnlinkedSummary (M.unionWith (++) a1 a2) (t1 + t2) (f1 + f2) (m1 + m2) (o1 ++ o2)
+    s1 <> s2 =
+        UnlinkedSummary
+            { usActivities = M.unionWith (++) (usActivities s1) (usActivities s2)
+            , usTotalLinks = usTotalLinks s1 + usTotalLinks s2
+            , usFoundLinks = usFoundLinks s1 + usFoundLinks s2
+            , usMissingLinks = usMissingLinks s1 + usMissingLinks s2
+            , usLocationOverrides = usLocationOverrides s1 ++ usLocationOverrides s2
+            , usAmbiguousProducers = usAmbiguousProducers s1 ++ usAmbiguousProducers s2
+            }
 
 instance Monoid UnlinkedSummary where
-    mempty = UnlinkedSummary M.empty 0 0 0 []
+    mempty =
+        UnlinkedSummary
+            { usActivities = M.empty
+            , usTotalLinks = 0
+            , usFoundLinks = 0
+            , usMissingLinks = 0
+            , usLocationOverrides = []
+            , usAmbiguousProducers = []
+            }
+
+-- | Report grouped summary of unlinked exchanges, and of the ties broken blind
+reportUnlinkedSummary :: UnlinkedSummary -> IO ()
+reportUnlinkedSummary summary = do
+    reportUnlinkedActivities summary
+    reportAmbiguousProducers (usAmbiguousProducers summary)
+
+{- | Report the inputs whose supplier the ranking picked among several.
+Deduplicated on (product, chosen activity): one line per choice made, however
+many activities of the database buy that product.
+-}
+reportAmbiguousProducers :: [AmbiguousProducer] -> IO ()
+reportAmbiguousProducers [] = return ()
+reportAmbiguousProducers ties = do
+    reportProgress Warning $
+        printf
+            "%d product(s) several activities of this database answer equally well - nothing in the row says which, so the ranking chose"
+            (length unique)
+    forM_ unique $ \AmbiguousProducer{apProduct, apChosen, apCandidates} ->
+        reportProgress Warning $
+            printf
+                "  - %s - %d producers, linked to %s"
+                (T.unpack apProduct)
+                apCandidates
+                (T.unpack apChosen)
+  where
+    unique :: [AmbiguousProducer]
+    unique = M.elems $ M.fromList [((apProduct t, apChosen t), t) | t <- ties]
 
 -- | Report grouped summary of unlinked exchanges
-reportUnlinkedSummary :: UnlinkedSummary -> IO ()
-reportUnlinkedSummary summary
+reportUnlinkedActivities :: UnlinkedSummary -> IO ()
+reportUnlinkedActivities summary
     | M.null (usActivities summary) = return () -- Nothing to report
     | otherwise = do
         let activities = usActivities summary
@@ -540,17 +627,29 @@ as one, along with an input a retired block supplies.
 -}
 buildSupplierIndexByName :: UnitDB -> ActivityMap -> TechFlowDB -> NameOnlyIndex
 buildSupplierIndexByName unitDB activities techFlowDb =
-    M.map (\candidates -> let (_, _, _, _, entry) = minimum candidates in entry) $
+    M.map (NE.sortWith producerOrder) $
         M.fromListWith
             (<>)
             [ ( normalizeText (tfName flow)
-              , [(activityIsObsolete act, activityName act, activityLocation act, actUUID, (actUUID, prodUUID, getUnitNameForExchange unitDB ex))]
+              , NameProducer
+                    { npActivityUUID = actUUID
+                    , npProductUUID = prodUUID
+                    , npActivityName = activityName act
+                    , npLocation = activityLocation act
+                    , npObsolete = activityIsObsolete act
+                    , npReferenceUnit = getUnitNameForExchange unitDB ex
+                    }
+                    NE.:| []
               )
             | ((actUUID, prodUUID), act) <- M.toList activities
             , ex <- exchanges act
             , exchangeIsReference ex
             , Just flow <- [M.lookup (exchangeFlowId ex) techFlowDb]
             ]
+
+-- | The rank a producer holds among those sharing a product name.
+producerOrder :: NameProducer -> (Bool, T.Text, T.Text, UUID.UUID)
+producerOrder p = (npObsolete p, npActivityName p, npLocation p, npActivityUUID p)
 
 {- | Build the name-only supplier index for EcoSpold1 linking, keeping every
 dataset a name covers rather than the last one seen.
@@ -681,10 +780,13 @@ Returns (fixed exchange, UnlinkedSummary)
 fixExchangeLink :: ExchangeLinkContext -> Activity -> Exchange -> (Exchange, UnlinkedSummary)
 fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
     | role == Input || role == ReferenceInput =
-        let linked overrides actUUID prodUUID = (ex{techFlowId = prodUUID, techActivityLinkId = actUUID}, UnlinkedSummary M.empty 1 1 0 overrides)
+        let linked overrides actUUID prodUUID =
+                ( ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
+                , mempty{usTotalLinks = 1, usFoundLinks = 1, usLocationOverrides = overrides}
+                )
             unlinked flow lookupLoc =
                 let ue = UnlinkedExchange (tfName flow) lookupLoc
-                 in (ex, UnlinkedSummary (M.singleton (activityName consumer) [ue]) 1 0 1 [])
+                 in (ex, mempty{usActivities = M.singleton (activityName consumer) [ue], usTotalLinks = 1, usMissingLinks = 1})
          in case M.lookup fid elcFlowDB of
                 Just flow ->
                     -- Tier 1: dataset-number lookup with name validation
@@ -710,7 +812,7 @@ fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlo
                                             Just (actUUID, prodUUID, _) -> linked [] actUUID prodUUID
                                             Nothing -> unlinked flow lookupLoc
                 Nothing ->
-                    (ex, UnlinkedSummary M.empty 1 0 1 [])
+                    (ex, mempty{usTotalLinks = 1, usMissingLinks = 1})
     | otherwise = (ex, mempty)
   where
     declaredLoc :: T.Text
@@ -986,36 +1088,87 @@ reference-product unit is dimensionally compatible with the consumer exchange
 forming a link the matrix builder cannot convert — which would otherwise abort
 the whole load.
 
+An input that names the activity it buys from is honoured first: a product name
+several activities of the database produce says which one only when the source
+also names it, and a Brightway Excel workbook does. The ranked head is the
+fallback, and when it decides alone among several the tie is reported.
+
 There is no second guess. An input naming a product no activity of this
 database produces stays unlinked, and the cross-database linker gets its turn
 on it. Returns (fixed exchange, UnlinkedSummary).
 -}
 fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techLocation = loc}
+fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techSupplierActivity = claimed, techLocation = loc}
     | role == Input || role == ReferenceInput || role == AvoidedProduct =
         case M.lookup fid techFlowDb of
             Just flow ->
                 let key = normalizeText (tfName flow)
                     consumerUnit = getUnitNameForExchange unitDB ex
-                    relink actUUID prodUUID = ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
+                    relink p = ex{techFlowId = npProductUUID p, techActivityLinkId = npActivityUUID p}
                     -- Accept a candidate only when its reference unit can convert.
-                    accept (actUUID, prodUUID, supplierUnit)
-                        | linkUnitsCompatible unitConfig consumerUnit supplierUnit = Just (actUUID, prodUUID)
+                    accept p
+                        | linkUnitsCompatible unitConfig consumerUnit (npReferenceUnit p) = Just p
                         | otherwise = Nothing
-                 in case M.lookup key idx >>= accept of
-                        Just (actUUID, prodUUID) ->
-                            (relink actUUID prodUUID, UnlinkedSummary M.empty 1 1 0 [])
-                        Nothing ->
-                            let unlinked = UnlinkedExchange (tfName flow) loc
-                                unlinkedMap = M.singleton consumerName [unlinked]
-                             in (ex, UnlinkedSummary unlinkedMap 1 0 1 [])
+                    unlinked =
+                        ( ex
+                        , mempty
+                            { usActivities = M.singleton consumerName [UnlinkedExchange (tfName flow) loc]
+                            , usTotalLinks = 1
+                            , usMissingLinks = 1
+                            }
+                        )
+                 in case M.lookup key idx >>= answering claimed of
+                        Nothing -> unlinked
+                        Just answers -> case accept (NE.head answers) of
+                            Nothing -> unlinked
+                            Just p ->
+                                ( relink p
+                                , mempty
+                                    { usTotalLinks = 1
+                                    , usFoundLinks = 1
+                                    , usAmbiguousProducers = tiedOn (tfName flow) answers
+                                    }
+                                )
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
-                (ex, UnlinkedSummary M.empty 1 0 1 [])
+                (ex, mempty{usTotalLinks = 1, usMissingLinks = 1})
     | otherwise = (ex, mempty) -- Reference products: nothing to relink
 fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
 fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
+
+{- | The producers that answer an input, best first.
+
+An input naming no activity is answered by every producer of the product it
+asks for. One that names an activity is answered by the producers carrying that
+name, and by nothing else: a name this database does not carry is a reference
+to another database, so the input stays here unlinked and the cross-database
+linker gets its turn on it. The name is matched the way every other name here
+is, on 'normalizeText'.
+-}
+answering :: Maybe T.Text -> NE.NonEmpty NameProducer -> Maybe (NE.NonEmpty NameProducer)
+answering Nothing producers = Just producers
+answering (Just name) producers = NE.nonEmpty (NE.filter named producers)
+  where
+    named :: NameProducer -> Bool
+    named p = normalizeText name == normalizeText (npActivityName p)
+
+{- | The tie an input left the ranking to break: several producers answered it
+equally well, and nothing in the row says which.
+-}
+tiedOn :: T.Text -> NE.NonEmpty NameProducer -> [AmbiguousProducer]
+tiedOn productName answers
+    | count <= 1 = []
+    | otherwise =
+        [ AmbiguousProducer
+            { apProduct = productName
+            , apChosen = npActivityName (NE.head answers)
+            , apCandidates = count
+            }
+        ]
+  where
+    count :: Int
+    count = NE.length answers
 
 {- | Recursively collect files under @dir@ whose lowercased extension matches
 @ext@. Lets an EcoSpold package load from its root even when the .spold datasets
@@ -2060,7 +2213,9 @@ cascade:
    dataset author's own disambiguation, no guessing. Nil-link inputs skip this
    tier (they carry no identity).
 2. __Attribute matching__ — name / location / unit scoring
-   ('findSupplierAcrossDatabases'), the matcher every other cross-link uses.
+   ('findSupplierInIndexedDBs'), the matcher every other cross-link uses. It
+   narrows on the supplier activity the source named, where it named one apart
+   from the product, before falling back to the product name alone.
    When a *non-nil* input falls through to here its source activity was absent
    from every dependency, so the match is a likely cross-version stitch,
    recorded in 'cdlAttributeFallbacks' for the consumer to verify.
@@ -2080,7 +2235,7 @@ findExchangeCrossDBLink ::
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techSupplierActivity = supplier, techLocation = loc}
     | namesASupplier ex && not resolvesInternally =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
@@ -2121,8 +2276,16 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                                 flowUnitName
                      in mempty{cdlLinks = [crossLink]}
                 [] -> attributeMatch flow flowUnitName
+    supplierQuery :: TechnosphereFlow -> T.Text -> SupplierQuery
+    supplierQuery flow flowUnitName =
+        SupplierQuery
+            { sqProductName = tfName flow
+            , sqSupplierActivity = supplier
+            , sqLocation = loc
+            , sqUnit = flowUnitName
+            }
     attributeMatch flow flowUnitName =
-        case findSupplierAcrossDatabases ctx (tfName flow) loc flowUnitName of
+        case findSupplierInIndexedDBs ctx (supplierQuery flow flowUnitName) of
             result@CrossDBLinked{} ->
                 let !crossLink =
                         mkTechLink
@@ -2153,10 +2316,24 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                             }
                         | linkId /= UUID.nil
                         ]
+                    -- Several activities of the supplier database answered this
+                    -- input equally well: the winner is the ranking's, not the
+                    -- data's.
+                    ambiguities =
+                        [ SupplierAmbiguity
+                            { saProduct = tfName flow
+                            , saRequested = loc
+                            , saChosen = chosen
+                            , saCandidates = candidates
+                            , saSourceDatabase = cdlrDatabaseName result
+                            }
+                        | AmbiguousSupplier chosen candidates <- cdlrWarnings result
+                        ]
                  in mempty
                         { cdlLinks = [crossLink]
                         , cdlLocationFallbacks = locFallbacks
                         , cdlAttributeFallbacks = attrFallbacks
+                        , cdlSupplierAmbiguities = ambiguities
                         }
             CrossDBNotLinked blocker
                 -- Nil-link inputs report a rich blocker; a non-nil dangling input
@@ -2350,6 +2527,25 @@ reportCrossDBLinkingStats nActivities stats = do
                     (T.unpack afRequested)
                     (T.unpack afMatched)
                     (T.unpack afSourceDatabase)
+
+    -- Ambiguous suppliers: several activities of one dependency tied for the
+    -- same input, so the winner is the ranking's and not the data's.
+    let !uniqueAmbiguities = deduplicateSupplierAmbiguities (cdlSupplierAmbiguities stats)
+        !nAmbiguities = length uniqueAmbiguities
+    when (nAmbiguities > 0) $ do
+        reportProgress Warning $
+            printf
+                "%d input(s) several activities of one dependency answer equally well - name the supplier meant, by its activity name or a relink mapping"
+                nAmbiguities
+        forM_ uniqueAmbiguities $ \SupplierAmbiguity{saProduct, saRequested, saChosen, saCandidates, saSourceDatabase} ->
+            reportProgress Warning $
+                printf
+                    "  - %s [%s] - %d candidates in %s, linked to %s"
+                    (T.unpack saProduct)
+                    (T.unpack saRequested)
+                    saCandidates
+                    (T.unpack saSourceDatabase)
+                    (T.unpack saChosen)
 
 showBlocker :: LinkBlocker -> String
 showBlocker NoNameMatch = "Not found"

@@ -89,6 +89,7 @@ refEx fid =
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -107,6 +108,7 @@ inputEx flowId linkId =
         , techRole = Input
         , techActivityLinkId = linkId
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -195,6 +197,30 @@ spec = do
                 stats = runLinks fg [bg]
             length (cdlLinks stats) `shouldBe` 1
             cdlAttributeFallbacks stats `shouldBe` []
+
+    describe "findExchangeCrossDBLink (two producers of one product)" $ do
+        -- The shape a Brightway foreground meets in a background database: one product name,
+        -- one location, several activities publishing it.
+        let twoProducers =
+                indexBg $
+                    mkDB
+                        [ ((supAct, supProd), mkActivity "market for widget" "GLO" [refEx supProd])
+                        , ((newAct, supProd), mkActivity "widget production, on site" "GLO" [refEx supProd])
+                        ]
+                        [mkFlow supProd "widget"]
+            consumerOf ex = mkDB [((cAct, cProd), mkActivity "consumer" "GLO" [refEx cProd, ex])] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
+
+        it "reports the tie when the input names no supplier activity" $ do
+            let stats = runLinks (consumerOf (inputEx supProd UUID.nil)) [twoProducers]
+            map (\a -> (saProduct a, saCandidates a, saSourceDatabase a)) (cdlSupplierAmbiguities stats)
+                `shouldBe` [("widget", 2, "bg")]
+
+        it "links to the named activity and reports no tie" $ do
+            let named = (inputEx supProd UUID.nil){techSupplierActivity = Just "widget production, on site"}
+                stats = runLinks (consumerOf named) [twoProducers]
+            map (\l -> (cdlSupplierActUUID l, cdlSourceDatabase l)) (cdlLinks stats)
+                `shouldBe` [(newAct, "bg")]
+            cdlSupplierAmbiguities stats `shouldBe` []
 
     describe "collectStagedDanglingProductNames (duplicate product flow)" $ do
         it "still names a residual gap when only one of two same-product inputs is covered" $ do

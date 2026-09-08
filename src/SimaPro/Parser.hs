@@ -1212,6 +1212,7 @@ productToExchange unitCfg env role ProductRow{..} =
                 , techRole = role
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , -- Preserve the location encoded on the Products row (e.g.
                   -- WFLDB writes "Product (WFLDB)/m2/GLO U" while the
                   -- enclosing Process name may be "/CH"). The activity's
@@ -1323,6 +1324,7 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
                 , techRole = Input
                 , techActivityLinkId = UUID.nil
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = location
                 , techComment = cleanedComment
                 , techPedigree = pedigree

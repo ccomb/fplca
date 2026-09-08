@@ -242,6 +242,7 @@ import Types (
     Medium (..),
     SimpleDatabase (..),
     SparseTriple (..),
+    SupplierAmbiguity (..),
     UUID,
     Unit (..),
     UnitDB,
@@ -255,6 +256,7 @@ import Types (
     crossDBRedundantSources,
     deduplicateAttributeFallbacks,
     deduplicateFallbacks,
+    deduplicateSupplierAmbiguities,
     deduplicateUnresolved,
     enrichBioFlowCAS,
     flowClosure,
@@ -418,6 +420,12 @@ data DatabaseSetupInfo = DatabaseSetupInfo
     {- ^ Source-identity inputs (non-nil 'activityLinkId') matched by attributes
     because no loaded dependency shipped the exact activity, a likely
     cross-version stitch the consumer should verify against the source release.
+    -}
+    , dsiSupplierAmbiguities :: ![SupplierAmbiguity]
+    {- ^ Inputs several activities of one dependency answered equally well, so
+    the supplier linked is the ranking's choice and not the data's. Named here
+    as well as in the load report, because the setup page is where the other
+    link diagnostics are read.
     -}
     , dsiDataPath :: !Text
     -- ^ Current selected data path (relative)
@@ -3303,6 +3311,7 @@ setupInfoFrom SetupSource{..} =
         , dsiLocationFallbacks = deduplicateFallbacks (cdlLocationFallbacks ssStats)
         , dsiLocationUnresolved = deduplicateUnresolved (cdlLocationUnresolved ssStats)
         , dsiAttributeFallbacks = deduplicateAttributeFallbacks (cdlAttributeFallbacks ssStats)
+        , dsiSupplierAmbiguities = deduplicateSupplierAmbiguities (cdlSupplierAmbiguities ssStats)
         , dsiDataPath = T.pack (dcPath ssConfig)
         , dsiAvailablePaths = []
         , dsiIsLoaded = case ssOrigin of

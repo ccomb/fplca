@@ -192,7 +192,7 @@ spec = do
                         , lcGeographyPolicy = GeoGlobal
                         , lcSupplierAliases = emptyAliasMap
                         }
-            case findSupplierInIndexedDBs ctx "product Y" "GLO" "kg" of
+            case findSupplierInIndexedDBs ctx (query "product Y" "GLO" "kg") of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked reason -> expectationFailure $ "Expected link but got: " ++ show reason
 
@@ -208,7 +208,7 @@ spec = do
                         , lcGeographyPolicy = GeoGlobal
                         , lcSupplierAliases = emptyAliasMap
                         }
-            case findSupplierInIndexedDBs ctx "no such product" "GLO" "kg" of
+            case findSupplierInIndexedDBs ctx (query "no such product" "GLO" "kg") of
                 CrossDBNotLinked _ -> return ()
                 CrossDBLinked{} -> expectationFailure "Expected CrossDBNotLinked"
 
@@ -225,7 +225,7 @@ spec = do
                         , lcSupplierAliases = emptyAliasMap
                         }
             -- "product Y" exists in kg; asking for m3 should fail unit check
-            case findSupplierInIndexedDBs ctx "product Y" "GLO" "m3" of
+            case findSupplierInIndexedDBs ctx (query "product Y" "GLO" "m3") of
                 CrossDBNotLinked UnitIncompatible{} -> return ()
                 CrossDBNotLinked reason -> expectationFailure $ "Expected UnitIncompatible but got: " ++ show reason
                 CrossDBLinked{} -> expectationFailure "Expected CrossDBNotLinked for unit mismatch"
@@ -245,7 +245,7 @@ spec = do
                         , lcSupplierAliases = emptyAliasMap
                         }
             -- Synonym lookup: "producto y" → group containing "product y" → supplier
-            case findSupplierInIndexedDBs ctx "producto y" "GLO" "kg" of
+            case findSupplierInIndexedDBs ctx (query "producto y" "GLO" "kg") of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked _ -> pendingWith "synonym linking requires index to be built with synDB"
 
@@ -263,7 +263,7 @@ spec = do
                         }
             -- "product Y {GLO}" compound name with empty location arg
             -- extractBracketedLocation will find "GLO"
-            case findSupplierInIndexedDBs ctx "product Y {GLO}" "" "kg" of
+            case findSupplierInIndexedDBs ctx (query "product Y {GLO}" "" "kg") of
                 CrossDBLinked{cdlrScore = score} -> score `shouldSatisfy` (>= defaultLinkingThreshold)
                 CrossDBNotLinked _ -> pendingWith "Compound name location extraction may not match"
 
@@ -315,14 +315,14 @@ spec = do
 
         it "GeoGlobal accepts FR query against a GLO candidate" $ do
             idb <- loadMin3IndexedDB
-            case findSupplierInIndexedDBs (mkCtx GeoGlobal idb) "product Y" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx GeoGlobal idb) (query "product Y" "FR" "kg") of
                 CrossDBLinked{cdlrLocation = loc} -> loc `shouldBe` "GLO"
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected link under GeoGlobal but got: " ++ show reason
 
         it "GeoExact rejects FR query against a GLO candidate with kind=GlobalLoc" $ do
             idb <- loadMin3IndexedDB
-            case findSupplierInIndexedDBs (mkCtx GeoExact idb) "product Y" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx GeoExact idb) (query "product Y" "FR" "kg") of
                 CrossDBNotLinked LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = actLoc, lrBestKind = kind} -> do
                     req `shouldBe` "FR"
                     actLoc `shouldBe` "GLO"
@@ -333,12 +333,70 @@ spec = do
 
         it "GeoParent also rejects a GLO candidate (parent-only does not include global)" $ do
             idb <- loadMin3IndexedDB
-            case findSupplierInIndexedDBs (mkCtx GeoParent idb) "product Y" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx GeoParent idb) (query "product Y" "FR" "kg") of
                 CrossDBNotLinked LocationRejectedByPolicy{lrBestKind = kind} ->
                     kind `shouldBe` GlobalLoc
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected LocationRejectedByPolicy GlobalLoc but got: " ++ show reason
                 CrossDBLinked{} -> expectationFailure "Expected rejection under GeoParent"
+
+    -- -----------------------------------------------------------------------
+    -- findSupplierInIndexedDBs — two activities, one product, one location.
+    -- The background shape: "electricity, medium voltage" in GLO is the
+    -- reference product of a market group and of 26 cut-off co-outputs, so the
+    -- product name alone cannot say which the source meant.
+    -- -----------------------------------------------------------------------
+    describe "findSupplierInIndexedDBs (two producers of one product)" $ do
+        let ctx =
+                LinkingContext
+                    { lcIndexedDatabases = [buildIndexedDatabase "background" emptySynonymDB twoProducerDB]
+                    , lcSynonymDB = emptySynonymDB
+                    , lcUnitConfig = defaultUnitConfig
+                    , lcThreshold = defaultLinkingThreshold
+                    , lcLocationHierarchy = locationHierarchy
+                    , lcGeographyPolicy = GeoGlobal
+                    , lcSupplierAliases = emptyAliasMap
+                    }
+            electricity = "electricity, medium voltage"
+
+        it "links to the activity the demand names, not to the other producer" $
+            forM_ [marketActivity, landfillActivity] $ \(name, uuid) ->
+                case findSupplierInIndexedDBs ctx (queryFrom name electricity "GLO" "kWh") of
+                    CrossDBLinked{cdlrActivityUUID = linked} -> linked `shouldBe` uuid
+                    CrossDBNotLinked reason ->
+                        expectationFailure $ "Expected a link for " ++ show name ++ " but got: " ++ show reason
+
+        it "warns that the suppliers tied when the demand names none" $
+            case findSupplierInIndexedDBs ctx (query electricity "GLO" "kWh") of
+                CrossDBLinked{cdlrWarnings = warnings} ->
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` [2]
+                CrossDBNotLinked reason -> expectationFailure $ "Expected a link but got: " ++ show reason
+
+        it "does not warn once the demand names its supplier" $
+            case findSupplierInIndexedDBs ctx (queryFrom (fst marketActivity) electricity "GLO" "kWh") of
+                CrossDBLinked{cdlrWarnings = warnings} ->
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` []
+                CrossDBNotLinked reason -> expectationFailure $ "Expected a link but got: " ++ show reason
+
+        it "falls back to the product name when no dependency ships the named activity" $
+            case findSupplierInIndexedDBs ctx (queryFrom "market for electricity, from another release" electricity "GLO" "kWh") of
+                CrossDBLinked{cdlrProductName = linked} -> linked `shouldBe` electricity
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected the product-name fallback but got: " ++ show reason
+
+        it "prefers the named activity among a synonym group's candidates" $ do
+            -- The dependency spells the product otherwise, so only the synonym
+            -- group answers and the (activity, product) index cannot. Both
+            -- producers come back; the activity name still says which is meant.
+            let oldName = "electricity, medium voltage, at grid"
+                synDB = buildFromPairs [(electricity, oldName)]
+                synCtx = ctx{lcIndexedDatabases = [buildIndexedDatabase "background" synDB twoProducerDB], lcSynonymDB = synDB}
+            case findSupplierInIndexedDBs synCtx (queryFrom (fst landfillActivity) oldName "GLO" "kWh") of
+                CrossDBLinked{cdlrActivityUUID = linked, cdlrWarnings = warnings} -> do
+                    linked `shouldBe` snd landfillActivity
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` []
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected a synonym link but got: " ++ show reason
 
     -- -----------------------------------------------------------------------
     -- supplierLocations & buildSupplierEntries — split-location indexing.
@@ -401,6 +459,7 @@ mkRefExchangeAt loc =
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = loc
         , techComment = Nothing
         , techPedigree = Nothing
@@ -448,6 +507,45 @@ loadMin3IndexedDB = do
         Left err -> error $ "Failed to load SAMPLE.min3: " ++ show err
         Right simpleDb -> return $ buildIndexedDatabase "SAMPLE.min3" emptySynonymDB simpleDb
 
+-- | The two activities of 'twoProducerDB': name and activity UUID.
+marketActivity, landfillActivity :: (Text, UUID.UUID)
+marketActivity = ("market group for electricity, medium voltage", read "cccccccc-0000-0000-0000-000000000002")
+landfillActivity = ("treatment of hard coal ash, sanitary landfill", read "cccccccc-0000-0000-0000-000000000003")
+
+{- | Two activities of one database whose reference product is the same flow at
+the same location, as a market group and its cut-off co-outputs are.
+-}
+twoProducerDB :: SimpleDatabase
+twoProducerDB =
+    SimpleDatabase
+        { sdbActivities = M.fromList [((uuid, flowUUID), producer name) | (name, uuid) <- [marketActivity, landfillActivity]]
+        , sdbTechFlows = M.singleton flowUUID flow
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.empty
+        , sdbUnits = M.empty
+        }
+  where
+    flowUUID = read "aaaaaaaa-0000-0000-0000-000000000002"
+    producer name = (mkActivityAt "GLO"){activityName = name, activityUnit = "kWh", exchanges = [(mkRefExchangeAt "GLO"){techFlowId = flowUUID}]}
+    flow =
+        TechnosphereFlow
+            { tfId = flowUUID
+            , tfName = "electricity, medium voltage"
+            , tfUnitId = UUID.nil
+            , tfSynonyms = M.empty
+            , tfCAS = Nothing
+            , tfSubstanceId = Nothing
+            }
+
 -- | An unresolved product with @n@ demands behind it, blocked by @b@.
 unresolved :: Int -> LinkBlocker -> UnresolvedProduct
 unresolved n b = UnresolvedProduct{upDemands = n, upBlocker = b}
+
+-- | A demand that names no supplier activity: product, location, unit.
+query :: Text -> Text -> Text -> SupplierQuery
+query p loc u =
+    SupplierQuery{sqProductName = p, sqSupplierActivity = Nothing, sqLocation = loc, sqUnit = u}
+
+-- | The same demand, naming the supplier activity its source states.
+queryFrom :: Text -> Text -> Text -> Text -> SupplierQuery
+queryFrom activity p loc u = (query p loc u){sqSupplierActivity = Just activity}

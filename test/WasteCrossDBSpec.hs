@@ -31,6 +31,7 @@ spec = describe "Cross-DB waste-treatment matching" $ do
                 , seLocation = "RoW"
                 , seUnit = "kg"
                 , seProductName = nm
+                , seActivityName = "treatment of " <> nm
                 , seRefSign = 1.0
                 }
 
@@ -42,6 +43,7 @@ spec = describe "Cross-DB waste-treatment matching" $ do
                 , idbBySynonymGroup = M.empty
                 , idbWasteTreatmentByFlowUUID = M.fromListWith (++) [(u, [e]) | (u, e) <- uuidEntries]
                 , idbWasteTreatmentByCanonicalName = M.fromListWith (++) [(n, [e]) | (n, e) <- nameEntries]
+                , idbByActivityAndProductName = M.empty
                 , idbByActivityProduct = M.empty
                 }
 
@@ -102,6 +104,7 @@ spec = describe "Cross-DB waste-treatment matching" $ do
                     , idbBySynonymGroup = M.empty
                     , idbWasteTreatmentByFlowUUID = M.singleton wasteUUID [entryFR, entryDE]
                     , idbWasteTreatmentByCanonicalName = M.empty
+                    , idbByActivityAndProductName = M.empty
                     , idbByActivityProduct = M.empty
                     }
             ctx = ctxWith [ecoinventMulti]

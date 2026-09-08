@@ -117,6 +117,7 @@ techExchange fid amount role =
         , techRole = role
         , techActivityLinkId = UUID.nil
         , techProcessLinkId = Nothing
+        , techSupplierActivity = Nothing
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing

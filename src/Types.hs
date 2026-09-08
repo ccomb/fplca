@@ -374,6 +374,17 @@ data Exchange
         , techRole :: !TechRole -- Role within the activity
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
         , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
+        , techSupplierActivity :: !(Maybe Text)
+        {- ^ The supplier activity the source names /by name/, when it names one.
+        EcoSpold 2 and ILCD designate theirs by identifier ('techActivityLinkId'),
+        SimaPro folds it into the product name, and Brightway Excel puts it in a
+        column of its own — the one source whose designation used to be dropped,
+        leaving the linker to pick between the 27 activities of a released background
+        database whose
+        reference product is "electricity, medium voltage" in GLO. Records what
+        the source said and is never rewritten by linking, unlike
+        'techActivityLinkId', which the load overwrites with what it resolved to.
+        -}
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , techPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
@@ -1901,6 +1912,30 @@ data AttributeFallback = AttributeFallback
     deriving (Show, Eq, Generic, NFData, Store)
     deriving (ToJSON, FromJSON, ToSchema) via (Stripped AttributeFallback)
 
+{- | One input several activities of the same dependency answer equally well.
+
+Their scores tie, so the ranking's winner is a choice nothing in the data made:
+in a released background database, @electricity, medium voltage@ in GLO is the reference
+product of 27 activities, and most of them are cut-off co-outputs carrying no
+burden — linking to one of those rather than the market group is off by orders
+of magnitude, in the quiet direction. Reported so the consumer can name the
+supplier it meant, by the activity name its source states or a relink mapping.
+-}
+data SupplierAmbiguity = SupplierAmbiguity
+    { saProduct :: !Text
+    -- ^ Consumer-side product name that was matched
+    , saRequested :: !Text
+    -- ^ Location requested by the consumer input
+    , saChosen :: !Text
+    -- ^ Activity the ranking returned
+    , saCandidates :: !Int
+    -- ^ How many activities of that database tied for it
+    , saSourceDatabase :: !Text
+    -- ^ Dependency the tie is inside
+    }
+    deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SupplierAmbiguity)
+
 {- | One product no dependency supplies: how many activities asked for it,
 and what stopped the first of them.
 
@@ -1934,6 +1969,8 @@ data CrossDBLinkingStats = CrossDBLinkingStats
     -- ^ Inputs rejected by policy or with no candidate
     , cdlAttributeFallbacks :: ![AttributeFallback]
     -- ^ Source-identity inputs matched by attributes instead (cross-version)
+    , cdlSupplierAmbiguities :: ![SupplierAmbiguity]
+    -- ^ Inputs several activities of one dependency answered equally well
     , cdlTotalInputs :: !Int
     -- ^ Total technosphere inputs at time of linking
     , cdlWasteExactLinks :: !Int
@@ -1958,6 +1995,7 @@ instance Semigroup CrossDBLinkingStats where
             , cdlLocationFallbacks = cdlLocationFallbacks s1 <> cdlLocationFallbacks s2
             , cdlLocationUnresolved = cdlLocationUnresolved s1 <> cdlLocationUnresolved s2
             , cdlAttributeFallbacks = cdlAttributeFallbacks s1 <> cdlAttributeFallbacks s2
+            , cdlSupplierAmbiguities = cdlSupplierAmbiguities s1 <> cdlSupplierAmbiguities s2
             , cdlTotalInputs = cdlTotalInputs s1 + cdlTotalInputs s2
             , cdlWasteExactLinks = cdlWasteExactLinks s1 + cdlWasteExactLinks s2
             , cdlWasteAmbiguous = cdlWasteAmbiguous s1 + cdlWasteAmbiguous s2
@@ -1975,6 +2013,7 @@ instance Monoid CrossDBLinkingStats where
             , cdlLocationFallbacks = []
             , cdlLocationUnresolved = []
             , cdlAttributeFallbacks = []
+            , cdlSupplierAmbiguities = []
             , cdlTotalInputs = 0
             , cdlWasteExactLinks = 0
             , cdlWasteAmbiguous = 0
@@ -2004,6 +2043,14 @@ deduplicateAttributeFallbacks =
         . M.toList
         . M.fromListWith (\_ b -> b)
         . map (\a -> ((afProduct a, afRequested a), a))
+
+-- | Deduplicate supplier ambiguities by (product, requestedLoc)
+deduplicateSupplierAmbiguities :: [SupplierAmbiguity] -> [SupplierAmbiguity]
+deduplicateSupplierAmbiguities =
+    map snd
+        . M.toList
+        . M.fromListWith (\_ b -> b)
+        . map (\a -> ((saProduct a, saRequested a), a))
 
 -- | Number of resolved cross-DB links
 crossDBLinksCount :: CrossDBLinkingStats -> Int

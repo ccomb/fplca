@@ -283,6 +283,7 @@ supplierDB offset products =
                         , techRole = ReferenceProduct
                         , techActivityLinkId = actUUID
                         , techProcessLinkId = Nothing
+                        , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing

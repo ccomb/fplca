@@ -523,6 +523,7 @@ milkActivity =
                 , techRole = ReferenceProduct
                 , techActivityLinkId = supplierActId
                 , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing

@@ -27,6 +27,7 @@ import Database.CrossLinking (
     CrossDBLinkResult (..),
     IndexedDatabase,
     LinkingContext (..),
+    SupplierQuery (..),
     buildIndexedDatabase,
     defaultLinkingThreshold,
     emptyAliasMap,
@@ -83,6 +84,7 @@ targetDB =
                         , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
                         , techProcessLinkId = Nothing
+                        , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
@@ -240,27 +242,27 @@ spec = do
 
     describe "findSupplierInIndexedDBs with supplier aliases" $ do
         it "does NOT link the aliased consumer name without the alias map" $
-            case findSupplierInIndexedDBs (mkCtx emptyAliasMap) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx emptyAliasMap) (aliasQuery consumerName "FR" "kg") of
                 CrossDBNotLinked NoNameMatch -> pure ()
                 CrossDBNotLinked other -> expectationFailure $ "Expected NoNameMatch, got: " ++ show other
                 CrossDBLinked{} -> expectationFailure "Expected no link without alias map"
 
         it "links the aliased consumer name to the target via the alias map" $
-            case findSupplierInIndexedDBs (mkCtx aliasMap) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx aliasMap) (aliasQuery consumerName "FR" "kg") of
                 CrossDBLinked{cdlrProductName = name, cdlrDatabaseName = db} -> do
                     name `shouldBe` "wheat production"
                     db `shouldBe` "background"
                 CrossDBNotLinked reason -> expectationFailure $ "Expected link, got: " ++ show reason
 
         it "scores name(50) + exact-location(30) = 80 for an FR→FR alias link" $
-            case findSupplierInIndexedDBs (mkCtx aliasMap) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx aliasMap) (aliasQuery consumerName "FR" "kg") of
                 CrossDBLinked{cdlrScore = score, cdlrLocation = loc} -> do
                     score `shouldBe` 80
                     loc `shouldBe` "FR"
                 CrossDBNotLinked reason -> expectationFailure $ "Expected link, got: " ++ show reason
 
         it "surfaces a unit mismatch as UnitIncompatible, never a silent drop" $
-            case findSupplierInIndexedDBs (mkCtx aliasMap) consumerName "FR" "m3" of
+            case findSupplierInIndexedDBs (mkCtx aliasMap) (aliasQuery consumerName "FR" "m3") of
                 CrossDBNotLinked UnitIncompatible{uiQueryUnit = req, uiSupplierUnit = got} -> do
                     req `shouldBe` "m3"
                     got `shouldBe` "kg"
@@ -270,7 +272,7 @@ spec = do
         it "resolves a name without an alias row independently of the mapping" $
             -- The target's own canonical name resolves directly; a mapping
             -- must never change the behaviour of names it doesn't mention.
-            case findSupplierInIndexedDBs (mkCtx aliasMap) "wheat production" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx aliasMap) (aliasQuery "wheat production" "FR" "kg") of
                 CrossDBLinked{cdlrScore = score} -> score `shouldBe` 80
                 CrossDBNotLinked reason -> expectationFailure $ "Expected direct link, got: " ++ show reason
 
@@ -279,7 +281,7 @@ spec = do
             -- curator redirected it to CH: the row must win, otherwise a
             -- curated answer could be silently overridden.
             let redirect = singletonAlias (AliasKey "wheat production" Nothing) (AliasTarget "wheat production" (Just "CH"))
-            case findSupplierInIndexedDBs (mkCtx redirect) "wheat production" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx redirect) (aliasQuery "wheat production" "FR" "kg") of
                 CrossDBLinked{cdlrLocation = loc} -> loc `shouldBe` "CH"
                 CrossDBNotLinked reason -> expectationFailure $ "Expected CH link, got: " ++ show reason
 
@@ -287,13 +289,13 @@ spec = do
             -- GeoExact would reject CH for an FR demand; the curator's pinned
             -- location is a deliberate designation, so it bypasses the policy.
             let pinned = singletonAlias (AliasKey consumerName Nothing) (AliasTarget "wheat production" (Just "CH"))
-            case findSupplierInIndexedDBs (mkCtxPolicy GeoExact pinned) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtxPolicy GeoExact pinned) (aliasQuery consumerName "FR" "kg") of
                 CrossDBLinked{cdlrLocation = loc} -> loc `shouldBe` "CH"
                 CrossDBNotLinked reason -> expectationFailure $ "Expected CH link, got: " ++ show reason
 
         it "reports a designated target name that matches nowhere" $ do
             let missing = singletonAlias (AliasKey consumerName Nothing) (AliasTarget "no such product" (Just "CH"))
-            case findSupplierInIndexedDBs (mkCtx missing) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx missing) (aliasQuery consumerName "FR" "kg") of
                 CrossDBNotLinked (AliasTargetMissing name loc) -> do
                     name `shouldBe` "no such product"
                     loc `shouldBe` Nothing
@@ -301,7 +303,7 @@ spec = do
 
         it "reports a designated target that exists but not at the pinned location" $ do
             let wrongLoc = singletonAlias (AliasKey consumerName Nothing) (AliasTarget "wheat production" (Just "DE"))
-            case findSupplierInIndexedDBs (mkCtx wrongLoc) consumerName "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx wrongLoc) (aliasQuery consumerName "FR" "kg") of
                 CrossDBNotLinked (AliasTargetMissing name loc) -> do
                     name `shouldBe` "wheat production"
                     loc `shouldBe` Just "DE"
@@ -312,13 +314,18 @@ spec = do
             -- fails loudly through the row — while a CH demand has no row in
             -- force and links normally through the cascade.
             let m = singletonAlias (AliasKey "wheat production" (Just "FR")) (AliasTarget "no such product" Nothing)
-            case findSupplierInIndexedDBs (mkCtx m) "wheat production" "FR" "kg" of
+            case findSupplierInIndexedDBs (mkCtx m) (aliasQuery "wheat production" "FR" "kg") of
                 CrossDBNotLinked (AliasTargetMissing name _) -> name `shouldBe` "no such product"
                 other -> expectationFailure $ "Expected AliasTargetMissing, got a different result: " ++ describe' other
-            case findSupplierInIndexedDBs (mkCtx m) "wheat production" "CH" "kg" of
+            case findSupplierInIndexedDBs (mkCtx m) (aliasQuery "wheat production" "CH" "kg") of
                 CrossDBLinked{cdlrLocation = loc} -> loc `shouldBe` "CH"
                 CrossDBNotLinked reason -> expectationFailure $ "Expected CH link, got: " ++ show reason
   where
     describe' result = case result of
         CrossDBLinked{cdlrLocation = loc} -> "linked @ " ++ show loc
         CrossDBNotLinked reason -> show reason
+
+-- | A demand naming no supplier activity: product, location, unit.
+aliasQuery :: Text -> Text -> Text -> SupplierQuery
+aliasQuery p loc u =
+    SupplierQuery{sqProductName = p, sqSupplierActivity = Nothing, sqLocation = loc, sqUnit = u}
