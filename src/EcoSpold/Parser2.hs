@@ -8,14 +8,14 @@ import Amount (readAmount)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToInt, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
+import EcoSpold.Common (ParsedDataset (..), bsToDouble, bsToInt, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
 import qualified Expr
 import Progress (ProgressLevel (..), reportProgress)
 import SubstanceRegistry (nonEmptyCAS)
@@ -631,12 +631,28 @@ checkFormulas params pairs = case checked of
             <> T.pack (show (exchangeAmount ex))
     nearlyEqual a b = abs (a - b) <= 1e-9 * max 1 (max (abs a) (abs b))
 
+{- | The fields the dataset left out and this reader stood in for.
+
+A placeholder is indistinguishable downstream from a name the file really
+carried, so the substitution is said out loud rather than merged into the data.
+The geography is not among them: a dataset that declares none is recorded as
+'LocationUnspecified', which says so in the type.
+-}
+placeholdersUsed :: ParseState -> [Text]
+placeholdersUsed st =
+    [ what
+    | (what, absent) <-
+        [ ("no activity name, read as \"Unknown Activity\"", isNothing (psActivityName st))
+        , ("no reference unit, read as \"UNKNOWN_UNIT\"", isNothing (psRefUnit st))
+        ]
+    , absent
+    ]
+
 -- | Xeno SAX parser implementation
-parseWithXeno :: BS.ByteString -> ProcessId -> Either String ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]), [String])
+parseWithXeno :: BS.ByteString -> ProcessId -> Either String ParsedDataset
 parseWithXeno xmlContent processId = do
     finalState <- first show (X.fold openTag attribute endOpen text closeTag cdata initialParseState xmlContent)
-    result <- buildResult finalState processId
-    pure (result, reverse (psWarnings finalState))
+    buildResult finalState processId
   where
     -- Open tag handler - update path and context
     openTag state tagName =
@@ -988,7 +1004,7 @@ parseWithXeno xmlContent processId = do
     cdata = text
 
     -- Build final result from parse state
-    buildResult :: ParseState -> ProcessId -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit])
+    buildResult :: ParseState -> ProcessId -> Either String ParsedDataset
     buildResult st _pid =
         let name = fromMaybe "Unknown Activity" (psActivityName st)
             location = fromMaybe "GLO" (psLocation st)
@@ -1018,25 +1034,37 @@ parseWithXeno xmlContent processId = do
                     , activityNativeId = Nothing
                     , activityFormulaCheck = formulaCheck
                     }
-            techs = reverse (psTechFlows st)
-            bios = reverse (psBioFlows st)
-            wastes = reverse (psWasteFlows st)
-            units = reverse (psUnits st)
          in -- A file that yields no exchange at all is not a dataset: a stray or
             -- truncated XML the SAX fold walked through without complaint.
             if null (exchanges activity)
                 then Left "not an EcoSpold2 dataset: no exchange found"
-                else Right (activity, techs, bios, wastes, units)
+                else
+                    Right
+                        ParsedDataset
+                            { pdActivity = activity
+                            , pdTechFlows = reverse (psTechFlows st)
+                            , pdBioFlows = reverse (psBioFlows st)
+                            , pdWasteFlows = reverse (psWasteFlows st)
+                            , pdUnits = reverse (psUnits st)
+                            , -- This format addresses a supplier by UUID, so it
+                              -- numbers no dataset and links none by number.
+                              pdDatasetNumber = 0
+                            , pdSupplierLinks = M.empty
+                            , pdWarnings = map T.pack (reverse (psWarnings st)) ++ placeholdersUsed st
+                            }
 
 -- | Parse EcoSpold file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
+streamParseActivityAndFlowsFromFile :: FilePath -> IO (Either String ParsedDataset)
 streamParseActivityAndFlowsFromFile path = do
     !xmlContent <- BS.readFile path
     let filenameBase = T.pack $ takeBaseName path
     case EcoSpold.Parser2.parseProcessId filenameBase of
         Nothing -> return $ Left $ "Invalid filename format for ProcessId: " ++ path
-        Just pid -> case parseWithXeno xmlContent pid of
-            Left err -> return $ Left err
-            Right (result, warnings) -> do
-                mapM_ (reportProgress Warning) warnings
-                return $ Right result
+        Just pid -> do
+            let parsed = parseWithXeno xmlContent pid
+            either (const (pure ())) (reportReading path) parsed
+            return parsed
+
+-- | Send what a reading had to say to the progress log, the one place it can go.
+reportReading :: FilePath -> ParsedDataset -> IO ()
+reportReading path = mapM_ (reportProgress Warning . ((path ++ ": ") ++) . T.unpack) . pdWarnings

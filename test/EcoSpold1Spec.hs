@@ -8,6 +8,7 @@ import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Test.Hspec
 
+import EcoSpold.Common (ParsedDataset (..))
 import EcoSpold.Parser1
 import Types
 
@@ -47,6 +48,30 @@ minimalXml =
         , "      <exchange number=\"4\" name=\"fuel oil\" category=\"Liquid fuels\""
         , "                unit=\"kg\" meanValue=\"2.0\">"
         , "        <inputGroup>5</inputGroup>"
+        , "      </exchange>"
+        , "    </flowData>"
+        , "  </dataset>"
+        , "</ecoSpold>"
+        ]
+
+{- | A dataset naming neither its activity nor its reference unit: both are
+read as placeholders, which is what the reading has to say out loud.
+-}
+namelessXml :: BC.ByteString
+namelessXml =
+    BC.unlines
+        [ "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        , "<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold01\">"
+        , "  <dataset number=\"7\">"
+        , "    <metaInformation>"
+        , "      <processInformation>"
+        , "        <geography location=\"DE\" />"
+        , "      </processInformation>"
+        , "    </metaInformation>"
+        , "    <flowData>"
+        , "      <exchange number=\"1\" name=\"electricity, high voltage\" category=\"Energy\""
+        , "                subCategory=\"Electricity\" unit=\"kWh\" meanValue=\"1.0\">"
+        , "        <outputGroup>0</outputGroup>"
         , "      </exchange>"
         , "    </flowData>"
         , "  </dataset>"
@@ -321,7 +346,7 @@ example rather than the whole run when the fixture stops parsing.
 withDocumented :: (Activity -> Expectation) -> Expectation
 withDocumented k = case parseWithXeno documentedXml of
     Left err -> expectationFailure $ "Parse failed: " ++ err
-    Right (act, _, _, _, _, _, _) -> k act
+    Right ParsedDataset{pdActivity = act} -> k act
 
 -- ---------------------------------------------------------------------------
 -- Spec
@@ -354,12 +379,12 @@ spec = do
         it "prefers the dates over the years when a dataset states both" $
             case parseWithXeno (datedPeriodXml "<startYear>2000</startYear><endYear>2020</endYear><startDate>2000-01</startDate><endDate>2020-01</endDate>") of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
+                Right ParsedDataset{pdActivity = act} -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
 
         it "reads a period stated only as dates, the form most of a real export uses" $
             case parseWithXeno (datedPeriodXml "<startDate>2000-01</startDate><endDate>2020-01</endDate>") of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
+                Right ParsedDataset{pdActivity = act} -> sectionNamed "Time period" act `shouldBe` Just "2000-01 - 2020-01"
 
         it "names the proof reader by the person number the validation points at" $
             withDocumented $ \act ->
@@ -368,14 +393,14 @@ spec = do
         it "reads an exporter's null placeholder as an unfilled rubric" $
             case parseWithXeno nullMarkerXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> do
+                Right ParsedDataset{pdActivity = act} -> do
                     sectionNamed "Geography" act `shouldBe` Nothing
                     sectionNamed "Technology" act `shouldBe` Just "Port distances."
 
         it "records no section for a dataset that states none" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> activityDocumentation act `shouldBe` []
+                Right ParsedDataset{pdActivity = act} -> activityDocumentation act `shouldBe` []
 
     describe "generateFlowUUID" $ do
         it "produces a stable UUID for known inputs" $
@@ -401,19 +426,19 @@ spec = do
     describe "flow identity across datasets" $ do
         it "gives one substance one flow id in every dataset that draws it" $
             case (parseWithXeno minimalXml, parseWithXeno otherAuthorXml) of
-                (Right (_, _, bios1, _, _, _, _), Right (_, _, bios2, _, _, _, _)) ->
+                (Right ParsedDataset{pdBioFlows = bios1}, Right ParsedDataset{pdBioFlows = bios2}) ->
                     map bfId bios1 `shouldBe` map bfId bios2
                 (Left err, _) -> expectationFailure ("minimalXml: " <> err)
                 (_, Left err) -> expectationFailure ("otherAuthorXml: " <> err)
 
         it "reads the dataset number off <dataset>, not off a numbered <person>" $
             case parseWithXeno otherAuthorXml of
-                Right (_, _, _, _, _, dsNum, _) -> dsNum `shouldBe` 43
+                Right ParsedDataset{pdDatasetNumber = dsNum} -> dsNum `shouldBe` 43
                 Left err -> expectationFailure err
 
         it "reads every dataset's own number when a numbered person precedes them" $
             case parseAllWithXeno multiDatasetXml of
-                Right results -> map (fmap (\(_, _, _, _, _, n, _) -> n)) results `shouldBe` [Right 1, Right 2]
+                Right results -> map (fmap pdDatasetNumber) results `shouldBe` [Right 1, Right 2]
                 Left err -> expectationFailure err
 
     describe "generateUnitUUID" $ do
@@ -447,27 +472,27 @@ spec = do
         it "parses activity name from referenceFunction" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> activityName act `shouldBe` "electricity production"
+                Right ParsedDataset{pdActivity = act} -> activityName act `shouldBe` "electricity production"
 
         it "parses activity location from geography" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> activityLocation act `shouldBe` "DE"
+                Right ParsedDataset{pdActivity = act} -> activityLocation act `shouldBe` "DE"
 
         it "parses activity unit from referenceFunction" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> activityUnit act `shouldBe` "kWh"
+                Right ParsedDataset{pdActivity = act} -> activityUnit act `shouldBe` "kWh"
 
         it "parses dataset number" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, _, _, _, _, num, _) -> num `shouldBe` 42
+                Right ParsedDataset{pdDatasetNumber = num} -> num `shouldBe` 42
 
         it "keeps the dataset number as the identifier the source gave it" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     activityNativeId act `shouldBe` Just (NativeProcessId "42")
 
         -- A missing or unparseable number is read as 0, which is the loader
@@ -476,35 +501,35 @@ spec = do
         it "gives no identifier to a dataset that publishes no number" $
             case parseWithXeno unnumberedXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> activityNativeId act `shouldBe` Nothing
+                Right ParsedDataset{pdActivity = act} -> activityNativeId act `shouldBe` Nothing
 
         it "produces 4 exchanges" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) -> length (exchanges act) `shouldBe` 4
+                Right ParsedDataset{pdActivity = act} -> length (exchanges act) `shouldBe` 4
 
         it "produces 4 flows (1 tech reference + 3 bio)" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, techs, bios, _, _, _, _) ->
+                Right ParsedDataset{pdTechFlows = techs, pdBioFlows = bios} ->
                     (length techs + length bios) `shouldBe` 4
 
         it "marks the reference output (outputGroup 0) as isReference" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     length (filter exchangeIsReference (exchanges act)) `shouldBe` 1
 
         it "marks biosphere exchange (outputGroup 4) as BiosphereExchange" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     let bios = filter (\case BiosphereExchange{} -> True; _ -> False) (exchanges act)
                      in length bios `shouldBe` 2 -- CO2 output + natural gas input (inputGroup 4)
         it "parses flow with CAS number" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, _, bios, _, _, _, _) ->
+                Right ParsedDataset{pdBioFlows = bios} ->
                     let co2Flows = filter (\f -> bfName f == "Carbon dioxide, fossil") bios
                      in case co2Flows of
                             [f] -> bfCAS f `shouldBe` Just "124-38-9"
@@ -513,20 +538,33 @@ spec = do
         it "sets activity classification from category/subCategory" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     M.lookup "Category" (activityClassification act) `shouldBe` Just "Energy"
 
         it "captures per-exchange generalComment as exchangeComment" $
             case parseWithXeno commentXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     map exchangeComment (exchanges act) `shouldBe` [Just "Global", Nothing]
 
         it "still routes referenceFunction generalComment to activity description" $
             case parseWithXeno commentXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     activityDescription act `shouldBe` ["Process-level note"]
+
+        it "says which fields it stood in for" $
+            case parseWithXeno namelessXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right ParsedDataset{pdActivity = act, pdWarnings = warns} -> do
+                    activityName act `shouldBe` "Unknown Activity"
+                    activityUnit act `shouldBe` "UNKNOWN_UNIT"
+                    length warns `shouldBe` 2
+
+        it "has nothing to say about a dataset that named both" $
+            case parseWithXeno minimalXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right ParsedDataset{pdWarnings = warns} -> warns `shouldBe` []
 
     -- -----------------------------------------------------------------------
     -- parseAllWithXeno — multi-dataset
@@ -546,21 +584,21 @@ spec = do
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let names = [activityName act | Right (act, _, _, _, _, _, _) <- results]
+                    let names = [activityName act | Right ParsedDataset{pdActivity = act} <- results]
                      in names `shouldBe` ["process A", "process B"]
 
         it "preserves dataset numbers in order" $
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let nums = [n | Right (_, _, _, _, _, n, _) <- results]
+                    let nums = [n | Right ParsedDataset{pdDatasetNumber = n} <- results]
                      in nums `shouldBe` [1, 2]
 
         it "parses location from each dataset" $
             case parseAllWithXeno multiDatasetXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right results ->
-                    let locs = [activityLocation act | Right (act, _, _, _, _, _, _) <- results]
+                    let locs = [activityLocation act | Right ParsedDataset{pdActivity = act} <- results]
                      in locs `shouldBe` ["CH", "FR"]
 
     -- -----------------------------------------------------------------------
@@ -572,7 +610,7 @@ spec = do
         it "reads category=\"Final waste flows\" as a biosphere flow of medium waste" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, bios, wastes, _, _, _) -> do
+                Right ParsedDataset{pdActivity = act, pdBioFlows = bios, pdWasteFlows = wastes} -> do
                     let bioExchanges = [e | e@BiosphereExchange{} <- exchanges act]
                     length bioExchanges `shouldBe` 1
                     map bfName bios `shouldBe` ["Organic carbon, placed in landfill"]
@@ -583,7 +621,7 @@ spec = do
         it "does not route the waste flow to the technosphere bucket" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (_, techs, _, _, _, _, _) ->
+                Right ParsedDataset{pdTechFlows = techs} ->
                     -- Only the reference product remains on the tech side;
                     -- the Final-waste-flows row must not show up there.
                     map tfName techs `shouldBe` ["aluminium ingot"]
@@ -591,7 +629,7 @@ spec = do
         it "reads it as an emission despite the input group" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     -- inputGroup=5 is an artefact of the format, not a
                     -- direction: the row is waste leaving the system.
                     [bioDirection e | e@BiosphereExchange{} <- exchanges act]
@@ -600,5 +638,5 @@ spec = do
         it "falls back to the activity location, as for any elementary flow" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     [bioLocation e | e@BiosphereExchange{} <- exchanges act] `shouldBe` ["RoW"]

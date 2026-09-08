@@ -13,6 +13,7 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
+import EcoSpold.Common (ParsedDataset (..))
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
 import Progress (LogLine (llText), getLogLines)
 import Types
@@ -24,7 +25,7 @@ streamParseActivityAndFlowsFromFile derives a synthetic ProcessId from the
 filename and rejects names that don't match `actUUID_prodUUID`, so we copy
 the fixture into a temp path with that shape.
 -}
-withFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withFixture :: (ParsedDataset -> IO ()) -> IO ()
 withFixture k = withSystemTempDirectory "es2-spec" $ \dir -> do
     bytes <- BS.readFile "test-data/electricity-production.spold"
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
@@ -37,7 +38,7 @@ withFixture k = withSystemTempDirectory "es2-spec" $ \dir -> do
 spec :: Spec
 spec = describe "per-exchange comments" $ do
     it "captures English <comment> on intermediateExchange and elementaryExchange" $
-        withFixture $ \(act, _, _, _, _) ->
+        withFixture $ \ParsedDataset{pdActivity = act} ->
             map exchangeComment (exchanges act)
                 `shouldMatchList` [ Just "Coal input for electricity generation"
                                   , Just "Electricity output (reference product)"
@@ -47,10 +48,10 @@ spec = describe "per-exchange comments" $ do
 
     it "preserves all four exchanges" $
         withFixture $
-            \(act, _, _, _, _) -> length (exchanges act) `shouldBe` 4
+            \ParsedDataset{pdActivity = act} -> length (exchanges act) `shouldBe` 4
 
     it "comments contain no &-entity artefacts" $
-        withFixture $ \(act, _, _, _, _) ->
+        withFixture $ \ParsedDataset{pdActivity = act} ->
             let comments = [c | ex <- exchanges act, Just c <- [exchangeComment ex]]
              in not (any (T.isInfixOf "&") comments) `shouldBe` True
 
@@ -61,7 +62,7 @@ spec = describe "per-exchange comments" $ do
         result <- streamParseActivityAndFlowsFromFile "test-data/sawnwood-properties_12345678-1234-5678-9abc-12345678aaaa.spold"
         case result of
             Left err -> expectationFailure $ "Parse failed: " ++ err
-            Right (act, _, _, _, _) ->
+            Right ParsedDataset{pdActivity = act} ->
                 map exchangeComment (exchanges act)
                     `shouldMatchList` [ Nothing -- ex1 has no top-level comment, only property comments
                                       , Just "Adhesive applied during pressing" -- ex2's exchange-level comment, NOT the noisy property comment
@@ -99,7 +100,7 @@ spec = describe "per-exchange comments" $ do
     -- supplier demand no activity can meet.
     describe "waste flow detection" $ do
         it "keeps an elementary 'inventory indicator/waste' input on the biosphere axis" $
-            withWastePatternsFixture $ \(act, _, bios, wastes, _) -> do
+            withWastePatternsFixture $ \ParsedDataset{pdActivity = act, pdBioFlows = bios, pdWasteFlows = wastes} -> do
                 length [e | e@WasteExchange{} <- exchanges act] `shouldBe` 1
                 length wastes `shouldBe` 1
                 -- the indicator input joins the genuine CO2 emission
@@ -111,11 +112,11 @@ spec = describe "per-exchange comments" $ do
         -- recording one direction is what lets a writer that reconstructs
         -- direction from the compartment round-trip the flow.
         it "records an inventory indicator as an output whichever group it carries" $
-            withWastePatternsFixture $ \(act, _, _, _, _) ->
+            withWastePatternsFixture $ \ParsedDataset{pdActivity = act} ->
                 [bioDirection e | e@BiosphereExchange{} <- exchanges act]
                     `shouldBe` [Emission, Emission]
         it "routes an intermediate classified 'By-product:Waste' to WasteExchange" $
-            withWastePatternsFixture $ \(act, _, _, _, _) -> do
+            withWastePatternsFixture $ \ParsedDataset{pdActivity = act} -> do
                 let wasteInputs = [e | e@WasteExchange{waIsInput = True} <- exchanges act]
                     wasteOutputs = [e | e@WasteExchange{waIsInput = False} <- exchanges act]
                 length wasteInputs `shouldBe` 1
@@ -136,17 +137,17 @@ spec = describe "per-exchange comments" $ do
                 Right _ -> pure ()
 
         it "keeps the reference on the technosphere axis, not the waste axis" $
-            withWasteReferenceFixture $ \(act, techs, _, wastes, _) -> do
+            withWasteReferenceFixture $ \ParsedDataset{pdActivity = act, pdTechFlows = techs, pdWasteFlows = wastes} -> do
                 [techRole e | e@TechnosphereExchange{} <- exchanges act] `shouldBe` [ReferenceProduct]
                 length [() | WasteExchange{} <- exchanges act] `shouldBe` 0
                 length techs `shouldBe` 1 -- reference registered as a TechnosphereFlow
                 length wastes `shouldBe` 0 -- and not as a WasteFlow
         it "carries the reference unit through (not UNKNOWN_UNIT)" $
-            withWasteReferenceFixture $ \(act, _, _, _, _) ->
+            withWasteReferenceFixture $ \ParsedDataset{pdActivity = act} ->
                 activityUnit act `shouldBe` "kg"
 
         it "preserves the negative reference amount for the matrix diagonal" $
-            withWasteReferenceFixture $ \(act, _, _, _, _) ->
+            withWasteReferenceFixture $ \ParsedDataset{pdActivity = act} ->
                 [exchangeAmount e | e@TechnosphereExchange{techRole = ReferenceProduct} <- exchanges act]
                     `shouldBe` [-1.0]
 
@@ -192,7 +193,7 @@ spec = describe "per-exchange comments" $ do
             result <- runOnBytes (activityTypeFixtureXml "2" (Just "1"))
             case result of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     activityNativeType act
                         `shouldBe` Just
                             EcoSpoldActivityType
@@ -206,7 +207,7 @@ spec = describe "per-exchange comments" $ do
             result <- runOnBytes (activityTypeFixtureXml "1" Nothing)
             case result of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     activityNativeType act
                         `shouldBe` Just
                             EcoSpoldActivityType
@@ -220,7 +221,7 @@ spec = describe "per-exchange comments" $ do
             result <- runOnBytes wastePatternsXml -- existing fixture has no activityType
             case result of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _) ->
+                Right ParsedDataset{pdActivity = act} ->
                     activityNativeType act `shouldBe` Nothing
 
     -- -----------------------------------------------------------------------
@@ -233,7 +234,7 @@ spec = describe "per-exchange comments" $ do
     -- -----------------------------------------------------------------------
     describe "mathematicalRelation formulas" $ do
         it "keeps the stored amount when the formula evaluates to a different value" $
-            withFormulaFixture $ \(act, _, _, _, _) ->
+            withFormulaFixture $ \ParsedDataset{pdActivity = act} ->
                 -- fuel_input(2.0) * 2 + production(1.0) = 5.0 diverges from the
                 -- stored 4.0; the stored amount wins (the recorded divergence is
                 -- asserted below, proving the nested <property>'s own
@@ -242,21 +243,21 @@ spec = describe "per-exchange comments" $ do
                     `shouldBe` [4.0]
 
         it "stores <parameter> values and raw formulas on the activity" $
-            withFormulaFixture $ \(act, _, _, _, _) -> do
+            withFormulaFixture $ \ParsedDataset{pdActivity = act} -> do
                 activityParams act `shouldBe` M.fromList [("fuel_input", 2.0)]
                 activityParamExprs act `shouldBe` M.fromList [("fuel_input", "4.0 / 2")]
 
         it "keeps the stored amount when a formula references an unknown variable" $
-            withFormulaFixture $ \(act, _, _, _, _) ->
+            withFormulaFixture $ \ParsedDataset{pdActivity = act} ->
                 [exchangeAmount e | e@BiosphereExchange{} <- exchanges act]
                     `shouldBe` [3.0]
 
         it "does not keep a <parameter> without a usable amount" $
-            withFormulaFixture $ \(act, _, _, _, _) ->
+            withFormulaFixture $ \ParsedDataset{pdActivity = act} ->
                 M.member "ghost" (activityParams act) `shouldBe` False
 
         it "records the check outcome on the activity, with the divergent example" $
-            withFormulaFixture $ \(act, _, _, _, _) ->
+            withFormulaFixture $ \ParsedDataset{pdActivity = act} ->
                 case activityFormulaCheck act of
                     Nothing -> expectationFailure "expected a FormulaCheck on the activity"
                     Just fc -> do
@@ -288,7 +289,7 @@ spec = describe "per-exchange comments" $ do
             result <- runOnBytes (activityTypeFixtureXml "1" Nothing)
             case result of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _) -> do
+                Right ParsedDataset{pdActivity = act} -> do
                     activityLocation act `shouldBe` "TEST"
                     activityLocationSource act `shouldBe` LocationDeclared
 
@@ -296,9 +297,36 @@ spec = describe "per-exchange comments" $ do
             result <- runOnBytes noGeographyXml
             case result of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, _, _) -> do
+                Right ParsedDataset{pdActivity = act} -> do
                     activityLocation act `shouldBe` "GLO"
                     activityLocationSource act `shouldBe` LocationUnspecified
+
+    describe "placeholders the reader stood in for" $ do
+        let runOnBytes bytes = withSystemTempDirectory "es2-placeholder" $ \dir -> do
+                let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
+                BS.writeFile path bytes
+                streamParseActivityAndFlowsFromFile path
+            -- The fixtures name their unit "unit-kg", which is not a UUID, so
+            -- each reading also remarks on that. Only the stand-ins are read here.
+            standIns = filter (T.isInfixOf "read as") . pdWarnings
+
+        it "says which fields it stood in for" $ do
+            result <- runOnBytes namelessXml
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right parsed -> do
+                    activityName (pdActivity parsed) `shouldBe` "Unknown Activity"
+                    activityUnit (pdActivity parsed) `shouldBe` "UNKNOWN_UNIT"
+                    standIns parsed
+                        `shouldBe` [ "no activity name, read as \"Unknown Activity\""
+                                   , "no reference unit, read as \"UNKNOWN_UNIT\""
+                                   ]
+
+        it "has nothing to say about a dataset that named both" $ do
+            result <- runOnBytes (activityTypeFixtureXml "1" Nothing)
+            case result of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right parsed -> standIns parsed `shouldBe` []
 
     describe "dataset documentation" $ do
         let sectionNamed label act = lookup label [(docLabel s, docText s) | s <- activityDocumentation act]
@@ -308,7 +336,7 @@ spec = describe "per-exchange comments" $ do
                 result <- streamParseActivityAndFlowsFromFile path
                 case result of
                     Left err -> expectationFailure $ "Parse failed: " ++ err
-                    Right (act, _, _, _, _) -> k act
+                    Right ParsedDataset{pdActivity = act} -> k act
 
         it "reads the sections of a dataset whose general comment runs to several paragraphs" $
             -- The shape four ecoinvent datasets in five have. Each paragraph of
@@ -349,16 +377,16 @@ spec = describe "per-exchange comments" $ do
                         "Carl Vadenbo (2012-06-29): The amounts of the exchanges were reviewed.\nGregor Wernet (2014-06-03)"
 
         it "reads a comment written straight into the element, with no <text> child" $
-            withFixture $ \(act, _, _, _, _) -> do
+            withFixture $ \ParsedDataset{pdActivity = act} -> do
                 sectionNamed "Technology" act `shouldBe` Just "Coal-fired power plant"
                 sectionNamed "Geography" act `shouldBe` Just "Test geography"
 
         it "reads the period as its dates followed by what the dataset says about them" $
-            withFixture $ \(act, _, _, _, _) ->
+            withFixture $ \ParsedDataset{pdActivity = act} ->
                 sectionNamed "Time period" act `shouldBe` Just "2020-01-01 - 2020-12-31 Test time period"
 
         it "reads what the dataset includes, and how it was sampled" $
-            withFixture $ \(act, _, _, _, _) -> do
+            withFixture $ \ParsedDataset{pdActivity = act} -> do
                 sectionNamed "Included activities" act `shouldBe` Just "Coal combustion Electricity generation"
                 sectionNamed "System model" act `shouldBe` Just "Test system model"
                 sectionNamed "Sampling procedure" act `shouldBe` Just "Test sampling"
@@ -458,6 +486,31 @@ activityTypeFixtureXml actType mSpec =
                \  </activityDataset>\n\
                \</ecoSpold>\n"
 
+{- | Same dataset as 'activityTypeFixtureXml' but naming neither its activity
+nor the unit of its reference product: both are read as placeholders, which is
+what the reading has to say out loud.
+-}
+namelessXml :: BS.ByteString
+namelessXml =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+    \<ecoSpold xmlns=\"http://www.EcoInvent.org/EcoSpold02\">\n\
+    \  <activityDataset>\n\
+    \    <activityDescription>\n\
+    \      <activity id=\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\" activityNameId=\"nameless\">\n\
+    \      </activity>\n\
+    \      <geography geographyId=\"TEST\"><shortname xml:lang=\"en\">TEST</shortname></geography>\n\
+    \    </activityDescription>\n\
+    \    <flowData>\n\
+    \      <intermediateExchange id=\"ref\" unitId=\"unit-kg\" amount=\"1.0\"\n\
+    \                           intermediateExchangeId=\"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\">\n\
+    \        <name xml:lang=\"en\">nameless product</name>\n\
+    \        <unitName xml:lang=\"en\"></unitName>\n\
+    \        <outputGroup>0</outputGroup>\n\
+    \      </intermediateExchange>\n\
+    \    </flowData>\n\
+    \  </activityDataset>\n\
+    \</ecoSpold>\n"
+
 -- | Same dataset as 'activityTypeFixtureXml' but with no @\<geography\>@ element.
 noGeographyXml :: BS.ByteString
 noGeographyXml =
@@ -486,7 +539,7 @@ withPropertyFixture k = do
     result <- streamParseActivityAndFlowsFromFile "test-data/sawnwood-properties_12345678-1234-5678-9abc-12345678aaaa.spold"
     case result of
         Left err -> expectationFailure $ "Parse failed: " ++ err
-        Right (act, _, _, _, _) -> k act
+        Right ParsedDataset{pdActivity = act} -> k act
 
 -- | The properties recorded on the exchange of a given flow, by flow id.
 propertiesOf :: Text -> Activity -> Maybe ExchangeProperties
@@ -497,7 +550,7 @@ propertiesOf flowId act =
         , Just (exchangeFlowId ex) == UUID.fromText flowId
         ]
 
-withWastePatternsFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withWastePatternsFixture :: (ParsedDataset -> IO ()) -> IO ()
 withWastePatternsFixture k = withSystemTempDirectory "es2-waste-spec" $ \dir -> do
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
     BS.writeFile path wastePatternsXml
@@ -604,13 +657,13 @@ wasteReferenceXml =
     \  </activityDataset>\n\
     \</ecoSpold>\n"
 
-parseWasteReference :: IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]))
+parseWasteReference :: IO (Either String ParsedDataset)
 parseWasteReference = withSystemTempDirectory "es2-waste-ref" $ \dir -> do
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
     BS.writeFile path wasteReferenceXml
     streamParseActivityAndFlowsFromFile path
 
-withWasteReferenceFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withWasteReferenceFixture :: (ParsedDataset -> IO ()) -> IO ()
 withWasteReferenceFixture k =
     parseWasteReference >>= either (expectationFailure . ("Parse failed: " ++)) k
 
@@ -675,7 +728,7 @@ formulaXml =
     \  </activityDataset>\n\
     \</ecoSpold>\n"
 
-withFormulaFixture :: ((Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> IO ()) -> IO ()
+withFormulaFixture :: (ParsedDataset -> IO ()) -> IO ()
 withFormulaFixture k = withSystemTempDirectory "es2-formula" $ \dir -> do
     let path = dir </> "12345678-1234-5678-9abc-123456789001_12345678-1234-5678-9abc-123456789002.spold"
     BS.writeFile path formulaXml

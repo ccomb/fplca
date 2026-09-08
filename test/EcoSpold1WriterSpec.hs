@@ -27,6 +27,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import qualified Database as DB
+import EcoSpold.Common (ParsedDataset (..))
 import EcoSpold.Parser1 (parseAllWithXeno)
 import EcoSpold.Writer1
 import qualified Matrix
@@ -150,17 +151,15 @@ fixtureDb = case parseAllWithXeno minimalXml of
         Left err -> fail ("fixture dataset failed: " ++ err)
         Right datasets -> pure (assembleSimpleDb datasets)
 
--- | Fold parser per-dataset tuples into a 'SimpleDatabase'.
-assembleSimpleDb ::
-    [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)] ->
-    SimpleDatabase
+-- | Fold the per-dataset readings into a 'SimpleDatabase'.
+assembleSimpleDb :: [ParsedDataset] -> SimpleDatabase
 assembleSimpleDb datasets =
     SimpleDatabase
-        { sdbActivities = M.fromList [(processKey a, a) | (a, _, _, _, _, _, _) <- datasets]
-        , sdbTechFlows = M.fromList [(tfId f, f) | (_, tfs, _, _, _, _, _) <- datasets, f <- tfs]
-        , sdbBioFlows = M.fromList [(bfId f, f) | (_, _, bfs, _, _, _, _) <- datasets, f <- bfs]
-        , sdbWasteFlows = M.fromList [(wfId f, f) | (_, _, _, wfs, _, _, _) <- datasets, f <- wfs]
-        , sdbUnits = M.fromList [(unitId u, u) | (_, _, _, _, us, _, _) <- datasets, u <- us]
+        { sdbActivities = M.fromList [(processKey a, a) | ParsedDataset{pdActivity = a} <- datasets]
+        , sdbTechFlows = M.fromList [(tfId f, f) | ParsedDataset{pdTechFlows = tfs} <- datasets, f <- tfs]
+        , sdbBioFlows = M.fromList [(bfId f, f) | ParsedDataset{pdBioFlows = bfs} <- datasets, f <- bfs]
+        , sdbWasteFlows = M.fromList [(wfId f, f) | ParsedDataset{pdWasteFlows = wfs} <- datasets, f <- wfs]
+        , sdbUnits = M.fromList [(unitId u, u) | ParsedDataset{pdUnits = us} <- datasets, u <- us]
         }
 
 {- | An injective @(activityUUID, productUUID)@ key for the matrix builder. The
@@ -302,7 +301,7 @@ roundTripSupplierLinks sdb =
             case parseAllWithXeno (TE.encodeUtf8 txt) of
                 Left err -> Left err
                 Right results ->
-                    concatMap (\(_, _, _, _, _, _, links) -> M.elems links) <$> sequence results
+                    concatMap (\ParsedDataset{pdSupplierLinks = links} -> M.elems links) <$> sequence results
 
 -- ---------------------------------------------------------------------------
 -- Order-insensitive observable projection of an activity, for semantic equality
