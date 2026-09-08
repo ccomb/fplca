@@ -15,11 +15,13 @@
   answer. An export writes them the way it reads them: waste that names no
   treatment goes out as an inventory flow, waste that is consumed by one goes
   out as a technosphere input, and an output that names a treatment is refused
-  rather than written with the link silently dropped. One thing is lost along
-  the way: an unlinked waste output used to be matched by name to a treatment
-  carried by another loaded database, and an elementary flow is matched
-  against methods instead. Caches built before this are rebuilt on the next
-  load.
+  rather than written with the link silently dropped. Two things change for a
+  reader beyond the gap report: such a row no longer carries a waste role, so
+  the activity holding it stops being described as treating waste; and in a
+  file this engine wrote itself, where the row was on the output side, it used
+  to be matched by name to a treatment carried by another loaded database, and
+  an elementary flow is matched against methods instead. Caches built before
+  this are rebuilt on the next load.
 - Waste that leaves a system with no treatment modelled for it is now
   characterized. A SimaPro CSV files such waste in a section of its own, and a
   method that scores it writes the same word in its compartment column. The

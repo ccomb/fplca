@@ -420,9 +420,10 @@ checkEcoSpold1Exportable db =
         , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
         ]
     -- A biosphere flow is serialised with @category = bfCompartmentName@. If that
-    -- equals the waste-routing marker, the parser (which tests the category first)
-    -- re-imports it as a waste exchange — a silent kind flip. A missing flow is
-    -- caught by 'checkFlows', so only resolvable biosphere flows are inspected here.
+    -- equals the final-waste marker, the parser (which tests the category before
+    -- the groups) re-imports it under the "waste" compartment instead, so a method
+    -- scores it as waste. A missing flow is caught by 'checkFlows', so only
+    -- resolvable biosphere flows are inspected here.
     wasteSentinelOffenders =
         [ activityName act
         | act <- M.elems (sdbActivities db)
