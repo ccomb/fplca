@@ -723,7 +723,7 @@ wasteDb mTreatment =
             "GLO"
             LocationDeclared
             "kg"
-            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing Nothing "" Nothing Nothing Nothing M.empty noProperties
             , WasteExchange wasteU 0.3 unitU False (fromMaybe UUID.nil mTreatment) Nothing "" Nothing Nothing
             ]
             M.empty
