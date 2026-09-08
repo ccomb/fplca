@@ -844,24 +844,6 @@ defaultLoadOptions unitConfig =
         , loAllocation = Declared
         }
 
-{- | An EcoSpold 2 reading, said in the shape both readers share. That format
-addresses a supplier by UUID rather than by the dataset number EcoSpold 1
-writes, and its reader reports its own remarks at its own edge, so three fields
-stay empty.
--}
-es2Parsed :: (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit]) -> ParsedDataset
-es2Parsed (act, techs, bios, wastes, units) =
-    ParsedDataset
-        { pdActivity = act
-        , pdTechFlows = techs
-        , pdBioFlows = bios
-        , pdWasteFlows = wastes
-        , pdUnits = units
-        , pdDatasetNumber = 0
-        , pdSupplierLinks = M.empty
-        , pdWarnings = []
-        }
-
 {- | Say that an EcoSpold 2 dataset divided into several processes will come
 back as one.
 
@@ -1148,7 +1130,7 @@ loadEcoSpoldDirectory opts dir = do
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else fmap (fmap es2Parsed) . streamParseActivityAndFlowsFromFile
+                    else streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired

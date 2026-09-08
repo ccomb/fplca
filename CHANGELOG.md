@@ -3,12 +3,13 @@
 ## [Unreleased]
 
 ### Fixed
-- Loading an EcoSpold 1 file now says when the file named neither its activity
-  nor its reference unit. Such a dataset still loads, under a placeholder no
-  reader downstream can tell from a name the file really carried, so a database
-  could show an activity called "Unknown Activity" measured in "UNKNOWN_UNIT"
-  with nothing in the log to say where it came from. The equivalent reader for
-  EcoSpold 2 already said so; this one had nowhere to say it from, and now has.
+- Loading an EcoSpold 1 or EcoSpold 2 file now says when the file named neither
+  its activity nor its reference unit. Such a dataset still loads, under a
+  placeholder no reader downstream can tell from a name the file really
+  carried, so a database could show an activity called "Unknown Activity"
+  measured in "UNKNOWN_UNIT" with nothing in the log to say where it came from.
+  Both readers name the file they were reading when they say it, which the
+  EcoSpold 2 reader did not do for the remarks it already made.
 - An EcoSpold 1 database no longer reports supplier gaps that cannot exist.
   A file of that format files waste with no modelled treatment under a
   category of its own, on an input group, because the format has only four
