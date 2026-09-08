@@ -416,17 +416,21 @@ exchangeRowOut cfg actName f =
 key 'Database.Loader.buildSupplierIndexByName' matches against), with the
 supplier location preserved for geography-aware cross-DB linking: an 'Input'
 for a @technosphere@ row, an 'AvoidedProduct' for a @substitution@ row.
-Zero-amount rows are dropped (parity with the SimaPro importer).
+
+A zero amount is kept, like every other amount and like the SimaPro importer:
+it says the author disabled this input, which is a statement about the model,
+not an empty row.
 
 The @name@ column, which holds the supplier /activity/, is kept alongside in
 'techSupplierActivity'. It is what tells @market group for electricity, medium
-voltage@ from the 26 other ecoinvent activities whose reference product is also
-@electricity, medium voltage@ in GLO.
+voltage@ from the 26 other activities of a released background database whose
+reference product is also @electricity, medium voltage@ in GLO.
 -}
 technosphereRowOut :: UC.UnitConfig -> TechRole -> Text -> M.Map Text CellValue -> RowOut
 technosphereRowOut cfg role actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped technosphere row with no name"]}
-    | amount == 0 = emptyRowOut
+    | isNothing (fieldNum f "amount") =
+        emptyRowOut{roWarn = ["activity '" <> actName <> "', row '" <> name <> "': skipped, its amount cell holds no number"]}
     | otherwise = RowOut (Just exch) [flow] [] [unit] []
   where
     name = fromMaybe "" (fieldText f "reference product" <|> fieldText f "name")

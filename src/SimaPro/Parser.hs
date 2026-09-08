@@ -1069,7 +1069,7 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     -- which goes to the technosphere with the rest.
     (avoidedExs, avoidedFlows, avoidedUnits) =
         unzip3 (productToExchange unitCfg env AvoidedProduct <$> pbAvoidedProducts)
-    (techMaybeExs, techFlows, techUnits) =
+    (techExs, techFlows, techUnits) =
         unzip3 (techRowToExchange unitCfg env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
     (bioExs, bioFlows, bioUnits) =
         unzip3 $
@@ -1082,8 +1082,7 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
     -- Exchanges/flows/units the block's products share. They are written once,
     -- unscaled: "Database.Allocation" splits the block into one process per
     -- product and scales them by each product's declared share.
-    -- Tech rows with a zero amount yield no exchange but still contribute a flow.
-    sharedExchanges = avoidedExs ++ catMaybes techMaybeExs ++ bioExs
+    sharedExchanges = avoidedExs ++ techExs ++ bioExs
     sharedTechFlows = avoidedFlows ++ techFlows
     sharedBioFlows = bioFlows
     -- The format has no waste axis: its two waste sections are elementary
@@ -1300,10 +1299,17 @@ parsePedigreePrefix raw =
     -- the comment proper. Strip leading separators and whitespace.
     stripCommentSeparators = T.dropWhile (`elem` (",;. \t" :: String))
 
-{- | Convert technosphere row to exchange (if non-zero), flow, and unit.
-Always returns the flow/unit; exchange is Nothing for zero-amount rows.
+{- | Convert a technosphere row to its exchange, flow and unit.
+
+A row whose amount is zero is kept like any other. Zero is a modelling
+statement: an input the author disabled, or a parameter that evaluates to zero
+in this scenario, and the file says so on purpose. Dropping it lost that
+statement without a word, made the reader disagree with the writer, and left
+the biosphere side (which never dropped a zero) reading a different rule from
+the same file. Nothing downstream is disturbed by the coefficient itself: both
+matrix builders skip a zero entry on their own.
 -}
-techRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> TechExchangeRow -> (Maybe Exchange, TechnosphereFlow, Unit)
+techRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> TechExchangeRow -> (Exchange, TechnosphereFlow, Unit)
 techRowToExchange unitCfg env TechExchangeRow{..} =
     let reading = extractLocation terName
         cleanName = maybe terName locatedName reading
@@ -1313,25 +1319,21 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
         unitUUID = generateUnitUUID effUnitName
         (pedigree, cleanedComment) = parsePedigreePrefix terComment
         exchange =
-            if resolvedAmount == 0
-                then Nothing
-                else
-                    Just
-                        TechnosphereExchange
-                            { techFlowId = flowUUID
-                            , techAmount = resolvedAmount
-                            , techUnitId = unitUUID
-                            , techRole = Input
-                            , techActivityLinkId = UUID.nil
-                            , techProcessLinkId = Nothing
-                            , techSupplierActivity = Nothing
-                            , techLocation = location
-                            , techComment = cleanedComment
-                            , techPedigree = pedigree
-                            , techShare = Nothing
-                            , techClassification = M.empty
-                            , techProperties = noProperties
-                            }
+            TechnosphereExchange
+                { techFlowId = flowUUID
+                , techAmount = resolvedAmount
+                , techUnitId = unitUUID
+                , techRole = Input
+                , techActivityLinkId = UUID.nil
+                , techProcessLinkId = Nothing
+                , techSupplierActivity = Nothing
+                , techLocation = location
+                , techComment = cleanedComment
+                , techPedigree = pedigree
+                , techShare = Nothing
+                , techClassification = M.empty
+                , techProperties = noProperties
+                }
         flow =
             TechnosphereFlow
                 { tfId = flowUUID

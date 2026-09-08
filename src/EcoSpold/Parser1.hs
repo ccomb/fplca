@@ -31,7 +31,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
-import EcoSpold.Common (bsToDouble, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
+import EcoSpold.Common (ParsedDataset (..), bsToDouble, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
 import Progress (ProgressLevel (..), reportProgress)
 import Types
 import qualified Xeno.SAX as X
@@ -196,7 +196,7 @@ data ParseState = ParseState
     , psTextAccum :: ![BS.ByteString]
     , psSupplierLinks :: !(M.Map UUID Int) -- flowId → supplier dataset number (technosphere inputs)
     , psDocs :: !DatasetDocs -- Provenance the dataset states about itself
-    , psCompletedActivities :: ![Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
+    , psCompletedActivities :: ![Either String ParsedDataset]
     }
 
 -- | Initial parsing state
@@ -660,8 +660,30 @@ datasetIdentifier :: Int -> Maybe NativeProcessId
 datasetIdentifier 0 = Nothing
 datasetIdentifier n = Just (NativeProcessId (T.pack (show n)))
 
+{- | The fields the dataset left out and this reader stood in for.
+
+A placeholder is indistinguishable downstream from a name the file really
+carried, so the substitution is said out loud rather than merged into the data.
+The geography is not among them: a dataset that declares none is recorded as
+'LocationUnspecified', which says so in the type.
+-}
+placeholdersUsed :: ParseState -> [Text]
+placeholdersUsed st =
+    [ named <> what
+    | (what, absent) <-
+        [ ("no activity name, read as \"Unknown Activity\"", isNothing (psActivityName st))
+        , ("no reference unit, read as \"UNKNOWN_UNIT\"", isNothing (psRefUnit st))
+        ]
+    , absent
+    ]
+  where
+    -- A dataset that declared no number is left unnamed rather than called
+    -- number zero, which is how 'datasetIdentifier' reads the same field.
+    named :: Text
+    named = maybe "" (\(NativeProcessId n) -> "dataset " <> n <> ": ") (datasetIdentifier (psDatasetNumber st))
+
 -- | Build the final per-dataset result, applying the cut-off strategy.
-buildResult :: ParseState -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
+buildResult :: ParseState -> Either String ParsedDataset
 buildResult st =
     let name = fromMaybe "Unknown Activity" (psActivityName st)
         location = fromMaybe "GLO" (psLocation st)
@@ -693,17 +715,19 @@ buildResult st =
                 , activityFormulaCheck = Nothing
                 }
         pack act =
-            ( act
-            , reverse (psTechFlows st)
-            , reverse (psBioFlows st)
-            , -- This format has no waste axis. Waste sent to treatment is a
-              -- technosphere input like any other, and waste with none is an
-              -- elementary flow, so nothing here builds a waste flow.
-              []
-            , reverse (psUnits st)
-            , psDatasetNumber st
-            , psSupplierLinks st
-            )
+            ParsedDataset
+                { pdActivity = act
+                , pdTechFlows = reverse (psTechFlows st)
+                , pdBioFlows = reverse (psBioFlows st)
+                , -- This format has no waste axis. Waste sent to treatment is a
+                  -- technosphere input like any other, and waste with none is an
+                  -- elementary flow, so nothing here builds a waste flow.
+                  pdWasteFlows = []
+                , pdUnits = reverse (psUnits st)
+                , pdDatasetNumber = psDatasetNumber st
+                , pdSupplierLinks = psSupplierLinks st
+                , pdWarnings = placeholdersUsed st
+                }
      in -- A file that yields no exchange at all is not a dataset: a stray or
         -- truncated XML the SAX fold walked through without complaint.
         if null (exchanges activity)
@@ -716,7 +740,7 @@ foldEcoSpold1 =
     first show . X.fold onOpenTag onAttribute onEndOpen onText onCloseTag onText initialParseState
 
 -- | Xeno SAX parser for EcoSpold1 — first dataset in the file.
-parseWithXeno :: BS.ByteString -> Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)
+parseWithXeno :: BS.ByteString -> Either String ParsedDataset
 parseWithXeno xmlContent = do
     finalState <- foldEcoSpold1 xmlContent
     case psCompletedActivities finalState of
@@ -726,14 +750,20 @@ parseWithXeno xmlContent = do
 {- | Parse ALL datasets from an EcoSpold1 file (multi-dataset support).
 Outer Either = XML parse failure; inner Either = per-activity failure.
 -}
-parseAllWithXeno :: BS.ByteString -> Either String [Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
+parseAllWithXeno :: BS.ByteString -> Either String [Either String ParsedDataset]
 parseAllWithXeno = fmap (reverse . psCompletedActivities) . foldEcoSpold1
 
 -- | Parse EcoSpold1 file using Xeno SAX parser
-streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int))
+streamParseActivityAndFlowsFromFile1 :: FilePath -> IO (Either String ParsedDataset)
 streamParseActivityAndFlowsFromFile1 path = do
     !xmlContent <- BS.readFile path
-    return (parseWithXeno xmlContent)
+    let parsed = parseWithXeno xmlContent
+    either (const (pure ())) (reportReading path) parsed
+    return parsed
+
+-- | Send what a reading had to say to the progress log, the one place it can go.
+reportReading :: FilePath -> ParsedDataset -> IO ()
+reportReading path = mapM_ (reportProgress Warning . ((path ++ ": ") ++) . T.unpack) . pdWarnings
 
 -- ============================================================================
 -- Multi-dataset file support
@@ -743,13 +773,14 @@ streamParseActivityAndFlowsFromFile1 path = do
 Used for multi-dataset files where <ecoSpold> contains multiple <dataset> elements
 Skips activities that fail (e.g. no reference product) and logs warnings
 -}
-streamParseAllDatasetsFromFile1 :: FilePath -> IO [(Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int)]
+streamParseAllDatasetsFromFile1 :: FilePath -> IO [ParsedDataset]
 streamParseAllDatasetsFromFile1 path = do
     !xmlContent <- BS.readFile path
     case parseAllWithXeno xmlContent of
         Right results -> do
             forM_ (lefts results) $ \e ->
                 reportProgress Warning $ "Skipping dataset in " ++ path ++ ": " ++ e
+            mapM_ (reportReading path) (rights results)
             return (rights results)
         Left err -> do
             reportProgress Warning $ "Failed to parse " ++ path ++ ": " ++ err

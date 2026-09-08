@@ -199,7 +199,7 @@ spec = do
             cdlAttributeFallbacks stats `shouldBe` []
 
     describe "findExchangeCrossDBLink (two producers of one product)" $ do
-        -- The ecoinvent shape a Brightway foreground meets: one product name,
+        -- The shape a Brightway foreground meets in a background database: one product name,
         -- one location, several activities publishing it.
         let twoProducers =
                 indexBg $

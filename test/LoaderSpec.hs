@@ -578,12 +578,27 @@ spec = do
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
             map apChosen (usAmbiguousProducers summary) `shouldBe` ["coal power plant"]
 
-        it "reports the tie when the activity the input names produces nothing here" $ do
-            -- The name is a claim, not a fact: an input can name an activity of
-            -- a database this one only depends on. The ranking then decides,
-            -- and says so.
+        it "leaves the input for the cross-database linker when it names an activity this database has not" $ do
+            -- A row can name an activity of a database this one only depends
+            -- on. Answering it with a local producer of the same product would
+            -- link it here and the cross-database linker, whose index answers
+            -- on the pair, would never see it.
             let (fixed, summary) =
                     fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (Just "gas power plant"))
+            techActivityLinkId fixed `shouldBe` UUID.nil
+            usMissingLinks summary `shouldBe` 1
+
+        it "reports the tie when several activities carry the name the input gives" $ do
+            -- Two plants of the same name in two locations: the name narrowed
+            -- the field and did not close it, so the ranking chose and says so.
+            let sameName =
+                    M.singleton
+                        "electricity"
+                        ( namedProducerOf "wind power plant" actUUID1 flowUUID2 ""
+                            NE.:| [namedProducerOf "Wind Power Plant" actUUID2 flowUUID2 ""]
+                        )
+                (fixed, summary) =
+                    fixExchangeLinkByName defaultUnitConfig M.empty sameName electricity "consumer" (buying (Just "wind power plant"))
             techActivityLinkId fixed `shouldBe` actUUID1
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
 

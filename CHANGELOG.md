@@ -5,9 +5,9 @@
 ### Fixed
 - A Brightway Excel inventory now links to the supplier activity its rows name.
   A workbook of that format names each supplier on two columns, the activity
-  and the product it makes, and only the product was kept. In ecoinvent 3.12
-  cut-off, "electricity, medium voltage" in GLO is the reference product of 27
-  different activities, so the product name alone could not say which one a row
+  and the product it makes, and only the product was kept. In a released
+  background database, "electricity, medium voltage" in GLO is the reference
+  product of 27 different activities, so the product name alone could not say which one a row
   meant and the ranking returned whichever it happened to return. Most of the
   others are cut-off co-outputs that carry no burden, so a wrong pick was quiet
   as well as wrong. The activity name is now read, matched first, and written
@@ -24,6 +24,13 @@
   and how many tied, so the supplier meant can be named. Ties across two
   dependencies were already reported; this is the tie inside one. Wire
   revision 23.
+- Loading an EcoSpold 1 or EcoSpold 2 file now says when the file named neither
+  its activity nor its reference unit. Such a dataset still loads, under a
+  placeholder no reader downstream can tell from a name the file really
+  carried, so a database could show an activity called "Unknown Activity"
+  measured in "UNKNOWN_UNIT" with nothing in the log to say where it came from.
+  Both readers name the file they were reading when they say it, which the
+  EcoSpold 2 reader did not do for the remarks it already made.
 - An EcoSpold 1 database no longer reports supplier gaps that cannot exist.
   A file of that format files waste with no modelled treatment under a
   category of its own, on an input group, because the format has only four

@@ -315,7 +315,8 @@ data Exchange
         EcoSpold 2 and ILCD designate theirs by identifier ('techActivityLinkId'),
         SimaPro folds it into the product name, and Brightway Excel puts it in a
         column of its own — the one source whose designation used to be dropped,
-        leaving the linker to pick between the 27 ecoinvent activities whose
+        leaving the linker to pick between the 27 activities of a released background
+        database whose
         reference product is "electricity, medium voltage" in GLO. Records what
         the source said and is never rewritten by linking, unlike
         'techActivityLinkId', which the load overwrites with what it resolved to.
@@ -1850,7 +1851,7 @@ data AttributeFallback = AttributeFallback
 {- | One input several activities of the same dependency answer equally well.
 
 Their scores tie, so the ranking's winner is a choice nothing in the data made:
-in ecoinvent 3.12 cut-off, @electricity, medium voltage@ in GLO is the reference
+in a released background database, @electricity, medium voltage@ in GLO is the reference
 product of 27 activities, and most of them are cut-off co-outputs carrying no
 burden — linking to one of those rather than the market group is off by orders
 of magnitude, in the quiet direction. Reported so the consumer can name the

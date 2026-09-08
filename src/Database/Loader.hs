@@ -106,7 +106,6 @@ import Data.Bits (xor)
 import qualified Data.ByteString as BS
 import Data.Char (toLower)
 import Data.Either (lefts, partitionEithers, rights)
-import Data.Foldable (find)
 import Data.List (intercalate, sort, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
@@ -159,7 +158,7 @@ import Database.CrossLinking (
  )
 import Database.MatrixBuild (findProducer)
 import Database.Upload (listDirectoryRecursive)
-import EcoSpold.Common (distributeFiles)
+import EcoSpold.Common (ParsedDataset (..), distributeFiles)
 import EcoSpold.Parser1 (streamParseActivityAndFlowsFromFile1, streamParseAllDatasetsFromFile1)
 import EcoSpold.Parser2 (streamParseActivityAndFlowsFromFile)
 import GHC.Conc (getNumCapabilities)
@@ -468,23 +467,22 @@ data LocationOverride = LocationOverride
     }
     deriving (Eq, Ord, Show)
 
-{- | One input several activities of this database produce equally well.
+{- | One input several activities of this database answer equally well.
 
 The winner is then the tie-break's, not the data's: it reads the file's own
 ranking (a block filed under an obsolete category supplies nothing, then
 activity name, then location) and the identifier breaks the last tie. An input
-that names the activity it buys from is never counted here, because its source
-made the choice. Reported so a modeller can name the supplier meant.
+that names its supplier narrows the field to the activities carrying that name,
+and is counted here only when several of them do. Reported so a modeller can
+say which one was meant.
 -}
 data AmbiguousProducer = AmbiguousProducer
-    { apConsumer :: !T.Text
-    -- ^ Activity holding the input
-    , apProduct :: !T.Text
+    { apProduct :: !T.Text
     -- ^ Product name several activities produce
     , apChosen :: !T.Text
     -- ^ Activity the tie-break returned
     , apCandidates :: !Int
-    -- ^ How many activities produce that name
+    -- ^ How many activities answered
     }
     deriving (Eq, Ord, Show)
 
@@ -540,7 +538,7 @@ reportAmbiguousProducers [] = return ()
 reportAmbiguousProducers ties = do
     reportProgress Warning $
         printf
-            "%d product(s) several activities of this database produce - the input names none of them, so the ranking chose"
+            "%d product(s) several activities of this database answer equally well - nothing in the row says which, so the ranking chose"
             (length unique)
     forM_ unique $ \AmbiguousProducer{apProduct, apChosen, apCandidates} ->
         reportProgress Warning $
@@ -948,9 +946,6 @@ defaultLoadOptions unitConfig =
         , loAllocation = Declared
         }
 
--- | Everything one EcoSpold dataset parses to, before it is keyed.
-type ParsedDataset = (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int)
-
 {- | Say that an EcoSpold 2 dataset divided into several processes will come
 back as one.
 
@@ -973,10 +968,13 @@ warnSplitKeyedOnFileName file =
 entry is then keyed on its own reference product.
 -}
 allocateParsed :: LoadOptions -> ParsedDataset -> [ParsedDataset]
-allocateParsed opts (act, techs, bios, wastes, units, dsNum, links) =
-    [ (act', techs, bios, wastes, units, dsNum, links)
-    | act' <- NE.toList (allocate (allocating opts (M.fromList [(unitId u, u) | u <- units])) act)
+allocateParsed opts parsed =
+    [ parsed{pdActivity = act}
+    | act <- NE.toList (allocate (allocating opts unitMap) (pdActivity parsed))
     ]
+  where
+    unitMap :: UnitDB
+    unitMap = M.fromList [(unitId u, u) | u <- pdUnits parsed]
 
 -- | Load SimaPro CSV file
 loadSimaProCSV :: LoadOptions -> FilePath -> IO (Either T.Text SimpleDatabase)
@@ -1116,21 +1114,18 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
                             , usMissingLinks = 1
                             }
                         )
-                 in case M.lookup key idx of
+                 in case M.lookup key idx >>= answering claimed of
                         Nothing -> unlinked
-                        Just producers ->
-                            let named = namedProducer claimed producers
-                                chosen = fromMaybe (NE.head producers) named
-                             in case accept chosen of
-                                    Nothing -> unlinked
-                                    Just p ->
-                                        ( relink p
-                                        , mempty
-                                            { usTotalLinks = 1
-                                            , usFoundLinks = 1
-                                            , usAmbiguousProducers = tiedOn consumerName (tfName flow) producers named
-                                            }
-                                        )
+                        Just answers -> case accept (NE.head answers) of
+                            Nothing -> unlinked
+                            Just p ->
+                                ( relink p
+                                , mempty
+                                    { usTotalLinks = 1
+                                    , usFoundLinks = 1
+                                    , usAmbiguousProducers = tiedOn (tfName flow) answers
+                                    }
+                                )
             Nothing ->
                 -- Flow not in technosphere map — shouldn't happen but be safe
                 (ex, mempty{usTotalLinks = 1, usMissingLinks = 1})
@@ -1139,32 +1134,38 @@ fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
 fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
 
-{- | The producer an input names, among those producing the product it asks for.
-The name is matched the way every other name here is, on 'normalizeText'.
--}
-namedProducer :: Maybe T.Text -> NE.NonEmpty NameProducer -> Maybe NameProducer
-namedProducer claimed producers = do
-    name <- claimed
-    find ((normalizeText name ==) . normalizeText . npActivityName) producers
+{- | The producers that answer an input, best first.
 
-{- | The tie an input left the ranking to break: several producers of the
-product, and no activity named by the source among them.
+An input naming no activity is answered by every producer of the product it
+asks for. One that names an activity is answered by the producers carrying that
+name, and by nothing else: a name this database does not carry is a reference
+to another database, so the input stays here unlinked and the cross-database
+linker gets its turn on it. The name is matched the way every other name here
+is, on 'normalizeText'.
 -}
-tiedOn :: T.Text -> T.Text -> NE.NonEmpty NameProducer -> Maybe NameProducer -> [AmbiguousProducer]
-tiedOn _ _ _ (Just _) = []
-tiedOn consumerName productName producers Nothing
+answering :: Maybe T.Text -> NE.NonEmpty NameProducer -> Maybe (NE.NonEmpty NameProducer)
+answering Nothing producers = Just producers
+answering (Just name) producers = NE.nonEmpty (NE.filter named producers)
+  where
+    named :: NameProducer -> Bool
+    named p = normalizeText name == normalizeText (npActivityName p)
+
+{- | The tie an input left the ranking to break: several producers answered it
+equally well, and nothing in the row says which.
+-}
+tiedOn :: T.Text -> NE.NonEmpty NameProducer -> [AmbiguousProducer]
+tiedOn productName answers
     | count <= 1 = []
     | otherwise =
         [ AmbiguousProducer
-            { apConsumer = consumerName
-            , apProduct = productName
-            , apChosen = npActivityName (NE.head producers)
+            { apProduct = productName
+            , apChosen = npActivityName (NE.head answers)
             , apCandidates = count
             }
         ]
   where
     count :: Int
-    count = NE.length producers
+    count = NE.length answers
 
 {- | Recursively collect files under @dir@ whose lowercased extension matches
 @ext@. Lets an EcoSpold package load from its root even when the .spold datasets
@@ -1276,14 +1277,13 @@ loadEcoSpoldDirectory opts dir = do
         workerStartTime <- getCurrentTime
         reportProgress Info $ printf "Worker %d started: processing %d files" workerNum (length workerFiles)
 
-        -- Parse all files for this worker using appropriate parser.
-        -- Both paths return (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID Int).
-        -- For EcoSpold2: dataset number = 0, supplier links = empty. WasteFlows now flow
-        -- through (intermediateExchange classified By-product:Waste).
+        -- Parse all files for this worker using appropriate parser. Both paths
+        -- return a 'ParsedDataset'; EcoSpold 2 addresses its suppliers by UUID
+        -- rather than by dataset number, so it fills neither of those fields.
         let parseFile =
                 if isEcoSpold1
                     then streamParseActivityAndFlowsFromFile1
-                    else fmap (fmap (\(a, ts, bs, ws, us) -> (a, ts, bs, ws, us, 0, M.empty))) . streamParseActivityAndFlowsFromFile
+                    else streamParseActivityAndFlowsFromFile
         workerResults <- mapM parseFile workerFiles
         let paired = zipWith (\f r -> fmap (f,) r) workerFiles workerResults
         let (errs, oks) = partitionEithers paired
@@ -1293,13 +1293,13 @@ loadEcoSpoldDirectory opts dir = do
             (okFiles, okResults) = unzip [(f, r') | (f, rs) <- split, r' <- rs]
         unless isEcoSpold1 $
             mapM_ (warnSplitKeyedOnFileName . fst) (filter ((> 1) . length . snd) split)
-        let procs = [a | (a, _, _, _, _, _, _) <- okResults]
-            techLists = [ts | (_, ts, _, _, _, _, _) <- okResults]
-            bioLists = [bs | (_, _, bs, _, _, _, _) <- okResults]
-            wasteLists = [ws | (_, _, _, ws, _, _, _) <- okResults]
-            unitLists = [us | (_, _, _, _, us, _, _) <- okResults]
-            dsNums = [n | (_, _, _, _, _, n, _) <- okResults]
-            supplierLinksList = [sl | (_, _, _, _, _, _, sl) <- okResults]
+        let procs = map pdActivity okResults
+            techLists = map pdTechFlows okResults
+            bioLists = map pdBioFlows okResults
+            wasteLists = map pdWasteFlows okResults
+            unitLists = map pdUnits okResults
+            dsNums = map pdDatasetNumber okResults
+            supplierLinksList = map pdSupplierLinks okResults
         let !allTechs = concat techLists
         let !allBios = concat bioLists
         let !allWastes = concat wasteLists
@@ -1378,29 +1378,30 @@ loadSingleEcoSpold1File opts filepath = do
             _ -> Nothing
         expanded = map (buildProcEntryFromResult fileUUID) results
         !procMap = M.fromList expanded
-        !techFlowMap = MS.fromListWith mergeTechFlows [(tfId f, f) | (_, techs, _, _, _, _, _) <- results, f <- techs]
-        !bioFlowMap = MS.fromListWith mergeBioFlows [(bfId f, f) | (_, _, bios, _, _, _, _) <- results, f <- bios]
-        !wasteFlowMap = M.fromList [(wfId f, f) | (_, _, _, wastes, _, _, _) <- results, f <- wastes]
-        !unitMap = M.fromList [(unitId u, u) | (_, _, _, _, units, _, _) <- results, u <- units]
+        !techFlowMap = MS.fromListWith mergeTechFlows [(tfId f, f) | r <- results, f <- pdTechFlows r]
+        !bioFlowMap = MS.fromListWith mergeBioFlows [(bfId f, f) | r <- results, f <- pdBioFlows r]
+        !wasteFlowMap = M.fromList [(wfId f, f) | r <- results, f <- pdWasteFlows r]
+        !unitMap = M.fromList [(unitId u, u) | r <- results, u <- pdUnits r]
         !dsIndex =
             M.fromList
-                [(dsNum, key) | ((_, _, _, _, _, dsNum, _), (key, _)) <- zip results expanded, dsNum /= 0]
-        !supplierLinks = M.unions [sl | (_, _, _, _, _, _, sl) <- results]
+                [(pdDatasetNumber r, key) | (r, (key, _)) <- zip results expanded, pdDatasetNumber r /= 0]
+        !supplierLinks = M.unions (map pdSupplierLinks results)
         simpleDb = SimpleDatabase procMap techFlowMap bioFlowMap wasteFlowMap unitMap
 
-    let totalTechs = sum [length techs | (_, techs, _, _, _, _, _) <- results]
-    let totalBios = sum [length bios | (_, _, bios, _, _, _, _) <- results]
-    let totalWastes = sum [length wastes | (_, _, _, wastes, _, _, _) <- results]
-    let totalUnits = sum [length units | (_, _, _, _, units, _, _) <- results]
+    let totalTechs = sum (map (length . pdTechFlows) results)
+    let totalBios = sum (map (length . pdBioFlows) results)
+    let totalWastes = sum (map (length . pdWasteFlows) results)
+    let totalUnits = sum (map (length . pdUnits) results)
     reportProgress Info $ printf "  Activities: %d processes" (M.size procMap)
     reportProgress Info $ printf "  Flows: %d tech + %d bio + %d waste (from %d raw)" (M.size techFlowMap) (M.size bioFlowMap) (M.size wasteFlowMap) (totalTechs + totalBios + totalWastes)
     reportProgress Info $ printf "  Units: %d unique (from %d raw)" (M.size unitMap) totalUnits
 
     Right <$> fixEcoSpold1ActivityLinks locationAliases dsIndex supplierLinks simpleDb
   where
-    buildProcEntryFromResult :: Maybe UUID.UUID -> (Activity, [TechnosphereFlow], [BiosphereFlow], [WasteFlow], [Unit], Int, M.Map UUID.UUID Int) -> ((UUID.UUID, UUID.UUID), Activity)
-    buildProcEntryFromResult fileUUID (activity, _, _, _, _, _, _) =
-        let actUUID = fromMaybe (generateActivityUUIDFromActivity activity) fileUUID
+    buildProcEntryFromResult :: Maybe UUID.UUID -> ParsedDataset -> ((UUID.UUID, UUID.UUID), Activity)
+    buildProcEntryFromResult fileUUID parsed =
+        let activity = pdActivity parsed
+            actUUID = fromMaybe (generateActivityUUIDFromActivity activity) fileUUID
             prodUUID = getReferenceProductUUID activity
          in ((actUUID, prodUUID), activity)
 
@@ -1736,9 +1737,24 @@ Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
 'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
 completeness below 100% for a perfectly solvable database. Waste *outputs* are
 generated, not demanded; only waste/technosphere *inputs* remain.
+
+An input of zero demands nothing either. It reaches no matrix: the builders drop
+a zero triple ('Database.MatrixBuild.triplesFor' and 'buildBioTriples'), and
+'missingActivityWarning' does not warn about one, so counting it as an unmet
+demand would report a gap no solve can encounter.
+
+Whether a row should be *linked* is the other question, and 'namesASupplier'
+answers it. A disabled input still points at a producer, and the author who
+re-enables it expects the link to be there.
 -}
 isSupplierDemand :: Exchange -> Bool
-isSupplierDemand ex =
+isSupplierDemand ex = namesASupplier ex && exchangeAmount ex /= 0
+
+{- | An input that names a supplier, whatever it asks of it. The linker's
+question, where 'isSupplierDemand' is the completeness report's.
+-}
+namesASupplier :: Exchange -> Bool
+namesASupplier ex =
     not (isBiosphereExchange ex)
         && exchangeIsInput ex
         && not (exchangeIsReference ex)
@@ -2217,7 +2233,7 @@ findExchangeCrossDBLink ::
     Exchange ->
     CrossDBLinkingStats
 findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techSupplierActivity = supplier, techLocation = loc}
-    | isSupplierDemand ex && not resolvesInternally =
+    | namesASupplier ex && not resolvesInternally =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
   where

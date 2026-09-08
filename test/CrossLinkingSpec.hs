@@ -342,7 +342,7 @@ spec = do
 
     -- -----------------------------------------------------------------------
     -- findSupplierInIndexedDBs — two activities, one product, one location.
-    -- The ecoinvent shape: "electricity, medium voltage" in GLO is the
+    -- The background shape: "electricity, medium voltage" in GLO is the
     -- reference product of a market group and of 26 cut-off co-outputs, so the
     -- product name alone cannot say which the source meant.
     -- -----------------------------------------------------------------------
@@ -513,7 +513,7 @@ marketActivity = ("market group for electricity, medium voltage", read "cccccccc
 landfillActivity = ("treatment of hard coal ash, sanitary landfill", read "cccccccc-0000-0000-0000-000000000003")
 
 {- | Two activities of one database whose reference product is the same flow at
-the same location, as ecoinvent's market group and its cut-off co-outputs are.
+the same location, as a market group and its cut-off co-outputs are.
 -}
 twoProducerDB :: SimpleDatabase
 twoProducerDB =

@@ -130,7 +130,7 @@ data IndexedDatabase = IndexedDatabase
     , idbByActivityAndProductName :: !(M.Map (Text, Text) [SupplierEntry])
     {- ^ (normalized activity name, normalized product name) → suppliers. What a
     demand that names its supplier activity is matched on first, before the
-    product name alone: in ecoinvent 3.12 cut-off, @electricity, medium voltage@
+    product name alone: in a released background database, @electricity, medium voltage@
     in GLO is the reference product of 27 different activities, and the product
     name alone cannot say which of them the source meant.
     -}
@@ -154,8 +154,8 @@ data SupplierEntry = SupplierEntry
     , seProductName :: !Text -- Product name for display/debugging
     , seActivityName :: !Text
     {- ^ Name of the activity that produces it. What separates
-    @market group for electricity, medium voltage@ from the 26 other ecoinvent
-    activities whose reference product is @electricity, medium voltage@ in GLO,
+    @market group for electricity, medium voltage@ from the 26 other
+    activities of that database whose reference product is @electricity, medium voltage@ in GLO,
     for the one import format that names the supplier activity apart from its
     product.
     -}
@@ -677,7 +677,7 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
             -- Priority-ordered match strategies; take the first non-empty
             -- result via 'firstNonEmpty':
             --   1. The (supplier activity, product) pair, when the source named
-            --      the activity: the only key that separates the 27 ecoinvent
+            --      the activity: the only key that separates the 27
             --      activities whose reference product is "electricity, medium
             --      voltage" in GLO.
             --   2. Exact product-name match across all indexed DBs.
