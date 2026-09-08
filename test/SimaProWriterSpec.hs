@@ -128,6 +128,11 @@ fixtureCSV =
 {- | A single process with one reference product and one coproduct (in the
 @Avoided products@ section, which the parser reads back as a 'Coproduct').
 -}
+
+-- | How many lines of a written file start with the given prefix.
+countOf :: BS.ByteString -> BS.ByteString -> Int
+countOf prefix written = length (filter (BS.isPrefixOf prefix) (BS.split 10 written))
+
 coproductCSV :: BS.ByteString
 coproductCSV =
     BS.intercalate
@@ -459,6 +464,18 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- count stable and preserves the AvoidedProduct role.
         length acts1 `shouldBe` length acts0
         (AvoidedProduct `elem` roles) `shouldBe` True
+
+    it "(regression) writes an avoided product once, not as an input as well" $ do
+        original <- parseBytes coproductCSV
+        f0 <- serBytes (toSimple original)
+        -- Written under "Avoided products" and nowhere else. Under
+        -- "Materials/fuels" as well, the re-import pairs the credit with an
+        -- equal input and the substitution cancels itself out.
+        countOf "Butter;kg;0.3" f0 `shouldBe` 1
+        reparsed <- parseBytes f0
+        let roles = [techRole e | a <- activitiesOf reparsed, e@TechnosphereExchange{} <- exchanges a]
+        length (filter (== AvoidedProduct) roles) `shouldBe` 1
+        length (filter (== Input) roles) `shouldBe` 0
 
     it "(regression) omits the Type line for an activity with no native type" $ do
         original <- parseBytes noTypeCSV

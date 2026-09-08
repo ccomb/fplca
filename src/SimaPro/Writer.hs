@@ -534,25 +534,36 @@ renderPedigree Pedigree{..} =
             (map (T.pack . show) [pedReliability, pedCompleteness, pedTemporal, pedGeographical, pedTechnological])
         <> ")"
 
-{- | Build a 'Line' for a technosphere input exchange. Returns 'Nothing' for
-the reference/coproduct outputs (those go to the Products section) and for
-exchanges whose flow is unknown to the tech-flow DB.
+{- | Build a 'Line' for the @Materials\/fuels@ section, which holds inputs and
+only inputs. 'Nothing' for every other role, and for an input whose flow is
+unknown to the tech-flow catalogue.
+
+Each of the other roles is an output with a section of its own: the reference
+and the coproducts go to @Products@, a substitution to @Avoided products@.
+Writing one here as well puts it in the file twice, and a reader then sees two
+exchanges where the source had one. On a substitution that is not a duplicate
+but a cancellation: the credit meets an equal input, and the activity loses the
+benefit it existed to record, along with every chain standing on it.
 -}
 techInputLine :: Catalogs -> Exchange -> Maybe Line
-techInputLine cats ex@TechnosphereExchange{..} =
-    if exchangeIsReference ex
-        then Nothing
-        else case M.lookup techFlowId (catTech cats) of
-            Nothing -> Nothing
-            Just flow ->
-                Just
-                    Line
-                        { lName = tfName flow
-                        , lCompartment = ""
-                        , lUnit = unitNameOf (catUnits cats) techUnitId
-                        , lAmount = techAmount
-                        , lComment = renderComment techPedigree techComment
-                        }
+techInputLine cats TechnosphereExchange{..} = case techRole of
+    Input -> inputLine
+    ReferenceProduct -> Nothing
+    ReferenceInput -> Nothing
+    Coproduct -> Nothing
+    AvoidedProduct -> Nothing
+  where
+    inputLine :: Maybe Line
+    inputLine = do
+        flow <- M.lookup techFlowId (catTech cats)
+        pure
+            Line
+                { lName = tfName flow
+                , lCompartment = ""
+                , lUnit = unitNameOf (catUnits cats) techUnitId
+                , lAmount = techAmount
+                , lComment = renderComment techPedigree techComment
+                }
 techInputLine _ BiosphereExchange{} = Nothing
 techInputLine _ WasteExchange{} = Nothing
 
