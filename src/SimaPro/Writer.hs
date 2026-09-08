@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -296,12 +297,10 @@ checkSimaProExportable db =
         | act <- M.elems (sdbActivities db)
         , ex@BiosphereExchange{bioDirection = Emission} <- exchanges act
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbBioFlows db)]
-        , let medium = T.toLower (bfCompartmentName flow)
-        , not (T.null medium)
+        , Just comp <- [bfCompartment flow]
         , -- A final waste flow is not an emission to a medium; it has its own
         -- section ('SecWaste'), so it is not held to the emission media.
-        medium `notElem` [wasteMedium, inventoryIndicatorMedium]
-        , medium `notElem` ["air", "water", "soil"]
+        compartmentName comp `notElem` [Waste, InventoryIndicator, Air, Water, Soil]
         ]
     amountOffenders =
         [ (activityName act, amt)
@@ -601,7 +600,7 @@ decides first.
 -}
 bioSection :: Catalogs -> Exchange -> Maybe BioSec
 bioSection cats ex@BiosphereExchange{bioDirection = dir}
-    | medium `elem` [Just wasteMedium, Just inventoryIndicatorMedium] = Just SecWaste
+    | medium `elem` [Just Waste, Just InventoryIndicator] = Just SecWaste
     | otherwise = case dir of
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
@@ -609,16 +608,19 @@ bioSection cats ex@BiosphereExchange{bioDirection = dir}
         -- 'serializeActivity'); no dead "unknown → air" arm.
         Emission -> sectionForMedium <$> medium
   where
-    medium :: Maybe Text
-    medium = T.toLower . bfCompartmentName <$> M.lookup (exchangeFlowId ex) (catBio cats)
-    sectionForMedium :: Text -> BioSec
-    sectionForMedium name = case name of
-        "water" -> SecWater
-        "soil" -> SecSoil
-        -- air, unspecified, or any other medium → air. 'checkSimaProExportable'
-        -- rejects non air/water/soil media at the export boundary, so a real
-        -- export only ever lands air or empty here.
-        _ -> SecAir
+    medium :: Maybe Medium
+    medium = compartmentName <$> (bfCompartment =<< M.lookup (exchangeFlowId ex) (catBio cats))
+    sectionForMedium :: Medium -> BioSec
+    sectionForMedium = \case
+        Water -> SecWater
+        Soil -> SecSoil
+        -- 'checkSimaProExportable' rejects every medium but air, water and soil
+        -- at the export boundary, so a real export only ever lands air here.
+        Air -> SecAir
+        NaturalResource -> SecAir
+        InventoryIndicator -> SecAir
+        Economic -> SecAir
+        Waste -> SecAir
 bioSection _ TechnosphereExchange{} = Nothing
 bioSection _ WasteExchange{} = Nothing
 

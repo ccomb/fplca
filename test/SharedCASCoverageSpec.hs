@@ -38,7 +38,10 @@ import Method.ParserSimaPro (parseSimaProMethodCSVBytes)
 import Method.Types (Compartment (..), FlowDirection (..), Location (..), Medium (..), Method (..), MethodCF (..), MethodCollection (..))
 import SubstanceRegistry (CASNumber (..))
 import SynonymDB (buildFromPairs, emptySynonymDB, normalizeName)
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 import UnitConversion (defaultUnitConfig)
 
@@ -53,7 +56,7 @@ waterCAS :: Text
 waterCAS = "7732-18-5"
 
 -- bfUnitId = mkUUID 0 with an empty UnitDB ⇒ identity unit conversion.
-mkWaterFlow :: Integer -> Text -> Text -> BiosphereFlow
+mkWaterFlow :: Integer -> Text -> VT.Medium -> BiosphereFlow
 mkWaterFlow i name medium =
     BiosphereFlow
         { bfId = mkUUID i
@@ -82,9 +85,9 @@ mkWaterCF name medium dir val =
 
 -- Real ecoinvent flow names (CAS 7732-18-5).
 river, cooling, emWater :: BiosphereFlow
-river = mkWaterFlow 1 "Water, river" "natural resource"
-cooling = mkWaterFlow 2 "Water, cooling, unspecified natural origin" "natural resource"
-emWater = mkWaterFlow 3 "Water" "water"
+river = mkWaterFlow 1 "Water, river" NaturalResource
+cooling = mkWaterFlow 2 "Water, cooling, unspecified natural origin" NaturalResource
+emWater = mkWaterFlow 3 "Water" Water
 
 allFlows :: [BiosphereFlow]
 allFlows = [river, cooling, emWater]
@@ -181,7 +184,7 @@ mkMethane i name =
         , bfSynonyms = M.empty
         , bfCAS = Just methaneCAS
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" Nothing)
+        , bfCompartment = Just (VT.Compartment Air Nothing)
         }
 
 methaneNonFossil, methaneFossil :: BiosphereFlow
@@ -288,7 +291,7 @@ mkAirFlow i name sub =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" (if sub == "" then Nothing else Just sub))
+        , bfCompartment = Just (VT.Compartment Air (if sub == "" then Nothing else Just sub))
         }
 
 mkAirCF :: Text -> Text -> Double -> MethodCF

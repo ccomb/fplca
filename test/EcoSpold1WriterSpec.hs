@@ -600,7 +600,7 @@ spec = do
                 Right sdb' -> do
                     map bfName (M.elems (sdbBioFlows sdb')) `shouldBe` ["spent solvent"]
                     map bfCompartment (M.elems (sdbBioFlows sdb'))
-                        `shouldBe` [Just (Compartment wasteMedium Nothing)]
+                        `shouldBe` [Just (Compartment Waste Nothing)]
                     M.size (sdbWasteFlows sdb') `shouldBe` 0
                     let directions = [d | BiosphereExchange{bioDirection = d} <- allExchanges sdb']
                     directions `shouldBe` [Emission]
@@ -687,20 +687,6 @@ spec = do
                 bios = M.singleton bioU (BiosphereFlow bioU "trace" kgUnit M.empty Nothing Nothing Nothing)
                 sdb = soloDb "subnormal emitter" prodU [bioEx] M.empty bios M.empty
             checkEcoSpold1Exportable sdb `shouldSatisfy` isRight
-
-    describe "waste-marker collision" $
-        it "rejects a biosphere flow whose compartment is the waste-routing category" $ do
-            -- "Final waste flows" is what the parser reads as the marker of a
-            -- final waste flow, before the groups, so a biosphere flow carrying
-            -- it as its compartment name would silently come back under the
-            -- "waste" compartment instead.
-            let prodU = read "bbbb0000-0000-4000-8000-000000000001" :: UUID
-                bioU = read "bbbb0000-0000-4000-8000-0000000000c0" :: UUID
-                comp = Compartment "Final waste flows" Nothing
-                bioEx = BiosphereExchange bioU 0.05 kgUnit Emission "" Nothing Nothing
-                bios = M.singleton bioU (BiosphereFlow bioU "oddly classified" kgUnit M.empty Nothing Nothing (Just comp))
-                sdb = soloDb "confused process" prodU [bioEx] M.empty bios M.empty
-            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
 
     describe "general comment (activity description)" $
         it "re-imports a multi-paragraph description as one joined paragraph" $ do

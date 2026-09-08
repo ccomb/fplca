@@ -53,6 +53,7 @@ import Types (
     Database (..),
     Exchange (..),
     LocationSource (..),
+    Medium (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -281,7 +282,7 @@ cheese =
                 { abFlow =
                     FlowByName
                         "Methane"
-                        Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
+                        Compartment{compartmentName = Air, compartmentSub = Just "low population density"}
                         "kg"
                 , abDirection = Emission
                 , abAmount = 0.01
@@ -298,7 +299,7 @@ methane =
         { abFlow =
             FlowByName
                 "Methane"
-                Compartment{compartmentName = "air", compartmentSub = Just "low population density"}
+                Compartment{compartmentName = Air, compartmentSub = Just "low population density"}
                 "kg"
         , abDirection = Emission
         , abAmount = 0.01
@@ -484,7 +485,7 @@ co2Flow =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just Compartment{compartmentName = "air", compartmentSub = Nothing}
+        , bfCompartment = Just Compartment{compartmentName = Air, compartmentSub = Nothing}
         }
 
 supplierActivity :: Activity

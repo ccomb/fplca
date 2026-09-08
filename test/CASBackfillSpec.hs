@@ -10,7 +10,12 @@ import Test.Hspec
 
 import SubstanceRegistry (CASNumber (..), NormName (..))
 import SynonymDB (normalizeName)
-import Types (BiosphereFlow (..), Compartment (..), fillBioFlowCAS)
+import Types (
+    BiosphereFlow (..),
+    Compartment (..),
+    Medium (..),
+    fillBioFlowCAS,
+ )
 
 mkUUID :: Integer -> UUID
 mkUUID n = UUID.fromWords64 (fromIntegral n) 0
@@ -24,7 +29,7 @@ mkFlow i name cas =
         , bfSynonyms = M.empty
         , bfCAS = cas
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (Compartment "water" Nothing)
+        , bfCompartment = Just (Compartment Water Nothing)
         }
 
 -- Key the binding through the same normalizer 'fillBioFlowCAS' applies, so the

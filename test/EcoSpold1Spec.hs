@@ -577,7 +577,7 @@ spec = do
                     length bioExchanges `shouldBe` 1
                     map bfName bios `shouldBe` ["Organic carbon, placed in landfill"]
                     map bfCompartment bios
-                        `shouldBe` [Just (Compartment wasteMedium (Just "landfill"))]
+                        `shouldBe` [Just (Compartment Waste (Just "landfill"))]
                     length wastes `shouldBe` 0
 
         it "does not route the waste flow to the technosphere bucket" $

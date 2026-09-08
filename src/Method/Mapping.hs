@@ -364,7 +364,7 @@ selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits 
     compFits f = case mcfCompartment cf of
         Nothing -> True
         Just (Compartment med sub _) ->
-            maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
+            maybe False (\c -> mediumEq med (VT.mediumText (VT.compartmentName c)) && subFits sub c) (bfCompartment f)
     subFits sub c = subcompartmentFits sub (fromMaybe "" (VT.compartmentSub c))
     mediumEq = sameMedium
 
@@ -452,7 +452,7 @@ expandPatternCF flows exclusions cf
             , mcfCompartment = fromFlowCompartment <$> bfCompartment f
             }
     fromFlowCompartment c =
-        Compartment (VT.compartmentName c) (fromMaybe "" (VT.compartmentSub c)) ""
+        Compartment (VT.mediumText (VT.compartmentName c)) (fromMaybe "" (VT.compartmentSub c)) ""
 
 {- | Take the exclusions' flows back out of a finished mapping list.
 
@@ -1161,12 +1161,7 @@ projectRegionalResourceFlows ::
 projectRegionalResourceFlows synDB bioFlows mappings =
     mappings ++ projected
   where
-    -- Strip a @"medium/sub"@ category tail before normalizing, exactly as
-    -- 'flowMediumSub' and 'findSimilarCFs' do: a resource encoded as
-    -- @"natural resource/in water"@ must still resolve to medium @"resource"@,
-    -- or the scope guard below misses it and the region-tagged flow is silently
-    -- not projected (the very withdrawal credit this function exists to recover).
-    flowMedium = normalizeMedium . T.takeWhile (/= '/') . T.toLower . VT.bfCompartmentName
+    flowMedium = normalizeMedium . VT.bfCompartmentName
     cfMedium cf = case mcfCompartment cf of
         Just (Compartment m _ _) -> normalizeMedium (T.toLower m)
         Nothing -> ""

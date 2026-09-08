@@ -36,7 +36,12 @@ import Test.Hspec
 import Method.Mapping
 import Method.Types (Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), buildEnergyDensityMapFromCSV)
 import SynonymDB (normalizeName)
-import Types (BiosphereFlow (..), Unit (..), UnitDB)
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+    Unit (..),
+    UnitDB,
+ )
 import qualified Types as VT
 import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 
@@ -90,7 +95,7 @@ coalFlowIn unitId =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "natural resource" Nothing)
+        , bfCompartment = Just (VT.Compartment NaturalResource Nothing)
         }
 
 -- An energy-denominated CF (value 1.0, unit MJ) matched to the coal flow by

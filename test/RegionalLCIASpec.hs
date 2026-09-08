@@ -30,6 +30,7 @@ import Types (
     Database (..),
     Indexes (..),
     LocationSource (..),
+    Medium (..),
     SparseTriple (..),
     Unit (..),
     emptyProductIndex,
@@ -73,7 +74,7 @@ testFlow =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" Nothing)
+        , bfCompartment = Just (VT.Compartment Air Nothing)
         }
 
 mkActivity :: Text -> Activity

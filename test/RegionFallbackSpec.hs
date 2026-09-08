@@ -11,7 +11,10 @@ import Test.Hspec
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, cfValue, lookupCFForFlow)
 import Method.Types (CFFamily (..), Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..), extractLocationSuffix, lookupEnergyDensity)
 import SynonymDB (normalizeName)
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -40,7 +43,7 @@ mkFlow i name =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" Nothing)
+        , bfCompartment = Just (VT.Compartment Air Nothing)
         }
 
 {- | Tables holding a name-matched CF for a base substance (no region tag), the

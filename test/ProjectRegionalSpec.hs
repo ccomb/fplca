@@ -11,7 +11,10 @@ import Test.Hspec
 import Method.Mapping (MatchStrategy (..), projectRegionalResourceFlows)
 import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs)
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -40,7 +43,7 @@ mkResourceFlow i name =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "natural resource" Nothing)
+        , bfCompartment = Just (VT.Compartment NaturalResource Nothing)
         }
 
 -- A projection nulls the CF's consumer location (it becomes a GLOBAL entry) and
@@ -97,7 +100,7 @@ spec = describe "projectRegionalResourceFlows" $ do
             cfGeneric = mkLocatedCF "river water" 42.95 Nothing
             rowRelease =
                 (mkResourceFlow 18 "Water, river, RoW")
-                    { bfCompartment = Just (VT.Compartment "water" Nothing)
+                    { bfCompartment = Just (VT.Compartment Water Nothing)
                     }
             flows = M.fromList [(bfId f, f) | f <- [baseFlow, rowRelease]]
         projected (projectRegionalResourceFlows inSynDB flows [(cfFR, Just (baseFlow, BySynonym)), (cfGeneric, Just (baseFlow, BySynonym))])
@@ -114,12 +117,12 @@ spec = describe "projectRegionalResourceFlows" $ do
         projected (projectRegionalResourceFlows synDB flows [(airCF, Nothing), (cfGeneric, Just (baseFlow, BySynonym))])
             `shouldNotContain` [("Water, river, RoW", Nothing, 42.95)]
 
-    it "derives the medium across a 'medium/sub' category, so a slash-encoded resource flow still projects" $ do
-        let frFlowSlashed =
+    it "projects a resource flow that names a subcompartment as well as its medium" $ do
+        let frFlowSubbed =
                 (mkResourceFlow 13 "Water, river, FR")
-                    { bfCompartment = Just (VT.Compartment "natural resource/in water" Nothing)
+                    { bfCompartment = Just (VT.Compartment VT.NaturalResource (Just "in water"))
                     }
-        runWith [baseFlow, frFlowSlashed] `shouldContain` [frProjection]
+        runWith [baseFlow, frFlowSubbed] `shouldContain` [frProjection]
 
     it "dedups colliding located CFs deterministically — higher value wins, order-independent" $ do
         let cfLo = mkLocatedCF "river water" 6.98 (Just "FR")
@@ -159,11 +162,11 @@ spec = describe "projectRegionalResourceFlows" $ do
                     }
             waterFR =
                 (mkResourceFlow 20 "Water, FR")
-                    { bfCompartment = Just (VT.Compartment "water" Nothing)
+                    { bfCompartment = Just (VT.Compartment Water Nothing)
                     }
             bareWater =
                 (mkResourceFlow 21 "Water")
-                    { bfCompartment = Just (VT.Compartment "water" Nothing)
+                    { bfCompartment = Just (VT.Compartment Water Nothing)
                     }
         projected
             ( projectRegionalResourceFlows
@@ -180,11 +183,11 @@ spec = describe "projectRegionalResourceFlows" $ do
                     }
             so2FR =
                 (mkResourceFlow 22 "Sulfur dioxide, FR")
-                    { bfCompartment = Just (VT.Compartment "air" Nothing)
+                    { bfCompartment = Just (VT.Compartment Air Nothing)
                     }
             bareSo2 =
                 (mkResourceFlow 23 "Sulfur dioxide")
-                    { bfCompartment = Just (VT.Compartment "air" Nothing)
+                    { bfCompartment = Just (VT.Compartment Air Nothing)
                     }
         projected
             ( projectRegionalResourceFlows
