@@ -183,9 +183,17 @@ EOF
             DARWIN_NUMERIC_FLAGS=" -optl-L${OPENBLAS_PREFIX}/lib -optl-lopenblas -optl-L${GFORTRAN_LIB_DIR} -optl-lgfortran -optl-lquadmath"
         fi
         DARWIN_LINK_FLAGS="$DARWIN_MUMPS_FLAGS$DARWIN_NUMERIC_FLAGS $DARWIN_TAIL_FLAGS"
+        # shared: False, for the same reason musl mode sets it. Left to itself,
+        # cabal builds the library both ways on aarch64-darwin, and every
+        # module is compiled twice: the CI log shows a `.dyn_o` next to the
+        # `.o` on every line, where the Linux leg shows the `.o` alone. It buys
+        # nothing here - no module in this tree uses TemplateHaskell, and the
+        # packaged macOS binary is standalone, so a dynamic copy of our own
+        # library is never loaded.
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
+shared: False
 
 extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
