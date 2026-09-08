@@ -371,6 +371,20 @@ selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits 
     mediumEq :: Text -> Medium -> Bool
     mediumEq stated actual = parseMedium stated == Right actual
 
+{- | The medium a word names, or 'Nothing' when this reader cannot place it.
+The one conversion from a source's spelling to the value the tables key on.
+-}
+mediumKey :: Text -> MediumKey
+mediumKey = either (const Nothing) Just . parseMedium
+
+{- | The medium a factor states, after the compartment rules but before any
+table: 'Nothing' when it names none, or none this reader can place.
+-}
+cfMedium :: MethodCF -> MediumKey
+cfMedium cf = do
+    Compartment med _ _ <- mcfCompartment cf
+    mediumKey med
+
 {- | The medium axis of a lookup key: the medium a source stated, or 'Nothing'
 where it stated none. A flow whose file gave it no compartment keys on
 'Nothing' and meets no factor, which is also what a factor without one gets:
@@ -1052,11 +1066,6 @@ buildMethodIndex method =
     cfTokens :: MethodCF -> S.Set Text
     cfTokens = S.fromList . T.words . normalizeName . mcfFlowName
 
-    cfMedium :: MethodCF -> MediumKey
-    cfMedium cf = do
-        Compartment med _ _ <- mcfCompartment cf
-        either (const Nothing) Just (parseMedium med)
-
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
 
 The map is applied to each CF's compartment before keying the lookup
@@ -1178,10 +1187,6 @@ projectRegionalResourceFlows synDB bioFlows mappings =
   where
     flowMedium :: BiosphereFlow -> MediumKey
     flowMedium = fmap VT.compartmentName . VT.bfCompartment
-    cfMedium :: MethodCF -> MediumKey
-    cfMedium cf = do
-        Compartment m _ _ <- mcfCompartment cf
-        either (const Nothing) Just (parseMedium m)
     -- A projection key (group/name, medium, region) drops the subcompartment, so
     -- two located CFs of the same substance can land on one key. 'M.fromList' would
     -- then keep whichever came last in 'mappings' — order-dependent and silent.
@@ -1340,25 +1345,23 @@ entryPriority :: BuildProvenance -> Int
 entryPriority = maybe (strategyPriority ByProxy) strategyPriority . bpStrategy
 
 {- | The medium and subcompartment a characterization factor keys on, or
-'Nothing' when it states no compartment at all.
+'Nothing' when it states no compartment, and 'Nothing' too when it states a
+medium 'parseMedium' cannot place: such a factor is left out of the tables
+rather than filed under a word no flow is ever looked up by.
 
 The compartment-keyed tables 'buildMethodTables' fills are spelled in terms of
 this — one derivation rather than one per table. (It still runs per table; what
 is shared is the derivation, not its result. 'mtUuidCF' and 'mtRegionalizedCF'
 key on the flow, not on this pair.)
 
-It carries the newtypes rather than a bare pair of 'Text', for the reason its
-read-path twin 'flowMediumSub' does: the two components are both text, so a
-transposed binding would key every table with the medium and the subcompartment
-swapped, and type-check.
-
-The two are not yet interchangeable. 'flowMediumSub' case-folds its input
-before normalizing where this folds the medium after, and neither folds the
-subcompartment the table keys on. On a compartment map whose target columns
-carry a capital — nothing forbids one, and the shipped file simply has none —
-the two sides key differently and every factor for that medium goes silently
-unmatched. Closing that changes which factors resolve, so it wants its own
-change and its own test rather than a quiet edit here.
+The subcompartment is the half still spelled as its source wrote it, and this
+and its read-path twin 'flowMediumSub' do not fold it. On a compartment map
+whose target subcompartment column carries a capital — nothing forbids one, and
+the shipped file simply has none — the two sides key differently and every
+factor for that subcompartment goes silently unmatched. Closing that changes
+which factors resolve, so it wants its own change and its own test rather than
+a quiet edit here. The medium half is no longer exposed to it: both sides read
+their word with 'parseMedium', which folds.
 -}
 
 {- | A subcompartment as the matchers compare them: case-folded and trimmed.
@@ -1379,7 +1382,7 @@ cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (MediumKey, Subcompartment)
 cfMediumSub cmap cf = do
     comp <- mcfCompartment cf
     let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-    medium <- either (const Nothing) Just (parseMedium normMedRaw)
+    medium <- mediumKey normMedRaw
     pure (Just medium, Subcompartment normSub)
 
 buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
@@ -2687,7 +2690,7 @@ flowMediumSub cmap flow =
         rawSub = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
         Compartment normMedRaw normSub _ =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
-     in (either (const Nothing) Just (parseMedium normMedRaw), Subcompartment normSub)
+     in (mediumKey normMedRaw, Subcompartment normSub)
 
 {- | Flow→CF conversion factor for @qty@ units of flow, applying the
 energy-density bridge when it is needed and available.

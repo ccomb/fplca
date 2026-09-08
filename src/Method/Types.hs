@@ -84,8 +84,8 @@ data Compartment = Compartment !Text !Text !Text
     deriving (Eq, Show, Generic, NFData, Store, ToJSON, FromJSON)
 
 {- | A normalized compartment subcompartment (e.g. @"surface water"@,
-@"(unspecified)"@). The third lookup-key axis alongside 'Medium' and a
-normalized name; a newtype so it can't be swapped with a medium in a key tuple.
+@"(unspecified)"@). A lookup-key axis alongside the medium and a normalized
+name; a newtype so it can't be swapped with either in a key tuple.
 -}
 newtype Subcompartment = Subcompartment Text
     deriving (Eq, Ord, Show)
