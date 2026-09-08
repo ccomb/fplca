@@ -468,8 +468,8 @@ renderBiosphere env ex =
         Emission -> "        <outputGroup>4</outputGroup>"
 
 {- | Shared @intermediateExchange@ emitter for technosphere and waste flows.
-The @activityLinkId@ is emitted only when non-nil (matching the parser, which
-treats nil/empty as "no link"). An optional @classification@ tags waste flows.
+The @activityLinkId@ is emitted only when the exchange has one (matching the parser, which
+treats a nil or empty attribute as "no link"). An optional @classification@ tags waste flows.
 -}
 intermediateExchange ::
     Maybe Text -> -- resolved flow name
@@ -479,7 +479,7 @@ intermediateExchange ::
     Maybe Text -> -- resolved unit name
     M.Map Text (S.Set Text) -> -- synonyms
     Text -> -- the in/out group line (8-space indent)
-    UUID.UUID -> -- activity link id (nil = omit)
+    Maybe UUID.UUID -> -- activity link id (absent = omit)
     Maybe (Text, Text) -> -- optional (classificationSystem, classificationValue)
     Maybe Text -> -- comment
     [Text]
@@ -504,8 +504,8 @@ intermediateExchange mName flowId unitUUID amount mUnit syns groupLine linkId mC
             <> linkAttr
             <> ">"
     linkAttr
-        | linkId == UUID.nil = ""
-        | otherwise = " activityLinkId=\"" <> escapeAttr (UUID.toText linkId) <> "\""
+        | Just linked <- linkId = " activityLinkId=\"" <> escapeAttr (UUID.toText linked) <> "\""
+        | otherwise = ""
 
 -- ============================================================================
 -- Small element emitters

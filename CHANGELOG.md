@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Changed
+- An exchange that resolved to no supplier now reports `activityLinkId` as
+  null. It used to report the all-zero UUID, a value that reads as an
+  identifier and is not one: every consumer had to know that one UUID means
+  "none", and one that did not know charged a link to a process that does not
+  exist. The engine no longer has a way to write it. Redefining a published
+  field is what makes the next release a minor rather than a patch.
 - An exchange no longer carries a process link, and responses no longer send
   `processLinkId`. The field held a matrix row index, a number minted when the
   matrices are built and renumbered whenever they are rebuilt, so no reader of

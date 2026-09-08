@@ -369,12 +369,10 @@ checkEcoSpold1Exportable db =
     -- either axis.
     namedSupplier :: Exchange -> [(UUID, UUID)]
     namedSupplier ex = case ex of
-        TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid}
-            | link /= UUID.nil -> [(link, fid)]
+        TechnosphereExchange{techRole = Input, techActivityLinkId = Just link, techFlowId = fid} -> [(link, fid)]
         TechnosphereExchange{} -> []
         BiosphereExchange{} -> []
-        WasteExchange{waIsInput = True, waActivityLinkId = link, waFlowId = fid}
-            | link /= UUID.nil -> [(link, fid)]
+        WasteExchange{waIsInput = True, waActivityLinkId = Just link, waFlowId = fid} -> [(link, fid)]
         WasteExchange{} -> []
     linkedWasteOutputs =
         [ activityName act
@@ -523,16 +521,14 @@ exchangeNumber :: Resolvers -> Int -> Exchange -> Int
 exchangeNumber res datasetNum ex
     | exchangeIsReference ex = datasetNum
     | otherwise = case ex of
-        TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid}
-            | link /= UUID.nil ->
-                M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
+        TechnosphereExchange{techRole = Input, techActivityLinkId = Just link, techFlowId = fid} ->
+            M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
         TechnosphereExchange{} -> flowNum
         BiosphereExchange{} -> flowNum
         -- A waste input is written as a technosphere input, so it names its
         -- treatment the same way. An output carries no link to name.
-        WasteExchange{waIsInput = True, waActivityLinkId = link, waFlowId = fid}
-            | link /= UUID.nil ->
-                M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
+        WasteExchange{waIsInput = True, waActivityLinkId = Just link, waFlowId = fid} ->
+            M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
         WasteExchange{} -> flowNum
   where
     flowNum = M.findWithDefault datasetNum (exchangeFlowId ex) (rFlowNumbers res)

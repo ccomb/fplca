@@ -289,7 +289,7 @@ validateOne ctx a =
                         , techRole = ReferenceProduct
                         , -- Self-link, as every loaded database records its
                           -- reference products.
-                          techActivityLinkId = fst key
+                          techActivityLinkId = Just (fst key)
                         , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
@@ -594,10 +594,10 @@ parseProvider provider = case parseProcessRef provider of
     Just ref -> Just (ProviderPair (prActivity ref) (prProduct ref))
     Nothing -> ProviderActivity <$> UUID.fromText provider
 
-matchesProvider :: ProviderKey -> UUID -> UUID -> Bool
+matchesProvider :: ProviderKey -> Maybe UUID -> UUID -> Bool
 matchesProvider key linkedActivity linkedFlow = case key of
-    ProviderPair activityId productId -> activityId == linkedActivity && productId == linkedFlow
-    ProviderActivity activityId -> activityId == linkedActivity
+    ProviderPair activityId productId -> Just activityId == linkedActivity && productId == linkedFlow
+    ProviderActivity activityId -> Just activityId == linkedActivity
 
 -- | The same exchange, restated. Only the amount moves.
 withAmount :: Double -> Exchange -> Exchange
@@ -636,7 +636,7 @@ resolveOne ctx ex = case ex of
                 , techAmount = amount
                 , techUnitId = unitRef
                 , techRole = Input
-                , techActivityLinkId = prActivity (supKey sup)
+                , techActivityLinkId = Just (prActivity (supKey sup))
                 , techSupplierClaim = ClaimById (prActivity (supKey sup))
                 , techLocation = ""
                 , techComment = comment
@@ -652,7 +652,7 @@ resolveOne ctx ex = case ex of
                 , waAmount = amount
                 , waUnitId = unitRef
                 , waIsInput = False
-                , waActivityLinkId = prActivity (supKey sup)
+                , waActivityLinkId = Just (prActivity (supKey sup))
                 , waSupplierClaim = ClaimById (prActivity (supKey sup))
                 , waLocation = ""
                 , waComment = comment

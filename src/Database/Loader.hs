@@ -336,6 +336,9 @@ History of manual bumps:
 - 31: a waste line carries its source's claim too, and a technosphere claim is
      a 'SupplierClaim' rather than a bare name, so the bytes of both differ
      from 29's.
+- 32: the supplier an exchange resolved to is a 'Maybe', not a UUID with nil
+     standing for none. The field changes width, so every field after it would
+     be read at the wrong offset.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -343,7 +346,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 31
+     in hi `xor` lo `xor` 32
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -787,7 +790,7 @@ fixExchangeLink :: ExchangeLinkContext -> Activity -> Exchange -> (Exchange, Unl
 fixExchangeLink ExchangeLinkContext{..} consumer ex@TechnosphereExchange{techFlowId = fid, techRole = role, techSupplierClaim = claim, techLocation = loc}
     | role == Input || role == ReferenceInput =
         let linked overrides actUUID prodUUID =
-                ( ex{techFlowId = prodUUID, techActivityLinkId = actUUID}
+                ( ex{techFlowId = prodUUID, techActivityLinkId = Just actUUID}
                 , mempty{usTotalLinks = 1, usFoundLinks = 1, usLocationOverrides = overrides}
                 )
             unlinked flow lookupLoc =
@@ -1110,7 +1113,7 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
             Just flow ->
                 let key = normalizeText (tfName flow)
                     consumerUnit = getUnitNameForExchange unitDB ex
-                    relink p = ex{techFlowId = npProductUUID p, techActivityLinkId = npActivityUUID p}
+                    relink p = ex{techFlowId = npProductUUID p, techActivityLinkId = Just (npActivityUUID p)}
                     -- Accept a candidate only when its reference unit can convert.
                     accept p
                         | linkUnitsCompatible unitConfig consumerUnit (npReferenceUnit p) = Just p
@@ -1684,7 +1687,7 @@ loadDatabaseWithCrossDBLinking opts otherIndexes synonymDB locationHier policy p
 
 {- | Fix activity links using cross-database lookup.
 
-For each unlinked technosphere input (where activityLinkId is nil),
+For each unlinked technosphere input (one with no activityLinkId),
 search across other loaded databases to find a matching supplier.
 
 Matching criteria:
@@ -1806,7 +1809,7 @@ index assigned only when matrices are built, so it never exists on a
 'collectDanglingProductNames' has the real lookup and calls 'findProducer'
 directly, honouring both branches.
 
-A nil @activityLinkId@ (SimaPro inputs awaiting cross-DB linking, or a genuine
+An absent @activityLinkId@ (SimaPro inputs awaiting cross-DB linking, or a genuine
 orphan) is never an internal producer. A *non-nil* link to an activity absent
 from this database — e.g. a partial EcoSpold2 import that references ecoinvent
 background activities it doesn't ship — is unresolved too: the matrix builder
@@ -2273,7 +2276,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
   where
-    resolvesInternally = linkId /= UUID.nil && S.member (linkId, fid) ownKeys
+    resolvesInternally = maybe False (\supplier -> S.member (supplier, fid) ownKeys) linkId
     mkTechLink supAct supProd supName supLoc srcDb tied flowUnitName =
         CrossDBLink
             { cdlConsumerActUUID = consumerActUUID
@@ -2441,7 +2444,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows 
   where
     -- Same gate as the technosphere arm: a link the matrix already routes in
     -- place would be counted twice if a cross-DB link were emitted for it too.
-    resolvesInternally = lid /= UUID.nil && S.member (lid, fid) ownKeys
+    resolvesInternally = maybe False (\supplier -> S.member (supplier, fid) ownKeys) lid
     treatmentMatch
         | ClaimById treatment <- claim = findWasteTreatmentByActivity ctx treatment fid
         | otherwise = findWasteTreatmentAcrossDatabases ctx fid flowName

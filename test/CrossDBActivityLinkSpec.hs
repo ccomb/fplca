@@ -87,7 +87,7 @@ refEx fid =
         , techAmount = 1.0
         , techUnitId = kgUnit
         , techRole = ReferenceProduct
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
@@ -103,7 +103,7 @@ refEx fid =
 activity's identifier: the claim the source made, and the link the load
 resolved it to, which for that format are the same value.
 -}
-inputEx :: UUID.UUID -> UUID.UUID -> Exchange
+inputEx :: UUID.UUID -> Maybe UUID.UUID -> Exchange
 inputEx flowId linkId =
     TechnosphereExchange
         { techFlowId = flowId
@@ -111,7 +111,7 @@ inputEx flowId linkId =
         , techUnitId = kgUnit
         , techRole = Input
         , techActivityLinkId = linkId
-        , techSupplierClaim = if linkId == UUID.nil then ClaimByProduct else ClaimById linkId
+        , techSupplierClaim = maybe ClaimByProduct ClaimById linkId
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -162,7 +162,7 @@ spec = do
 
     describe "findExchangeCrossDBLink (activityLinkId cascade)" $ do
         it "links a dangling non-nil input to a background supplier by exact identity" $ do
-            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd supAct]
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd (Just supAct)]
                 fg = mkDB [((cAct, cProd), consumer)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
                 bg = indexBg (mkDB [((supAct, supProd), mkActivity "widget" "GLO" [refEx supProd])] [mkFlow supProd "widget"])
                 stats = runLinks fg [bg]
@@ -172,7 +172,7 @@ spec = do
             cdlAttributeFallbacks stats `shouldBe` []
 
         it "does not emit a cross-DB link when the target resolves internally" $ do
-            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd supAct]
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd (Just supAct)]
                 supplier = mkActivity "widget" "GLO" [refEx supProd]
                 -- supplier present in the SAME database as the consumer
                 fg = mkDB [((cAct, cProd), consumer), ((supAct, supProd), supplier)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
@@ -184,7 +184,7 @@ spec = do
             -- Consumer references a release whose activity UUID (oldAct) the
             -- background does not ship; the background offers the same product
             -- under a different activity UUID (newAct).
-            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd oldAct]
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd (Just oldAct)]
                 fg = mkDB [((cAct, cProd), consumer)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
                 bg = indexBg (mkDB [((newAct, supProd2), mkActivity "widget" "GLO" [refEx supProd2])] [mkFlow supProd2 "widget"])
                 stats = runLinks fg [bg]
@@ -194,7 +194,7 @@ spec = do
                 `shouldBe` [("widget", "bg")]
 
         it "does not flag a nil-link input matched by attributes" $ do
-            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd UUID.nil]
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd Nothing]
                 fg = mkDB [((cAct, cProd), consumer)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
                 bg = indexBg (mkDB [((supAct, supProd), mkActivity "widget" "GLO" [refEx supProd])] [mkFlow supProd "widget"])
                 stats = runLinks fg [bg]
@@ -214,12 +214,12 @@ spec = do
             consumerOf ex = mkDB [((cAct, cProd), mkActivity "consumer" "GLO" [refEx cProd, ex])] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
 
         it "reports the tie when the input names no supplier activity" $ do
-            let stats = runLinks (consumerOf (inputEx supProd UUID.nil)) [twoProducers]
+            let stats = runLinks (consumerOf (inputEx supProd Nothing)) [twoProducers]
             map (\a -> (saProduct a, saCandidates a, saSourceDatabase a)) (cdlSupplierAmbiguities stats)
                 `shouldBe` [("widget", 2, "bg")]
 
         it "links to the named activity and reports no tie" $ do
-            let named = (inputEx supProd UUID.nil){techSupplierClaim = ClaimByName "widget production, on site"}
+            let named = (inputEx supProd Nothing){techSupplierClaim = ClaimByName "widget production, on site"}
                 stats = runLinks (consumerOf named) [twoProducers]
             map (\l -> (cdlSupplierActUUID l, cdlSourceDatabase l)) (cdlLinks stats)
                 `shouldBe` [(newAct, "bg")]
@@ -233,7 +233,7 @@ spec = do
             -- must still be reported, not masked by the shared (act, prod, flow)
             -- triple. The engine resolves demands by (activityLinkId, flowId),
             -- so coverage is counted per occurrence, not tested for membership.
-            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd supAct, inputEx supProd oldAct]
+            let consumer = mkActivity "consumer" "GLO" [refEx cProd, inputEx supProd (Just supAct), inputEx supProd (Just oldAct)]
                 fg = mkDB [((cAct, cProd), consumer)] [mkFlow cProd "consumer-product", mkFlow supProd "widget"]
                 coveringLink =
                     CrossDBLink

@@ -14,7 +14,6 @@ module GapReportSpec (spec) where
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import Data.UUID (UUID)
-import qualified Data.UUID as UUID
 import Test.Hspec
 
 import API.DatabaseHandlers (gapReportToAPI)
@@ -119,7 +118,7 @@ techInput fid amount =
         , techAmount = amount
         , techUnitId = kgUnit
         , techRole = Input
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "FR"
         , techComment = Nothing
@@ -136,7 +135,7 @@ wasteInput fid amount =
         , waAmount = amount
         , waUnitId = kgUnit
         , waIsInput = True
-        , waActivityLinkId = UUID.nil
+        , waActivityLinkId = Nothing
         , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing
@@ -187,7 +186,7 @@ consumerDB =
     cakeExchanges =
         [ reference cakeFlow
         , techInput flourFlow 4.0
-        , (techInput breadFlow 1.0){techActivityLinkId = actBread, techSupplierClaim = ClaimById actBread}
+        , (techInput breadFlow 1.0){techActivityLinkId = Just actBread, techSupplierClaim = ClaimById actBread}
         ]
 
 -- | Background dependency: supplies "water" @ FR in kg, nothing else.

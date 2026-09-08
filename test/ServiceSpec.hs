@@ -186,12 +186,12 @@ spec = do
                     , waUnitId = nil
                     , waIsInput = isInput
                     , waActivityLinkId = link
-                    , waSupplierClaim = if link == nil then ClaimByProduct else ClaimById link
+                    , waSupplierClaim = maybe ClaimByProduct ClaimById link
                     , waLocation = ""
                     , waComment = Nothing
                     , waPedigree = Nothing
                     }
-            linked = fromWords 1 2 3 4
+            linked = Just (fromWords 1 2 3 4)
 
         it "calls an input a treatment of the waste" $
             wasteRoleOf (Just treatment) (wasteLine True linked) `shouldBe` Just TreatsWaste
@@ -200,7 +200,7 @@ spec = do
             wasteRoleOf (Just treatment) (wasteLine False linked) `shouldBe` Just SentToTreatment
 
         it "calls an output naming no treatment a final waste flow" $
-            wasteRoleOf Nothing (wasteLine False nil) `shouldBe` Just FinalWasteFlow
+            wasteRoleOf Nothing (wasteLine False Nothing) `shouldBe` Just FinalWasteFlow
 
         -- The distinction the whole field exists for: this output states that
         -- something treats the waste, so calling it final would report a
@@ -210,7 +210,7 @@ spec = do
 
         it "leaves every other kind of line without a role" $ do
             let bio = BiosphereExchange nil 1.0 nil Emission "" Nothing Nothing
-                tech = TechnosphereExchange nil 1.0 nil Input nil ClaimByProduct "" Nothing Nothing Nothing M.empty noProperties
+                tech = TechnosphereExchange nil 1.0 nil Input Nothing ClaimByProduct "" Nothing Nothing Nothing M.empty noProperties
             wasteRoleOf Nothing bio `shouldBe` Nothing
             wasteRoleOf (Just treatment) tech `shouldBe` Nothing
 

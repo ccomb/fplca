@@ -69,7 +69,7 @@ refExchange fid =
         , techAmount = 1.0
         , techUnitId = UUID.nil
         , techRole = ReferenceProduct
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
@@ -86,7 +86,7 @@ inputExchange fid loc =
         , techAmount = 0.5
         , techUnitId = UUID.nil
         , techRole = Input
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = loc
         , techComment = Nothing
@@ -154,7 +154,7 @@ buyingDataset n ex = ex{techSupplierClaim = ClaimByDatasetNumber n}
 
 -- | An input linked (non-nil) to producer activity @actId@ producing @prodId@.
 linkedInput :: UUID.UUID -> UUID.UUID -> Exchange
-linkedInput actId prodId = (inputExchange prodId "GLO"){techActivityLinkId = actId}
+linkedInput actId prodId = (inputExchange prodId "GLO"){techActivityLinkId = Just actId}
 
 {- | A treatment process's reference input (the waste it treats): an input-side
 reference exchange that the matrix builder skips, so it is no supplier demand.
@@ -467,7 +467,7 @@ spec = do
                 idx = oneProducer "wheat" actUUID1 flowUUID2 ""
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` actUUID1
+            techActivityLinkId fixed `shouldBe` Just actUUID1
             usFoundLinks summary `shouldBe` 1
             usMissingLinks summary `shouldBe` 0
 
@@ -476,7 +476,7 @@ spec = do
                 idx = M.empty
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` UUID.nil
+            techActivityLinkId fixed `shouldBe` Nothing
             usMissingLinks summary `shouldBe` 1
 
         it "leaves an input unlinked rather than resolving a prefix of its name" $ do
@@ -487,7 +487,7 @@ spec = do
                 idx = oneProducer "urea" actUUID1 flowUUID2 ""
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` UUID.nil
+            techActivityLinkId fixed `shouldBe` Nothing
             usMissingLinks summary `shouldBe` 1
 
         it "leaves exchange unlinked when flow not in flowDB" $ do
@@ -495,7 +495,7 @@ spec = do
                 idx = M.empty
                 ex = inputExchange flowUUID1 "GLO"
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` UUID.nil
+            techActivityLinkId fixed `shouldBe` Nothing
             usMissingLinks summary `shouldBe` 1
 
         it "does not touch output reference exchanges" $ do
@@ -503,7 +503,7 @@ spec = do
                 idx = oneProducer "wheat" actUUID1 flowUUID2 ""
                 ex = refExchange flowUUID1
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig M.empty idx flows "producer" ex
-            techActivityLinkId fixed `shouldBe` UUID.nil -- unchanged
+            techActivityLinkId fixed `shouldBe` Nothing -- unchanged
             usTotalLinks summary `shouldBe` 0 -- not counted
         it "does not touch biosphere exchanges" $ do
             let flows = M.empty
@@ -542,7 +542,7 @@ spec = do
                 -- consumer wants the pump by the piece (item)
                 ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitItemUUID}
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` UUID.nil
+            techActivityLinkId fixed `shouldBe` Nothing
             usMissingLinks summary `shouldBe` 1
 
         it "links a dimensionally-compatible candidate (mass input vs mass supplier)" $ do
@@ -552,7 +552,7 @@ spec = do
                 idx = oneProducer "pump" actUUID1 flowUUID2 "kg"
                 ex = (inputExchange flowUUID1 "GLO"){techUnitId = unitKgUUID}
                 (fixed, summary) = fixExchangeLinkByName defaultUnitConfig unitDB idx flows "consumer" ex
-            techActivityLinkId fixed `shouldBe` actUUID1
+            techActivityLinkId fixed `shouldBe` Just actUUID1
             usFoundLinks summary `shouldBe` 1
 
         -- A Brightway Excel workbook names the activity each input buys from,
@@ -570,13 +570,13 @@ spec = do
         it "links to the activity the input names, not the ranked first" $ do
             let (fixed, summary) =
                     fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (ClaimByName "Wind power plant"))
-            techActivityLinkId fixed `shouldBe` actUUID2
+            techActivityLinkId fixed `shouldBe` Just actUUID2
             usAmbiguousProducers summary `shouldBe` []
 
         it "reports the tie when the input names no activity" $ do
             let (fixed, summary) =
                     fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying ClaimByProduct)
-            techActivityLinkId fixed `shouldBe` actUUID1
+            techActivityLinkId fixed `shouldBe` Just actUUID1
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
             map apChosen (usAmbiguousProducers summary) `shouldBe` ["coal power plant"]
 
@@ -587,7 +587,7 @@ spec = do
             -- on the pair, would never see it.
             let (fixed, summary) =
                     fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (ClaimByName "gas power plant"))
-            techActivityLinkId fixed `shouldBe` UUID.nil
+            techActivityLinkId fixed `shouldBe` Nothing
             usMissingLinks summary `shouldBe` 1
 
         it "reports the tie when several activities carry the name the input gives" $ do
@@ -601,7 +601,7 @@ spec = do
                         )
                 (fixed, summary) =
                     fixExchangeLinkByName defaultUnitConfig M.empty sameName electricity "consumer" (buying (ClaimByName "wind power plant"))
-            techActivityLinkId fixed `shouldBe` actUUID1
+            techActivityLinkId fixed `shouldBe` Just actUUID1
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
 
         it "reports no tie when one activity produces the name" $ do
@@ -633,11 +633,11 @@ spec = do
 
         it "leaves an unlocated input unlinked when the product name covers several geographies" $ do
             fixed <- fixEcoSpold1ActivityLinks M.empty M.empty (simpleDBOf [wheatFR, wheatDE, bread] flowNames)
-            wheatLink fixed `shouldBe` [UUID.nil]
+            wheatLink fixed `shouldBe` [Nothing]
 
         it "links an unlocated input when the product name covers one dataset" $ do
             fixed <- fixEcoSpold1ActivityLinks M.empty M.empty (simpleDBOf [wheatFR, bread] flowNames)
-            wheatLink fixed `shouldBe` [actUUID1]
+            wheatLink fixed `shouldBe` [Just actUUID1]
 
         -- BAFU 2026 v1 has power plants whose gas input carries the number of
         -- their own country's gas supply and the label RER (volca#347). The number
@@ -675,12 +675,12 @@ spec = do
                     | Just act <- [M.lookup key acts]
                     , TechnosphereExchange{techRole = Input, techActivityLinkId = link} <- exchanges act
                     ]
-            supplierOf (consumerUUID, breadUUID) `shouldBe` [actUUID1]
-            supplierOf (missingActUUID, flowUUID2) `shouldBe` [actUUID2]
+            supplierOf (consumerUUID, breadUUID) `shouldBe` [Just actUUID1]
+            supplierOf (missingActUUID, flowUUID2) `shouldBe` [Just actUUID2]
 
         it "follows the dataset number over the declared location, and records the override" $ do
             let (acts, summary) = linkPlantDeclaring "RER"
-            inputLinksIn acts `shouldBe` [actUUID1]
+            inputLinksIn acts `shouldBe` [Just actUUID1]
             usLocationOverrides summary
                 `shouldBe` [ LocationOverride
                                 { loConsumer = "power plant"
@@ -694,7 +694,7 @@ spec = do
 
         it "records no override when the declared location names no dataset" $ do
             let (acts, summary) = linkPlantDeclaring "ENTSO"
-            inputLinksIn acts `shouldBe` [actUUID1]
+            inputLinksIn acts `shouldBe` [Just actUUID1]
             usLocationOverrides summary `shouldBe` []
 
     -- -----------------------------------------------------------------------
@@ -773,7 +773,7 @@ spec = do
                     , techAmount = amt
                     , techUnitId = UUID.nil
                     , techRole = role
-                    , techActivityLinkId = UUID.nil
+                    , techActivityLinkId = Nothing
                     , techSupplierClaim = ClaimByProduct
                     , techLocation = ""
                     , techComment = Nothing
@@ -798,7 +798,7 @@ spec = do
 
         it "subtracts self-loop consumption from the reference output" $ do
             let selfInput =
-                    (withRole Input 0.2 prodUUID){techActivityLinkId = actUUID}
+                    (withRole Input 0.2 prodUUID){techActivityLinkId = Just actUUID}
                 refOut = withRole ReferenceProduct 1.0 prodUUID
                 act = minimalActivity "self-looper" "GLO" [refOut, selfInput]
             activityNormFactor act (actUUID, prodUUID) `shouldBe` 0.8

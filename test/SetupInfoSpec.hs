@@ -77,7 +77,7 @@ refExchange fid =
         , techAmount = 1.0
         , techUnitId = UUID.nil
         , techRole = ReferenceProduct
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
@@ -95,7 +95,7 @@ linkedInput actId prodId =
         , techAmount = 0.5
         , techUnitId = UUID.nil
         , techRole = Input
-        , techActivityLinkId = actId
+        , techActivityLinkId = Just actId
         , -- An EcoSpold 2 row: the identifier is both what the source said and
           -- what the load resolved it to.
           techSupplierClaim = ClaimById actId

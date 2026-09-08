@@ -91,7 +91,7 @@ Steps, all pure:
      'ProcessId' exists (no silent skip).
   2. Drop those keys; for every surviving activity, UNLINK any technosphere /
      waste exchange whose @(activityLink, flow)@ pointed at a deleted key —
-     reset its activity link to 'UUID.nil' and clear the stale process link.
+     clear its activity link and clear the stale process link.
   3. Rebuild interning tables, indexes, matrices and the product index from
      the surviving activity map via the shared loader builders.
 
@@ -145,15 +145,15 @@ unlinkActivity :: S.Set (UUID, UUID) -> Activity -> Activity
 unlinkActivity survivingKeys act =
     act{exchanges = map unlinkExchange (exchanges act)}
   where
-    dangling link flow = link /= UUID.nil && not (S.member (link, flow) survivingKeys)
+    dangling link flow = not (S.member (link, flow) survivingKeys)
     unlinkExchange ex = case ex of
         BiosphereExchange{} -> ex
-        TechnosphereExchange{techActivityLinkId = link, techFlowId = flow}
-            | dangling link flow -> ex{techActivityLinkId = UUID.nil}
-            | otherwise -> ex
-        WasteExchange{waActivityLinkId = link, waFlowId = flow}
-            | dangling link flow -> ex{waActivityLinkId = UUID.nil}
-            | otherwise -> ex
+        TechnosphereExchange{techActivityLinkId = Just link, techFlowId = flow}
+            | dangling link flow -> ex{techActivityLinkId = Nothing}
+        TechnosphereExchange{} -> ex
+        WasteExchange{waActivityLinkId = Just link, waFlowId = flow}
+            | dangling link flow -> ex{waActivityLinkId = Nothing}
+        WasteExchange{} -> ex
 
 {- | Rebuild a 'Database' from a surviving activity map, reusing the exact pure
 builders that back a freshly-loaded database. Flow / unit tables are carried
