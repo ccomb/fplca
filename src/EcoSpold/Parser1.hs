@@ -606,7 +606,6 @@ buildExchange activityLoc edata
             , techUnitId = unitId
             , techRole = techRoleFor
             , techActivityLinkId = UUID.nil
-            , techProcessLinkId = Nothing
             , techSupplierActivity = Nothing
             , techLocation = exchangeLocation
             , techComment = nonEmptyText (exComment edata)

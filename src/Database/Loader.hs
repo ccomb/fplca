@@ -328,6 +328,10 @@ History of manual bumps:
      inputs several activities of one dependency answered equally well. Cached
      exchanges end before the field, and every field after it would be read at
      the wrong offset.
+- 30: a technosphere or waste line no longer carries a process link. It was a
+     matrix row index on a parsed exchange, which no parser can know and none
+     ever wrote; the record is one field shorter, so every field after it
+     would be read at the wrong offset.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -335,7 +339,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 29
+     in hi `xor` lo `xor` 30
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1891,9 +1895,8 @@ that no cross-DB link supplies. The loaded-path counterpart that names the
 supplier gaps a partial EcoSpold2 import leaves behind — distinct from nil-link
 inputs, the cross-DB candidates already tracked in the linking stats.
 
-Sharing 'findProducer' keeps this honest with the matrix even once
-@techProcessLinkId@ is populated: an input whose process link resolves is not
-dangling, however its activity link looks. Subtracting per-triple cross-DB
+Sharing 'findProducer' keeps this honest with the matrix: an input the matrix
+routes is not dangling, however its activity link looks. Subtracting per-triple cross-DB
 coverage ('crossDBCoveredCounts') keeps it honest the other way: once the
 matching background is loaded, a UUID- or attribute-resolved input is supplied,
 not missing.
@@ -2240,9 +2243,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
   where
-    resolvesInternally =
-        isJust (exchangeProcessLinkId ex)
-            || (linkId /= UUID.nil && S.member (linkId, fid) ownKeys)
+    resolvesInternally = linkId /= UUID.nil && S.member (linkId, fid) ownKeys
     mkTechLink supAct supProd supName supLoc srcDb tied flowUnitName =
         CrossDBLink
             { cdlConsumerActUUID = consumerActUUID
@@ -2373,7 +2374,7 @@ findExchangeCrossDBLink _ _ _ BiosphereExchange{} = mempty
 -- would link the waste to an activity nobody asked for.
 -- Waste inputs (treatment side) are left alone: they have no clean LCA
 -- semantic as a cross-DB demand.
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID ex@WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
     | not isInp && not resolvesInternally =
         case treatmentMatch of
             WasteMatched entry dbN ->
@@ -2408,9 +2409,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows 
   where
     -- Same gate as the technosphere arm: a link the matrix already routes in
     -- place would be counted twice if a cross-DB link were emitted for it too.
-    resolvesInternally =
-        isJust (exchangeProcessLinkId ex)
-            || (lid /= UUID.nil && S.member (lid, fid) ownKeys)
+    resolvesInternally = lid /= UUID.nil && S.member (lid, fid) ownKeys
     treatmentMatch
         | lid /= UUID.nil = findWasteTreatmentByActivity ctx lid fid
         | otherwise = findWasteTreatmentAcrossDatabases ctx fid flowName

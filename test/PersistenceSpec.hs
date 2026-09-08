@@ -429,7 +429,6 @@ milkActivity name =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = supplierActId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing

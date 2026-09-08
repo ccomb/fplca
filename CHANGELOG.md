@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- An exchange no longer carries a process link, and responses no longer send
+  `processLinkId`. The field held a matrix row index, a number minted when the
+  matrices are built and renumbered whenever they are rebuilt, so no reader of
+  a source file could ever fill one and none ever did: the key was null in
+  every response the engine has ever sent. The four places that asked whether a
+  link resolved that way now ask the one question there was ever an answer to.
+  Caches built before this are rebuilt on the next load.
+
 ### Fixed
 - A Brightway Excel inventory now links to the supplier activity its rows name.
   A workbook of that format names each supplier on two columns, the activity

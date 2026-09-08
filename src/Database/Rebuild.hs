@@ -139,9 +139,7 @@ The link target is exactly that pair: 'findProducer' resolves
 activity that keeps at least one product stays a valid target for exchanges
 pointing at a *surviving* product, while exchanges pointing at a deleted
 product are unlinked. A biosphere exchange has no producer link and is
-returned unchanged. The stale 'ProcessId' link is always cleared because
-deletion renumbers every 'ProcessId'. An already-orphan link
-(@activityLink == nil@) stays orphan.
+returned unchanged. An already-orphan link stays orphan.
 -}
 unlinkActivity :: S.Set (UUID, UUID) -> Activity -> Activity
 unlinkActivity survivingKeys act =
@@ -151,13 +149,11 @@ unlinkActivity survivingKeys act =
     unlinkExchange ex = case ex of
         BiosphereExchange{} -> ex
         TechnosphereExchange{techActivityLinkId = link, techFlowId = flow}
-            | dangling link flow ->
-                ex{techActivityLinkId = UUID.nil, techProcessLinkId = Nothing}
-            | otherwise -> ex{techProcessLinkId = Nothing}
+            | dangling link flow -> ex{techActivityLinkId = UUID.nil}
+            | otherwise -> ex
         WasteExchange{waActivityLinkId = link, waFlowId = flow}
-            | dangling link flow ->
-                ex{waActivityLinkId = UUID.nil, waProcessLinkId = Nothing}
-            | otherwise -> ex{waProcessLinkId = Nothing}
+            | dangling link flow -> ex{waActivityLinkId = UUID.nil}
+            | otherwise -> ex
 
 {- | Rebuild a 'Database' from a surviving activity map, reusing the exact pure
 builders that back a freshly-loaded database. Flow / unit tables are carried

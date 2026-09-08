@@ -184,7 +184,6 @@ spec = do
                     , waUnitId = nil
                     , waIsInput = isInput
                     , waActivityLinkId = link
-                    , waProcessLinkId = Nothing
                     , waLocation = ""
                     , waComment = Nothing
                     , waPedigree = Nothing
@@ -208,7 +207,7 @@ spec = do
 
         it "leaves every other kind of line without a role" $ do
             let bio = BiosphereExchange nil 1.0 nil Emission "" Nothing Nothing
-                tech = TechnosphereExchange nil 1.0 nil Input nil Nothing Nothing "" Nothing Nothing Nothing M.empty noProperties
+                tech = TechnosphereExchange nil 1.0 nil Input nil Nothing "" Nothing Nothing Nothing M.empty noProperties
             wasteRoleOf Nothing bio `shouldBe` Nothing
             wasteRoleOf (Just treatment) tech `shouldBe` Nothing
 

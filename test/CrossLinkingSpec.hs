@@ -458,7 +458,6 @@ mkRefExchangeAt loc =
         , techUnitId = UUID.nil
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
-        , techProcessLinkId = Nothing
         , techSupplierActivity = Nothing
         , techLocation = loc
         , techComment = Nothing
