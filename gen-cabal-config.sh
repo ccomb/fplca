@@ -44,6 +44,14 @@ VOLCA_OPT_LEVEL="${VOLCA_OPT_LEVEL:-2}"
 # with `liftM2 (||)`, so `shared: False` with the other unset is Nothing and
 # the compiler's own default wins - True, on a dynamic GHC. 3.14 honours
 # `shared` alone. Setting both makes the pair definite on either version.
+#
+# The price is `cabal repl` on a GHC that is itself dynamic: the interpreter
+# loads packages the dynamic way only, so a repl on exe:volca or on the test
+# suite, both of which depend on the library, can no longer link it. Nothing
+# here runs a repl, and HLS is unaffected because it loads local components
+# from source. If you want one, build that invocation with --enable-shared.
+# In a checkout built before this line existed, delete dist-newstyle first:
+# the stale .so is still there, and a repl would quietly load it.
 cat > "$OUTPUT" << 'EOF'
 jobs: $ncpus
 
