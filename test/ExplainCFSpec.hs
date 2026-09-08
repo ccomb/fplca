@@ -36,7 +36,12 @@ import Method.Mapping (
  )
 import Method.Types (CFFamily (..), Compartment (..), EnergyDensity (..), EnergyDensityMap, FlowDirection (..), MethodCF (..))
 import SynonymDB (normalizeName)
-import Types (BiosphereFlow (..), Unit (..), UnitDB)
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+    Unit (..),
+    UnitDB,
+ )
 import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
@@ -84,7 +89,7 @@ waterLine :: Text -> Text -> Double -> MethodCF
 waterLine name sub val =
     (cfLine name sub "kg" val){mcfCompartment = Just (Compartment "water" sub "")}
 
-flowIn :: Integer -> Text -> Text -> Maybe Text -> BiosphereFlow
+flowIn :: Integer -> Text -> VT.Medium -> Maybe Text -> BiosphereFlow
 flowIn i name medium sub =
     BiosphereFlow
         { bfId = mkUUID i
@@ -236,7 +241,7 @@ spec = do
 
     describe "explainFlowCF (replaying the cascade)" $ do
         it "reports the rung that answered and stops there" $ do
-            let flow = flowIn 1 "Methane, fossil" "air" Nothing
+            let flow = flowIn 1 "Methane, fossil" Air Nothing
                 tables = tablesFor M.empty [(cfLine "Methane, fossil" "" "kg" 29.8, Just (flow, ByUUID))] [flow]
                 explained = explainOf defaultUnitConfig tables flow
             case ceResolution explained of
@@ -249,7 +254,7 @@ spec = do
             -- A name-matched factor with no subcompartment lands in the
             -- compartment-level table, so the trail must show the rungs above
             -- it being tried and missing.
-            let flow = flowIn 11 "Methane, fossil" "air" Nothing
+            let flow = flowIn 11 "Methane, fossil" Air Nothing
                 tables = tablesFor M.empty [(cfLine "Methane, fossil" "" "kg" 29.8, Just (flow, ByName))] [flow]
                 explained = explainOf defaultUnitConfig tables flow
                 results = resultsFor explained
@@ -266,8 +271,8 @@ spec = do
             -- A method that names the sea somewhere meant to leave this
             -- emission out, so its freshwater factor must not reach the ocean,
             -- and the trail must say the veto is what stopped it.
-            let ocean = flowIn 2 "Water" "water" (Just "ocean")
-                fresh = flowIn 3 "Water" "water" Nothing
+            let ocean = flowIn 2 "Water" Water (Just "ocean")
+                fresh = flowIn 3 "Water" Water Nothing
                 tables =
                     tablesFor
                         M.empty
@@ -284,8 +289,8 @@ spec = do
         it "lets a method that never names the sea characterize an ocean flow" $ do
             -- The mirror case: silence about sea water is not an exclusion, so
             -- the freshwater default applies and no veto appears in the trail.
-            let ocean = flowIn 12 "Water" "water" (Just "ocean")
-                fresh = flowIn 13 "Water" "water" Nothing
+            let ocean = flowIn 12 "Water" Water (Just "ocean")
+                fresh = flowIn 13 "Water" Water Nothing
                 tables = tablesFor M.empty [(waterLine "Water" "" 1.0, Just (fresh, ByName))] [ocean, fresh]
                 explained = explainOf defaultUnitConfig tables ocean
             [rung | (rung, StepVetoed ForeignMediumVeto) <- resultsFor explained] `shouldBe` []
@@ -295,7 +300,7 @@ spec = do
 
         it "marks a rung the flow cannot use as not applicable" $ do
             -- No CAS on the flow, so the CAS bridge is not a miss: it never ran.
-            let flow = flowIn 4 "Nitrous oxide" "air" Nothing
+            let flow = flowIn 4 "Nitrous oxide" Air Nothing
                 tables = tablesFor M.empty [(cfLine "Something else" "" "kg" 1.0, Nothing)] [flow]
                 explained = explainOf defaultUnitConfig tables flow
             lookup RungCasBridge (resultsFor explained) `shouldBe` Just StepNotApplicable
@@ -303,9 +308,9 @@ spec = do
         it "refuses to guess between disagreeing energy-family factors" $ do
             -- Two coal factors that disagree: the family factor is ambiguous,
             -- and the trail says so rather than reporting an ordinary miss.
-            let coal = flowIn 5 "Coal, 18 MJ per kg" "resource" Nothing
-                hard = flowIn 6 "Coal, hard" "resource" Nothing
-                brown = flowIn 7 "Coal, brown" "resource" Nothing
+            let coal = flowIn 5 "Coal, 18 MJ per kg" NaturalResource Nothing
+                hard = flowIn 6 "Coal, hard" NaturalResource Nothing
+                brown = flowIn 7 "Coal, brown" NaturalResource Nothing
                 densities =
                     M.fromList
                         [ (normalizeName "Coal, hard", EnergyDensity 18.0 "MJ" "kg")
@@ -323,8 +328,8 @@ spec = do
             ceResolution explained `shouldBe` Uncharacterized
 
         it "explains a factor borrowed through the flow's energy content" $ do
-            let coal = flowIn 8 "Coal, 18 MJ per kg" "resource" Nothing
-                hard = flowIn 9 "Coal, hard" "resource" Nothing
+            let coal = flowIn 8 "Coal, 18 MJ per kg" NaturalResource Nothing
+                hard = flowIn 9 "Coal, hard" NaturalResource Nothing
                 densities = M.singleton (normalizeName "Coal, 18 MJ per kg") (EnergyDensity 18.0 "MJ" "kg")
                 tables =
                     tablesFor
@@ -342,7 +347,7 @@ spec = do
             -- A per-m3 factor against a kg flow with no density to bridge them:
             -- the flow looks characterized and scores nothing, and the
             -- explanation is what says so.
-            let flow = flowIn 10 "Water" "resource" Nothing
+            let flow = flowIn 10 "Water" NaturalResource Nothing
                 tables = tablesFor M.empty [(resourceLine "Water" "m3" 42.95, Just (flow, ByName))] [flow]
                 explained = explainOf volumeMassConfig tables flow
             case ceResolution explained of
@@ -368,12 +373,12 @@ spec = do
                             `shouldBe` (bfName f, replayedKind cfg tables f)
 
         it "agrees for a direct hit" $ do
-            let flow = flowIn 20 "Methane, fossil" "air" Nothing
+            let flow = flowIn 20 "Methane, fossil" Air Nothing
             agreesFor defaultUnitConfig M.empty [(cfLine "Methane, fossil" "" "kg" 29.8, Just (flow, ByUUID))] [flow]
 
         it "agrees under the sea-water veto, factor served and factor withheld" $ do
-            let ocean = flowIn 21 "Water" "water" (Just "ocean")
-                fresh = flowIn 22 "Water" "water" Nothing
+            let ocean = flowIn 21 "Water" Water (Just "ocean")
+                fresh = flowIn 22 "Water" Water Nothing
             agreesFor
                 defaultUnitConfig
                 M.empty
@@ -383,9 +388,9 @@ spec = do
                 [ocean, fresh]
 
         it "agrees when the energy family refuses to guess" $ do
-            let coal = flowIn 23 "Coal, 18 MJ per kg" "resource" Nothing
-                hard = flowIn 24 "Coal, hard" "resource" Nothing
-                brown = flowIn 25 "Coal, brown" "resource" Nothing
+            let coal = flowIn 23 "Coal, 18 MJ per kg" NaturalResource Nothing
+                hard = flowIn 24 "Coal, hard" NaturalResource Nothing
+                brown = flowIn 25 "Coal, brown" NaturalResource Nothing
                 densities =
                     M.fromList
                         [ (normalizeName "Coal, hard", EnergyDensity 18.0 "MJ" "kg")
@@ -402,7 +407,7 @@ spec = do
         it "agrees for a factor found but refused on units" $ do
             -- The refused flow must still annotate: it scores 0, but its
             -- match kind is the rung that found the factor, not "none".
-            let flow = flowIn 26 "Water" "resource" Nothing
+            let flow = flowIn 26 "Water" NaturalResource Nothing
             agreesFor volumeMassConfig M.empty [(resourceLine "Water" "m3" 42.95, Just (flow, ByName))] [flow]
   where
     -- kg and m3 known but dimensionally apart, so the pair is a mismatch.

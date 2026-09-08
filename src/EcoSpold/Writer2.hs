@@ -548,7 +548,7 @@ parser expects. Omitted when the flow carries no compartment.
 compartmentBlock :: Maybe Compartment -> [Text]
 compartmentBlock Nothing = []
 compartmentBlock (Just (Compartment name mSub)) =
-    ["        <compartment>", "          <compartment xml:lang=\"en\">" <> escapeText name <> "</compartment>"]
+    ["        <compartment>", "          <compartment xml:lang=\"en\">" <> escapeText (mediumText name) <> "</compartment>"]
         ++ subLine mSub
         ++ ["        </compartment>"]
   where

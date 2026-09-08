@@ -25,7 +25,12 @@ import Matrix (Inventory)
 import Method.Mapping
 import Method.Types (Compartment (..), Location (..), Method (..), MethodCF (..))
 import qualified Method.Types as MT
-import Types (BiosphereFlow (..), Database, Unit (..))
+import Types (
+    BiosphereFlow (..),
+    Database,
+    Medium (..),
+    Unit (..),
+ )
 import qualified Types as VT
 import qualified UnitConversion
 
@@ -48,7 +53,7 @@ mkFlow fid name uId =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" Nothing)
+        , bfCompartment = Just (VT.Compartment Air Nothing)
         }
 
 mkCF :: UUID -> Double -> MethodCF
@@ -419,11 +424,11 @@ spec = do
                 uidKg = mkUuid 200
                 flowUns =
                     (mkFlow fidUns "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "(unspecified)"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "(unspecified)"))
                         }
                 flowOcean =
                     (mkFlow fidOcean "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "ocean"))
                         }
                 cfUns =
                     (mkCF fidUns 3.0)
@@ -463,7 +468,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowRiver =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "river"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "river"))
                         }
                 cfEmpty =
                     (mkCF fid 2.0)
@@ -504,7 +509,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowRiver =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "river"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "river"))
                         }
                 cfAt sub value =
                     (mkCF fid value)
@@ -530,7 +535,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowOcean =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "ocean"))
                         }
                 cfAt sub value =
                     (mkCF fid value)
@@ -559,7 +564,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowOcean =
                     (mkFlow fid "nitrogen, total" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just "ocean"))
+                        { bfCompartment = Just (VT.Compartment Water (Just "ocean"))
                         }
                 cfUnspecified =
                     (mkCF fid 1.0)
@@ -584,7 +589,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowSub s =
                     (mkFlow fid "nickel" uidKg)
-                        { bfCompartment = Just (VT.Compartment "water" (Just s))
+                        { bfCompartment = Just (VT.Compartment Water (Just s))
                         }
                 cfUnspecified =
                     (mkCF fid 7.0)
@@ -603,7 +608,7 @@ spec = do
                 uidKg = mkUuid 200
                 flowAny =
                     (mkFlow fid "water" uidKg)
-                        { bfCompartment = Just (VT.Compartment "air" (Just "groundwater, long-term"))
+                        { bfCompartment = Just (VT.Compartment Air (Just "groundwater, long-term"))
                         }
                 cf =
                     (mkCF fid 4.0)

@@ -207,11 +207,11 @@ A multi-output activity is /not/ one of those: ILCD keys a process by a single
 dataset UUID, but 'ilcdProcessUUID' hands each @(activity, product)@ entry a
 distinct one, so each product becomes its own process dataset.
 
-* /Non-canonical biosphere media./ 'compartmentBlock' emits @"Emissions to
-  <medium>"@ for any non-resource medium, but the parser's @extractMedium@ only
-  inverts the canonical air\/water\/soil\/natural-resource phrasings; any other
-  medium (e.g. @"resource"@ from ES1\/ES2, or @"fresh water"@) re-imports under a
-  different compartment, silently shifting LCIA scores.
+* /Media this classification cannot name./ 'compartmentBlock' emits
+  @"Emissions to <medium>"@ for any non-resource medium, but the parser's
+  @extractMedium@ only inverts the air\/water\/soil\/natural-resource phrasings.
+  A flow of any other medium ('Waste', 'InventoryIndicator', 'Economic')
+  re-imports under a different compartment, silently shifting LCIA scores.
 
 * /Empty classification levels./ 'classificationBlock' joins levels with @"/"@
   and the parser splits on it, dropping empty parts. A value with an empty level
@@ -234,9 +234,8 @@ checkILCDExportable db =
         [] -> Right ()
         violations -> Left (T.intercalate "\n\n" violations)
   where
-    -- Media the parser's @extractMedium@ inverts back, after canonicalising
-    -- aliases like "resource" → "natural resource".
-    canonicalMedia = ["air", "water", "soil", "natural resource"]
+    -- The media the parser's @extractMedium@ inverts back.
+    canonicalMedia = [Air, Water, Soil, NaturalResource]
     checkMedia =
         case [f | f <- M.elems (sdbBioFlows db), notInvertible f] of
             [] -> Right ()
@@ -252,7 +251,7 @@ checkILCDExportable db =
                         <> "only air, water, soil and natural resource round-trip."
     notInvertible f = case bfCompartment f of
         Nothing -> False
-        Just c -> canonicalMedium (compartmentName c) `notElem` canonicalMedia
+        Just c -> compartmentName c `notElem` canonicalMedia
 
     nameOf actUUID =
         case [activityName act | ((a, _), act) <- M.toList (sdbActivities db), a == actUUID] of
@@ -546,15 +545,6 @@ casBlock (Just cas)
 'parseCompartment': level 0 is "Emissions"/"Resources", level 1 names the
 medium, level 2 (when a sub-compartment exists) is "<medium-phrase>, <sub>".
 -}
-
-{- | Canonicalise a biosphere compartment medium to the spelling ILCD's
-classification — and the parser's 'extractMedium' — round-trips. SimaPro-sourced
-databases label natural-resource flows "resource"; ILCD uses "natural resource".
--}
-canonicalMedium :: Text -> Text
-canonicalMedium "resource" = "natural resource"
-canonicalMedium m = m
-
 compartmentBlock :: Maybe Compartment -> [Text]
 compartmentBlock Nothing = []
 compartmentBlock (Just (Compartment medium sub)) =
@@ -568,8 +558,8 @@ compartmentBlock (Just (Compartment medium sub)) =
            , "      </classificationInformation>"
            ]
   where
-    m = canonicalMedium medium
-    isResource = m == "natural resource"
+    m = mediumText medium
+    isResource = medium == NaturalResource
     level0 = if isResource then "Resources" else "Emissions"
     level1
         | isResource = "Resources"

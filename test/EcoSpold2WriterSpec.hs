@@ -90,8 +90,8 @@ fixtureSimple =
                 ]
         , sdbBioFlows =
             M.fromList
-                [ (co2, BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty (Just "124-38-9") Nothing (Just (Compartment "air" (Just "unspecified"))))
-                , (land, BiosphereFlow land "Occupation, arable land" unitM2a M.empty Nothing Nothing (Just (Compartment "natural resource" (Just "land"))))
+                [ (co2, BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty (Just "124-38-9") Nothing (Just (Compartment Air (Just "unspecified"))))
+                , (land, BiosphereFlow land "Occupation, arable land" unitM2a M.empty Nothing Nothing (Just (Compartment NaturalResource (Just "land"))))
                 ]
         , sdbWasteFlows = M.empty
         , sdbUnits =
@@ -154,7 +154,7 @@ fixtureDupBio =
     SimpleDatabase
         { sdbActivities = M.singleton (actA, prodA) activityDup
         , sdbTechFlows = M.singleton prodA (TechnosphereFlow prodA "product A" unitKg M.empty Nothing Nothing)
-        , sdbBioFlows = M.singleton co2 (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty Nothing Nothing (Just (Compartment "air" (Just "unspecified"))))
+        , sdbBioFlows = M.singleton co2 (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty Nothing Nothing (Just (Compartment Air (Just "unspecified"))))
         , sdbWasteFlows = M.empty
         , sdbUnits = M.singleton unitKg (Unit unitKg "kg" "kg" "")
         }
@@ -188,7 +188,7 @@ fixtureWithExchange ex =
     SimpleDatabase
         { sdbActivities = M.singleton (actA, prodA) activity
         , sdbTechFlows = M.singleton prodA (TechnosphereFlow prodA "product A" unitKg M.empty Nothing Nothing)
-        , sdbBioFlows = M.singleton co2 (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty Nothing Nothing (Just (Compartment "air" (Just "unspecified"))))
+        , sdbBioFlows = M.singleton co2 (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg M.empty Nothing Nothing (Just (Compartment Air (Just "unspecified"))))
         , sdbWasteFlows = M.empty
         , sdbUnits = M.singleton unitKg (Unit unitKg "kg" "kg" "")
         }
@@ -224,7 +224,7 @@ fixtureWithBioSynonyms =
         , sdbBioFlows =
             M.singleton
                 co2
-                (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg syns (Just "124-38-9") Nothing (Just (Compartment "air" (Just "unspecified"))))
+                (BiosphereFlow co2 "Carbon dioxide, fossil" unitKg syns (Just "124-38-9") Nothing (Just (Compartment Air (Just "unspecified"))))
         , sdbWasteFlows = M.empty
         , sdbUnits = M.singleton unitKg (Unit unitKg "kg" "kg" "")
         }
@@ -522,7 +522,7 @@ bioFingerprint f =
     ( UUID.toText (bfId f)
     , bfName f
     , bfCAS f
-    , maybe "" compartmentName (bfCompartment f)
+    , maybe "" (mediumText . compartmentName) (bfCompartment f)
     , bfCompartment f >>= compartmentSub
     )
 

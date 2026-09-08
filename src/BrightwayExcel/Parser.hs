@@ -47,7 +47,6 @@ module BrightwayExcel.Parser (
     sheetToActivities,
     skippedSheetWarning,
     splitCategories,
-    isResourceCompartment,
 ) where
 
 import Amount (readAmount)
@@ -455,7 +454,7 @@ compartment string as the SimaPro importer so LCIA characterization matches.
 biosphereRowOut :: UC.UnitConfig -> Text -> M.Map Text CellValue -> RowOut
 biosphereRowOut cfg actName f
     | T.null name = emptyRowOut{roWarn = ["activity '" <> actName <> "': skipped biosphere row with no name"]}
-    | otherwise = RowOut (Just exch) [] [flow] [unit] []
+    | otherwise = RowOut (Just exch) [] [flow] [unit] mediumWarn
   where
     name = fromMaybe "" (fieldText f "name")
     (unitName', amount) = canonicalRow cfg (fromMaybe "" (fieldText f "unit")) (fromMaybe 0 (fieldNum f "amount"))
@@ -467,7 +466,7 @@ biosphereRowOut cfg actName f
             { bioFlowId = flowUUID
             , bioAmount = amount
             , bioUnitId = unitUUID
-            , bioDirection = if isResourceCompartment comp then Resource else Emission
+            , bioDirection = if parseMedium comp == Right NaturalResource then Resource else Emission
             , bioLocation = fromMaybe "" (fieldText f "location")
             , bioComment = fieldText f "comment"
             , bioPedigree = Nothing
@@ -480,8 +479,17 @@ biosphereRowOut cfg actName f
             , bfSynonyms = M.empty
             , bfCAS = Nothing
             , bfSubstanceId = Nothing
-            , bfCompartment = Just (Compartment comp (if T.null sub then Nothing else Just sub))
+            , bfCompartment = case parseMedium comp of
+                Right medium -> Just (Compartment medium (if T.null sub then Nothing else Just sub))
+                Left _ -> Nothing
             }
+    -- A medium nothing can bucket leaves the flow without a compartment, which
+    -- costs it every characterization factor. Say which word did it.
+    mediumWarn = case parseMedium comp of
+        Right _ -> []
+        Left got ->
+            [ "activity '" <> actName <> "', flow '" <> name <> "': " <> T.pack (unknownMedium got)
+            ]
     unit = Unit unitUUID unitName' unitName' ""
 
 {- | Split a Brightway @categories@ cell (@"air"@, @"air::urban air"@) into
@@ -492,10 +500,6 @@ splitCategories cats = case T.splitOn "::" cats of
     [] -> ("", "")
     [a] -> (T.strip a, "")
     (a : rest) -> (T.strip a, T.strip (T.intercalate "::" rest))
-
-isResourceCompartment :: Text -> Bool
-isResourceCompartment comp =
-    T.toLower (T.strip comp) `elem` ["natural resource", "resource", "resources", "raw"]
 
 fieldText :: M.Map Text CellValue -> Text -> Maybe Text
 fieldText m k = cellText =<< M.lookup k m

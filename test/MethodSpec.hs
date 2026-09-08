@@ -23,7 +23,10 @@ import Method.ParserNW (parseNormWeightCSVBytes)
 import Method.ParserSimaPro (isSimaProMethodCSV, parseSimaProMethodCSVBytes)
 import Method.Types
 import SynonymDB
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 import UnitConversion (defaultUnitConfig)
 
@@ -1140,5 +1143,5 @@ mkTestFlow uuid name =
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
         , bfSynonyms = M.empty
-        , bfCompartment = Just (VT.Compartment "air" Nothing)
+        , bfCompartment = Just (VT.Compartment Air Nothing)
         }

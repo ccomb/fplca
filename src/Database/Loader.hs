@@ -316,6 +316,9 @@ History of manual bumps:
      an export writes it as one. Nothing changes type, so a cache written just
      before this would pass the fingerprint and keep those flows on the waste
      axis, still counted as demands the gap report can never close.
+- 28: a compartment's medium is a 'Types.Medium', not text. The stored shape
+     changes and the resource flows of a SimaPro-sourced database change
+     identity, since the medium is hashed into it.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -323,7 +326,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 27
+     in hi `xor` lo `xor` 28
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.

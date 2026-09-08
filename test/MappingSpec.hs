@@ -17,7 +17,11 @@ import Method.Mapping
 import Method.ParserCSV (parseMethodCSVBytes)
 import Method.Types (Compartment (..), EnergyDensity (..), FlowDirection (..), Method (..), MethodCF (..), buildCompartmentMapFromCSV)
 import SynonymDB (BridgeDirection (..), SynEdge (..), buildFromEdges, buildFromPairs, emptySynonymDB, normalizeName)
-import Types (BiosphereFlow (..), Unit (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+    Unit (..),
+ )
 import qualified Types as VT
 import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitConfig)
 
@@ -25,7 +29,7 @@ import UnitConversion (UnitConfig (..), UnitDef (..), defaultUnitConfig, mkUnitC
 -- Helpers
 -- ---------------------------------------------------------------------------
 
-mkFlow :: UUID -> Text -> Text -> Maybe Text -> BiosphereFlow
+mkFlow :: UUID -> Text -> VT.Medium -> Maybe Text -> BiosphereFlow
 mkFlow fid name cat msub =
     BiosphereFlow
         { bfId = fid
@@ -91,7 +95,7 @@ spec = do
     describe "findFlowByUUID" $ do
         it "finds a flow by its UUID" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "CO2" "air" Nothing
+            let flow = mkFlow fid "CO2" Air Nothing
                 db = M.singleton fid flow
             fmap bfId (findFlowByUUID db fid) `shouldBe` Just fid
 
@@ -106,16 +110,16 @@ spec = do
         it "returns first flow when no compartment preference" $ do
             fid1 <- nextRandom
             fid2 <- nextRandom
-            let f1 = mkFlow fid1 "co2" "air" Nothing
-                f2 = mkFlow fid2 "co2" "water" Nothing
+            let f1 = mkFlow fid1 "co2" Air Nothing
+                f2 = mkFlow fid2 "co2" Water Nothing
                 byName = M.singleton "co2" [f1, f2]
             fmap bfId (findFlowByNameComp M.empty byName "co2" Nothing) `shouldBe` Just fid1
 
         it "prefers exact medium+subcomp match" $ do
             fid1 <- nextRandom
             fid2 <- nextRandom
-            let fAir = mkFlow fid1 "co2" "air" (Just "urban air")
-                fWater = mkFlow fid2 "co2" "water" (Just "surface water")
+            let fAir = mkFlow fid1 "co2" Air (Just "urban air")
+                fWater = mkFlow fid2 "co2" Water (Just "surface water")
                 byName = M.singleton "co2" [fWater, fAir]
                 comp = Compartment "air" "urban air" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Just fid1
@@ -123,8 +127,8 @@ spec = do
         it "falls back to medium match when no exact subcomp" $ do
             fid1 <- nextRandom
             fid2 <- nextRandom
-            let fAir = mkFlow fid1 "co2" "air" (Just "non-urban air")
-                fWater = mkFlow fid2 "co2" "water" Nothing
+            let fAir = mkFlow fid1 "co2" Air (Just "non-urban air")
+                fWater = mkFlow fid2 "co2" Water Nothing
                 byName = M.singleton "co2" [fWater, fAir]
                 comp = Compartment "air" "unspecified" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Just fid1
@@ -134,7 +138,7 @@ spec = do
             -- the same name, so the name matcher has found nothing and the
             -- cascade is free to try the next one.
             fid1 <- nextRandom
-            let fWater = mkFlow fid1 "co2" "water" Nothing
+            let fWater = mkFlow fid1 "co2" Water Nothing
                 byName = M.singleton "co2" [fWater]
                 comp = Compartment "air" "" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Nothing
@@ -145,9 +149,9 @@ spec = do
             -- normalized medium, so a match here promised a factor scoring
             -- never served (volca#346). A compartment rule is what bridges it.
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "emissions to air" Nothing
+            let flow = mkFlow fid "ammonia" Air Nothing
                 byName = M.singleton "ammonia" [flow]
-                comp = Compartment "air" "" ""
+                comp = Compartment "emissions to air" "" ""
                 rule = M.singleton ("emissions to air", "", "") (Compartment "air" "" "")
             fmap bfId (findFlowByNameComp M.empty byName "ammonia" (Just comp)) `shouldBe` Nothing
             fmap bfId (findFlowByNameComp rule byName "ammonia" (Just comp)) `shouldBe` Just fid
@@ -158,8 +162,8 @@ spec = do
             -- the subcompartment it names and not the one merely containing it.
             fidLongTerm <- nextRandom
             fidNow <- nextRandom
-            let fLongTerm = mkFlow fidLongTerm "co2" "air" (Just "low. pop., long-term")
-                fNow = mkFlow fidNow "co2" "air" (Just "low. pop.")
+            let fLongTerm = mkFlow fidLongTerm "co2" Air (Just "low. pop., long-term")
+                fNow = mkFlow fidNow "co2" Air (Just "low. pop.")
                 byName = M.singleton "co2" [fLongTerm, fNow]
                 comp = Compartment "air" "low. pop." ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Just fidNow
@@ -169,7 +173,7 @@ spec = do
             -- spelling an ILCD method writes for what a database files under
             -- "air". Both sides go through the table, as scoring does.
             fid <- nextRandom
-            let fAir = mkFlow fid "co2" "air" Nothing
+            let fAir = mkFlow fid "co2" Air Nothing
                 byName = M.singleton "co2" [fAir]
                 cmap = M.singleton ("emissions to air", "", "") (Compartment "air" "" "")
                 comp = Compartment "Emissions to air" "" ""
@@ -181,8 +185,8 @@ spec = do
             -- row is left with, and it must not depend on the index order.
             fidLongTerm <- nextRandom
             fidPlain <- nextRandom
-            let fLongTerm = mkFlow fidLongTerm "co2" "air" (Just "low. pop., long-term")
-                fPlain = mkFlow fidPlain "co2" "air" Nothing
+            let fLongTerm = mkFlow fidLongTerm "co2" Air (Just "low. pop., long-term")
+                fPlain = mkFlow fidPlain "co2" Air Nothing
                 comp = Compartment "air" "low. pop." ""
             fmap bfId (findFlowByNameComp M.empty (M.singleton "co2" [fLongTerm, fPlain]) "co2" (Just comp))
                 `shouldBe` Just fidPlain
@@ -192,7 +196,7 @@ spec = do
     describe "findFlowByCAS" $ do
         it "finds flow by CAS number" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+            let flow = mkFlow fid "Carbon dioxide" Air Nothing
                 byCAS = M.singleton "124-38-9" [flow]
             fmap bfId (findFlowByCAS M.empty byCAS "124-38-9" Nothing) `shouldBe` Just fid
 
@@ -204,7 +208,7 @@ spec = do
         -- factor goes silently missing.
         it "meets a canonically indexed flow from a zero-padded query" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+            let flow = mkFlow fid "Carbon dioxide" Air Nothing
                 byCAS = M.singleton "124-38-9" [flow]
             fmap bfId (findFlowByCAS M.empty byCAS "000124-38-9" Nothing) `shouldBe` Just fid
 
@@ -212,14 +216,14 @@ spec = do
         -- would collide every CAS-less flow onto one key.
         it "refuses an all-zeros placeholder rather than treating it as a CAS" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Unknown" "air" Nothing
+            let flow = mkFlow fid "Unknown" Air Nothing
                 byCAS = M.singleton "0-00-0" [flow]
             fmap bfId (findFlowByCAS M.empty byCAS "000-00-0" Nothing) `shouldBe` Nothing
 
     describe "findFlowByName" $ do
         it "finds a flow by name (case-insensitive via normalization)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+            let flow = mkFlow fid "Carbon dioxide" Air Nothing
                 byName = M.singleton "carbon dioxide" [flow]
             fmap bfId (findFlowByName M.empty byName "Carbon dioxide") `shouldBe` Just fid
 
@@ -229,7 +233,7 @@ spec = do
     describe "findFlowBySynonym" $ do
         it "returns Nothing when synonym not in DB" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+            let flow = mkFlow fid "Carbon dioxide" Air Nothing
                 byName = M.singleton "carbon dioxide" [flow]
             fmap bfId (findFlowBySynonym (SynonymSearch emptySynonymDB byName M.empty) "CO2") `shouldBe` Nothing
 
@@ -238,8 +242,8 @@ spec = do
             fid1 <- nextRandom
             fid2 <- nextRandom
             let synDB = buildFromPairs [("CO2", "Carbon dioxide")]
-                fAir = mkFlow fid1 "Carbon dioxide" "air" Nothing
-                fWater = mkFlow fid2 "Carbon dioxide" "water" Nothing
+                fAir = mkFlow fid1 "Carbon dioxide" Air Nothing
+                fWater = mkFlow fid2 "Carbon dioxide" Water Nothing
                 byName = M.singleton "carbon dioxide" [fWater, fAir]
                 comp = Compartment "air" "" ""
             fmap bfId (findFlowBySynonymComp (SynonymSearch synDB byName M.empty) "CO2" (Just comp))
@@ -248,7 +252,7 @@ spec = do
         it "returns Nothing when synonym not in DB" $ do
             fid <- nextRandom
             let synDB = buildFromPairs [("CO2", "Carbon dioxide")]
-                flow = mkFlow fid "Carbon dioxide" "air" Nothing
+                flow = mkFlow fid "Carbon dioxide" Air Nothing
                 byName = M.singleton "carbon dioxide" [flow]
             fmap bfId (findFlowBySynonymComp (SynonymSearch synDB byName M.empty) "methane" Nothing)
                 `shouldBe` Nothing
@@ -264,7 +268,7 @@ spec = do
         -- must not fan out onto the resource flow through it — else a release
         -- inherits a withdrawal scarcity factor (wrong sign/magnitude).
         let synDB = buildFromEdges [SynEdge "freshwater" "Water, unspecified natural origin" BridgeInput]
-            resourceFlow fid = mkFlow fid "Water, unspecified natural origin" "natural resource" Nothing
+            resourceFlow fid = mkFlow fid "Water, unspecified natural origin" NaturalResource Nothing
             flowsByName fid = M.singleton "water unspecified natural origin" [resourceFlow fid]
             inputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Input}
             outputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Output}
@@ -294,7 +298,7 @@ spec = do
 
         it "fans out through a pivot alias that is neither a flow nor a CF name" $ do
             fid <- nextRandom
-            let coalFlow = mkFlow fid "Coal, hard" "resource" Nothing
+            let coalFlow = mkFlow fid "Coal, hard" NaturalResource Nothing
                 flowsByName = M.singleton "coal hard" [coalFlow]
             [ bfId flow
               | (_, Just (flow, BySynonym)) <-
@@ -309,7 +313,7 @@ spec = do
         -- method carried none. The loader surfaces these so the loss is
         -- distinguishable from a genuinely uncharacterized flow.
         let synDB = buildFromEdges [SynEdge "freshwater" "Water, unspecified natural origin" BridgeInput]
-            flowsByName fid = M.singleton "water unspecified natural origin" [mkFlow fid "Water, unspecified natural origin" "natural resource" Nothing]
+            flowsByName fid = M.singleton "water unspecified natural origin" [mkFlow fid "Water, unspecified natural origin" NaturalResource Nothing]
             inputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Input}
             outputCF = (mkCF "freshwater" Nothing 1.0){mcfDirection = Output}
 
@@ -328,9 +332,9 @@ spec = do
             fid1 <- nextRandom
             fid2 <- nextRandom
             fid3 <- nextRandom
-            let f1 = mkFlow fid1 "co2" "air" Nothing
-                f2 = mkFlow fid2 "methane" "air" Nothing
-                f3 = mkFlow fid3 "n2o" "air" Nothing
+            let f1 = mkFlow fid1 "co2" Air Nothing
+                f2 = mkFlow fid2 "methane" Air Nothing
+                f3 = mkFlow fid3 "n2o" Air Nothing
                 cf1 = mkCF "co2" Nothing 1.0
                 cf2 = mkCF "methane" Nothing 25.0
                 cf3 = mkCF "n2o" Nothing 298.0
@@ -358,7 +362,7 @@ spec = do
     describe "computeLCIAScore" $ do
         it "sums UUID-matched flows" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 unit = Unit{unitId = nil, unitName = "kg", unitSymbol = "kg", unitComment = ""}
                 cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Just (flow, ByUUID))]
@@ -375,7 +379,7 @@ spec = do
 
         it "skips zero-quantity flows" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = mkCF "co2" Nothing 1.0
                 mapping = [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 0.0
@@ -384,7 +388,7 @@ spec = do
 
         it "scores via fallback CF (name+medium, empty subcomp)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" Nothing
+            let flow = mkFlow fid "Carbon dioxide" Air Nothing
                 cf = mkCFComp "Carbon dioxide" "air" "" 2.5
                 mapping = [(cf, Nothing)] -- unmatched → name-based lookup
                 inventory = M.singleton fid 10.0
@@ -394,7 +398,7 @@ spec = do
 
         it "scores via exact CF (name+medium+subcomp)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "Carbon dioxide" "air" (Just "urban air close to ground")
+            let flow = mkFlow fid "Carbon dioxide" Air (Just "urban air close to ground")
                 cf = mkCFComp "Carbon dioxide" "air" "urban air close to ground" 3.0
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 5.0
@@ -404,7 +408,7 @@ spec = do
 
         it "normalizes 'natural resource' category to 'resource'" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "crude oil" "natural resource" Nothing
+            let flow = mkFlow fid "crude oil" NaturalResource Nothing
                 cf = mkCFComp "crude oil" "natural resource" "" 1.5
                 mapping = [(cf, Nothing)]
                 inventory = M.singleton fid 4.0
@@ -426,8 +430,8 @@ spec = do
         -- both sides, the lookup misses and the flow silently scores zero.
         it "scores zero without a compartment map (regression)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
-                cf = mkCFComp "ammonia" "air" "low. pop." 0.747
+            let flow = mkFlow fid "ammonia" Air (Just "low. pop.")
+                cf = mkCFComp "ammonia" "emissions to air" "low. pop." 0.747
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
                 flowDB = M.singleton fid flow
@@ -436,8 +440,8 @@ spec = do
 
         it "bridges 'emissions to air' → 'air' via a medium-only rule" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
-                cf = mkCFComp "ammonia" "air" "low. pop." 0.747
+            let flow = mkFlow fid "ammonia" Air (Just "low. pop.")
+                cf = mkCFComp "ammonia" "emissions to air" "low. pop." 0.747
                 cmap = M.singleton ("emissions to air", "", "") (Compartment "air" "" "")
                 tables = buildMethodTables OtherCFFamily cmap M.empty [(cf, Nothing)]
                 inventory = M.singleton fid 10.0
@@ -447,9 +451,10 @@ spec = do
 
         it "bridges full (medium, sub, qual) triples for subcompartment rewrites" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "emissions to air/low. pop." Nothing
-                -- ILCD-style CF on a different subcompartment than the BAFU flow.
-                cf = mkCFComp "ammonia" "air" "non-urban air or from high stacks" 0.747
+            let flow = mkFlow fid "ammonia" Air (Just "non-urban air or from high stacks")
+                -- A CF categorized the way BAFU categorizes it, on a different
+                -- subcompartment than the flow.
+                cf = mkCFComp "ammonia" "emissions to air" "low. pop." 0.747
                 cmap =
                     M.singleton
                         ("emissions to air", "low. pop.", "")
@@ -465,7 +470,7 @@ spec = do
         -- Now an unconvertible flow contributes 0, matching the "no-CF" branch.
         it "returns 0 when unit conversion fails (dimension mismatch)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = mkCF "co2" Nothing 1.0 -- mcfUnit = "kg"
                 mapping = [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 100.0
@@ -476,7 +481,7 @@ spec = do
 
         it "applies conversion factor when units differ but are compatible (g→kg)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = mkCF "co2" Nothing 2.0 -- mcfUnit = "kg"
                 mapping = [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 1000.0 -- 1000 g
@@ -506,7 +511,7 @@ spec = do
         it "the verbatim-named CF wins over the higher-valued homonym" $ do
             fid <- nextRandom
             uidM3 <- nextRandom
-            let flow = (mkFlow fid "Gas, natural/m3" "natural resource" (Just "in ground")){bfUnitId = uidM3}
+            let flow = (mkFlow fid "Gas, natural/m3" NaturalResource (Just "in ground")){bfUnitId = uidM3}
                 mappings = [(cfPerKg, Just (flow, ByName)), (cfPerM3, Just (flow, ByName))]
                 unitDB = M.singleton uidM3 Unit{unitId = uidM3, unitName = "m3", unitSymbol = "m3", unitComment = ""}
                 flowDB = M.singleton fid flow
@@ -535,8 +540,8 @@ spec = do
             servedFor mappings = do
                 targetId <- nextRandom
                 probeId <- nextRandom
-                let target = mkFlow targetId "phosphate" "water" Nothing
-                    probe = mkFlow probeId "phosphate" "water" Nothing
+                let target = mkFlow targetId "phosphate" Water Nothing
+                    probe = mkFlow probeId "phosphate" Water Nothing
                     tables = buildMethodTables OtherCFFamily M.empty M.empty (mappings target)
                 pure (cfValue <$> lookupCFForFlow tables probeId (Just probe))
 
@@ -582,7 +587,7 @@ spec = do
             sea = mkCFComp "Nitrogen, total" "water" "ocean" 0.0
             scoreWith cfs sub = do
                 fid <- nextRandom
-                let flow = mkFlow fid "Nitrogen, total" "water" (Just sub)
+                let flow = mkFlow fid "Nitrogen, total" Water (Just sub)
                     tables =
                         buildMethodTables
                             OtherCFFamily
@@ -624,7 +629,7 @@ spec = do
                     pure
                     (buildCompartmentMapFromCSV "source_medium,source_sub,source_qualifier,target_medium,target_sub,target_qualifier\nwater,sea water,,water,ocean,\n")
             fid <- nextRandom
-            let flow = mkFlow fid "Nitrogen, total" "water" (Just "sea water")
+            let flow = mkFlow fid "Nitrogen, total" Water (Just "sea water")
                 score cfs =
                     loScore $
                         computeLCIAScoreFromTables
@@ -651,10 +656,10 @@ spec = do
             scoreVia cm fam name mCas sub = do
                 fid <- nextRandom
                 mid <- nextRandom
-                let flow = (mkFlow fid name "water" (Just sub)){bfCAS = mCas}
+                let flow = (mkFlow fid name Water (Just sub)){bfCAS = mCas}
                     -- cfUns matched ByCAS on a sibling flow, so it also
                     -- populates the CAS bridge (mtCasCF).
-                    matched = (mkFlow mid "Iron, ion" "water" Nothing){bfCAS = Just "7439-89-6"}
+                    matched = (mkFlow mid "Iron, ion" Water Nothing){bfCAS = Just "7439-89-6"}
                     tables = buildMethodTables fam cm M.empty [(cfUns, Just (matched, ByCAS)), (cfLt, Nothing)]
                     flowDB = M.singleton fid flow
                 pure (loScore (computeLCIAScoreFromTables defaultUnitConfig M.empty flowDB (M.singleton fid 1.0) tables))
@@ -714,23 +719,23 @@ spec = do
                         tables
 
         it "characterizes a flow filed under the medium the method names" $
-            scoreOf "waste" Nothing `shouldReturn` 24.0
+            scoreOf Waste Nothing `shouldReturn` 24.0
 
         it "characterizes an inventory indicator whose subcompartment is waste" $
-            scoreOf "inventory indicator" (Just "waste") `shouldReturn` 24.0
+            scoreOf InventoryIndicator (Just "waste") `shouldReturn` 24.0
 
         it "leaves the indicators that are not waste alone" $ do
             -- The same compartment name also covers secondary materials and
             -- exported energy. A rule keyed on the medium alone would hand
             -- them a waste factor; this one is keyed on the pair.
-            scoreOf "inventory indicator" (Just "resource use") `shouldReturn` 0.0
-            scoreOf "inventory indicator" (Just "output flow") `shouldReturn` 0.0
+            scoreOf InventoryIndicator (Just "resource use") `shouldReturn` 0.0
+            scoreOf InventoryIndicator (Just "output flow") `shouldReturn` 0.0
 
     describe "inventoryContributions" $ do
         -- Regression: same fallback bug as computeLCIAScoreFromTables.
         it "yields zero contribution when unit conversion fails" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = mkCF "co2" Nothing 1.0
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByUUID))]
                 inventory = M.singleton fid 100.0
@@ -769,7 +774,7 @@ spec = do
     describe "computeMappingStats" $ do
         it "counts BySynonym matches" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = mkCF "co2" Nothing 1.0
                 stats = computeMappingStats [(cf, Just (flow, BySynonym))]
             msBySynonym stats `shouldBe` 1
@@ -778,7 +783,7 @@ spec = do
         it "finds flow via synonym group (no compartment)" $ do
             fid <- nextRandom
             let synDB = buildFromPairs [("co2", "carbon dioxide")]
-                flow = mkFlow fid "carbon dioxide" "air" Nothing
+                flow = mkFlow fid "carbon dioxide" Air Nothing
                 byName = M.singleton "carbon dioxide" [flow]
             fmap bfId (findFlowBySynonym (SynonymSearch synDB byName M.empty) "co2")
                 `shouldBe` Just fid
@@ -786,7 +791,7 @@ spec = do
     describe "pickByCompartment M.empty (matchMedium edge cases)" $ do
         it "null medium matches any flow" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "water" Nothing
+            let flow = mkFlow fid "co2" Water Nothing
                 byName = M.singleton "co2" [flow]
                 comp = Compartment "" "" ""
             fmap bfId (findFlowByNameComp M.empty byName "co2" (Just comp)) `shouldBe` Just fid
@@ -798,10 +803,10 @@ spec = do
             -- spellings are one medium.
             fid1 <- nextRandom
             fid2 <- nextRandom
-            let fUrbanAir = mkFlow fid1 "nox" "urban air" Nothing
-                fWater = mkFlow fid2 "nox" "water" Nothing
+            let fUrbanAir = mkFlow fid1 "nox" Air (Just "urban")
+                fWater = mkFlow fid2 "nox" Water Nothing
                 byName = M.singleton "nox" [fWater, fUrbanAir]
-                comp = Compartment "air" "urban" ""
+                comp = Compartment "urban air" "" ""
                 rule = M.singleton ("urban air", "", "") (Compartment "air" "urban" "")
             fmap bfId (findFlowByNameComp M.empty byName "nox" (Just comp)) `shouldBe` Nothing
             fmap bfId (findFlowByNameComp rule byName "nox" (Just comp)) `shouldBe` Just fid1
@@ -809,10 +814,10 @@ spec = do
     describe "compartmentGapWarning" $ do
         it "names both vocabularies when a factor's name is filed under another medium" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "emissions to air" Nothing
-                cf = mkCFComp "ammonia" "air" "" 0.747
+            let flow = mkFlow fid "ammonia" Air Nothing
+                cf = mkCFComp "ammonia" "emissions to air" "" 0.747
             compartmentGapWarning M.empty (M.singleton "ammonia" [flow]) [(cf, Nothing)]
-                `shouldBe` Just "1 factor(s) name a flow this database files under another compartment (method: \"air\"; database: \"emissions to air\"). Declare a [[compartment-mappings]] table bridging them."
+                `shouldBe` Just "1 factor(s) name a flow this database files under another compartment (method: \"emissions to air\"; database: \"air\"). Declare a [[compartment-mappings]] table bridging them."
 
         it "stays silent when the name is simply absent" $ do
             let cf = mkCFComp "ammonia" "air" "" 0.747
@@ -823,15 +828,15 @@ spec = do
             -- not its vocabulary: nothing to declare.
             fid1 <- nextRandom
             fid2 <- nextRandom
-            let nitrite = mkFlow fid1 "nitrite" "water" Nothing
-                co2 = mkFlow fid2 "co2" "air" Nothing
+            let nitrite = mkFlow fid1 "nitrite" Water Nothing
+                co2 = mkFlow fid2 "co2" Air Nothing
                 byName = M.fromList [("nitrite", [nitrite]), ("co2", [co2])]
                 cf = mkCFComp "nitrite" "air" "" 1.0
             compartmentGapWarning M.empty byName [(cf, Nothing)] `shouldBe` Nothing
 
         it "stays silent for a factor that resolved" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "ammonia" "air" Nothing
+            let flow = mkFlow fid "ammonia" Air Nothing
                 cf = mkCFComp "ammonia" "air" "" 0.747
             compartmentGapWarning M.empty (M.singleton "ammonia" [flow]) [(cf, Just (flow, ByName))] `shouldBe` Nothing
 
@@ -841,7 +846,7 @@ spec = do
         it "scoring with empty broadcast equals scoring with filled broadcast (UUID match)" $ do
             fid <- nextRandom
             uidKg <- nextRandom
-            let flow = (mkFlow fid "co2" "air" Nothing){bfUnitId = uidKg}
+            let flow = (mkFlow fid "co2" Air Nothing){bfUnitId = uidKg}
                 cf = (mkCF "co2" Nothing 2.5){mcfUnit = "kg"}
                 rawTables = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByUUID))]
                 flowDB = M.singleton fid flow
@@ -867,7 +872,7 @@ spec = do
                         (M.fromList [("kg", "kg"), ("g", "g")])
             fid <- nextRandom
             uidKg <- nextRandom
-            let flow = (mkFlow fid "co2" "air" Nothing){bfUnitId = uidKg}
+            let flow = (mkFlow fid "co2" Air Nothing){bfUnitId = uidKg}
                 cf = (mkCF "co2" Nothing 1.0e-3){mcfUnit = "g"}
                 tables0 = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByUUID))]
                 flowDB = M.singleton fid flow
@@ -886,7 +891,7 @@ spec = do
         it "broadcast covers exact (name, medium, subcomp) cascade" $ do
             fid <- nextRandom
             uidKg <- nextRandom
-            let flow = (mkFlow fid "co2" "air" (Just "high pop")){bfUnitId = uidKg}
+            let flow = (mkFlow fid "co2" Air (Just "high pop")){bfUnitId = uidKg}
                 cf = (mkCFComp "co2" "air" "high pop" 3.0){mcfUnit = "kg"}
                 tables0 = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByName))]
                 flowDB = M.singleton fid flow
@@ -902,7 +907,7 @@ spec = do
             fid <- nextRandom
             uidKg <- nextRandom
             -- Flow has subcomp "high pop", but CF only has medium-level entry (subcomp "")
-            let flow = (mkFlow fid "co2" "air" (Just "high pop")){bfUnitId = uidKg}
+            let flow = (mkFlow fid "co2" Air (Just "high pop")){bfUnitId = uidKg}
                 cf = (mkCFComp "co2" "air" "" 5.0){mcfUnit = "kg"}
                 tables0 = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByName))]
                 flowDB = M.singleton fid flow
@@ -918,7 +923,7 @@ spec = do
             fidLocal <- nextRandom
             fidExtra <- nextRandom -- in inventory but NOT in flowDB at fill time
             uidKg <- nextRandom
-            let flowLocal = (mkFlow fidLocal "co2" "air" Nothing){bfUnitId = uidKg}
+            let flowLocal = (mkFlow fidLocal "co2" Air Nothing){bfUnitId = uidKg}
                 cf = (mkCF "co2" Nothing 1.5){mcfUnit = "kg"}
                 tables0 = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flowLocal, ByUUID))]
                 flowDBAtBuild = M.singleton fidLocal flowLocal
@@ -948,7 +953,7 @@ spec = do
             fillWith densities unitName' cf = do
                 fid <- nextRandom
                 uid <- nextRandom
-                let flow = (mkFlow fid "gas" "air" Nothing){bfUnitId = uid}
+                let flow = (mkFlow fid "gas" Air Nothing){bfUnitId = uid}
                     flowDB = M.singleton fid flow
                     unitDB = M.singleton uid ((unitNamed unitName'){unitId = uid})
                     filled =
@@ -1019,7 +1024,7 @@ spec = do
 
         it "returns no candidates from an empty method" $ do
             fid <- nextRandom
-            let flow = (mkFlow fid "Carbon dioxide" "air" Nothing){bfCAS = Nothing}
+            let flow = (mkFlow fid "Carbon dioxide" Air Nothing){bfCAS = Nothing}
                 idx = buildMethodIndex (mkMethod [])
             findSimilarCFs emptyChemSynonyms idx flow 3 `shouldBe` []
 
@@ -1032,7 +1037,7 @@ spec = do
                 co2 = (mkCFComp "CO2" "air" "" 1.0){mcfCompartment = airComp}
                 ch4 = (mkCFComp "Methane" "air" "" 27.0){mcfCompartment = airComp}
                 idx = buildMethodIndex (mkMethod [co2, ch4])
-                flow = (mkFlow fid "Carbon dioxide" "air" Nothing){bfCAS = Nothing}
+                flow = (mkFlow fid "Carbon dioxide" Air Nothing){bfCAS = Nothing}
                 cands = findSimilarCFs syns idx flow 3
             -- The CO2 candidate must be present, with the synonym-expansion reason.
             let names = map scfMethodFlowName cands
@@ -1050,7 +1055,7 @@ spec = do
                         }
                 idx = buildMethodIndex (mkMethod [oddName])
                 flow =
-                    (mkFlow fid "Random unrelated text" "air" Nothing)
+                    (mkFlow fid "Random unrelated text" Air Nothing)
                         { bfCAS = Just "124-38-9"
                         }
                 cands = findSimilarCFs emptyChemSynonyms idx flow 3
@@ -1062,7 +1067,7 @@ spec = do
             let close = mkCFComp "Methane biogenic" "air" "" 27.0
                 far = mkCFComp "Crude oil" "air" "" 0.0
                 idx = buildMethodIndex (mkMethod [far, close])
-                flow = mkFlow fid "Methane, biogenic" "air" Nothing
+                flow = mkFlow fid "Methane, biogenic" Air Nothing
                 cands = findSimilarCFs emptyChemSynonyms idx flow 2
             map scfMethodFlowName cands `shouldSatisfy` (\ns -> not (null ns) && head ns == "Methane biogenic")
 
@@ -1070,7 +1075,7 @@ spec = do
             fid <- nextRandom
             let cfs = [mkCFComp ("foo " <> tShow i) "air" "" 1.0 | i <- [1 .. 10 :: Int]]
                 idx = buildMethodIndex (mkMethod cfs)
-                flow = mkFlow fid "foo bar" "air" Nothing
+                flow = mkFlow fid "foo bar" Air Nothing
                 cands = findSimilarCFs emptyChemSynonyms idx flow 3
             length cands `shouldSatisfy` (<= 3)
 
@@ -1088,7 +1093,7 @@ spec = do
 
         it "returns [] when uoMaxFlows is 0" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 inv = M.singleton fid 100.0
                 tables = buildMethodTables OtherCFFamily M.empty M.empty []
                 idx = buildMethodIndex (mkMethod [])
@@ -1107,8 +1112,8 @@ spec = do
         it "drops flows below the absolute-weight threshold" $ do
             big <- nextRandom
             small <- nextRandom
-            let bigFlow = mkFlow big "tiny stuff" "air" Nothing
-                smallFlow = mkFlow small "huge stuff" "air" Nothing
+            let bigFlow = mkFlow big "tiny stuff" Air Nothing
+                smallFlow = mkFlow small "huge stuff" Air Nothing
                 inv = M.fromList [(big, 999.0), (small, 1.0)]
                 flowDB = M.fromList [(big, bigFlow), (small, smallFlow)]
                 tables = buildMethodTables OtherCFFamily M.empty M.empty []
@@ -1129,7 +1134,7 @@ spec = do
 
         it "skips flows that DO have a CF (they're characterized)" $ do
             fid <- nextRandom
-            let flow = mkFlow fid "co2" "air" Nothing
+            let flow = mkFlow fid "co2" Air Nothing
                 cf = (mkCF "co2" Nothing 1.0){mcfFlowRef = fid}
                 tables = buildMethodTables OtherCFFamily M.empty M.empty [(cf, Just (flow, ByUUID))]
                 idx = buildMethodIndex (mkMethod [cf])
@@ -1170,19 +1175,19 @@ spec = do
                 , occIndustrial
                 , occBenthos
                 ]
-            occAnnual = mkFlow (u 1) "Occupation, annual crop" "resource" Nothing
-            occOrchard = mkFlow (u 2) "Occupation, permanent crop, fruit" "resource" Nothing
+            occAnnual = mkFlow (u 1) "Occupation, annual crop" NaturalResource Nothing
+            occOrchard = mkFlow (u 2) "Occupation, permanent crop, fruit" NaturalResource Nothing
             -- The sea floor and a factory yard sit in one occupation family, and
             -- the drowned one shares its prefix with the dry one: the case
             -- exclusions exist for, since no set of prefixes separates them.
-            occSea = mkFlow (u 8) "Occupation, sea and ocean" "resource" Nothing
-            occIndustrial = mkFlow (u 9) "Occupation, industrial area" "resource" Nothing
-            occBenthos = mkFlow (u 10) "Occupation, industrial area, benthos" "resource" Nothing
-            transformation = mkFlow (u 3) "Transformation, to annual crop" "resource" Nothing
-            waterRiver = mkFlow (u 4) "Water, river" "resource" Nothing
-            waterWell = mkFlow (u 7) "Water, well" "resource" (Just "in ground")
-            methaneAir = (mkFlow (u 5) "Methane, fossil" "air" Nothing){bfCAS = Just "74-82-8"}
-            methaneWater = (mkFlow (u 6) "Methane, fossil" "water" Nothing){bfCAS = Just "74-82-8"}
+            occSea = mkFlow (u 8) "Occupation, sea and ocean" NaturalResource Nothing
+            occIndustrial = mkFlow (u 9) "Occupation, industrial area" NaturalResource Nothing
+            occBenthos = mkFlow (u 10) "Occupation, industrial area, benthos" NaturalResource Nothing
+            transformation = mkFlow (u 3) "Transformation, to annual crop" NaturalResource Nothing
+            waterRiver = mkFlow (u 4) "Water, river" NaturalResource Nothing
+            waterWell = mkFlow (u 7) "Water, well" NaturalResource (Just "in ground")
+            methaneAir = (mkFlow (u 5) "Methane, fossil" Air Nothing){bfCAS = Just "74-82-8"}
+            methaneWater = (mkFlow (u 6) "Methane, fossil" Water Nothing){bfCAS = Just "74-82-8"}
             occupationFlows = [occAnnual, occOrchard, occSea, occIndustrial, occBenthos]
             u = uuidFromInt
             -- Compare by UUID: BiosphereFlow has no Eq/Show instance.

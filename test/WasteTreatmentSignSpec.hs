@@ -137,7 +137,7 @@ producer waste =
         }
 
 co2Flow :: BiosphereFlow
-co2Flow = BiosphereFlow co2 "carbon dioxide" kgU M.empty Nothing Nothing (Just (Compartment "air" Nothing))
+co2Flow = BiosphereFlow co2 "carbon dioxide" kgU M.empty Nothing Nothing (Just (Compartment Air Nothing))
 
 wasteFlowDB :: M.Map UUID WasteFlow
 wasteFlowDB = M.singleton wW (WasteFlow wW "waste W" kgU M.empty Nothing Nothing)

@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -15,7 +16,7 @@ module Types (
 
 import API.JsonOptions (Stripped (..))
 import Control.DeepSeq (NFData)
-import Control.Monad ((<=<))
+import Control.Monad ((<=<), (>=>))
 import Data.Aeson (FromJSON (..), ToJSON (..))
 import Data.Int (Int32)
 import qualified Data.IntSet as IS
@@ -78,13 +79,97 @@ data ProcessRef = ProcessRef
     }
     deriving (Eq, Ord, Show)
 
+{- | The medium a biosphere flow exchanges with.
+
+Every format spells these differently and none of them spells more than these:
+EcoSpold 2 writes @natural resource@ where SimaPro writes @Raw@ and EcoSpold 1
+writes @resource@, and the whole vocabulary observed across EcoSpold 1 and 2,
+SimaPro CSV and ILCD is the constructors below. Holding it as text meant
+two databases loaded side by side described one physical flow with two strings,
+and every reader and writer that needed them to agree carried its own list of
+spellings. The medium is the closed part; the subcompartment underneath it
+("high. pop.", "river water") is genuinely open and stays 'Text'.
+
+'Economic', 'InventoryIndicator' and 'Waste' are not media in the physical
+sense. They are what the sources file those flows under, and a flow has to keep
+saying which it is for the readers and writers that bucket by medium.
+-}
+data Medium
+    = Air
+    | Water
+    | Soil
+    | NaturalResource
+    | InventoryIndicator
+    | Economic
+    | {- | Waste that leaves the system with no treatment modelled for it, so
+      no activity produces or consumes it. SimaPro files these in their own
+      section and a method characterizes them under this name, which is why
+      they are elementary flows rather than a demand on the technosphere.
+      Waste that IS sent to treatment keeps its producer and stays on the
+      technosphere side.
+      -}
+      Waste
+    deriving (Eq, Ord, Show, Enum, Bounded, Generic, NFData, Store)
+    deriving anyclass (ToSchema)
+
+{- | The one spelling the engine says out loud: on the wire, in an identity, and
+wherever a medium is compared to itself. A file's own spelling belongs to the
+writer that emits that format, not here.
+-}
+mediumText :: Medium -> Text
+mediumText = \case
+    Air -> "air"
+    Water -> "water"
+    Soil -> "soil"
+    NaturalResource -> "natural resource"
+    InventoryIndicator -> "inventory indicator"
+    Economic -> "economic"
+    Waste -> "waste"
+
+{- | Read a medium as any format writes it. Case and surrounding space are
+ignored; @raw@, @resource@ and @resources@ are the three ways the formats name
+'NaturalResource'.
+
+'Left' names the string it could not place, so an unknown medium is reported
+rather than turned into a flow that quietly belongs nowhere.
+-}
+parseMedium :: Text -> Either Text Medium
+parseMedium raw = case T.toLower (T.strip raw) of
+    "air" -> Right Air
+    "water" -> Right Water
+    "soil" -> Right Soil
+    "natural resource" -> Right NaturalResource
+    "raw" -> Right NaturalResource
+    "resource" -> Right NaturalResource
+    "resources" -> Right NaturalResource
+    "inventory indicator" -> Right InventoryIndicator
+    "economic" -> Right Economic
+    "waste" -> Right Waste
+    other -> Left other
+
+-- | On the wire a medium is its canonical spelling, and reads back from any.
+instance ToJSON Medium where
+    toJSON = toJSON . mediumText
+
+instance FromJSON Medium where
+    parseJSON = parseJSON >=> either (fail . unknownMedium) pure . parseMedium
+
+-- | What to say about a medium string that belongs to no known medium.
+unknownMedium :: Text -> String
+unknownMedium got =
+    "unknown compartment medium "
+        <> show got
+        <> " (expected one of: "
+        <> T.unpack (T.intercalate ", " (map mediumText [minBound .. maxBound]))
+        <> ")"
+
 {- | Biosphere compartment — the natural medium a biosphere flow exchanges
 with. Present only on `BiosphereFlow`; technosphere flows have no
 compartment (their taxonomy, when meaningful, lives on the producing
 activity's `activityClassification`).
 -}
 data Compartment = Compartment
-    { compartmentName :: !Text -- air | water | soil | natural resource
+    { compartmentName :: !Medium
     , compartmentSub :: !(Maybe Text) -- "high. pop.", "river water", …
     }
     deriving (Eq, Show, Generic, NFData, Store)
@@ -95,34 +180,13 @@ source dataset omitted the compartment. Use 'bfCompartment' directly when
 you need to distinguish "absent" from "empty string".
 -}
 bfCompartmentName :: BiosphereFlow -> Text
-bfCompartmentName = maybe "" compartmentName . bfCompartment
+bfCompartmentName = maybe "" (mediumText . compartmentName) . bfCompartment
 
 {- | The biosphere flow's sub-compartment (e.g. "high. pop."), or @Nothing@
 when neither the source nor the medium recorded one.
 -}
 bfCompartmentSub :: BiosphereFlow -> Maybe Text
 bfCompartmentSub = compartmentSub <=< bfCompartment
-
-{- | The medium of an inventory indicator: an elementary flow that counts what
-an activity accounts for rather than naming a substance exchanged with the
-environment, so that a method can characterize the total. It is neither an
-emission to a medium nor an extraction from one, which is why the readers and
-writers that bucket a flow by its medium all need to recognise it. Compared
-lowercased and stripped, as sources vary in spacing and case.
--}
-inventoryIndicatorMedium :: Text
-inventoryIndicatorMedium = "inventory indicator"
-
-{- | The medium of a final waste flow: waste that leaves the system with no
-treatment modelled for it, so no activity produces or consumes it. SimaPro
-files these in their own section and a method characterizes them under this
-name (the compartment column of an ecofactor for landfilled waste reads
-@Waste@), which is why they are elementary flows rather than a demand on the
-technosphere. Waste that IS sent to treatment keeps its producer and stays on
-the technosphere side. Compared lowercased and stripped.
--}
-wasteMedium :: Text
-wasteMedium = "waste"
 
 {- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
 biosphere side also gets named variants instead of a load-bearing 'Bool'.
@@ -333,7 +397,7 @@ data Exchange
         , waIsInput :: !Bool
         {- ^ True when consumed by a treatment activity; False when generated
         by it. Waste with no treatment modelled at all is not on this axis:
-        it is an elementary flow of medium 'wasteMedium'.
+        it is an elementary flow of medium 'Waste'.
         -}
         , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
         , waProcessLinkId :: !(Maybe ProcessId) -- Target process ID (matches techProcessLinkId)

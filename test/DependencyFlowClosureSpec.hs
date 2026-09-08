@@ -48,7 +48,7 @@ riverWater =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (Compartment "natural resource" Nothing)
+        , bfCompartment = Just (Compartment NaturalResource Nothing)
         }
 
 -- | A flow the root database owns itself, unrelated to the dependency's.
@@ -61,7 +61,7 @@ methane =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (Compartment "air" Nothing)
+        , bfCompartment = Just (Compartment Air Nothing)
         }
 
 {- | The root's own flow under the name the dependency also uses, with a lower

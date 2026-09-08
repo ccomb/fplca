@@ -1904,7 +1904,7 @@ another consumes, ``"biosphere"`` for a substance exchanged with nature,
 ``"waste"`` for a waste. It is ``None`` against an engine older than wire
 revision 9, which did not report it.
 
-``category`` is the medium alone ("air", "water", "soil", "resource") and
+``category`` is the medium alone ("air", "water", "soil", "natural resource") and
 ``compartment`` the sub-compartment ("agricultural"), which is often all
 that tells two same-named flows apart. Only a biosphere flow has either:
 that is where "taken from nature" and "released to nature" are told apart.

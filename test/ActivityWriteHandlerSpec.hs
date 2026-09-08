@@ -62,6 +62,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    Medium (..),
     SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
@@ -500,7 +501,7 @@ co2Flow =
         , bfSynonyms = M.empty
         , bfCAS = Just "124-38-9"
         , bfSubstanceId = Nothing
-        , bfCompartment = Just Compartment{compartmentName = "air", compartmentSub = Nothing}
+        , bfCompartment = Just Compartment{compartmentName = Air, compartmentSub = Nothing}
         }
 
 milkActivity :: Activity
