@@ -12,8 +12,11 @@
   others are cut-off co-outputs that carry no burden, so a wrong pick was quiet
   as well as wrong. The activity name is now read, matched first, and written
   back out on export. It also decides between the candidates a synonym group
-  returns, where the dependency spells the product otherwise. Caches built
-  before this are rebuilt on the next load. Wire revision 23.
+  returns, where the dependency spells the product otherwise, and it decides
+  inside the workbook as well: a product several of the file's own activities
+  make is linked to the one the row names, and when no row names one the load
+  report says which activity was chosen and how many produced that product.
+  Caches built before this are rebuilt on the next load. Wire revision 23.
 - A cross-database link whose candidates tie inside one dependency now says so.
   Several activities scoring the same means nothing in the data chose between
   them, and until now the load said nothing while picking one. The load report
