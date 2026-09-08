@@ -82,7 +82,7 @@ module SimaPro.Writer (
 
 import qualified Data.ByteString as BS
 import Data.Either (lefts)
-import Data.List (sortOn)
+import Data.List (partition, sortOn)
 import qualified Data.Map.Strict as M
 
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
@@ -298,9 +298,9 @@ checkSimaProExportable db =
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbBioFlows db)]
         , let medium = T.toLower (bfCompartmentName flow)
         , not (T.null medium)
-        , -- An inventory indicator is not an emission to a medium; it has its own
+        , -- A final waste flow is not an emission to a medium; it has its own
         -- section ('SecWaste'), so it is not held to the emission media.
-        medium /= inventoryIndicatorMedium
+        medium `notElem` [wasteMedium, inventoryIndicatorMedium]
         , medium `notElem` ["air", "water", "soil"]
         ]
     amountOffenders =
@@ -594,13 +594,14 @@ wasteLine _ BiosphereExchange{} = Nothing
 compartment name. SimaPro splits biosphere rows into five sections keyed on
 the medium: Resources, Emissions to air/water/soil, and Final waste flows.
 Resources are the 'Resource' direction; emissions are bucketed by compartment
-name. An inventory indicator counts what the activity sends away rather than
-naming a substance, and the same source's own SimaPro export files all of them
-under Final waste flows, so its medium decides before its direction does.
+name. A final waste flow and an inventory indicator both count what the
+activity sends away rather than naming a substance exchanged with a medium, so
+they belong to Final waste flows whatever their direction says: their medium
+decides first.
 -}
 bioSection :: Catalogs -> Exchange -> Maybe BioSec
 bioSection cats ex@BiosphereExchange{bioDirection = dir}
-    | medium == Just inventoryIndicatorMedium = Just SecWaste
+    | medium `elem` [Just wasteMedium, Just inventoryIndicatorMedium] = Just SecWaste
     | otherwise = case dir of
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
@@ -748,7 +749,12 @@ serializeActivity cats act@Activity{..} =
             , Just sec <- [bioSection cats ex]
             , Just l <- [bioLine cats ex]
             ]
-        wasteLines = mapMaybe (wasteLine cats) unscaledExchanges
+        -- A waste row goes to the section that says what the format will
+        -- read back: a named treatment makes it an input from that treatment,
+        -- and with none nothing treats it, which is a final waste flow.
+        (treatedWaste, finalWaste) = partition linkedWaste unscaledExchanges
+        treatmentLines = mapMaybe (wasteLine cats) treatedWaste
+        wasteLines = mapMaybe (wasteLine cats) finalWaste
      in concat
             [ ["Process", ""]
             , concatMap (uncurry meta) (activityMetaLines act)
@@ -763,12 +769,14 @@ serializeActivity cats act@Activity{..} =
             , withBlank (avoidedHeader (productLines isAvoidedProduct cats category unscaledExchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
+            , withBlank (section "Waste to treatment" techRowText treatmentLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))
             , withBlank (section "Emissions to air" bioRowText (bioByName SecAir))
             , withBlank (section "Emissions to water" bioRowText (bioByName SecWater))
             , withBlank (section "Emissions to soil" bioRowText (bioByName SecSoil))
-            , -- Both kinds of final waste flow: the waste axis, and the inventory
-              -- indicators the biosphere axis carries ('bioSection').
+            , -- Both readings of a final waste flow: the elementary one every
+              -- source but this format's own waste axis produces
+              -- ('bioSection'), and a waste exchange that names no treatment.
               withBlank (section "Final waste flows" bioRowText (bioByName SecWaste ++ wasteLines))
             , ["End", ""]
             ]
