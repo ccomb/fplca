@@ -207,11 +207,11 @@ A multi-output activity is /not/ one of those: ILCD keys a process by a single
 dataset UUID, but 'ilcdProcessUUID' hands each @(activity, product)@ entry a
 distinct one, so each product becomes its own process dataset.
 
-* /Non-canonical biosphere media./ 'compartmentBlock' emits @"Emissions to
-  <medium>"@ for any non-resource medium, but the parser's @extractMedium@ only
-  inverts the canonical air\/water\/soil\/natural-resource phrasings; any other
-  medium (e.g. @"resource"@ from ES1\/ES2, or @"fresh water"@) re-imports under a
-  different compartment, silently shifting LCIA scores.
+* /Media this classification cannot name./ 'compartmentBlock' emits
+  @"Emissions to <medium>"@ for any non-resource medium, but the parser's
+  @extractMedium@ only inverts the air\/water\/soil\/natural-resource phrasings.
+  A flow of any other medium ('Waste', 'InventoryIndicator', 'Economic')
+  re-imports under a different compartment, silently shifting LCIA scores.
 
 * /Empty classification levels./ 'classificationBlock' joins levels with @"/"@
   and the parser splits on it, dropping empty parts. A value with an empty level

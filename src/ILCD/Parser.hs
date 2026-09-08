@@ -94,6 +94,7 @@ parseILCDDirectory unitConfig key dir = do
 
     -- Step 3: Build TechFlowDB, BioFlowDB, WasteFlowDB and UnitDB from parsed data
     let (techFlowDB, bioFlowDB, wasteFlowDB, unitDB) = buildFlowAndUnitDB flowInfoMap flowPropMap unitGroupMap
+    mapM_ (reportProgress Warning . T.unpack) (unplaceableMedia flowInfoMap)
 
     -- Step 4: Parse process XMLs in parallel
     processFiles <- listXMLFiles (dir </> "processes")
@@ -240,6 +241,27 @@ parseFlowPropertyXML bytes =
 --------------------------------------------------------------------------------
 -- Build FlowDB and UnitDB from ILCD data
 --------------------------------------------------------------------------------
+
+{- | One line per medium the flow files name that this engine cannot place.
+
+An ILCD category tree is open: 'Method.FlowResolver.parseCompartment' lowercases
+whatever level 1 holds when it recognises none of its four phrasings. Such a flow
+loads without a compartment, which costs it every characterization factor, so the
+word that did it is named rather than dropped.
+-}
+unplaceableMedia :: M.Map UUID ILCDFlowInfo -> [Text]
+unplaceableMedia flowInfoMap =
+    [ T.pack (unknownMedium got) <> ", on " <> T.pack (show n) <> " ILCD flow(s)"
+    | (got, n) <- M.toList (M.fromListWith (+) [(got, 1 :: Int) | got <- refused])
+    ]
+  where
+    refused :: [Text]
+    refused =
+        [ got
+        | info <- M.elems flowInfoMap
+        , Just (MT.Compartment m _ _) <- [ilcdCompartment info]
+        , Left got <- [parseMedium m]
+        ]
 
 buildFlowAndUnitDB ::
     M.Map UUID ILCDFlowInfo ->
