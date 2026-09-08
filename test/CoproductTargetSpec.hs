@@ -202,7 +202,7 @@ treatmentProcess :: Activity
 treatmentProcess =
     bareActivity
         "milk treatment"
-        [(techExchange milkId 1.0 ReferenceProduct supplierActId){techRole = ReferenceInput}]
+        [(techExchange milkId 1.0 ReferenceProduct (Just supplierActId)){techRole = ReferenceInput}]
 
 {- | The same consumer, its input naming an activity no row in the database
 carries.
@@ -264,21 +264,21 @@ supplierProcess :: UUID -> Double -> Activity
 supplierProcess productId amount =
     bareActivity
         "milk production"
-        [techExchange productId amount ReferenceProduct supplierActId]
+        [techExchange productId amount ReferenceProduct (Just supplierActId)]
 
 consumerActivity :: [Exchange] -> [Exchange] -> Activity
 consumerActivity inputs outputs =
     bareActivity
         "cheese production"
-        ([techExchange consumerProdId 1.0 ReferenceProduct consumerActId] ++ inputs ++ outputs)
+        ([techExchange consumerProdId 1.0 ReferenceProduct (Just consumerActId)] ++ inputs ++ outputs)
 
 -- | An input naming the supplier's lower-UUID coproduct.
 milkInput :: Exchange
-milkInput = techExchange milkId 2.0 Input supplierActId
+milkInput = techExchange milkId 2.0 Input (Just supplierActId)
 
 -- | An input naming an activity the database does not hold.
 ghostInput :: Exchange
-ghostInput = techExchange milkId 2.0 Input ghostActId
+ghostInput = techExchange milkId 2.0 Input (Just ghostActId)
 
 {- | A waste output naming the supplier: the activity exists, no row of it
 produces the waste flow, so nothing routes it.
@@ -290,14 +290,14 @@ wasteOutput =
         , waAmount = 0.5
         , waUnitId = kgUnitId
         , waIsInput = False
-        , waActivityLinkId = supplierActId
+        , waActivityLinkId = Just supplierActId
         , waSupplierClaim = ClaimById supplierActId
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing
         }
 
-techExchange :: UUID -> Double -> TechRole -> UUID -> Exchange
+techExchange :: UUID -> Double -> TechRole -> Maybe UUID -> Exchange
 techExchange flowId amount role link =
     TechnosphereExchange
         { techFlowId = flowId
@@ -305,7 +305,7 @@ techExchange flowId amount role link =
         , techUnitId = kgUnitId
         , techRole = role
         , techActivityLinkId = link
-        , techSupplierClaim = if link == UUID.nil then ClaimByProduct else ClaimById link
+        , techSupplierClaim = maybe ClaimByProduct ClaimById link
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing

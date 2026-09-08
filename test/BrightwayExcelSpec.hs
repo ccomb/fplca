@@ -229,7 +229,7 @@ inputExchanges = filter isInput . exchanges
 
 inputLink :: Exchange -> Maybe UUID.UUID
 inputLink e = case e of
-    TechnosphereExchange{techRole = Input, techActivityLinkId = l} -> Just l
+    TechnosphereExchange{techRole = Input, techActivityLinkId = Just l} -> Just l
     TechnosphereExchange{} -> Nothing
     BiosphereExchange{} -> Nothing
     WasteExchange{} -> Nothing

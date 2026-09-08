@@ -42,7 +42,7 @@ activityWithRefExchange fid =
                 , techAmount = 1.0
                 , techUnitId = UUID.nil
                 , techRole = ReferenceProduct
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
@@ -77,7 +77,7 @@ activityWithInputExchange fid =
                 , techAmount = 0.5
                 , techUnitId = UUID.nil
                 , techRole = Input
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
@@ -223,7 +223,7 @@ spec = do
                 act = activityWithInputExchange flowUUID1
                 fixed = fixActivityExchanges idx act
             case exchanges fixed of
-                [TechnosphereExchange{techFlowId = fid, techActivityLinkId = alink}] -> do
+                [TechnosphereExchange{techFlowId = fid, techActivityLinkId = Just alink}] -> do
                     fid `shouldBe` prodUUID1
                     alink `shouldBe` actUUID1
                 _ -> expectationFailure "expected one TechnosphereExchange"

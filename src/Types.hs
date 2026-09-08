@@ -398,7 +398,7 @@ data Exchange
         , techAmount :: !Double -- Quantity exchanged
         , techUnitId :: !UUID -- Unit of measurement
         , techRole :: !TechRole -- Role within the activity
-        , techActivityLinkId :: !UUID -- Supplier this exchange resolved to, nil until it does
+        , techActivityLinkId :: !(Maybe UUID) -- Supplier this exchange resolved to, Nothing until it does
         , techSupplierClaim :: !SupplierClaim
         {- ^ How the source designates its supplier. Written once, by a parser,
         and never rewritten by linking, unlike 'techActivityLinkId'.
@@ -428,7 +428,7 @@ data Exchange
         by it. Waste with no treatment modelled at all is not on this axis:
         it is an elementary flow of medium 'Waste'.
         -}
-        , waActivityLinkId :: !UUID -- Treatment this exchange resolved to (UUID.nil if orphan)
+        , waActivityLinkId :: !(Maybe UUID) -- Treatment this exchange resolved to (Nothing if orphan)
         , waSupplierClaim :: !SupplierClaim
         -- ^ How the source designates the treatment, as on a technosphere line.
         , waLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
@@ -525,13 +525,11 @@ exchangeSupplierClaim TechnosphereExchange{techSupplierClaim = claim} = claim
 exchangeSupplierClaim BiosphereExchange{} = ClaimByProduct
 exchangeSupplierClaim WasteExchange{waSupplierClaim = claim} = claim
 
--- | Get activity link ID (backward compatibility)
+-- | The supplier an exchange resolved to, on the two axes that can have one.
 exchangeActivityLinkId :: Exchange -> Maybe UUID
-exchangeActivityLinkId TechnosphereExchange{techActivityLinkId = linkId} =
-    if linkId == UUID.nil then Nothing else Just linkId
+exchangeActivityLinkId TechnosphereExchange{techActivityLinkId = linkId} = linkId
 exchangeActivityLinkId BiosphereExchange{} = Nothing
-exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} =
-    if linkId == UUID.nil then Nothing else Just linkId
+exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} = linkId
 
 -- | Get exchange location (for EcoSpold1 supplier lookup)
 exchangeLocation :: Exchange -> Text
@@ -1391,7 +1389,7 @@ sole (x :| []) = Just x
 sole (_ :| (_ : _)) = Nothing
 
 {- | Find supplier ProcessId by product flow UUID.
-ESSENTIAL for SimaPro data: exchanges have techActivityLinkId = nil, but techFlowId is valid.
+ESSENTIAL for SimaPro data: exchanges have no techActivityLinkId, but techFlowId is valid.
 
 Answers only when exactly one row produces the flow. A product made in several
 geographies is produced by several rows, and naming one of them would answer a

@@ -152,7 +152,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                             , activityName act == "mid"
                             , ex@TechnosphereExchange{techRole = Input} <- exchanges act
                             ]
-                    midInputLinks `shouldBe` [UUID.nil]
+                    midInputLinks `shouldBe` [Nothing]
 
         it "keeps a multi-product link target when only one product is deleted" $ do
             db <- buildOrFail (multiProductDB 300)
@@ -169,7 +169,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                             , activityName act == "consumer-A"
                             , ex@TechnosphereExchange{techRole = Input} <- exchanges act
                             ]
-                    consumerLinks `shouldBe` [mkUUID 301]
+                    consumerLinks `shouldBe` [Just (mkUUID 301)]
 
         it "unlinks a surviving waste generator when its treatment is deleted" $ do
             db <- buildOrFail (wasteDB 350)
@@ -187,7 +187,7 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                             , activityName act == "generator"
                             , ex@WasteExchange{} <- exchanges act
                             ]
-                    generatorLinks `shouldBe` [UUID.nil]
+                    generatorLinks `shouldBe` [Nothing]
 
         it "fails loudly on an out-of-range ProcessId" $ do
             db <- buildOrFail (chainDB 400)
@@ -472,7 +472,7 @@ refOut actUUID prodUUID =
         , techAmount = 1.0
         , techUnitId = kgUnitId
         , techRole = ReferenceProduct
-        , techActivityLinkId = actUUID
+        , techActivityLinkId = Just actUUID
         , techSupplierClaim = ClaimByProduct
         , techLocation = ""
         , techComment = Nothing
@@ -490,7 +490,7 @@ inputFrom supplierActUUID supplierProdUUID =
         , techAmount = 0.5
         , techUnitId = kgUnitId
         , techRole = Input
-        , techActivityLinkId = supplierActUUID
+        , techActivityLinkId = Just supplierActUUID
         , techSupplierClaim = ClaimByProduct
         , techLocation = ""
         , techComment = Nothing
@@ -511,7 +511,7 @@ wasteOut treatmentActUUID treatmentProdUUID =
         , waAmount = 0.5
         , waUnitId = kgUnitId
         , waIsInput = False
-        , waActivityLinkId = treatmentActUUID
+        , waActivityLinkId = Just treatmentActUUID
         , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing

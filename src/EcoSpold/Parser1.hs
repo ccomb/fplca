@@ -29,7 +29,6 @@ import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.UUID as UUID
 import qualified Data.UUID.V5 as UUID5
 import EcoSpold.Common (ParsedDataset (..), bsToDouble, bsToIntMaybe, bsToText, docSection, isElement, joinParts, nonEmptyText)
 import Progress (ProgressLevel (..), reportProgress)
@@ -602,7 +601,7 @@ buildExchange activityLoc edata
             , techAmount = exMeanValue edata
             , techUnitId = unitId
             , techRole = techRoleFor
-            , techActivityLinkId = UUID.nil
+            , techActivityLinkId = Nothing
             , techSupplierClaim = supplierClaim
             , techLocation = exchangeLocation
             , techComment = nonEmptyText (exComment edata)

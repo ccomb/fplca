@@ -46,7 +46,6 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
-import qualified Data.UUID as UUID
 import Database (buildDatabaseWithMatrices)
 import Database.Loader (getReferenceProductUUID)
 import Matrix (computeInventoryMatrix)
@@ -312,7 +311,7 @@ prodExch =
         , techAmount = 1
         , techUnitId = generateUnitUUID "kilowatt hour"
         , techRole = ReferenceProduct
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
@@ -329,7 +328,7 @@ gasExch =
         , techAmount = 8.5
         , techUnitId = generateUnitUUID "cubic meter"
         , techRole = Input
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "RoW"
         , techComment = Nothing
@@ -406,7 +405,7 @@ specialAct =
                 , techAmount = 1
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = ReferenceProduct
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = "GLO"
                 , techComment = Nothing
@@ -420,7 +419,7 @@ specialAct =
                 , techAmount = 0.7
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = Input
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = "RoW"
                 , techComment = Nothing
@@ -501,7 +500,7 @@ refInputAct =
                 , techAmount = 1
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = ReferenceInput
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = "GLO"
                 , techComment = Nothing
@@ -601,7 +600,7 @@ kgProduction flow role amount =
         , techAmount = amount
         , techUnitId = generateUnitUUID "kilogram"
         , techRole = role
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
@@ -689,7 +688,7 @@ gramRefDb =
                     , techAmount = 1000
                     , techUnitId = generateUnitUUID "g"
                     , techRole = ReferenceProduct
-                    , techActivityLinkId = UUID.nil
+                    , techActivityLinkId = Nothing
                     , techSupplierClaim = ClaimByProduct
                     , techLocation = "GLO"
                     , techComment = Nothing
@@ -744,7 +743,7 @@ scrapExch =
         , waAmount = 0.1
         , waUnitId = generateUnitUUID "kilogram"
         , waIsInput = False
-        , waActivityLinkId = UUID.nil
+        , waActivityLinkId = Nothing
         , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing
@@ -762,7 +761,7 @@ linkedWasteDb =
         { sdbActivities = M.singleton (generateActivityUUID act, getReferenceProductUUID act) act
         }
   where
-    act = elec{exchanges = [prodExch, scrapExch{waActivityLinkId = generateActivityUUID elec}]}
+    act = elec{exchanges = [prodExch, scrapExch{waActivityLinkId = Just (generateActivityUUID elec)}]}
 
 {- | A database whose input exchange carries a non-finite amount: rejected, since
 it has no numeric-cell form that re-parses to the same value.

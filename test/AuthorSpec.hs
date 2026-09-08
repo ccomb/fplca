@@ -177,7 +177,7 @@ spec = do
                 -- silently point at whichever row inherits the number.
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [techInput supplierPid 2 Nothing]}
                 case [ex | ex <- exchanges (riActivity r), isTechnosphereExchange ex, exchangeAmount ex == 2] of
-                    [TechnosphereExchange{techActivityLinkId = link}] -> link `shouldBe` supplierActId
+                    [TechnosphereExchange{techActivityLinkId = Just link}] -> link `shouldBe` supplierActId
                     other -> expectationFailure ("expected one resolved input, got " <> show (length other))
 
             it "defaults a waste output to the treatment's reference unit" $ do
@@ -185,7 +185,7 @@ spec = do
                 -- falls back to its reference input's.
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [wasteOut treatPid 1 Nothing]}
                 case [ex | ex@WasteExchange{} <- exchanges (riActivity r)] of
-                    [WasteExchange{waActivityLinkId = link, waUnitId = unit}] -> do
+                    [WasteExchange{waActivityLinkId = Just link, waUnitId = unit}] -> do
                         link `shouldBe` treatActId
                         unit `shouldBe` kgUnitId
                     other -> expectationFailure ("expected one waste output, got " <> show (length other))
@@ -200,7 +200,7 @@ spec = do
                     Left errs -> expectationFailure ("expected resolution, got " <> show errs)
                     Right ([r], _) ->
                         case [ex | ex <- exchanges (riActivity r), exchangeAmount ex == 3] of
-                            [TechnosphereExchange{techActivityLinkId = link}] -> link `shouldBe` supplierActId
+                            [TechnosphereExchange{techActivityLinkId = Just link}] -> link `shouldBe` supplierActId
                             other -> expectationFailure ("expected one dependency input, got " <> show (length other))
                     Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
 
@@ -725,7 +725,7 @@ importedActivity =
                 , techAmount = 1.0
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
-                , techActivityLinkId = importedActId
+                , techActivityLinkId = Just importedActId
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
@@ -739,7 +739,7 @@ importedActivity =
                 , techAmount = 0.3
                 , techUnitId = kgUnitId
                 , techRole = Coproduct
-                , techActivityLinkId = importedActId
+                , techActivityLinkId = Just importedActId
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
@@ -753,7 +753,7 @@ importedActivity =
                 , techAmount = 8.0
                 , techUnitId = kgUnitId
                 , techRole = Input
-                , techActivityLinkId = supplierActId
+                , techActivityLinkId = Just supplierActId
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = "FR"
                 , techComment = Just "milk in"
@@ -785,7 +785,7 @@ importedActivity =
                 , waAmount = 0.5
                 , waUnitId = kgUnitId
                 , waIsInput = False
-                , waActivityLinkId = treatActId
+                , waActivityLinkId = Just treatActId
                 , waSupplierClaim = ClaimByProduct
                 , waLocation = ""
                 , waComment = Nothing
@@ -796,7 +796,7 @@ importedActivity =
                 , waAmount = 0.2
                 , waUnitId = kgUnitId
                 , waIsInput = True
-                , waActivityLinkId = treatActId
+                , waActivityLinkId = Just treatActId
                 , waSupplierClaim = ClaimByProduct
                 , waLocation = ""
                 , waComment = Nothing
@@ -990,7 +990,7 @@ treatmentWithHeat =
                         , techAmount = 3.0
                         , techUnitId = kgUnitId
                         , techRole = Coproduct
-                        , techActivityLinkId = UUID.nil
+                        , techActivityLinkId = Nothing
                         , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
@@ -1022,7 +1022,7 @@ treatmentActivity =
                 , techAmount = 1.0
                 , techUnitId = kgUnitId
                 , techRole = ReferenceInput
-                , techActivityLinkId = treatActId
+                , techActivityLinkId = Just treatActId
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
@@ -1056,7 +1056,7 @@ supplierActivityAt actId prodId =
                 , techAmount = 1.0
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
-                , techActivityLinkId = actId
+                , techActivityLinkId = Just actId
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing

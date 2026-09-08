@@ -67,7 +67,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.Text.Read as TR
-import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import EcoSpold.Common (numericRefChar)
 import Progress (ProgressLevel (..), reportProgress)
@@ -386,7 +385,7 @@ productRowOut cfg meta isRef f =
             , techAmount = effAmount
             , techUnitId = unitUUID
             , techRole = if isRef then ReferenceProduct else Coproduct
-            , techActivityLinkId = UUID.nil
+            , techActivityLinkId = Nothing
             , techSupplierClaim = ClaimByProduct -- an output of this activity, not a reference to another
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
             , techComment = fieldText f "comment"
@@ -441,7 +440,7 @@ technosphereRowOut cfg role actName f
             , techAmount = amount
             , techUnitId = unitUUID
             , techRole = role
-            , techActivityLinkId = UUID.nil
+            , techActivityLinkId = Nothing
             , techSupplierClaim = maybe ClaimByProduct ClaimByName supplierActivity
             , techLocation = fromMaybe "" (fieldText f "location")
             , techComment = fieldText f "comment"

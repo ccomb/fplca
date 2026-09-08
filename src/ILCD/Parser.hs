@@ -729,7 +729,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , waAmount = ierAmount raw
                         , waUnitId = fUnitId
                         , waIsInput = isInput
-                        , waActivityLinkId = UUID.nil
+                        , waActivityLinkId = Nothing
                         , waSupplierClaim = ClaimByProduct
                         , waLocation = ierLocation raw
                         , waComment = ierComment raw
@@ -741,7 +741,7 @@ buildActivity flowInfoMap techFlowDB bioFlowDB wasteFlowDB unitDB p =
                         , techAmount = ierAmount raw
                         , techUnitId = fUnitId
                         , techRole = techRoleFor
-                        , techActivityLinkId = UUID.nil
+                        , techActivityLinkId = Nothing
                         , techSupplierClaim = ClaimByProduct
                         , techLocation = ierLocation raw
                         , techComment = ierComment raw
@@ -789,7 +789,7 @@ fixActivityExchanges idx act =
             Just (actUUID, prodUUID) ->
                 ex
                     { techFlowId = prodUUID
-                    , techActivityLinkId = actUUID
+                    , techActivityLinkId = Just actUUID
                     }
             Nothing -> ex
     fixEx ex@TechnosphereExchange{} = ex
@@ -801,7 +801,7 @@ fixActivityExchanges idx act =
             Just (actUUID, prodUUID) ->
                 ex
                     { waFlowId = prodUUID
-                    , waActivityLinkId = actUUID
+                    , waActivityLinkId = Just actUUID
                     }
             Nothing -> ex
     fixEx ex@WasteExchange{} = ex

@@ -23,13 +23,14 @@ import System.FilePath (takeBaseName)
 import Types
 import qualified Xeno.SAX as X
 
-{- | What an EcoSpold 2 row says about its supplier: the activity identifier it
-carries, and nothing when it carries none.
+{- | The identifier a row carries, absent where the file wrote none. An
+EcoSpold 2 row says the same thing twice with it: it is what the source claims
+and, at parse time, what the load has resolved.
 -}
-claimOf :: UUID.UUID -> SupplierClaim
-claimOf linkUUID
-    | linkUUID == UUID.nil = ClaimByProduct
-    | otherwise = ClaimById linkUUID
+nonNil :: UUID.UUID -> Maybe UUID.UUID
+nonNil linkUUID
+    | linkUUID == UUID.nil = Nothing
+    | otherwise = Just linkUUID
 
 {- | Namespace UUID for generating deterministic UUIDs from invalid text
 Using UUID v5 (SHA1-based) with a custom namespace for test data compatibility
@@ -826,8 +827,8 @@ parseWithXeno xmlContent processId = do
                                 , techAmount = idAmount idata
                                 , techUnitId = unitUUID
                                 , techRole = techRoleFor
-                                , techActivityLinkId = linkUUID
-                                , techSupplierClaim = claimOf linkUUID
+                                , techActivityLinkId = nonNil linkUUID
+                                , techSupplierClaim = maybe ClaimByProduct ClaimById (nonNil linkUUID)
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing
@@ -842,8 +843,8 @@ parseWithXeno xmlContent processId = do
                                 , waAmount = idAmount idata
                                 , waUnitId = unitUUID
                                 , waIsInput = isInput
-                                , waActivityLinkId = linkUUID
-                                , waSupplierClaim = claimOf linkUUID
+                                , waActivityLinkId = nonNil linkUUID
+                                , waSupplierClaim = maybe ClaimByProduct ClaimById (nonNil linkUUID)
                                 , waLocation = ""
                                 , waComment = snd <$> idComment idata
                                 , waPedigree = Nothing

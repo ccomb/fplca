@@ -1210,7 +1210,7 @@ productToExchange unitCfg env role ProductRow{..} =
                 , techAmount = amount
                 , techUnitId = unitUUID
                 , techRole = role
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , -- Preserve the location encoded on the Products row (e.g.
                   -- WFLDB writes "Product (WFLDB)/m2/GLO U" while the
@@ -1321,7 +1321,7 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
                 , techAmount = resolvedAmount
                 , techUnitId = unitUUID
                 , techRole = Input
-                , techActivityLinkId = UUID.nil
+                , techActivityLinkId = Nothing
                 , techSupplierClaim = ClaimByProduct
                 , techLocation = location
                 , techComment = cleanedComment

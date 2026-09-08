@@ -73,7 +73,7 @@ emptyActivity =
         , activityFormulaCheck = Nothing
         }
 
-techEx :: UUID -> Double -> TechRole -> UUID -> Exchange
+techEx :: UUID -> Double -> TechRole -> Maybe UUID -> Exchange
 techEx flow amt role link =
     TechnosphereExchange
         { techFlowId = flow
@@ -102,7 +102,7 @@ co2Emission amt =
         , bioPedigree = Nothing
         }
 
-wasteEx :: Bool -> UUID -> Double -> Exchange
+wasteEx :: Bool -> Maybe UUID -> Double -> Exchange
 wasteEx isInput link amt =
     WasteExchange
         { waFlowId = wW
@@ -123,7 +123,7 @@ treatment :: TechRole -> Double -> Activity
 treatment role amt =
     emptyActivity
         { activityName = "treatment of waste W"
-        , exchanges = [techEx wW amt role UUID.nil, co2Emission 2.0]
+        , exchanges = [techEx wW amt role Nothing, co2Emission 2.0]
         }
 
 {- | A producer of Y that also emits 3 kg of waste W. @waste@ supplies the
@@ -133,7 +133,7 @@ producer :: Exchange -> Activity
 producer waste =
     emptyActivity
         { activityName = "producer of Y"
-        , exchanges = [techEx yY 1.0 ReferenceProduct UUID.nil, waste]
+        , exchanges = [techEx yY 1.0 ReferenceProduct Nothing, waste]
         }
 
 co2Flow :: BiosphereFlow
@@ -199,7 +199,7 @@ scored through the dep-demand solve. Going through the linker (rather than a
 hand-built 'CrossDBLink') is the point: that is where the treatment's
 reference-sign correction is applied.
 
-@rootLink@ is what the waste output states about its treatment: 'UUID.nil' for
+@rootLink@ is what the waste output states about its treatment: 'Nothing' for
 an output naming none, @tA@ for one naming the dependency's treatment. Both
 must reach the same treatment and the same score.
 
@@ -207,7 +207,7 @@ Returns the score and the waste line as the API reports it, so a test can hold
 the two against each other: a charged line that reports no treatment is the
 same bug read from the other end.
 -}
-scoreCross :: UUID -> T.Text -> TechRole -> Double -> IO (Double, ExchangeWithUnit)
+scoreCross :: Maybe UUID -> T.Text -> TechRole -> Double -> IO (Double, ExchangeWithUnit)
 scoreCross rootLink depName depRole depRefAmount = do
     let rootActs = M.singleton (pA, yY) (producer (wasteEx False rootLink 3.0))
     rootBase <- buildDB "root" rootActs
@@ -240,7 +240,7 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
             scoreIntra
                 "intra-eco"
                 ( M.fromList
-                    [ ((pA, yY), producer (wasteEx False tA 3.0))
+                    [ ((pA, yY), producer (wasteEx False (Just tA) 3.0))
                     , ((tA, wW), treatment ReferenceProduct (-1.0))
                     ]
                 )
@@ -251,18 +251,18 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
             scoreIntra
                 "intra-ilcd"
                 ( M.fromList
-                    [ ((pA, yY), producer (wasteEx True tA 3.0))
+                    [ ((pA, yY), producer (wasteEx True (Just tA) 3.0))
                     , ((tA, wW), treatment ReferenceInput 1.0)
                     ]
                 )
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ILCD (positive ReferenceInput) treatment scores +6" $ do
-        (score, _) <- scoreCross UUID.nil "ilcd-dep" ReferenceInput 1.0
+        (score, _) <- scoreCross Nothing "ilcd-dep" ReferenceInput 1.0
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     it "cross-DB to an ecoinvent (negative ReferenceProduct) treatment scores +6" $ do
-        (score, _) <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
+        (score, _) <- scoreCross Nothing "eco-dep" ReferenceProduct (-1.0)
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     -- An authored waste output states the treatment it goes to. When that
@@ -270,7 +270,7 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
     -- just as naming nothing does; reading the link as "resolved elsewhere"
     -- cut the waste off with no burden at all.
     it "cross-DB from a waste output that names the dependency's treatment scores +6" $ do
-        (score, _) <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
+        (score, _) <- scoreCross (Just tA) "eco-dep" ReferenceProduct (-1.0)
         withinTolerance 1.0e-9 6.0 score `shouldBe` True
 
     -- Both halves of the same statement: the treatment charged is the one
@@ -278,12 +278,12 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
     -- burden is missing when it was counted, which is the reading the role
     -- exists to make impossible.
     it "reports the dependency's treatment for the waste output it charged" $ do
-        (_, reported) <- scoreCross tA "eco-dep" ReferenceProduct (-1.0)
+        (_, reported) <- scoreCross (Just tA) "eco-dep" ReferenceProduct (-1.0)
         ewuWasteRole reported `shouldBe` Just SentToTreatment
         (T.isPrefixOf "eco-dep::" <$> ewuTargetProcessId reported) `shouldBe` Just True
 
     it "reports the dependency's treatment for an output naming none" $ do
-        (_, reported) <- scoreCross UUID.nil "eco-dep" ReferenceProduct (-1.0)
+        (_, reported) <- scoreCross Nothing "eco-dep" ReferenceProduct (-1.0)
         ewuWasteRole reported `shouldBe` Just SentToTreatment
         (T.isPrefixOf "eco-dep::" <$> ewuTargetProcessId reported) `shouldBe` Just True
 
@@ -293,7 +293,7 @@ spec = describe "Waste-treatment scoring sign across reference conventions" $ do
     it "a waste output linked inside its own database gets no cross-DB link" $ do
         let rootActs =
                 M.fromList
-                    [ ((pA, yY), producer (wasteEx False tA 3.0))
+                    [ ((pA, yY), producer (wasteEx False (Just tA) 3.0))
                     , ((tA, wW), treatment ReferenceProduct (-1.0))
                     ]
         depDB <- buildDB "eco-dep" (M.singleton (tA, wW) (treatment ReferenceProduct (-1.0)))

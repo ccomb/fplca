@@ -20,7 +20,7 @@ import qualified Data.IntSet as IS
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Sequence (Seq (..), (|>))
 import qualified Data.Set as S
 import Data.Text (Text)
@@ -1084,7 +1084,7 @@ buildCutoffWaste db activity =
             , cwfUnit = maybe "" (lookupUnitName . wfUnitId) mFlow
             }
         | WasteExchange{waActivityLinkId = lid, waIsInput = False, waFlowId = fid, waAmount = amt} <- exchanges activity
-        , lid == UUID.nil
+        , isNothing lid
         , not (S.member fid resolved)
         , let mFlow = M.lookup fid (dbWasteFlows db)
         ]
@@ -1104,7 +1104,7 @@ calculateActivityMetadata db activity =
         bioExchanges = length [ex | ex <- allExchanges, isBiosphereExchange ex]
         resolved = crossDBResolvedFlowIds db activity
         wasteExchanges = [(fid, linkId) | WasteExchange{waFlowId = fid, waActivityLinkId = linkId} <- allExchanges]
-        wasteLinked = length [() | (fid, linkId) <- wasteExchanges, linkId /= UUID.nil || S.member fid resolved]
+        wasteLinked = length [() | (fid, linkId) <- wasteExchanges, isJust linkId || S.member fid resolved]
         wasteOrphan = length wasteExchanges - wasteLinked
         refProduct = exchangeFlowId <$> L.find exchangeIsReference allExchanges
      in ActivityMetadata
@@ -1236,11 +1236,11 @@ resolveTarget ::
 resolveTarget db links = \case
     ex@TechnosphereExchange{techRole = role, techActivityLinkId = lid, techFlowId = fid}
         | role /= Input && role /= ReferenceInput -> Nothing
-        | lid /= UUID.nil -> resolveByLinkedProducer db ex
+        | isJust lid -> resolveByLinkedProducer db ex
         | otherwise -> resolveByProductFlow db fid <|> resolveByCrossDBLink links fid
     BiosphereExchange{} -> Nothing
     ex@WasteExchange{waIsInput = True, waActivityLinkId = lid}
-        | lid /= UUID.nil -> resolveByLinkedProducer db ex
+        | isJust lid -> resolveByLinkedProducer db ex
         | otherwise -> Nothing
     -- An output's link names the activity that treats the waste, exactly as an
     -- input's names the one that supplies it. Reading it as no target at all
@@ -1250,7 +1250,7 @@ resolveTarget db links = \case
     -- the loader built for it, for the same reason as everywhere here: the row
     -- named must be the row the score charged, and that link is charged.
     ex@WasteExchange{waIsInput = False, waActivityLinkId = lid, waFlowId = fid}
-        | lid /= UUID.nil -> resolveByRoutedProducer db ex <|> resolveByCrossDBLink links fid
+        | isJust lid -> resolveByRoutedProducer db ex <|> resolveByCrossDBLink links fid
         | otherwise -> resolveByCrossDBLink links fid
 
 {- | What a waste line does, given the target 'resolveTarget' found for it.
@@ -1590,7 +1590,7 @@ resolveTargetSummary db links exchange = case exchange of
             <|> (crossDBLinkToSummary <$> M.lookup (exchangeFlowId exchange) links)
 
 {- | Detailed exchanges with filtering. Resolves cross-DB technosphere inputs
-(SimaPro pattern: @activityLinkId@ is nil, the supplier lives in a dep DB
+(SimaPro pattern: no @activityLinkId@, the supplier lives in a dep DB
 via 'dbCrossDBLinks') by synthesizing an 'ActivitySummary' with a qualified
 pid @"dbName::actUUID_prodUUID"@ — same convention the @/activity/{pid}@
 endpoint uses.

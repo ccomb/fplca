@@ -13,7 +13,6 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.UUID as UUID
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import System.FilePath ((</>))
@@ -363,7 +362,7 @@ spec = do
     describe "the matrix" $ do
         it "gives a refused activity no column, and says why" $ do
             let refused = activity [productRow cheeseId 1.0 ReferenceProduct Nothing M.empty, productRow wheyId 2.0 Coproduct Nothing M.empty, input 10.0]
-                consumer = (activity [productRow creamId 1.0 ReferenceProduct Nothing M.empty, (tech cheeseId 3.0 Input){techActivityLinkId = refusedActId}]){activityName = "consumer"}
+                consumer = (activity [productRow creamId 1.0 ReferenceProduct Nothing M.empty, (tech cheeseId 3.0 Input){techActivityLinkId = Just refusedActId}]){activityName = "consumer"}
                 tables = buildInterningTables (M.fromList [((refusedActId, cheeseId), refused), ((consumerActId, creamId), consumer)])
                 refUnits = buildSupplierRefUnits units (itActivities tables)
             case buildTechTriples defaultUnitConfig units tables refUnits of
@@ -417,7 +416,7 @@ tech fid amount role =
         , techAmount = amount
         , techUnitId = kgId
         , techRole = role
-        , techActivityLinkId = UUID.nil
+        , techActivityLinkId = Nothing
         , techSupplierClaim = ClaimByProduct
         , techLocation = ""
         , techComment = Nothing
