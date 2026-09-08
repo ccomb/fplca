@@ -429,14 +429,6 @@ exchangeActivityLinkId BiosphereExchange{} = Nothing
 exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} =
     if linkId == UUID.nil then Nothing else Just linkId
 
-{- | The supplier activity the source named, for the one format that names it
-apart from the product. 'Nothing' for every other exchange kind and source.
--}
-exchangeSupplierActivity :: Exchange -> Maybe Text
-exchangeSupplierActivity TechnosphereExchange{techSupplierActivity = a} = a
-exchangeSupplierActivity BiosphereExchange{} = Nothing
-exchangeSupplierActivity WasteExchange{} = Nothing
-
 -- | Get process link ID (new field)
 exchangeProcessLinkId :: Exchange -> Maybe ProcessId
 exchangeProcessLinkId TechnosphereExchange{techProcessLinkId = pid} = pid
@@ -1856,6 +1848,7 @@ data SupplierAmbiguity = SupplierAmbiguity
     -- ^ Dependency the tie is inside
     }
     deriving (Show, Eq, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SupplierAmbiguity)
 
 {- | One product no dependency supplies: how many activities asked for it,
 and what stopped the first of them.

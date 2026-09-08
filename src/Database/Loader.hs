@@ -2064,7 +2064,7 @@ findExchangeCrossDBLink ::
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techSupplierActivity = supplier, techLocation = loc}
     | isSupplierDemand ex && not resolvesInternally =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
@@ -2109,7 +2109,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
     supplierQuery flow flowUnitName =
         SupplierQuery
             { sqProductName = tfName flow
-            , sqSupplierActivity = exchangeSupplierActivity ex
+            , sqSupplierActivity = supplier
             , sqLocation = loc
             , sqUnit = flowUnitName
             }
