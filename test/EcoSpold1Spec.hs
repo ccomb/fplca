@@ -175,11 +175,12 @@ multiDatasetXml =
         , "</ecoSpold>"
         ]
 
-{- | Fixture exercising the 'Final waste flows' export shape. SimaPro's
-third flow class lands on inputGroup=5 (consumer-side) in the EcoSpold1
-serialisation, with the category attribute preserved. Exchange #1 is the
-reference product, #2 is a real waste output the parser must route to
-WasteExchange instead of treating it as an unresolved tech input.
+{- | Fixture exercising the 'Final waste flows' export shape. Waste with no
+modelled treatment lands on inputGroup=5, the export's way of fitting a fifth
+flow class into a four-type model, with the category attribute preserved.
+Exchange #1 is the reference product, #2 is such a row: nothing treats it, so
+the parser must read it as an elementary flow rather than as a demand on a
+supplier that cannot exist.
 -}
 wasteFlowXml :: BC.ByteString
 wasteFlowXml =
@@ -200,7 +201,8 @@ wasteFlowXml =
         , "        <outputGroup>0</outputGroup>"
         , "      </exchange>"
         , "      <exchange number=\"2\" name=\"Organic carbon, placed in landfill\""
-        , "                category=\"Final waste flows\" unit=\"kg\" meanValue=\"0.02\">"
+        , "                category=\"Final waste flows\" subCategory=\"landfill\""
+        , "                unit=\"kg\" meanValue=\"0.02\">"
         , "        <inputGroup>5</inputGroup>"
         , "      </exchange>"
         , "    </flowData>"
@@ -562,18 +564,21 @@ spec = do
                      in locs `shouldBe` ["CH", "FR"]
 
     -- -----------------------------------------------------------------------
-    -- Waste-flow routing: category="Final waste flows" must surface as
-    -- WasteExchange + WasteFlow, not a technosphere input. This is the
-    -- inputGroup=5 export path that motivated the three-flow-kind series.
+    -- Final waste flows: waste with no modelled treatment is an elementary
+    -- flow of medium "waste". Nothing treats it, so nothing produces it, and
+    -- reading it as an input would demand a supplier no database can provide.
     -- -----------------------------------------------------------------------
     describe "Final waste flows routing" $ do
-        it "routes category=\"Final waste flows\" to WasteExchange" $
+        it "reads category=\"Final waste flows\" as a biosphere flow of medium waste" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
-                Right (act, _, _, wastes, _, _, _) -> do
-                    let wasteExchanges = [e | e@WasteExchange{} <- exchanges act]
-                    length wasteExchanges `shouldBe` 1
-                    length wastes `shouldBe` 1
+                Right (act, _, bios, wastes, _, _, _) -> do
+                    let bioExchanges = [e | e@BiosphereExchange{} <- exchanges act]
+                    length bioExchanges `shouldBe` 1
+                    map bfName bios `shouldBe` ["Organic carbon, placed in landfill"]
+                    map bfCompartment bios
+                        `shouldBe` [Just (Compartment wasteMedium (Just "landfill"))]
+                    length wastes `shouldBe` 0
 
         it "does not route the waste flow to the technosphere bucket" $
             case parseWithXeno wasteFlowXml of
@@ -583,10 +588,17 @@ spec = do
                     -- the Final-waste-flows row must not show up there.
                     map tfName techs `shouldBe` ["aluminium ingot"]
 
-        it "preserves waIsInput from inputGroup (5 → True)" $
+        it "reads it as an emission despite the input group" $
             case parseWithXeno wasteFlowXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right (act, _, _, _, _, _, _) ->
-                    -- Final waste flows surface on inputGroup=5; preserve
-                    -- that consumer-side semantic in the resulting WasteExchange.
-                    [waIsInput e | e@WasteExchange{} <- exchanges act] `shouldBe` [True]
+                    -- inputGroup=5 is an artefact of the format, not a
+                    -- direction: the row is waste leaving the system.
+                    [bioDirection e | e@BiosphereExchange{} <- exchanges act]
+                        `shouldBe` [Emission]
+
+        it "falls back to the activity location, as for any elementary flow" $
+            case parseWithXeno wasteFlowXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right (act, _, _, _, _, _, _) ->
+                    [bioLocation e | e@BiosphereExchange{} <- exchanges act] `shouldBe` ["RoW"]

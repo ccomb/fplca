@@ -392,6 +392,10 @@ dbViews sdb =
 -- Parse helper: write → parse back into a SimpleDatabase
 -- ---------------------------------------------------------------------------
 
+-- | Every exchange of a database, order irrelevant to the assertions using it.
+allExchanges :: SimpleDatabase -> [Exchange]
+allExchanges = concatMap exchanges . M.elems . sdbActivities
+
 roundTrip :: SimpleDatabase -> Either String SimpleDatabase
 roundTrip sdb =
     case writeSimpleDatabase canonicalWriterOptions sdb of
@@ -580,8 +584,12 @@ spec = do
                 Left err -> expectationFailure ("round-trip failed: " ++ err)
                 Right sdb' -> map activityName (M.elems (sdbActivities sdb')) `shouldBe` [nm]
 
-    describe "Final waste flows" $
-        it "round-trips a waste output as a waste flow (not a coproduct)" $ do
+    -- EcoSpold1 has no third flow class, so a waste exchange is written as the
+    -- technosphere or biosphere row that keeps its meaning: an input names its
+    -- treatment the way a technosphere input does, an output that names none is
+    -- an elementary flow, and an output that names one cannot be written at all.
+    describe "Final waste flows" $ do
+        it "writes an unlinked waste output as an elementary flow of medium waste" $ do
             let prodU = read "55555555-0000-4000-8000-000000000001" :: UUID
                 wasteU = read "55555555-0000-4000-8000-0000000000a0" :: UUID
                 wasteEx = WasteExchange wasteU 0.3 kgUnit False UUID.nil Nothing "" Nothing Nothing
@@ -590,11 +598,48 @@ spec = do
             case roundTrip sdb of
                 Left err -> expectationFailure ("round-trip failed: " ++ err)
                 Right sdb' -> do
-                    map wfName (M.elems (sdbWasteFlows sdb')) `shouldBe` ["spent solvent"]
-                    let isWasteOutput WasteExchange{waIsInput = i} = not i
-                        isWasteOutput TechnosphereExchange{} = False
-                        isWasteOutput BiosphereExchange{} = False
-                    any isWasteOutput (concatMap exchanges (M.elems (sdbActivities sdb'))) `shouldBe` True
+                    map bfName (M.elems (sdbBioFlows sdb')) `shouldBe` ["spent solvent"]
+                    map bfCompartment (M.elems (sdbBioFlows sdb'))
+                        `shouldBe` [Just (Compartment wasteMedium Nothing)]
+                    M.size (sdbWasteFlows sdb') `shouldBe` 0
+                    let directions = [d | BiosphereExchange{bioDirection = d} <- allExchanges sdb']
+                    directions `shouldBe` [Emission]
+
+        it "writes a waste input as a technosphere input" $ do
+            let prodU = read "55555555-0000-4000-8000-000000000002" :: UUID
+                wasteU = read "55555555-0000-4000-8000-0000000000a1" :: UUID
+                wasteEx = WasteExchange wasteU 0.3 kgUnit True UUID.nil Nothing "" Nothing Nothing
+                wastes = M.singleton wasteU (WasteFlow wasteU "spent solvent" kgUnit M.empty Nothing Nothing)
+                sdb = soloDb "solvent user" prodU [wasteEx] M.empty M.empty wastes
+            case roundTrip sdb of
+                Left err -> expectationFailure ("round-trip failed: " ++ err)
+                Right sdb' -> do
+                    let roles = [r | TechnosphereExchange{techRole = r} <- allExchanges sdb']
+                    roles `shouldBe` [ReferenceProduct, Input]
+                    M.size (sdbBioFlows sdb') `shouldBe` 0
+
+        it "rejects a waste output that names the treatment it goes to" $ do
+            -- The number attribute names a supplier only on an input, so the
+            -- link would have to be dropped and the row would come back as
+            -- waste nothing treats.
+            let prodU = read "55555555-0000-4000-8000-000000000003" :: UUID
+                wasteU = read "55555555-0000-4000-8000-0000000000a2" :: UUID
+                treatU = read "55555555-0000-4000-8000-0000000000b2" :: UUID
+                wasteEx = WasteExchange wasteU 0.3 kgUnit False treatU Nothing "" Nothing Nothing
+                wastes = M.singleton wasteU (WasteFlow wasteU "spent solvent" kgUnit M.empty Nothing Nothing)
+                sdb = soloDb "solvent user" prodU [wasteEx] M.empty M.empty wastes
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
+
+        it "rejects a waste input whose treatment is not exported alongside it" $ do
+            -- Same rule as a technosphere input: the writer can only emit a
+            -- supplier number for a row that is in the export.
+            let prodU = read "55555555-0000-4000-8000-000000000004" :: UUID
+                wasteU = read "55555555-0000-4000-8000-0000000000a3" :: UUID
+                treatU = read "55555555-0000-4000-8000-0000000000b3" :: UUID
+                wasteEx = WasteExchange wasteU 0.3 kgUnit True treatU Nothing "" Nothing Nothing
+                wastes = M.singleton wasteU (WasteFlow wasteU "spent solvent" kgUnit M.empty Nothing Nothing)
+                sdb = soloDb "solvent user" prodU [wasteEx] M.empty M.empty wastes
+            checkEcoSpold1Exportable sdb `shouldSatisfy` isLeft
 
     describe "non-finite amounts" $
         it "rejects an Infinity exchange amount rather than exporting it as 0.0" $ do
@@ -645,9 +690,10 @@ spec = do
 
     describe "waste-marker collision" $
         it "rejects a biosphere flow whose compartment is the waste-routing category" $ do
-            -- "Final waste flows" is the parser's waste-routing marker, tested
-            -- before the biosphere group, so a biosphere flow carrying it as its
-            -- compartment name would silently re-import as a waste exchange.
+            -- "Final waste flows" is what the parser reads as the marker of a
+            -- final waste flow, before the groups, so a biosphere flow carrying
+            -- it as its compartment name would silently come back under the
+            -- "waste" compartment instead.
             let prodU = read "bbbb0000-0000-4000-8000-000000000001" :: UUID
                 bioU = read "bbbb0000-0000-4000-8000-0000000000c0" :: UUID
                 comp = Compartment "Final waste flows" Nothing

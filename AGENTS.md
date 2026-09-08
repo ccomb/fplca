@@ -112,6 +112,7 @@ writing it or reading someone else's.
 ### Open-source boundary
 - This engine stands alone — keep deployment/SaaS concerns and any customer- or product-specific names out of code, comments, and PRs.
 - Name things after the standard or format, not the vendor or tool that produces them.
+- **The same holds for prose as for code.** An issue, a pull request or a commit message names the *shape* of data that broke (an EcoSpold 2 activity with two reference products, a CSV row carrying an avoided product), never the database it was found in nor the organisation publishing it. The engine reads formats, not brands, and a bug named after one database is already wrong the day the same shape turns up in another. Same rule for branch names and test fixtures.
 
 ### Formatting
 - Haskell is formatted with `fourmolu` — version pinned in `versions.env` (`FOURMOLU_VERSION`), style in `fourmolu.yaml`. You don't run it by hand:

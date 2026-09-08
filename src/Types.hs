@@ -810,7 +810,6 @@ parsers never produce unresolved entries.
 data ParsedFlow
     = ParsedTech !TechnosphereFlow
     | ParsedBio !BiosphereFlow
-    | ParsedWaste !WasteFlow
     deriving (Generic, NFData)
 
 {- | A resolved flow tagged with its kind. Returned by lookup/search code

@@ -317,7 +317,11 @@ History of manual bumps:
      "waste", not a waste exchange. Nothing changes type, so a cache written
      just before this would pass the fingerprint and keep those flows on an
      axis no method reads.
-- 27: a technosphere line carries the supplier activity its source names apart
+- 27: the same row read from an EcoSpold 1 file is an elementary flow too, and
+     an export writes it as one. Nothing changes type, so a cache written just
+     before this would pass the fingerprint and keep those flows on the waste
+     axis, still counted as demands the gap report can never close.
+- 28: a technosphere line carries the supplier activity its source names apart
      from the product ('techSupplierActivity'), and the linking stats carry the
      inputs several activities of one dependency answered equally well. Cached
      exchanges end before the field, and every field after it would be read at
@@ -329,7 +333,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 27
+     in hi `xor` lo `xor` 28
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
