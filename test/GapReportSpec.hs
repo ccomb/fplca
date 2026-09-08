@@ -44,6 +44,7 @@ import Types (
     LinkBlocker (..),
     LocationSource (..),
     SimpleDatabase (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     Unit (..),
@@ -119,7 +120,7 @@ techInput fid amount =
         , techUnitId = kgUnit
         , techRole = Input
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -136,6 +137,7 @@ wasteInput fid amount =
         , waUnitId = kgUnit
         , waIsInput = True
         , waActivityLinkId = UUID.nil
+        , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing
@@ -177,13 +179,15 @@ consumerDB =
         , techInput flourFlow 1.0
         , techInput flourFlow 2.0
         , techInput waterFlow 3.0
-        , (techInput sugarFlow 0.5){techActivityLinkId = ghostAct}
+        , -- An input that named an activity, after a deletion cleared the link
+          -- it had resolved to. What the source said outlives it.
+          (techInput sugarFlow 0.5){techSupplierClaim = ClaimById ghostAct}
         , wasteInput wasteFlow 0.25
         ]
     cakeExchanges =
         [ reference cakeFlow
         , techInput flourFlow 4.0
-        , (techInput breadFlow 1.0){techActivityLinkId = actBread}
+        , (techInput breadFlow 1.0){techActivityLinkId = actBread, techSupplierClaim = ClaimById actBread}
         ]
 
 -- | Background dependency: supplies "water" @ FR in kg, nothing else.
@@ -262,6 +266,11 @@ spec = do
                     map gcProductName (geTopConsumers e) `shouldBe` ["bread", "cake"]
 
         it "reports a dangling source identity as its own reason" $
+            -- Judged on what the source said, not on the link: deleting the
+            -- activity an input named clears the link, and judging on that
+            -- would move the input to the blocker report, which lists the
+            -- products nothing supplies rather than the identities nothing
+            -- answers.
             fmap geReason (entryFor "sugar") `shouldBe` Just GapDanglingIdentity
 
         it "reports an unlinked waste input as its own reason" $

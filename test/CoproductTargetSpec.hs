@@ -291,6 +291,7 @@ wasteOutput =
         , waUnitId = kgUnitId
         , waIsInput = False
         , waActivityLinkId = supplierActId
+        , waSupplierClaim = ClaimById supplierActId
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing
@@ -304,7 +305,7 @@ techExchange flowId amount role link =
         , techUnitId = kgUnitId
         , techRole = role
         , techActivityLinkId = link
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = if link == UUID.nil then ClaimByProduct else ClaimById link
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing

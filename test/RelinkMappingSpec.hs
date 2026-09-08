@@ -50,6 +50,7 @@ import Types (
     LinkBlocker (..),
     LocationSource (..),
     SimpleDatabase (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     noProperties,
@@ -83,7 +84,7 @@ targetDB =
                         , techUnitId = UUID.nil
                         , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing

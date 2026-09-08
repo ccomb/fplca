@@ -346,6 +346,7 @@ test-suite lca-tests
                      , ActivityWriteHandlerSpec
                      , PersistenceSpec
                      , CacheLayoutSpec
+                     , ExchangeWireSpec
                      , DeleteSelectionSpec
                      , ExportSpec
                      , ExportHandlerSpec

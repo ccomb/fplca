@@ -178,7 +178,7 @@ data SupplierQuery = SupplierQuery
     -- ^ Product the consumer asks for
     , sqSupplierActivity :: !(Maybe Text)
     {- ^ Activity the source names as its supplier, where it names one apart
-    from the product ('Types.techSupplierActivity'). Matched first. A name no
+    from the product (a 'Types.ClaimByName'). Matched first. A name no
     dependency carries falls through to the product name, so a foreground
     written against another release still links; a name that is carried, but
     not where the demand needs it, is refused as any other demand would be

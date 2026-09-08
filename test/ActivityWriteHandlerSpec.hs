@@ -65,6 +65,7 @@ import Types (
     Medium (..),
     SimpleDatabase (..),
     SparseTriple (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -522,7 +523,7 @@ milkActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = supplierActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing

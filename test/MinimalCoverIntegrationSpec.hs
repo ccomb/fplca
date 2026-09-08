@@ -31,6 +31,7 @@ import Types (
     GeographyPolicy (..),
     LocationSource (..),
     SimpleDatabase (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -129,7 +130,7 @@ supplierDB offset =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = actUUID
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -198,7 +199,7 @@ consumerDB offset n =
                         , techUnitId = kgUnitId
                         , techRole = ReferenceProduct
                         , techActivityLinkId = actUUID
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
@@ -213,7 +214,7 @@ consumerDB offset n =
                         , techUnitId = kgUnitId
                         , techRole = Input
                         , techActivityLinkId = UUID.nil -- unlinked → triggers cross-DB lookup
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = "GLO"
                         , techComment = Nothing
                         , techPedigree = Nothing

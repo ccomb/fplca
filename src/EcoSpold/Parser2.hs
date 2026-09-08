@@ -23,6 +23,14 @@ import System.FilePath (takeBaseName)
 import Types
 import qualified Xeno.SAX as X
 
+{- | What an EcoSpold 2 row says about its supplier: the activity identifier it
+carries, and nothing when it carries none.
+-}
+claimOf :: UUID.UUID -> SupplierClaim
+claimOf linkUUID
+    | linkUUID == UUID.nil = ClaimByProduct
+    | otherwise = ClaimById linkUUID
+
 {- | Namespace UUID for generating deterministic UUIDs from invalid text
 Using UUID v5 (SHA1-based) with a custom namespace for test data compatibility
 -}
@@ -819,7 +827,7 @@ parseWithXeno xmlContent processId = do
                                 , techUnitId = unitUUID
                                 , techRole = techRoleFor
                                 , techActivityLinkId = linkUUID
-                                , techSupplierActivity = Nothing
+                                , techSupplierClaim = claimOf linkUUID
                                 , techLocation = "" -- EcoSpold2: no per-exchange location
                                 , techComment = snd <$> idComment idata
                                 , techPedigree = Nothing
@@ -835,6 +843,7 @@ parseWithXeno xmlContent processId = do
                                 , waUnitId = unitUUID
                                 , waIsInput = isInput
                                 , waActivityLinkId = linkUUID
+                                , waSupplierClaim = claimOf linkUUID
                                 , waLocation = ""
                                 , waComment = snd <$> idComment idata
                                 , waPedigree = Nothing

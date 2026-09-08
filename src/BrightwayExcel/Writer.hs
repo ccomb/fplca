@@ -70,7 +70,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -407,11 +407,11 @@ flow name where it did not.
 -}
 exchangeRow :: WriterConfig -> SimpleDatabase -> Exchange -> Maybe [Cell]
 exchangeRow cfg db = \case
-    ex@TechnosphereExchange{techAmount = amt, techRole = role, techLocation = loc, techSupplierActivity = supplier} -> do
+    ex@TechnosphereExchange{techAmount = amt, techRole = role, techLocation = loc, techSupplierClaim = claim} -> do
         name <- flowNameOf db ex
         unit <- unitNameOf (exchangeUnitId ex) db
         Just
-            [ CText (fromMaybe name supplier)
+            [ CText (namedSupplier claim name)
             , CNum amt
             , CText name
             , locCell loc
@@ -457,6 +457,16 @@ exchangeRow cfg db = \case
   where
     locCell l = if T.null l then CEmpty else CText l
     commentCell = maybe CEmpty CText
+
+{- | The @name@ column: the supplier activity where the source named one, and
+the flow name where it designated by the product row instead.
+-}
+namedSupplier :: SupplierClaim -> Text -> Text
+namedSupplier claim flowName = case claim of
+    ClaimByName supplier -> supplier
+    ClaimByProduct -> flowName
+    ClaimById _ -> flowName
+    ClaimByDatasetNumber _ -> flowName
 
 -- | Brightway @type@ label for a technosphere role.
 techTypeLabel :: TechRole -> Text

@@ -70,7 +70,7 @@ refExchange fid =
         , techUnitId = UUID.nil
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -87,7 +87,7 @@ inputExchange fid loc =
         , techUnitId = UUID.nil
         , techRole = Input
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = loc
         , techComment = Nothing
         , techPedigree = Nothing
@@ -561,17 +561,17 @@ spec = do
                         NE.:| [namedProducerOf "wind power plant" actUUID2 flowUUID2 ""]
                     )
             electricity = M.fromList [(flowUUID1, minimalFlow flowUUID1 "electricity")]
-            buying supplier = (inputExchange flowUUID1 "GLO"){techSupplierActivity = supplier}
+            buying claim = (inputExchange flowUUID1 "GLO"){techSupplierClaim = claim}
 
         it "links to the activity the input names, not the ranked first" $ do
             let (fixed, summary) =
-                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (Just "Wind power plant"))
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (ClaimByName "Wind power plant"))
             techActivityLinkId fixed `shouldBe` actUUID2
             usAmbiguousProducers summary `shouldBe` []
 
         it "reports the tie when the input names no activity" $ do
             let (fixed, summary) =
-                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying Nothing)
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying ClaimByProduct)
             techActivityLinkId fixed `shouldBe` actUUID1
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
             map apChosen (usAmbiguousProducers summary) `shouldBe` ["coal power plant"]
@@ -582,7 +582,7 @@ spec = do
             -- link it here and the cross-database linker, whose index answers
             -- on the pair, would never see it.
             let (fixed, summary) =
-                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (Just "gas power plant"))
+                    fixExchangeLinkByName defaultUnitConfig M.empty twoProducers electricity "consumer" (buying (ClaimByName "gas power plant"))
             techActivityLinkId fixed `shouldBe` UUID.nil
             usMissingLinks summary `shouldBe` 1
 
@@ -596,7 +596,7 @@ spec = do
                             NE.:| [namedProducerOf "Wind Power Plant" actUUID2 flowUUID2 ""]
                         )
                 (fixed, summary) =
-                    fixExchangeLinkByName defaultUnitConfig M.empty sameName electricity "consumer" (buying (Just "wind power plant"))
+                    fixExchangeLinkByName defaultUnitConfig M.empty sameName electricity "consumer" (buying (ClaimByName "wind power plant"))
             techActivityLinkId fixed `shouldBe` actUUID1
             map apCandidates (usAmbiguousProducers summary) `shouldBe` [2]
 
@@ -746,7 +746,7 @@ spec = do
                     , techUnitId = UUID.nil
                     , techRole = role
                     , techActivityLinkId = UUID.nil
-                    , techSupplierActivity = Nothing
+                    , techSupplierClaim = ClaimByProduct
                     , techLocation = ""
                     , techComment = Nothing
                     , techPedigree = Nothing

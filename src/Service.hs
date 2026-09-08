@@ -1267,10 +1267,19 @@ wasteRoleOf target = \case
     TechnosphereExchange{} -> Nothing
     BiosphereExchange{} -> Nothing
     WasteExchange{waIsInput = True} -> Just TreatsWaste
-    WasteExchange{waActivityLinkId = lid}
+    WasteExchange{waSupplierClaim = claim}
         | isJust target -> Just SentToTreatment
-        | lid /= UUID.nil -> Just TreatmentNotLoaded
+        | namesATreatment claim -> Just TreatmentNotLoaded
         | otherwise -> Just FinalWasteFlow
+  where
+    -- What the source said, not what linking made of it: a treatment named and
+    -- since deleted still leaves a row that named one.
+    namesATreatment :: SupplierClaim -> Bool
+    namesATreatment = \case
+        ClaimById _ -> True
+        ClaimByName _ -> True
+        ClaimByDatasetNumber _ -> True
+        ClaimByProduct -> False
 
 {- | Flow name + (biosphere-only) compartment. Each variant has exactly one
 flow side by construction, so no Maybe-merge is needed downstream.

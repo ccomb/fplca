@@ -177,6 +177,8 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "wasteRoleOf" $ do
         let treatment = TargetRef "waste oil incineration" "GLO" "aaa_bbb"
+            -- A source that names a treatment says so on the claim; linking
+            -- puts what it resolved to on the link, and the two agree here.
             wasteLine isInput link =
                 WasteExchange
                     { waFlowId = nil
@@ -184,6 +186,7 @@ spec = do
                     , waUnitId = nil
                     , waIsInput = isInput
                     , waActivityLinkId = link
+                    , waSupplierClaim = if link == nil then ClaimByProduct else ClaimById link
                     , waLocation = ""
                     , waComment = Nothing
                     , waPedigree = Nothing
@@ -207,7 +210,7 @@ spec = do
 
         it "leaves every other kind of line without a role" $ do
             let bio = BiosphereExchange nil 1.0 nil Emission "" Nothing Nothing
-                tech = TechnosphereExchange nil 1.0 nil Input nil Nothing "" Nothing Nothing Nothing M.empty noProperties
+                tech = TechnosphereExchange nil 1.0 nil Input nil ClaimByProduct "" Nothing Nothing Nothing M.empty noProperties
             wasteRoleOf Nothing bio `shouldBe` Nothing
             wasteRoleOf (Just treatment) tech `shouldBe` Nothing
 

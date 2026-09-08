@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -332,6 +333,9 @@ History of manual bumps:
      matrix row index on a parsed exchange, which no parser can know and none
      ever wrote; the record is one field shorter, so every field after it
      would be read at the wrong offset.
+- 31: a waste line carries its source's claim too, and a technosphere claim is
+     a 'SupplierClaim' rather than a bare name, so the bytes of both differ
+     from 29's.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -339,7 +343,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 30
+     in hi `xor` lo `xor` 31
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
@@ -1102,7 +1106,7 @@ database produces stays unlinked, and the cross-database linker gets its turn
 on it. Returns (fixed exchange, UnlinkedSummary).
 -}
 fixExchangeLinkByName :: UC.UnitConfig -> UnitDB -> NameOnlyIndex -> TechFlowDB -> T.Text -> Exchange -> (Exchange, UnlinkedSummary)
-fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techSupplierActivity = claimed, techLocation = loc}
+fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@TechnosphereExchange{techFlowId = fid, techRole = role, techSupplierClaim = claim, techLocation = loc}
     | role == Input || role == ReferenceInput || role == AvoidedProduct =
         case M.lookup fid techFlowDb of
             Just flow ->
@@ -1121,7 +1125,7 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
                             , usMissingLinks = 1
                             }
                         )
-                 in case M.lookup key idx >>= answering claimed of
+                 in case M.lookup key idx >>= answering (claimedName claim) of
                         Nothing -> unlinked
                         Just answers -> case accept (NE.head answers) of
                             Nothing -> unlinked
@@ -1140,6 +1144,30 @@ fixExchangeLinkByName unitConfig unitDB idx techFlowDb consumerName ex@Technosph
 fixExchangeLinkByName _ _ _ _ _ ex@BiosphereExchange{} = (ex, mempty)
 -- Waste link resolution is deferred to the cross-DB linker path.
 fixExchangeLinkByName _ _ _ _ _ ex@WasteExchange{} = (ex, mempty)
+
+-- | The supplier activity a claim names, when it names one by name.
+claimedName :: SupplierClaim -> Maybe T.Text
+claimedName = \case
+    ClaimByName name -> Just name
+    ClaimByProduct -> Nothing
+    ClaimById _ -> Nothing
+    ClaimByDatasetNumber _ -> Nothing
+
+{- | Whether the source named an activity by an identifier another database
+could carry. An input that did and still found no supplier there is a dangling
+identity, which the dangling scan names; anything else is an unsupplied
+product, which the blocker report names.
+
+A dataset number is not one of those: it numbers a dataset inside its own file
+and means nothing in another database, so a row carrying one is judged on its
+product like any other.
+-}
+claimsAnActivityUUID :: SupplierClaim -> Bool
+claimsAnActivityUUID = \case
+    ClaimById _ -> True
+    ClaimByDatasetNumber _ -> False
+    ClaimByProduct -> False
+    ClaimByName _ -> False
 
 {- | The producers that answer an input, best first.
 
@@ -1910,7 +1938,7 @@ collectDanglingProductNames db =
         , ex@TechnosphereExchange{} <- exchanges act
         , isSupplierDemand ex
         , isNothing (findProducer (dbProcessIdLookup db) ex)
-        , Just _ <- [exchangeActivityLinkId ex]
+        , claimsAnActivityUUID (exchangeSupplierClaim ex)
         , Just flow <- [M.lookup (exchangeFlowId ex) (dbTechFlows db)]
         ]
 
@@ -1928,7 +1956,7 @@ collectStagedDanglingProductNames db links =
         , ex@TechnosphereExchange{} <- exchanges act
         , isSupplierDemand ex
         , not (hasInternalProducer db ex)
-        , Just _ <- [exchangeActivityLinkId ex]
+        , claimsAnActivityUUID (exchangeSupplierClaim ex)
         , Just flow <- [M.lookup (exchangeFlowId ex) (sdbTechFlows db)]
         ]
 
@@ -2050,9 +2078,9 @@ mkGapEdge ::
 mkGapEdge db stats actUUID prodUUID ex = case ex of
     TechnosphereExchange{} ->
         let name = flowNameOr tfName (sdbTechFlows db)
-            reason = case exchangeActivityLinkId ex of
-                Nothing -> GapBlocked (maybe NoNameMatch upBlocker (M.lookup name (cdlUnresolvedProducts stats)))
-                Just _ -> GapDanglingIdentity
+            reason
+                | claimsAnActivityUUID (exchangeSupplierClaim ex) = GapDanglingIdentity
+                | otherwise = GapBlocked (maybe NoNameMatch upBlocker (M.lookup name (cdlUnresolvedProducts stats)))
          in Just (edge name reason)
     WasteExchange{} -> Just (edge (flowNameOr wfName (sdbWasteFlows db)) GapWasteInput)
     BiosphereExchange{} -> Nothing
@@ -2238,7 +2266,7 @@ findExchangeCrossDBLink ::
     UUID.UUID ->
     Exchange ->
     CrossDBLinkingStats
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techSupplierActivity = supplier, techLocation = loc}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techSupplierClaim = claim, techLocation = loc}
     | namesASupplier ex && not resolvesInternally =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
@@ -2260,10 +2288,11 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
             }
     resolveTechInput flow =
         let flowUnitName = maybe "" unitName (M.lookup (tfUnitId flow) unitDb)
-            identityMatches =
-                if linkId == UUID.nil
-                    then []
-                    else findSupplierByActivityProduct (lcIndexedDatabases ctx) linkId fid
+            identityMatches = case claim of
+                ClaimById actUUID -> findSupplierByActivityProduct (lcIndexedDatabases ctx) actUUID fid
+                ClaimByProduct -> []
+                ClaimByName _ -> []
+                ClaimByDatasetNumber _ -> []
          in case identityMatches of
                 ((entry, srcDb) : rest) ->
                     let !crossLink =
@@ -2281,7 +2310,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
     supplierQuery flow flowUnitName =
         SupplierQuery
             { sqProductName = tfName flow
-            , sqSupplierActivity = supplier
+            , sqSupplierActivity = claimedName claim
             , sqLocation = loc
             , sqUnit = flowUnitName
             }
@@ -2315,7 +2344,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                             , afMatched = cdlrLocation result
                             , afSourceDatabase = cdlrDatabaseName result
                             }
-                        | linkId /= UUID.nil
+                        | claimsAnActivityUUID claim
                         ]
                     -- Several activities of the supplier database answered this
                     -- input equally well: the winner is the ranking's, not the
@@ -2337,10 +2366,11 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows =
                         , cdlSupplierAmbiguities = ambiguities
                         }
             CrossDBNotLinked blocker
-                -- Nil-link inputs report a rich blocker; a non-nil dangling input
-                -- (no identity, no attribute match) is left for the dangling scan.
-                | linkId == UUID.nil -> unresolvedStats flow blocker
-                | otherwise -> mempty
+                -- An input designating by its product row reports a rich blocker;
+                -- one that named an identity and matched nothing (no identity, no
+                -- attribute match) is left for the dangling scan.
+                | claimsAnActivityUUID claim -> mempty
+                | otherwise -> unresolvedStats flow blocker
     unresolvedStats flow blocker =
         let unresolved = case blocker of
                 LocationRejectedByPolicy{lrRequested = req, lrBestCandidate = actLoc, lrBestKind = kind} ->
@@ -2374,7 +2404,7 @@ findExchangeCrossDBLink _ _ _ BiosphereExchange{} = mempty
 -- would link the waste to an activity nobody asked for.
 -- Waste inputs (treatment side) are left alone: they have no clean LCA
 -- semantic as a cross-DB demand.
-findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waIsInput = isInp}
+findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows = wasteFlowDb} consumerActUUID consumerProdUUID WasteExchange{waFlowId = fid, waAmount = amt, waActivityLinkId = lid, waSupplierClaim = claim, waIsInput = isInp}
     | not isInp && not resolvesInternally =
         case treatmentMatch of
             WasteMatched entry dbN ->
@@ -2411,7 +2441,7 @@ findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsWasteFlows 
     -- place would be counted twice if a cross-DB link were emitted for it too.
     resolvesInternally = lid /= UUID.nil && S.member (lid, fid) ownKeys
     treatmentMatch
-        | lid /= UUID.nil = findWasteTreatmentByActivity ctx lid fid
+        | ClaimById treatment <- claim = findWasteTreatmentByActivity ctx treatment fid
         | otherwise = findWasteTreatmentAcrossDatabases ctx fid flowName
     flowName = maybe "" wfName (M.lookup fid wasteFlowDb)
 

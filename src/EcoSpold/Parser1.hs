@@ -577,6 +577,14 @@ buildExchange activityLoc edata
         | isInput = Input
         | otherwise = Coproduct
 
+    {- An EcoSpold 1 input carries the number the dataset producing it is
+    published under, on the exchange's own @number@ attribute. An output
+    carries its own number, which designates nobody. -}
+    supplierClaim :: SupplierClaim
+    supplierClaim
+        | isInput, not isReferenceProduct, exNumber edata /= 0 = ClaimByDatasetNumber (exNumber edata)
+        | otherwise = ClaimByProduct
+
     subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
     -- The medium of a group-4 exchange is its @category@, and the vocabulary
     -- EcoSpold 1 writes there is the four 'parseMedium' reads. A category it
@@ -606,7 +614,7 @@ buildExchange activityLoc edata
             , techUnitId = unitId
             , techRole = techRoleFor
             , techActivityLinkId = UUID.nil
-            , techSupplierActivity = Nothing
+            , techSupplierClaim = supplierClaim
             , techLocation = exchangeLocation
             , techComment = nonEmptyText (exComment edata)
             , techPedigree = Nothing

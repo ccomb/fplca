@@ -198,8 +198,8 @@ spec = describe "BrightwayExcel.Writer" $ do
                     Left err -> expectationFailure (T.unpack err)
                     Right (acts, techDB, _, _, _) -> case acts of
                         [a] -> do
-                            [techSupplierActivity ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a]
-                                `shouldBe` [Just "market for natural gas, high pressure"]
+                            [techSupplierClaim ex | ex@TechnosphereExchange{techRole = Input} <- exchanges a]
+                                `shouldBe` [ClaimByName "market for natural gas, high pressure"]
                             [tfName f | ex@TechnosphereExchange{techRole = Input} <- exchanges a, Just f <- [M.lookup (techFlowId ex) techDB]]
                                 `shouldBe` ["natural gas, high pressure"]
                         other -> expectationFailure ("expected one activity, got " <> show (length other))
@@ -313,7 +313,7 @@ prodExch =
         , techUnitId = generateUnitUUID "kilowatt hour"
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -330,7 +330,7 @@ gasExch =
         , techUnitId = generateUnitUUID "cubic meter"
         , techRole = Input
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "RoW"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -407,7 +407,7 @@ specialAct =
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = ReferenceProduct
                 , techActivityLinkId = UUID.nil
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -421,7 +421,7 @@ specialAct =
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = Input
                 , techActivityLinkId = UUID.nil
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = "RoW"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -502,7 +502,7 @@ refInputAct =
                 , techUnitId = generateUnitUUID "kilogram"
                 , techRole = ReferenceInput
                 , techActivityLinkId = UUID.nil
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = "GLO"
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -546,7 +546,7 @@ supplierNamedDb =
   where
     a = elec{exchanges = map named (exchanges elec)}
     named ex = case ex of
-        TechnosphereExchange{techRole = Input} -> ex{techSupplierActivity = Just "market for natural gas, high pressure"}
+        TechnosphereExchange{techRole = Input} -> ex{techSupplierClaim = ClaimByName "market for natural gas, high pressure"}
         TechnosphereExchange{} -> ex
         BiosphereExchange{} -> ex
         WasteExchange{} -> ex
@@ -602,7 +602,7 @@ kgProduction flow role amount =
         , techUnitId = generateUnitUUID "kilogram"
         , techRole = role
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -690,7 +690,7 @@ gramRefDb =
                     , techUnitId = generateUnitUUID "g"
                     , techRole = ReferenceProduct
                     , techActivityLinkId = UUID.nil
-                    , techSupplierActivity = Nothing
+                    , techSupplierClaim = ClaimByProduct
                     , techLocation = "GLO"
                     , techComment = Nothing
                     , techPedigree = Nothing
@@ -745,6 +745,7 @@ scrapExch =
         , waUnitId = generateUnitUUID "kilogram"
         , waIsInput = False
         , waActivityLinkId = UUID.nil
+        , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing
