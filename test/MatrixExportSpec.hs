@@ -274,7 +274,7 @@ treatmentDatabase =
                         M.empty
                         Nothing
                         Nothing
-                        (Just (Compartment "air" Nothing))
+                        (Just (Compartment Air Nothing))
                     )
             , sdbWasteFlows = M.empty
             , sdbUnits = M.singleton kilogram (Unit kilogram "kg" "kg" "")
@@ -333,13 +333,13 @@ blankActivity name exs =
 
 -- | The activity's own product, in the amount its dataset records. Negative for a treatment.
 reference :: UUID -> Double -> Exchange
-reference flow amount = technosphere flow amount ReferenceProduct UUID.nil
+reference flow amount = technosphere flow amount ReferenceProduct Nothing
 
 -- | An input taken from a named producer.
 consumesFrom :: UUID -> UUID -> Double -> Exchange
-consumesFrom supplier flow amount = technosphere flow amount Input supplier
+consumesFrom supplier flow amount = technosphere flow amount Input (Just supplier)
 
-technosphere :: UUID -> Double -> TechRole -> UUID -> Exchange
+technosphere :: UUID -> Double -> TechRole -> Maybe UUID -> Exchange
 technosphere flow amount role supplier =
     TechnosphereExchange
         { techFlowId = flow
@@ -347,7 +347,7 @@ technosphere flow amount role supplier =
         , techUnitId = kilogram
         , techRole = role
         , techActivityLinkId = supplier
-        , techProcessLinkId = Nothing
+        , techSupplierClaim = maybe ClaimByProduct ClaimById supplier
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
