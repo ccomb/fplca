@@ -15,18 +15,42 @@ module EcoSpold.Common (
     docSection,
     joinParts,
     showFFloatTrim,
+
+    -- * What one dataset yields
+    ParsedDataset (..),
 ) where
 
 import Amount (readAmount)
 import qualified Data.ByteString as BS
 import Data.Char (chr)
+import qualified Data.Map as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as TR
 import Numeric (showFFloat)
-import Types (DocSection (..))
+import Types (Activity, BiosphereFlow, DocSection (..), TechnosphereFlow, UUID, Unit, WasteFlow)
+
+{- | One dataset as a reader read it: the activity, the flows and units it
+names, and whatever the reader has to say about the reading.
+
+'pdDatasetNumber' and 'pdSupplierLinks' are EcoSpold 1's: that format numbers
+its datasets and points an exchange at the numbered dataset that supplies it,
+where EcoSpold 2 addresses a supplier by UUID. A reader with nothing to say
+there leaves them empty.
+-}
+data ParsedDataset = ParsedDataset
+    { pdActivity :: !Activity
+    , pdTechFlows :: ![TechnosphereFlow]
+    , pdBioFlows :: ![BiosphereFlow]
+    , pdWasteFlows :: ![WasteFlow]
+    , pdUnits :: ![Unit]
+    , pdDatasetNumber :: !Int
+    , pdSupplierLinks :: !(M.Map UUID Int)
+    , pdWarnings :: ![Text]
+    -- ^ What the reader could not make sense of, for the caller to report.
+    }
 
 -- | ByteString to Text conversion with UTF-8 decoding and XML entity decoding
 bsToText :: BS.ByteString -> Text
