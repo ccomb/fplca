@@ -668,13 +668,18 @@ The geography is not among them: a dataset that declares none is recorded as
 -}
 placeholdersUsed :: ParseState -> [Text]
 placeholdersUsed st =
-    [ "dataset " <> T.pack (show (psDatasetNumber st)) <> ": " <> what
+    [ named <> what
     | (what, absent) <-
         [ ("no activity name, read as \"Unknown Activity\"", isNothing (psActivityName st))
         , ("no reference unit, read as \"UNKNOWN_UNIT\"", isNothing (psRefUnit st))
         ]
     , absent
     ]
+  where
+    -- A dataset that declared no number is left unnamed rather than called
+    -- number zero, which is how 'datasetIdentifier' reads the same field.
+    named :: Text
+    named = maybe "" (\(NativeProcessId n) -> "dataset " <> n <> ": ") (datasetIdentifier (psDatasetNumber st))
 
 -- | Build the final per-dataset result, applying the cut-off strategy.
 buildResult :: ParseState -> Either String ParsedDataset
