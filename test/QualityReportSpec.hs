@@ -36,6 +36,7 @@ import Types (
     NativeProcessId (..),
     Severity (..),
     SimpleDatabase (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     Unit (..),
@@ -116,7 +117,7 @@ techExchange fid amount role =
         , techUnitId = kgUnit
         , techRole = role
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "FR"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -165,6 +166,7 @@ wasteOut fid =
         , waUnitId = kgUnit
         , waIsInput = False
         , waActivityLinkId = UUID.nil
+        , waSupplierClaim = ClaimByProduct
         , waLocation = "FR"
         , waComment = Nothing
         , waPedigree = Nothing

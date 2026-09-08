@@ -489,6 +489,16 @@ spec = do
                 Left err -> expectationFailure $ "Parse failed: " ++ err
                 Right ParsedDataset{pdDatasetNumber = num} -> num `shouldBe` 42
 
+        it "reads the number an input names its supplier dataset by" $
+            -- An EcoSpold 1 input carries, on its own @number@ attribute, the
+            -- number of the dataset producing it. An output's number names
+            -- itself and designates nobody.
+            case parseWithXeno minimalXml of
+                Left err -> expectationFailure $ "Parse failed: " ++ err
+                Right ParsedDataset{pdActivity = act} ->
+                    [techSupplierClaim ex | ex@TechnosphereExchange{} <- exchanges act]
+                        `shouldBe` [ClaimByProduct, ClaimByDatasetNumber 4]
+
         it "keeps the dataset number as the identifier the source gave it" $
             case parseWithXeno minimalXml of
                 Left err -> expectationFailure $ "Parse failed: " ++ err

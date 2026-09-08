@@ -51,6 +51,7 @@ import Types (
     LocationSource (..),
     SimpleDatabase (..),
     SparseTriple (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -282,7 +283,7 @@ supplierDB offset products =
                         , techUnitId = kgUnitId
                         , techRole = ReferenceProduct
                         , techActivityLinkId = actUUID
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing

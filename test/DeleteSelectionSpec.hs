@@ -59,6 +59,7 @@ import Types (
     ProcessId,
     SimpleDatabase (..),
     SparseTriple (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -472,7 +473,7 @@ refOut actUUID prodUUID =
         , techUnitId = kgUnitId
         , techRole = ReferenceProduct
         , techActivityLinkId = actUUID
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
@@ -490,7 +491,7 @@ inputFrom supplierActUUID supplierProdUUID =
         , techUnitId = kgUnitId
         , techRole = Input
         , techActivityLinkId = supplierActUUID
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = ""
         , techComment = Nothing
         , techPedigree = Nothing
@@ -511,6 +512,7 @@ wasteOut treatmentActUUID treatmentProdUUID =
         , waUnitId = kgUnitId
         , waIsInput = False
         , waActivityLinkId = treatmentActUUID
+        , waSupplierClaim = ClaimByProduct
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing

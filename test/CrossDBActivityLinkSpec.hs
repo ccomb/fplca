@@ -88,7 +88,7 @@ refEx fid =
         , techUnitId = kgUnit
         , techRole = ReferenceProduct
         , techActivityLinkId = UUID.nil
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = ClaimByProduct
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -98,6 +98,11 @@ refEx fid =
         }
 
 -- | An input for @flowId@, linked to producer activity @linkId@ (nil = unlinked).
+
+{- | An input designating its supplier the way EcoSpold 2 does, by the
+activity's identifier: the claim the source made, and the link the load
+resolved it to, which for that format are the same value.
+-}
 inputEx :: UUID.UUID -> UUID.UUID -> Exchange
 inputEx flowId linkId =
     TechnosphereExchange
@@ -106,7 +111,7 @@ inputEx flowId linkId =
         , techUnitId = kgUnit
         , techRole = Input
         , techActivityLinkId = linkId
-        , techSupplierActivity = Nothing
+        , techSupplierClaim = if linkId == UUID.nil then ClaimByProduct else ClaimById linkId
         , techLocation = "GLO"
         , techComment = Nothing
         , techPedigree = Nothing
@@ -214,7 +219,7 @@ spec = do
                 `shouldBe` [("widget", 2, "bg")]
 
         it "links to the named activity and reports no tie" $ do
-            let named = (inputEx supProd UUID.nil){techSupplierActivity = Just "widget production, on site"}
+            let named = (inputEx supProd UUID.nil){techSupplierClaim = ClaimByName "widget production, on site"}
                 stats = runLinks (consumerOf named) [twoProducers]
             map (\l -> (cdlSupplierActUUID l, cdlSourceDatabase l)) (cdlLinks stats)
                 `shouldBe` [(newAct, "bg")]

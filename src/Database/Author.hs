@@ -87,6 +87,7 @@ import Types (
     Medium (..),
     ProcessId,
     ProcessRef (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -289,7 +290,7 @@ validateOne ctx a =
                         , -- Self-link, as every loaded database records its
                           -- reference products.
                           techActivityLinkId = fst key
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
@@ -636,7 +637,7 @@ resolveOne ctx ex = case ex of
                 , techUnitId = unitRef
                 , techRole = Input
                 , techActivityLinkId = prActivity (supKey sup)
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimById (prActivity (supKey sup))
                 , techLocation = ""
                 , techComment = comment
                 , techPedigree = Nothing
@@ -652,6 +653,7 @@ resolveOne ctx ex = case ex of
                 , waUnitId = unitRef
                 , waIsInput = False
                 , waActivityLinkId = prActivity (supKey sup)
+                , waSupplierClaim = ClaimById (prActivity (supKey sup))
                 , waLocation = ""
                 , waComment = comment
                 , waPedigree = Nothing

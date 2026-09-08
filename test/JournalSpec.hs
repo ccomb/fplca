@@ -55,6 +55,7 @@ import Types (
     LocationSource (..),
     Medium (..),
     SimpleDatabase (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -450,7 +451,7 @@ depActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = depActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -506,7 +507,7 @@ supplierActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = supplierActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing

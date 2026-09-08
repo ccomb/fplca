@@ -9,7 +9,17 @@
   a source file could ever fill one and none ever did: the key was null in
   every response the engine has ever sent. The four places that asked whether a
   link resolved that way now ask the one question there was ever an answer to.
-  Caches built before this are rebuilt on the next load.
+- What a source says about the supplier of an exchange is now recorded as what
+  it is. Every format designates a supplier differently: EcoSpold 2 by the
+  activity's identifier, EcoSpold 1 by the number its dataset is published
+  under, a Brightway workbook by the activity's name, SimaPro and ILCD by the
+  product line itself. All of them had to say it through the same field that
+  linking then overwrites with what it resolved to, so the question disappeared
+  the moment it was answered, and two formats had a channel of their own
+  alongside. An exchange now carries that claim in a field of its own, which
+  linking never rewrites, and reports it as `supplierClaim`, which replaces the
+  `supplierActivity` of the same release, never shipped. Caches built
+  before this are rebuilt on the next load. Wire revision 23.
 
 ### Fixed
 - A Brightway Excel inventory now links to the supplier activity its rows name.

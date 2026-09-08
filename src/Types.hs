@@ -365,6 +365,32 @@ mkPedigree r c t g f
   where
     inRange n = n >= 1 && n <= 5
 
+{- | How a source designates the supplier of one exchange.
+
+Every format says it differently, and until this type they all had to say it
+through 'techActivityLinkId', which linking then overwrites with what it
+resolved to: the question and the answer shared one field, so the question was
+lost the moment it was answered. Here the claim is what the source said, and it
+is never rewritten.
+
+There is no constructor for "says nothing": a row that designates by its
+product line still designates, through the flow and location it already
+carries, which is what 'ClaimByProduct' means.
+-}
+data SupplierClaim
+    = {- | The product row itself: its flow, and its location where it has one.
+      SimaPro, ILCD, and a Brightway workbook whose row names no activity.
+      -}
+      ClaimByProduct
+    | -- | The activity's own identifier, as EcoSpold 2 writes it.
+      ClaimById !UUID
+    | -- | The supplier activity by name, from a Brightway workbook's @name@ column.
+      ClaimByName !Text
+    | -- | The number the supplier dataset is published under, as EcoSpold 1 writes it.
+      ClaimByDatasetNumber !Int
+    deriving (Eq, Show, Generic, NFData, Store)
+    deriving (ToJSON, FromJSON, ToSchema) via (Stripped SupplierClaim)
+
 -- | Exchange in an activity - Mirrors EcoSpold intermediateExchange/elementaryExchange structure
 data Exchange
     = TechnosphereExchange
@@ -372,17 +398,10 @@ data Exchange
         , techAmount :: !Double -- Quantity exchanged
         , techUnitId :: !UUID -- Unit of measurement
         , techRole :: !TechRole -- Role within the activity
-        , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
-        , techSupplierActivity :: !(Maybe Text)
-        {- ^ The supplier activity the source names /by name/, when it names one.
-        EcoSpold 2 and ILCD designate theirs by identifier ('techActivityLinkId'),
-        SimaPro folds it into the product name, and Brightway Excel puts it in a
-        column of its own — the one source whose designation used to be dropped,
-        leaving the linker to pick between the 27 activities of a released background
-        database whose
-        reference product is "electricity, medium voltage" in GLO. Records what
-        the source said and is never rewritten by linking, unlike
-        'techActivityLinkId', which the load overwrites with what it resolved to.
+        , techActivityLinkId :: !UUID -- Supplier this exchange resolved to, nil until it does
+        , techSupplierClaim :: !SupplierClaim
+        {- ^ How the source designates its supplier. Written once, by a parser,
+        and never rewritten by linking, unlike 'techActivityLinkId'.
         -}
         , techLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , techComment :: !(Maybe Text) -- Free-text per-exchange comment from source
@@ -409,7 +428,9 @@ data Exchange
         by it. Waste with no treatment modelled at all is not on this axis:
         it is an elementary flow of medium 'Waste'.
         -}
-        , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
+        , waActivityLinkId :: !UUID -- Treatment this exchange resolved to (UUID.nil if orphan)
+        , waSupplierClaim :: !SupplierClaim
+        -- ^ How the source designates the treatment, as on a technosphere line.
         , waLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , waComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
@@ -495,6 +516,14 @@ activityDeclaredShares act = [exchangeDeclaredShare ex | ex <- exchanges act, ex
 activityReferenceShare :: Activity -> Maybe DeclaredShare
 activityReferenceShare act =
     listToMaybe [share | ex <- exchanges act, exchangeIsReference ex, Just share <- [exchangeDeclaredShare ex]]
+
+{- | How the source designates the supplier of an exchange, on the two axes
+that have one. A biosphere line designates none: it has no supplier.
+-}
+exchangeSupplierClaim :: Exchange -> SupplierClaim
+exchangeSupplierClaim TechnosphereExchange{techSupplierClaim = claim} = claim
+exchangeSupplierClaim BiosphereExchange{} = ClaimByProduct
+exchangeSupplierClaim WasteExchange{waSupplierClaim = claim} = claim
 
 -- | Get activity link ID (backward compatibility)
 exchangeActivityLinkId :: Exchange -> Maybe UUID

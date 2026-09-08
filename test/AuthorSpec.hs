@@ -54,6 +54,7 @@ import Types (
     Pedigree (..),
     SimpleDatabase (..),
     SparseTriple (..),
+    SupplierClaim (..),
     TechRole (..),
     TechnosphereFlow (..),
     UUID,
@@ -725,7 +726,7 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = importedActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -739,7 +740,7 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = Coproduct
                 , techActivityLinkId = importedActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -753,7 +754,7 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = Input
                 , techActivityLinkId = supplierActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = "FR"
                 , techComment = Just "milk in"
                 , techPedigree = Just milkPedigree
@@ -785,6 +786,7 @@ importedActivity =
                 , waUnitId = kgUnitId
                 , waIsInput = False
                 , waActivityLinkId = treatActId
+                , waSupplierClaim = ClaimByProduct
                 , waLocation = ""
                 , waComment = Nothing
                 , waPedigree = Nothing
@@ -795,6 +797,7 @@ importedActivity =
                 , waUnitId = kgUnitId
                 , waIsInput = True
                 , waActivityLinkId = treatActId
+                , waSupplierClaim = ClaimByProduct
                 , waLocation = ""
                 , waComment = Nothing
                 , waPedigree = Nothing
@@ -988,7 +991,7 @@ treatmentWithHeat =
                         , techUnitId = kgUnitId
                         , techRole = Coproduct
                         , techActivityLinkId = UUID.nil
-                        , techSupplierActivity = Nothing
+                        , techSupplierClaim = ClaimByProduct
                         , techLocation = ""
                         , techComment = Nothing
                         , techPedigree = Nothing
@@ -1020,7 +1023,7 @@ treatmentActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceInput
                 , techActivityLinkId = treatActId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing
@@ -1054,7 +1057,7 @@ supplierActivityAt actId prodId =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = actId
-                , techSupplierActivity = Nothing
+                , techSupplierClaim = ClaimByProduct
                 , techLocation = ""
                 , techComment = Nothing
                 , techPedigree = Nothing

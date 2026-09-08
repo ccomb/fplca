@@ -36,7 +36,7 @@ normalization, unit canonicalization) so Brightway activities, flows and units
 hash identically to the other importers and link through the same
 cross-database pass. This is the one format that names the supplier activity in
 a column apart from its product, so a technosphere row keeps that name
-('techSupplierActivity') for the linker to match on ahead of the product name.
+(as a 'ClaimByName') for the linker to match on ahead of the product name.
 -}
 module BrightwayExcel.Parser (
     parseBrightwayExcel,
@@ -387,7 +387,7 @@ productRowOut cfg meta isRef f =
             , techUnitId = unitUUID
             , techRole = if isRef then ReferenceProduct else Coproduct
             , techActivityLinkId = UUID.nil
-            , techSupplierActivity = Nothing -- an output of this activity, not a reference to another
+            , techSupplierClaim = ClaimByProduct -- an output of this activity, not a reference to another
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
@@ -420,7 +420,7 @@ it says the author disabled this input, which is a statement about the model,
 not an empty row.
 
 The @name@ column, which holds the supplier /activity/, is kept alongside in
-'techSupplierActivity'. It is what tells @market group for electricity, medium
+the row's 'SupplierClaim'. It is what tells @market group for electricity, medium
 voltage@ from the 26 other activities of a released background database whose
 reference product is also @electricity, medium voltage@ in GLO.
 -}
@@ -442,7 +442,7 @@ technosphereRowOut cfg role actName f
             , techUnitId = unitUUID
             , techRole = role
             , techActivityLinkId = UUID.nil
-            , techSupplierActivity = supplierActivity
+            , techSupplierClaim = maybe ClaimByProduct ClaimByName supplierActivity
             , techLocation = fromMaybe "" (fieldText f "location")
             , techComment = fieldText f "comment"
             , techPedigree = Nothing
