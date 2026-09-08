@@ -3,8 +3,10 @@
 The engine emits waste flows as their own kind (PR #83): they share the
 technosphere matrix with product flows but are tagged separately so callers
 can distinguish "waste sent to landfill" from a product input. Orphan waste
-(``activityLinkId == nil``, ``targetActivity == null``) is the typical case
-for SimaPro "Final waste flows".
+(``activityLinkId == nil``, ``targetActivity == null``) is what a partial
+export leaves behind: waste whose treatment is modelled somewhere, but not in
+the file that was read. Waste with no treatment modelled at all is not on this
+axis, it is an elementary flow of medium ``waste``.
 
 This module covers the wire shape for both envelopes:
 

@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Fixed
+- An EcoSpold 1 database no longer reports supplier gaps that cannot exist.
+  A file of that format files waste with no modelled treatment under a
+  category of its own, on an input group, because the format has only four
+  flow types and this is a fifth. The loader read the input direction
+  literally and turned every such row into a demand waiting for a supplier,
+  which no database can ever close: the completeness report filled with edges
+  that had nothing to point at. Those rows are elementary flows now, of the
+  same medium the equivalent rows of the other formats already use, so a
+  method characterizes them and the report only counts what a supplier could
+  answer. An export writes them the way it reads them: waste that names no
+  treatment goes out as an inventory flow, waste that is consumed by one goes
+  out as a technosphere input, and an output that names a treatment is refused
+  rather than written with the link silently dropped. Two things change for a
+  reader beyond the gap report: such a row no longer carries a waste role, so
+  the activity holding it stops being described as treating waste; and in a
+  file this engine wrote itself, where the row was on the output side, it used
+  to be matched by name to a treatment carried by another loaded database, and
+  an elementary flow is matched against methods instead. Caches built before
+  this are rebuilt on the next load.
 - Waste that leaves a system with no treatment modelled for it is now
   characterized. A SimaPro CSV files such waste in a section of its own, and a
   method that scores it writes the same word in its compartment column. The
