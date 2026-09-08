@@ -190,10 +190,20 @@ EOF
         # nothing here - no module in this tree uses TemplateHaskell, and the
         # packaged macOS binary is standalone, so a dynamic copy of our own
         # library is never loaded.
+        #
+        # executable-dynamic: False is not redundant, it is what makes the line
+        # above bite on every cabal. Up to cabal-install 3.12 the two fields are
+        # combined with `liftM2 (||)`, so `shared: False` with the other unset
+        # is `Nothing` and the compiler's own default wins - and on a dynamic
+        # GHC, which is what ghcup installs for macOS, that default is True.
+        # 3.14 honours `shared` alone. Setting both makes the pair definite
+        # either way, so a developer on an older cabal gets the same build as
+        # CI instead of silently keeping the double compile.
         cat >> "$OUTPUT" << EOF
 optimization: 2
 split-sections: True
 shared: False
+executable-dynamic: False
 
 extra-lib-dirs: $MUMPS_LIB_DIR
 extra-include-dirs: $MUMPS_INCLUDE_DIR
