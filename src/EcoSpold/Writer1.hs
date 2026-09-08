@@ -594,17 +594,6 @@ groupElement ex = case ex of
 -- Flow-field resolution (name / category / subCategory / CAS by UUID)
 -- ----------------------------------------------------------------------------
 
-{- | The category label an EcoSpold1 export files waste with no modelled
-treatment under. 'EcoSpold.Parser1.buildExchange' reads any exchange carrying
-it as an elementary flow of medium 'Waste', whatever group it is on and
-before the groups are consulted. The writer no longer emits it — it writes the
-medium itself, which re-imports unchanged — so this is now only what
-'checkEcoSpold1Exportable' compares a biosphere compartment against, to reject
-a flow that would come back under a compartment it was not written with.
--}
-finalWasteFlowsCategory :: Text
-finalWasteFlowsCategory = "Final waste flows"
-
 {- | The four flow-derived attribute values the parser stored on a flow:
 name, category, subCategory, CAS. Positional — always consumed as a whole.
 -}
