@@ -605,11 +605,16 @@ bioSection cats ex@BiosphereExchange{bioDirection = dir}
         Resource -> Just SecRes
         -- Unknown flow → Nothing, mirroring 'bioLine' so an emission keeps a
         -- section only when it also keeps a row (the two are paired in
-        -- 'serializeActivity'); no dead "unknown → air" arm.
-        Emission -> sectionForMedium <$> medium
+        -- 'serializeActivity'). A *known* flow that records no compartment
+        -- keeps both: it has a row, so it needs a section, and air is where
+        -- this format files an emission it cannot place.
+        Emission -> maybe SecAir sectionForMedium medium <$ flow
   where
+    flow :: Maybe BiosphereFlow
+    flow = M.lookup (exchangeFlowId ex) (catBio cats)
+
     medium :: Maybe Medium
-    medium = compartmentName <$> (bfCompartment =<< M.lookup (exchangeFlowId ex) (catBio cats))
+    medium = compartmentName <$> (bfCompartment =<< flow)
     sectionForMedium :: Medium -> BioSec
     sectionForMedium = \case
         Water -> SecWater

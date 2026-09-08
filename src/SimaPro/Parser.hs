@@ -1343,13 +1343,13 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
      in (exchange, flow, unit)
 
 {- | Convert biosphere row to exchange, flow, and unit in one pass
-The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
-and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
+The compartment parameter is the medium the section names; berCompartment is
+the row-level sub-compartment ("high. pop.", "river", etc. or empty).
 
-The "waste" case is @Final waste flows@: waste that leaves the system with no
-treatment modelled for it, hence elementary. That spelling of the medium is
-also the one the flow's UUID is hashed from, and the one a method writes in
-its compartment column, so the two sides of a CF match meet on it.
+'Waste' is @Final waste flows@: waste that leaves the system with no treatment
+modelled for it, hence elementary. The flow's UUID is hashed from the medium's
+canonical spelling, and the method reader hashes the same one, so the two sides
+of a CF match meet on it.
 -}
 bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Medium -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =

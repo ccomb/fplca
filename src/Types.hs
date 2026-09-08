@@ -84,7 +84,7 @@ data ProcessRef = ProcessRef
 Every format spells these differently and none of them spells more than these:
 EcoSpold 2 writes @natural resource@ where SimaPro writes @Raw@ and EcoSpold 1
 writes @resource@, and the whole vocabulary observed across EcoSpold 1 and 2,
-SimaPro CSV and ILCD is the six constructors below. Holding it as text meant
+SimaPro CSV and ILCD is the constructors below. Holding it as text meant
 two databases loaded side by side described one physical flow with two strings,
 and every reader and writer that needed them to agree carried its own list of
 spellings. The medium is the closed part; the subcompartment underneath it

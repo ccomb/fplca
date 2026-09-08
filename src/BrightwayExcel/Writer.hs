@@ -76,7 +76,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 
 import Amount (readAmount)
-import BrightwayExcel.Parser (isResourceCompartment)
 import EcoSpold.Common (showFFloatTrim)
 import Types
 import Zip (zipFiles)
@@ -154,10 +153,10 @@ exchange (no producer link) never enters the matrix, so 'exchangeRow' instead
 best-efforts it as technosphere and 'wasteManifest' reports it.
 
 A biosphere exchange's 'BioDirection' is likewise never written: the parser
-re-derives it from the @categories@ compartment, reading 'Resource' only when the
-compartment matches 'isResourceCompartment'. A 'Resource' flow whose compartment
-is outside that whitelist would round-trip as an 'Emission' — a sign flip, since
-the two directions act as input vs output. Such a flow is rejected here too.
+re-derives it from the @categories@ compartment, reading 'Resource' only for
+'NaturalResource'. A 'Resource' flow of any other medium would round-trip as an
+'Emission' — a sign flip, since the two directions act as input vs output. Such
+a flow is rejected here too.
 
 An amount that does not re-parse to itself is rejected. The written decimal must
 re-parse through 'Amount.readAmount' (the importer's correctly-rounded reader);
@@ -250,16 +249,16 @@ checkBrightwayExportable db =
     amountRoundTrips amt = readAmount (formatAmount amt) == Just amt
 
 {- | A 'Resource' biosphere exchange whose compartment would not re-parse as a
-resource: the writer never records the direction, so the parser reconstructs
-it from the @categories@ compartment via 'isResourceCompartment'. When that
-whitelist rejects the compartment, 'Resource' silently flips to 'Emission'.
-A flow absent from the map is left to 'flowResolvable' to report.
+resource: the writer never records the direction, so the parser reconstructs it
+from the @categories@ compartment, which names a resource only when the medium
+is 'NaturalResource'. Under any other medium 'Resource' silently flips to
+'Emission'. A flow absent from the map is left to 'flowResolvable' to report.
 -}
 resourceDirectionLost :: SimpleDatabase -> Exchange -> Bool
 resourceDirectionLost db = \case
     ex@BiosphereExchange{bioDirection = Resource} ->
         case M.lookup (exchangeFlowId ex) (sdbBioFlows db) of
-            Just flow -> not (isResourceCompartment (bfCompartmentName flow))
+            Just flow -> (compartmentName <$> bfCompartment flow) /= Just NaturalResource
             Nothing -> False
     BiosphereExchange{bioDirection = Emission} -> False
     TechnosphereExchange{} -> False

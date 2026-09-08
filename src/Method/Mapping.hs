@@ -3241,7 +3241,7 @@ findSimilarCFs syns idx flow maxN
     | otherwise =
         let flowName' = bfName flow
             flowCAS' = bfCAS flow
-            flowMedium = normalizeMedium . T.takeWhile (/= '/') . T.toLower $ VT.bfCompartmentName flow
+            flowMedium = normalizeMedium (VT.bfCompartmentName flow)
 
             flowRawTokens = S.fromList (T.words (normalizeName flowName'))
             flowExpTokens = expandedTokens syns flowName'
