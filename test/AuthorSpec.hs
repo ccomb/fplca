@@ -176,9 +176,7 @@ spec = do
                 -- silently point at whichever row inherits the number.
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [techInput supplierPid 2 Nothing]}
                 case [ex | ex <- exchanges (riActivity r), isTechnosphereExchange ex, exchangeAmount ex == 2] of
-                    [TechnosphereExchange{techActivityLinkId = link, techProcessLinkId = pid}] -> do
-                        link `shouldBe` supplierActId
-                        pid `shouldBe` Nothing
+                    [TechnosphereExchange{techActivityLinkId = link}] -> link `shouldBe` supplierActId
                     other -> expectationFailure ("expected one resolved input, got " <> show (length other))
 
             it "defaults a waste output to the treatment's reference unit" $ do
@@ -201,9 +199,7 @@ spec = do
                     Left errs -> expectationFailure ("expected resolution, got " <> show errs)
                     Right ([r], _) ->
                         case [ex | ex <- exchanges (riActivity r), exchangeAmount ex == 3] of
-                            [TechnosphereExchange{techActivityLinkId = link, techProcessLinkId = pid}] -> do
-                                link `shouldBe` supplierActId
-                                pid `shouldBe` Nothing
+                            [TechnosphereExchange{techActivityLinkId = link}] -> link `shouldBe` supplierActId
                             other -> expectationFailure ("expected one dependency input, got " <> show (length other))
                     Right (rs, _) -> expectationFailure ("expected one insert, got " <> show (length rs))
 
@@ -729,7 +725,6 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = importedActId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing
@@ -744,7 +739,6 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = Coproduct
                 , techActivityLinkId = importedActId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing
@@ -759,7 +753,6 @@ importedActivity =
                 , techUnitId = kgUnitId
                 , techRole = Input
                 , techActivityLinkId = supplierActId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = "FR"
                 , techComment = Just "milk in"
@@ -792,7 +785,6 @@ importedActivity =
                 , waUnitId = kgUnitId
                 , waIsInput = False
                 , waActivityLinkId = treatActId
-                , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = Nothing
                 , waPedigree = Nothing
@@ -803,7 +795,6 @@ importedActivity =
                 , waUnitId = kgUnitId
                 , waIsInput = True
                 , waActivityLinkId = treatActId
-                , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = Nothing
                 , waPedigree = Nothing
@@ -997,7 +988,6 @@ treatmentWithHeat =
                         , techUnitId = kgUnitId
                         , techRole = Coproduct
                         , techActivityLinkId = UUID.nil
-                        , techProcessLinkId = Nothing
                         , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing
@@ -1030,7 +1020,6 @@ treatmentActivity =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceInput
                 , techActivityLinkId = treatActId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing
@@ -1065,7 +1054,6 @@ supplierActivityAt actId prodId =
                 , techUnitId = kgUnitId
                 , techRole = ReferenceProduct
                 , techActivityLinkId = actId
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = Nothing

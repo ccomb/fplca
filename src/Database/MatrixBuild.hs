@@ -96,15 +96,10 @@ normalization — collapsing it to 1.0 silently flips the activity's inventory.
 safeDenom :: Double -> Double
 safeDenom f = if abs f > 1e-15 then f else 1.0
 
-{- | Producer cascade for technosphere exchanges: prefer the resolved process
-link, else look up the (activityUUID, flowUUID) pair. This is the
-@Alternative@ on @Maybe@ — the @Maybe@ analogue of @firstNonEmpty@ in
-"Database.CrossLinking".
--}
+-- | Producer of a technosphere exchange: the row its (activityUUID, flowUUID) pair names.
 findProducer :: M.Map (UUID, UUID) ProcessId -> Exchange -> Maybe ProcessId
 findProducer lkp ex =
-    exchangeProcessLinkId ex
-        <|> (exchangeActivityLinkId ex >>= \actUUID -> M.lookup (actUUID, exchangeFlowId ex) lkp)
+    exchangeActivityLinkId ex >>= \actUUID -> M.lookup (actUUID, exchangeFlowId ex) lkp
 
 {- | The row a consumer names as this exchange's target: the row the matrix
 routes it through, else the row its activity link alone names. The fallback

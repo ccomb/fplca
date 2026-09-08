@@ -373,7 +373,6 @@ data Exchange
         , techUnitId :: !UUID -- Unit of measurement
         , techRole :: !TechRole -- Role within the activity
         , techActivityLinkId :: !UUID -- Target activity ID (backward compatibility)
-        , techProcessLinkId :: !(Maybe ProcessId) -- Target process ID (new field)
         , techSupplierActivity :: !(Maybe Text)
         {- ^ The supplier activity the source names /by name/, when it names one.
         EcoSpold 2 and ILCD designate theirs by identifier ('techActivityLinkId'),
@@ -411,7 +410,6 @@ data Exchange
         it is an elementary flow of medium 'Waste'.
         -}
         , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
-        , waProcessLinkId :: !(Maybe ProcessId) -- Target process ID (matches techProcessLinkId)
         , waLocation :: !Text -- Supplier location (EcoSpold1) or "" (EcoSpold2)
         , waComment :: !(Maybe Text) -- Free-text per-exchange comment from source
         , waPedigree :: !(Maybe Pedigree) -- LCA data-quality scores when available
@@ -506,12 +504,6 @@ exchangeActivityLinkId BiosphereExchange{} = Nothing
 exchangeActivityLinkId WasteExchange{waActivityLinkId = linkId} =
     if linkId == UUID.nil then Nothing else Just linkId
 
--- | Get process link ID (new field)
-exchangeProcessLinkId :: Exchange -> Maybe ProcessId
-exchangeProcessLinkId TechnosphereExchange{techProcessLinkId = pid} = pid
-exchangeProcessLinkId BiosphereExchange{} = Nothing
-exchangeProcessLinkId WasteExchange{waProcessLinkId = pid} = pid
-
 -- | Get exchange location (for EcoSpold1 supplier lookup)
 exchangeLocation :: Exchange -> Text
 exchangeLocation TechnosphereExchange{techLocation = loc} = loc
@@ -548,15 +540,13 @@ isWasteExchange TechnosphereExchange{} = False
 isWasteExchange BiosphereExchange{} = False
 isWasteExchange WasteExchange{} = True
 
-{- | A waste exchange that names the treatment it goes to, by process link or
-by activity link. It is the question a writer choosing where to put such a row
-has to answer: a named treatment makes it technosphere, and with none nothing
-treats it, which is what a final waste flow is.
+{- | A waste exchange that names the treatment it goes to. It is the question a
+writer choosing where to put such a row has to answer: a named treatment makes
+it technosphere, and with none nothing treats it, which is what a final waste
+flow is.
 -}
 linkedWaste :: Exchange -> Bool
-linkedWaste ex =
-    isWasteExchange ex
-        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
+linkedWaste ex = isWasteExchange ex && isJust (exchangeActivityLinkId ex)
 
 {- | Activity's reference-product amount used to normalize its matrix column.
 Net output = sum of reference outputs minus self-loop consumption; falls back

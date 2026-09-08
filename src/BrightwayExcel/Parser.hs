@@ -387,7 +387,6 @@ productRowOut cfg meta isRef f =
             , techUnitId = unitUUID
             , techRole = if isRef then ReferenceProduct else Coproduct
             , techActivityLinkId = UUID.nil
-            , techProcessLinkId = Nothing
             , techSupplierActivity = Nothing -- an output of this activity, not a reference to another
             , techLocation = fromMaybe "" (fieldText f "location" <|> metaText meta "location")
             , techComment = fieldText f "comment"
@@ -443,7 +442,6 @@ technosphereRowOut cfg role actName f
             , techUnitId = unitUUID
             , techRole = role
             , techActivityLinkId = UUID.nil
-            , techProcessLinkId = Nothing
             , techSupplierActivity = supplierActivity
             , techLocation = fromMaybe "" (fieldText f "location")
             , techComment = fieldText f "comment"

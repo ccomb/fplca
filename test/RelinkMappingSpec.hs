@@ -83,7 +83,6 @@ targetDB =
                         , techUnitId = UUID.nil
                         , techRole = ReferenceProduct
                         , techActivityLinkId = UUID.nil
-                        , techProcessLinkId = Nothing
                         , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing

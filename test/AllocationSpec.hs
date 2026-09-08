@@ -418,7 +418,6 @@ tech fid amount role =
         , techUnitId = kgId
         , techRole = role
         , techActivityLinkId = UUID.nil
-        , techProcessLinkId = Nothing
         , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing

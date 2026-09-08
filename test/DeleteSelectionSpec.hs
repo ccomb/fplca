@@ -146,12 +146,12 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                     -- The mid activity kept its input exchange, but the link to
                     -- the deleted supplier is now nil, ready for relinking.
                     let midInputLinks =
-                            [ (techActivityLinkId ex, techProcessLinkId ex)
+                            [ techActivityLinkId ex
                             | act <- V.toList (dbActivities db')
                             , activityName act == "mid"
                             , ex@TechnosphereExchange{techRole = Input} <- exchanges act
                             ]
-                    midInputLinks `shouldBe` [(UUID.nil, Nothing)]
+                    midInputLinks `shouldBe` [UUID.nil]
 
         it "keeps a multi-product link target when only one product is deleted" $ do
             db <- buildOrFail (multiProductDB 300)
@@ -181,12 +181,12 @@ spec = describe "Database.Edit delete-by-selection primitive" $ do
                     -- The surviving generator's waste output no longer resolves to
                     -- the deleted treatment: the link is nil, ready for relinking.
                     let generatorLinks =
-                            [ (waActivityLinkId ex, waProcessLinkId ex)
+                            [ waActivityLinkId ex
                             | act <- V.toList (dbActivities db')
                             , activityName act == "generator"
                             , ex@WasteExchange{} <- exchanges act
                             ]
-                    generatorLinks `shouldBe` [(UUID.nil, Nothing)]
+                    generatorLinks `shouldBe` [UUID.nil]
 
         it "fails loudly on an out-of-range ProcessId" $ do
             db <- buildOrFail (chainDB 400)
@@ -472,7 +472,6 @@ refOut actUUID prodUUID =
         , techUnitId = kgUnitId
         , techRole = ReferenceProduct
         , techActivityLinkId = actUUID
-        , techProcessLinkId = Nothing
         , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing
@@ -491,7 +490,6 @@ inputFrom supplierActUUID supplierProdUUID =
         , techUnitId = kgUnitId
         , techRole = Input
         , techActivityLinkId = supplierActUUID
-        , techProcessLinkId = Nothing
         , techSupplierActivity = Nothing
         , techLocation = ""
         , techComment = Nothing
@@ -513,7 +511,6 @@ wasteOut treatmentActUUID treatmentProdUUID =
         , waUnitId = kgUnitId
         , waIsInput = False
         , waActivityLinkId = treatmentActUUID
-        , waProcessLinkId = Nothing
         , waLocation = ""
         , waComment = Nothing
         , waPedigree = Nothing

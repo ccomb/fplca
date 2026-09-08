@@ -289,7 +289,6 @@ validateOne ctx a =
                         , -- Self-link, as every loaded database records its
                           -- reference products.
                           techActivityLinkId = fst key
-                        , techProcessLinkId = Nothing
                         , techSupplierActivity = Nothing
                         , techLocation = ""
                         , techComment = Nothing
@@ -637,7 +636,6 @@ resolveOne ctx ex = case ex of
                 , techUnitId = unitRef
                 , techRole = Input
                 , techActivityLinkId = prActivity (supKey sup)
-                , techProcessLinkId = Nothing
                 , techSupplierActivity = Nothing
                 , techLocation = ""
                 , techComment = comment
@@ -654,7 +652,6 @@ resolveOne ctx ex = case ex of
                 , waUnitId = unitRef
                 , waIsInput = False
                 , waActivityLinkId = prActivity (supKey sup)
-                , waProcessLinkId = Nothing
                 , waLocation = ""
                 , waComment = comment
                 , waPedigree = Nothing
