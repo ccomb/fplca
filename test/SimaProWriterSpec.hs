@@ -501,18 +501,18 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- medium, and the section is what the writer has to find it again by.
         let (_, _, bioFlows, wasteFlows, _) = original
         map bfCompartment (M.elems bioFlows)
-            `shouldBe` [Just (Compartment "waste" Nothing)]
+            `shouldBe` [Just (Compartment Waste Nothing)]
         M.size wasteFlows `shouldBe` 0
 
     describe "checkSimaProExportable (emission-medium guard)" $ do
         it "accepts air / water / soil emissions" $
-            checkSimaProExportable (emissionDb (Compartment "air" Nothing))
+            checkSimaProExportable (emissionDb (Just (Compartment Air Nothing)))
                 `shouldBe` Right ()
 
         it "rejects an emission whose medium has no faithful SimaPro section" $
             -- A "raw" medium would otherwise be silently filed under
             -- "Emissions to air" and re-parse as air; reject it loudly instead.
-            checkSimaProExportable (emissionDb (Compartment "raw" Nothing))
+            checkSimaProExportable (emissionDb (Just (Compartment NaturalResource Nothing)))
                 `shouldSatisfy` either (const True) (const False)
 
         -- An inventory indicator is neither an emission to a medium nor an
@@ -521,7 +521,7 @@ spec = describe "SimaPro.Writer round-trip" $ do
         -- "Emissions to air" it would re-parse as an emission to air, and the
         -- guard alone would refuse every database carrying one.
         it "accepts an inventory indicator and files it under Final waste flows" $ do
-            let db = emissionDb (Compartment "inventory indicator" (Just "waste"))
+            let db = emissionDb (Just (Compartment InventoryIndicator (Just "waste")))
             checkSimaProExportable db `shouldBe` Right ()
             case serializeSimaProCSV defaultWriterConfig db of
                 Left err -> expectationFailure (T.unpack err)
@@ -530,8 +530,20 @@ spec = describe "SimaPro.Writer round-trip" $ do
                         `shouldBe` ["Some emission;waste;kg;0.5;Undefined;;;;;;"]
                     firstRowUnder out "Emissions to air" `shouldBe` []
 
+        -- A flow the map knows but that records no compartment keeps its row,
+        -- so it must keep a section. Dropping the section drops the pair, and
+        -- the export loses the exchange with the check still reporting success.
+        it "files an emission whose flow records no compartment under air" $ do
+            let db = emissionDb Nothing
+            checkSimaProExportable db `shouldBe` Right ()
+            case serializeSimaProCSV defaultWriterConfig db of
+                Left err -> expectationFailure (T.unpack err)
+                Right out ->
+                    firstRowUnder out "Emissions to air"
+                        `shouldBe` ["Some emission;;kg;0.5;Undefined;;;;;;"]
+
         it "accepts a final waste flow, whose medium is the section's own name" $
-            checkSimaProExportable (emissionDb (Compartment "waste" Nothing))
+            checkSimaProExportable (emissionDb (Just (Compartment Waste Nothing)))
                 `shouldBe` Right ()
 
     -- This format has no waste axis of its own, so a waste exchange from
@@ -660,12 +672,12 @@ testUUID n = UUID.fromWords n 0x4000 0x8000 1
 Used to exercise 'checkSimaProExportable': air/water/soil pass, anything else is
 rejected.
 -}
-emissionDb :: Compartment -> SimpleDatabase
+emissionDb :: Maybe Compartment -> SimpleDatabase
 emissionDb comp =
     SimpleDatabase
         { sdbActivities = M.singleton (actU, prodU) act
         , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "thing" unitU M.empty Nothing Nothing)
-        , sdbBioFlows = M.singleton bioU (BiosphereFlow bioU "Some emission" unitU M.empty Nothing Nothing (Just comp))
+        , sdbBioFlows = M.singleton bioU (BiosphereFlow bioU "Some emission" unitU M.empty Nothing Nothing comp)
         , sdbWasteFlows = M.empty
         , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
         }
@@ -957,7 +969,7 @@ guardDb alloc ntype exs =
                 , (gMat, TechnosphereFlow gMat "some material" gUnit M.empty Nothing Nothing)
                 ]
         , sdbBioFlows =
-            M.singleton gBio (BiosphereFlow gBio "an emission" gUnit M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+            M.singleton gBio (BiosphereFlow gBio "an emission" gUnit M.empty Nothing Nothing (Just (Compartment Air Nothing)))
         , sdbWasteFlows = M.empty
         , sdbUnits = M.singleton gUnit (Unit gUnit "kg" "kg" "")
         }

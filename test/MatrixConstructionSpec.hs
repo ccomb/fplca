@@ -179,7 +179,7 @@ spec = do
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" mjUnitId M.empty Nothing Nothing)
-                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment Air Nothing)))
                 unitDB =
                     M.fromList
                         [ (mjUnitId, Unit mjUnitId "mj" "mj" "")
@@ -265,7 +265,7 @@ spec = do
                         }
                 activityMap = M.singleton (actUUID, prodUUID) activity
                 techFlowDB = M.singleton prodUUID (TechnosphereFlow prodUUID "energy product" mjUnitId M.empty Nothing Nothing)
-                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+                bioFlowDB = M.singleton bioFlowUUID (BiosphereFlow bioFlowUUID "trace pollutant" kgUnitId M.empty Nothing Nothing (Just (Compartment Air Nothing)))
                 unitDB =
                     M.fromList
                         [ (mjUnitId, Unit mjUnitId "mj" "mj" "")
@@ -395,7 +395,7 @@ spec = do
                         [ (wW, TechnosphereFlow wW "waste W" kgU M.empty Nothing Nothing)
                         , (yY, TechnosphereFlow yY "product Y" kgU M.empty Nothing Nothing)
                         ]
-                bioFlowDB = M.singleton co2 (BiosphereFlow co2 "carbon dioxide" kgU M.empty Nothing Nothing (Just (Compartment "air" Nothing)))
+                bioFlowDB = M.singleton co2 (BiosphereFlow co2 "carbon dioxide" kgU M.empty Nothing Nothing (Just (Compartment Air Nothing)))
                 wasteFlowDB = M.singleton wW (WasteFlow wW "waste W" kgU M.empty Nothing Nothing)
                 unitDB = M.singleton kgU (Unit kgU "kg" "kg" "")
 

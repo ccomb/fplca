@@ -50,6 +50,25 @@
   to be matched by name to a treatment carried by another loaded database, and
   an elementary flow is matched against methods instead. Caches built before
   this are rebuilt on the next load.
+- Two databases read from two formats now describe one physical flow the same
+  way. Every format spells a compartment's medium differently: an EcoSpold 2
+  file writes `natural resource`, an EcoSpold 1 file writes `resource`, a
+  SimaPro file heads the section `Raw`. Each was stored as written, so the same
+  extraction carried a different medium depending on which file it came from,
+  and every reader, writer and comparison that needed them to agree carried its
+  own list of spellings. The medium is now one value with one name, read at the
+  boundary and written back in each format's own vocabulary, so a database
+  exported and read again comes back with the medium it went out with. Two
+  consequences are visible: an inventory from a SimaPro or EcoSpold 1 source
+  now reports `natural resource` where it used to report `resource`, and the
+  elementary flows of such a database change identity, since the medium is part
+  of it. Caches built before this are rebuilt on the next load.
+- A technosphere input whose amount is zero is now kept. A SimaPro or Brightway
+  Excel file writes one when the author disabled an input or a parameter
+  evaluates to zero in this scenario, and dropping it lost what the file said
+  without a word, while the loader went on reporting a link rate over the rows
+  that survived. No computed number moves, a zero coefficient having no weight
+  in any matrix; an export now carries the rows its source carried.
 - Waste that leaves a system with no treatment modelled for it is now
   characterized. A SimaPro CSV files such waste in a section of its own, and a
   method that scores it writes the same word in its compartment column. The

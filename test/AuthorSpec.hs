@@ -50,6 +50,7 @@ import Types (
     DeclaredShare (..),
     Exchange (..),
     LocationSource (..),
+    Medium (..),
     Pedigree (..),
     SimpleDatabase (..),
     SparseTriple (..),
@@ -312,7 +313,7 @@ spec = do
                 bioFlowIds r `shouldBe` [co2Id]
 
             it "keeps a name in another compartment apart" $ do
-                let urban = Compartment{compartmentName = "air", compartmentSub = Just "urban air"}
+                let urban = Compartment{compartmentName = Air, compartmentSub = Just "urban air"}
                 r <- resolveOrFail fixtureDb baseActivity{aaExchanges = [bioOf (FlowByName "Carbon dioxide" urban "kg") 2 Nothing]}
                 map bfName (riNewBioFlows r) `shouldBe` ["Carbon dioxide"]
                 bioFlowIds r `shouldSatisfy` (/= [co2Id])
@@ -660,7 +661,7 @@ bioOf flow amount unit =
         }
 
 air :: Compartment
-air = Compartment{compartmentName = "air", compartmentSub = Nothing}
+air = Compartment{compartmentName = Air, compartmentSub = Nothing}
 
 -- ---------------------------------------------------------------------------
 -- Fixture: an activity as a database file would have brought it in

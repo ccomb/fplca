@@ -207,7 +207,6 @@ import Method.Types (
     CompartmentMap,
     EnergyDensityMap,
     Location (..),
-    Medium (..),
     Method (..),
     MethodCF (..),
     MethodCollection (..),
@@ -240,6 +239,7 @@ import Types (
     LinkBlocker (..),
     LocationFallback (..),
     LocationUnresolved (..),
+    Medium (..),
     SimpleDatabase (..),
     SparseTriple (..),
     SupplierAmbiguity (..),
@@ -861,8 +861,8 @@ buildMethodTablesFor manager dbName collection db method = do
       where
         waterCFs :: Int
         waterCFs =
-            length [() | (_, Medium "water", _) <- M.keys (mtExactCF tables)]
-                + length [() | (_, Medium "water") <- M.keys (mtFallbackCF tables)]
+            length [() | (_, Just Water, _) <- M.keys (mtExactCF tables)]
+                + length [() | (_, Just Water) <- M.keys (mtFallbackCF tables)]
 
     -- A CF that matched (broadcast or regionalized) but cannot be
     -- unit-converted scores an (intentional) 0 - refusing wrong-dimension data

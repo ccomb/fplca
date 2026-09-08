@@ -71,6 +71,7 @@ import Types (
     Exchange (..),
     GeographyPolicy (..),
     LocationSource (..),
+    Medium (..),
     SimpleDatabase (..),
     SparseTriple (..),
     TechRole (..),
@@ -396,7 +397,7 @@ milkFlow =
         }
 
 air :: Compartment
-air = Compartment{compartmentName = "air", compartmentSub = Nothing}
+air = Compartment{compartmentName = Air, compartmentSub = Nothing}
 
 co2Flow :: BiosphereFlow
 co2Flow =

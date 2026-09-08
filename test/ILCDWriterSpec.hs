@@ -413,31 +413,32 @@ spec = describe "ILCD.Writer round-trip" $ do
                     ]
             refIdxs `shouldBe` [2]
 
-        it "rejects a non-canonical biosphere medium at the export boundary" $
-            checkILCDExportable (bioMediumDb "fresh water") `shouldSatisfy` isLeft
+        it "rejects a medium the ILCD classification cannot name" $
+            checkILCDExportable (bioMediumDb Waste) `shouldSatisfy` isLeft
 
         it "accepts a canonical biosphere medium" $
-            checkILCDExportable (bioMediumDb "air") `shouldBe` Right ()
+            checkILCDExportable (bioMediumDb Air) `shouldBe` Right ()
 
-        it "accepts and canonicalises the SimaPro \"resource\" medium to \"natural resource\"" $ do
-            -- SimaPro labels natural-resource flows "resource"; the writer maps it
-            -- to ILCD's "natural resource", which the parser reads back, so the
-            -- flow is representable rather than rejected.
-            checkILCDExportable (bioMediumDb "resource") `shouldBe` Right ()
-            db' <- roundTrip (bioMediumDb "resource")
+        it "round-trips a natural resource under its own medium" $ do
+            -- Every format spells this medium its own way and each writer emits
+            -- the spelling its own reader inverts, so the medium that comes back
+            -- is the medium that went out.
+            checkILCDExportable (bioMediumDb NaturalResource) `shouldBe` Right ()
+            db' <- roundTrip (bioMediumDb NaturalResource)
             map (fmap compartmentName . bfCompartment) (M.elems (sdbBioFlows db'))
-                `shouldBe` [Just "natural resource"]
+                `shouldBe` [Just NaturalResource]
 
         it "reports every violation category in one message, not just the first" $ do
-            -- A flow with both a non-canonical medium and a non-finite amount trips
-            -- two independent checks; the collected report must carry both.
+            -- A flow with both a medium the classification cannot name and a
+            -- non-finite amount trips two independent checks; the collected
+            -- report must carry both.
             let db =
                     oneActivityDb
-                        (M.singleton fEmitU (fEmission{bfCompartment = Just (Compartment "fresh water" Nothing)}))
+                        (M.singleton fEmitU (fEmission{bfCompartment = Just (Compartment Waste Nothing)}))
                         [BiosphereExchange fEmitU (1 / 0) fUnitU Emission "" Nothing Nothing, refProductEx]
             case checkILCDExportable db of
                 Left msg -> do
-                    msg `shouldSatisfy` T.isInfixOf "fresh water"
+                    msg `shouldSatisfy` T.isInfixOf "waste"
                     msg `shouldSatisfy` T.isInfixOf "non-finite"
                 Right () -> expectationFailure "expected violations"
 
@@ -561,12 +562,12 @@ fProduct = TechnosphereFlow fProdU "product P" fUnitU M.empty Nothing Nothing
 fEmission :: BiosphereFlow
 fEmission =
     BiosphereFlow fEmitU "Carbon dioxide" fUnitU M.empty Nothing Nothing $
-        Just (Compartment "air" (Just "high. pop."))
+        Just (Compartment Air (Just "high. pop."))
 
 fResource :: BiosphereFlow
 fResource =
     BiosphereFlow fResU "Iron ore" fUnitU M.empty Nothing Nothing $
-        Just (Compartment "natural resource" (Just "in ground"))
+        Just (Compartment NaturalResource (Just "in ground"))
 
 {- | A one-activity database wrapping the given biosphere catalog and exchanges,
 sharing one technosphere product flow and one unit. The activity name carries
@@ -618,11 +619,11 @@ richDb =
         ]
 
 {- | One activity with a single biosphere emission under the given medium.
-A non-canonical medium ("fresh water", …) is what 'checkILCDExportable' must
-reject; a canonical one (or an alias the writer canonicalises, like
-"resource" → "natural resource") passes.
+A medium the ILCD classification has no place for ('Waste', 'Economic',
+'InventoryIndicator') is what 'checkILCDExportable' must reject; the four the
+classification names pass.
 -}
-bioMediumDb :: Text -> SimpleDatabase
+bioMediumDb :: Medium -> SimpleDatabase
 bioMediumDb medium =
     oneActivityDb
         (M.singleton fEmitU (fEmission{bfCompartment = Just (Compartment medium Nothing)}))

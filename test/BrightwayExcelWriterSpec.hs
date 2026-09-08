@@ -72,10 +72,10 @@ spec = describe "BrightwayExcel.Writer" $ do
 
     describe "renderCategories" $ do
         it "joins compartment and subcompartment with ::" $
-            renderCategories (Just (Compartment "natural resource" (Just "in water")))
+            renderCategories (Just (Compartment NaturalResource (Just "in water")))
                 `shouldBe` "natural resource::in water"
         it "emits the bare medium when there is no sub" $
-            renderCategories (Just (Compartment "air" Nothing)) `shouldBe` "air"
+            renderCategories (Just (Compartment Air Nothing)) `shouldBe` "air"
         it "emits empty for no recorded compartment" $
             renderCategories Nothing `shouldBe` ""
 
@@ -802,7 +802,7 @@ co2 =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (Compartment "air" Nothing)
+        , bfCompartment = Just (Compartment Air Nothing)
         }
 
 kwh, m3, kg :: Unit

@@ -138,15 +138,15 @@ spec = do
     -- -----------------------------------------------------------------------
     describe "isResourceExtraction" $ do
         it "detects natural resource category" $ do
-            let flow = mkBioFlow "natural resource"
+            let flow = mkBioFlow NaturalResource
             isResourceExtraction flow `shouldBe` True
 
         it "detects resource category prefix" $ do
-            let flow = mkBioFlow "resource"
+            let flow = mkBioFlow NaturalResource
             isResourceExtraction flow `shouldBe` True
 
         it "returns False for air emission" $ do
-            let flow = mkBioFlow "air"
+            let flow = mkBioFlow Air
             isResourceExtraction flow `shouldBe` False
     -- Technosphere flows can't reach this function under the new type system.
 
@@ -262,7 +262,7 @@ spec = do
 -- Helpers
 -- ---------------------------------------------------------------------------
 
-mkBioFlow :: Text -> BiosphereFlow
+mkBioFlow :: VT.Medium -> BiosphereFlow
 mkBioFlow cat =
     BiosphereFlow
         { bfId = nil

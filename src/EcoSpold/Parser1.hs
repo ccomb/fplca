@@ -535,7 +535,7 @@ EcoSpold1 groups:
   Output: 0 = reference product, 1-3 = byproduct/co-product, 4 = emission (biosphere)
 
 A row filed under @category="Final waste flows"@ is an elementary flow of
-medium 'wasteMedium' whatever group it carries, so it is read as biosphere
+medium 'Waste' whatever group it carries, so it is read as biosphere
 before the groups are consulted. Waste that does have a treatment is not
 written that way and stays on the technosphere side.
 -}
@@ -560,7 +560,7 @@ buildExchange activityLoc edata
     -- it as an input would ask for a supplier no database can provide.
     isFinalWaste = exCategory edata == "Final waste flows"
     -- The medium a method characterizes it under, and what the flow stores.
-    category = if isFinalWaste then wasteMedium else exCategory edata
+    category = if isFinalWaste then mediumText Waste else exCategory edata
 
     -- Technosphere: leave empty if unspecified so the Loader can do name-only
     -- lookup. Biosphere: fall back to the activity location (no supplier link).
@@ -578,10 +578,14 @@ buildExchange activityLoc edata
         | otherwise = Coproduct
 
     subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
-    compartment =
-        if T.null category && isNothing subCat
-            then Nothing
-            else Just (Compartment category subCat)
+    -- The medium of a group-4 exchange is its @category@, and the vocabulary
+    -- EcoSpold 1 writes there is the four 'parseMedium' reads. A category it
+    -- cannot place leaves the flow with no compartment: this reader assembles
+    -- its result purely and has no channel to report on, which is a limitation
+    -- of the reader rather than a judgement about the file.
+    compartment = case parseMedium category of
+        Right medium -> Just (Compartment medium subCat)
+        Left _ -> Nothing
     bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
     bioEx =
         BiosphereExchange
