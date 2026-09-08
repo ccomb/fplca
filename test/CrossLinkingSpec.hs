@@ -384,6 +384,20 @@ spec = do
                 CrossDBNotLinked reason ->
                     expectationFailure $ "Expected the product-name fallback but got: " ++ show reason
 
+        it "prefers the named activity among a synonym group's candidates" $ do
+            -- The dependency spells the product otherwise, so only the synonym
+            -- group answers and the (activity, product) index cannot. Both
+            -- producers come back; the activity name still says which is meant.
+            let oldName = "electricity, medium voltage, at grid"
+                synDB = buildFromPairs [(electricity, oldName)]
+                synCtx = ctx{lcIndexedDatabases = [buildIndexedDatabase "background" synDB twoProducerDB], lcSynonymDB = synDB}
+            case findSupplierInIndexedDBs synCtx (queryFrom (fst landfillActivity) oldName "GLO" "kWh") of
+                CrossDBLinked{cdlrActivityUUID = linked, cdlrWarnings = warnings} -> do
+                    linked `shouldBe` snd landfillActivity
+                    [n | AmbiguousSupplier _ n <- warnings] `shouldBe` []
+                CrossDBNotLinked reason ->
+                    expectationFailure $ "Expected a synonym link but got: " ++ show reason
+
     -- -----------------------------------------------------------------------
     -- supplierLocations & buildSupplierEntries — split-location indexing.
     -- Guards the WFLDB case where Process name @ /CH but Products row @ /GLO:

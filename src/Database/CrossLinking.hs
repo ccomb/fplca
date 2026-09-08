@@ -681,12 +681,13 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
             --      activities whose reference product is "electricity, medium
             --      voltage" in GLO.
             --   2. Exact product-name match across all indexed DBs.
-            --   3. Synonym-group match if exact yielded nothing.
+            --   3. Synonym-group match if exact yielded nothing, the named
+            --      activity preferred among what the group returns.
             resolveCandidates $
                 firstNonEmpty
                     [ byActivityAndProduct
                     , concatMap (lookupExact (normalizeText productName)) lcIndexedDatabases
-                    , case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
+                    , preferNamedActivity $ case lookupSynonymGroup lcSynonymDB (normalizeName productName) of
                         Just groupId -> concatMap (lookupBySynonym groupId) lcIndexedDatabases
                         Nothing -> []
                     ]
@@ -700,6 +701,19 @@ findSupplierInIndexedDBs LinkingContext{..} SupplierQuery{sqProductName = produc
             fromMaybe [] $
                 M.lookup (normalizeText activity, normalizeText productName) (idbByActivityAndProductName idb)
         ]
+
+    {- The synonym tier answers under a name the dependency spells otherwise, so
+    the pair index could not have matched and the activity name is still
+    unspent. Where one candidate of the group carries it, that is the demand
+    answered exactly; where none does, the release renamed the activity as well
+    as the product and the ranking judges, as it did before. -}
+    preferNamedActivity :: [(Text, SupplierEntry)] -> [(Text, SupplierEntry)]
+    preferNamedActivity candidates = case supplierActivity of
+        Nothing -> candidates
+        Just activity -> firstNonEmpty [filter (named activity) candidates, candidates]
+      where
+        named :: Text -> (Text, SupplierEntry) -> Bool
+        named activity (_, entry) = normalizeText activity == normalizeText (seActivityName entry)
 
     -- Effective location: if raw location is empty, try extracting from compound name
     effectiveLocation =
