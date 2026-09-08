@@ -70,7 +70,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (chr, ord)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -168,19 +168,6 @@ Databases whose exchanges all resolve, carry no linked waste, keep every resourc
 direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
 
-{- | A waste exchange that resolves to a producer in the technosphere matrix.
-'Database.MatrixBuild.findProducer' locates a producer via the process link or a
-non-nil activity link, and 'techTriple' then emits a signed triple — with the
-negative sign of a waste /output/ ('exchangeIsInput' is 'False'). Re-imported, the
-technosphere row 'exchangeRow' writes is read back as a positive 'Input',
-inverting that sign. So a linked waste exchange cannot be best-efforted as
-technosphere; 'checkBrightwayExportable' rejects it.
--}
-linkedWaste :: Exchange -> Bool
-linkedWaste ex =
-    isWasteExchange ex
-        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
-
 {- | A waste exchange with no producer link: matrix-invisible, so 'exchangeRow'
 rewrites it as a technosphere flow (best-effort) rather than rejecting it.
 -}
@@ -188,7 +175,7 @@ orphanWaste :: Exchange -> Bool
 orphanWaste ex = isWasteExchange ex && not (linkedWaste ex)
 
 {- | Best-effort export note for a database with /orphan/ waste exchanges —
-end-of-life waste outputs that carry no producer link. Brightway has no waste
+waste rows that name no producer at all. Brightway has no waste
 type, so 'exchangeRow' writes each as a technosphere flow. Such an exchange never
 participates in the technosphere matrix ('Database.MatrixBuild.findProducer'
 returns 'Nothing'), so the rewrite is inventory-neutral; only the waste

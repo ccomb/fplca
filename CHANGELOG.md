@@ -21,6 +21,25 @@
   and how many tied, so the supplier meant can be named. Ties across two
   dependencies were already reported; this is the tie inside one. Wire
   revision 23.
+- Waste that leaves a system with no treatment modelled for it is now
+  characterized. A SimaPro CSV files such waste in a section of its own, and a
+  method that scores it writes the same word in its compartment column. The
+  loader was putting those rows on the technosphere waste side instead, where
+  no method looks and where a row with no producer never reaches an inventory
+  at all: a database could carry thousands of them and still score zero on a
+  waste category the method covers. They are elementary flows now, of the
+  medium the section is named after, and the exports that have a section for
+  them still write them there. The same factor also reaches the equivalent
+  flows of an EcoSpold 2 source, whose compartment table gained one line
+  (data version 4) pairing its waste indicators with that medium; its
+  indicators that count recovered energy or secondary materials are left where
+  they are, being nothing of the kind. On a database read from those formats
+  these rows now appear as inventory flows rather than waste exchanges, so a
+  waste-flow search no longer returns them and a cut-off report no longer
+  counts them. One export loses out: ILCD has no category that reads back as
+  this medium, so a database carrying such flows is now refused at that export
+  rather than written in a shape the reader turns into something else. Caches
+  built before this are rebuilt on the next load.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though
@@ -38,6 +57,17 @@
   complete. They are elementary flows again: they appear in the inventory
   where a method can characterize them, and the gap report is empty. Caches
   built before this are rebuilt on the next load.
+- The functional unit reported beside a score now says what the score is
+  actually per: one unit of the reference product. It used to repeat the
+  amount the source declares the process produces, which for a coproduct is
+  rarely one: the cream of an Agribalyse cheese block is stated at
+  0.0686462 kg, so the score came back labelled `0.07 kg of cream` while the
+  number itself was per kilogram, every coefficient of the column having been
+  divided by that amount. The same applies to a reference product ingested in
+  a canonical unit, a 1 kWh product read as 3.6 mj and scored per megajoule.
+  The Python client's documentation said the same thing wrongly and now
+  states that `product_amount` describes what the block produces, not the
+  basis of the score.
 - An EcoSpold 2 dataset whose block a key divides into several processes now
   says that only one of them will be kept. A process is identified by its file
   name there, which names a single product, so the coproducts a key had just

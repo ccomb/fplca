@@ -309,6 +309,10 @@ History of manual bumps:
      type, so a cache written just before this would pass the fingerprint and
      go on holding those flows on the waste axis - invisible to every method,
      and demanding a supplier no activity can be.
+- 26: a SimaPro "Final waste flows" row is an elementary flow of medium
+     "waste", not a waste exchange. Nothing changes type, so a cache written
+     just before this would pass the fingerprint and keep those flows on an
+     axis no method reads.
 
 - 26: a technosphere line carries the supplier activity its source names apart
      from the product ('techSupplierActivity'), and the linking stats carry the
@@ -1581,9 +1585,8 @@ resolve in 'Database.MatrixBuild.techTriple'.
 Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
 @(I-A)@ and are skipped by the matrix builder, so a treatment process's
 'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
-completeness below 100% for a perfectly solvable database. Waste *outputs* (the
-typical SimaPro 'Final waste flows' case) are end-of-life markers, also not
-demands; only waste/technosphere *inputs* remain.
+completeness below 100% for a perfectly solvable database. Waste *outputs* are
+generated, not demanded; only waste/technosphere *inputs* remain.
 -}
 isSupplierDemand :: Exchange -> Bool
 isSupplierDemand ex =

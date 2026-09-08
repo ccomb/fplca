@@ -28,6 +28,7 @@ import qualified Data.ByteString as BS
 import Data.Either (isLeft, isRight)
 import Data.List (sort)
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -185,7 +186,7 @@ noTypeCSV =
         , "End"
         ]
 
--- | A process with a @Final waste flows@ section, exercising the waste path.
+-- | A process with a @Final waste flows@ section, whose rows are elementary.
 wasteCSV :: BS.ByteString
 wasteCSV =
     BS.intercalate
@@ -494,10 +495,14 @@ spec = describe "SimaPro.Writer round-trip" $ do
         f0 <- serBytes (toSimple original)
         reparsed <- parseBytes f0
         shapeSet reparsed `shouldBe` shapeSet original
-        -- Guard against a vacuous pass: the original must actually carry a waste
-        -- exchange, so the structural equality above is pinning something.
-        let kinds = [esKind ex | ash <- S.toList (shapeSet original), ex <- asExchanges ash]
-        kinds `shouldSatisfy` elem "waste"
+        -- Guard against a vacuous pass: the original must actually carry the
+        -- section's flow, so the structural equality above is pinning
+        -- something. A final waste flow is elementary, filed under its own
+        -- medium, and the section is what the writer has to find it again by.
+        let (_, _, bioFlows, wasteFlows, _) = original
+        map bfCompartment (M.elems bioFlows)
+            `shouldBe` [Just (Compartment "waste" Nothing)]
+        M.size wasteFlows `shouldBe` 0
 
     describe "checkSimaProExportable (emission-medium guard)" $ do
         it "accepts air / water / soil emissions" $
@@ -521,13 +526,34 @@ spec = describe "SimaPro.Writer round-trip" $ do
             case serializeSimaProCSV defaultWriterConfig db of
                 Left err -> expectationFailure (T.unpack err)
                 Right out -> do
-                    -- the writer joins with CRLF; drop the carriage returns
-                    let ls = map (T.dropWhileEnd (== '\r')) (T.lines (TE.decodeUtf8 out))
-                        after header = drop 1 (dropWhile (/= header) ls)
-                        firstRow header = take 1 (takeWhile (not . T.null) (after header))
-                    firstRow "Final waste flows"
+                    firstRowUnder out "Final waste flows"
                         `shouldBe` ["Some emission;waste;kg;0.5;Undefined;;;;;;"]
-                    firstRow "Emissions to air" `shouldBe` []
+                    firstRowUnder out "Emissions to air" `shouldBe` []
+
+        it "accepts a final waste flow, whose medium is the section's own name" $
+            checkSimaProExportable (emissionDb (Compartment "waste" Nothing))
+                `shouldBe` Right ()
+
+    -- This format has no waste axis of its own, so a waste exchange from
+    -- another one has to be written into one of its two waste sections, and
+    -- the section decides what a re-import makes of it. Naming a treatment is
+    -- what tells the two apart.
+    describe "a waste exchange imported from another format" $ do
+        it "writes one that names its treatment under Waste to treatment" $
+            case serializeSimaProCSV defaultWriterConfig (wasteDb (Just (testUUID 0xbb))) of
+                Left err -> expectationFailure (T.unpack err)
+                Right out -> do
+                    firstRowUnder out "Waste to treatment"
+                        `shouldBe` ["spent solvent;kg;0.3;Undefined;0;0;0;"]
+                    firstRowUnder out "Final waste flows" `shouldBe` []
+
+        it "writes one that names none under Final waste flows" $
+            case serializeSimaProCSV defaultWriterConfig (wasteDb Nothing) of
+                Left err -> expectationFailure (T.unpack err)
+                Right out -> do
+                    firstRowUnder out "Final waste flows"
+                        `shouldBe` ["spent solvent;;kg;0.3;Undefined;;;;;;"]
+                    firstRowUnder out "Waste to treatment" `shouldBe` []
 
     describe "checkSimaProExportable (round-trip guards)" $ do
         it "refuses an activity whose product rows carry no share: each row would claim the whole" $
@@ -667,6 +693,55 @@ emissionDb comp =
             Nothing
             Nothing
             Nothing
+
+{- | One activity carrying a waste exchange of the kind only another format
+produces, optionally naming the activity that treats it. Which section the
+writer files it under is what decides the kind it comes back as.
+-}
+wasteDb :: Maybe UUID -> SimpleDatabase
+wasteDb mTreatment =
+    SimpleDatabase
+        { sdbActivities = M.singleton (actU, prodU) act
+        , sdbTechFlows = M.singleton prodU (TechnosphereFlow prodU "thing" unitU M.empty Nothing Nothing)
+        , sdbBioFlows = M.empty
+        , sdbWasteFlows = M.singleton wasteU (WasteFlow wasteU "spent solvent" unitU M.empty Nothing Nothing)
+        , sdbUnits = M.singleton unitU (Unit unitU "kg" "kg" "")
+        }
+  where
+    actU, prodU, wasteU, unitU :: UUID
+    actU = testUUID 0x20
+    prodU = testUUID 0xa1
+    wasteU = testUUID 0xc1
+    unitU = testUUID 0x01
+    act =
+        Activity
+            "solvent user"
+            []
+            []
+            M.empty
+            M.empty
+            "GLO"
+            LocationDeclared
+            "kg"
+            [ TechnosphereExchange prodU 1.0 unitU ReferenceProduct UUID.nil Nothing "" Nothing Nothing Nothing M.empty noProperties
+            , WasteExchange wasteU 0.3 unitU False (fromMaybe UUID.nil mTreatment) Nothing "" Nothing Nothing
+            ]
+            M.empty
+            M.empty
+            Nothing
+            Nothing
+            Nothing
+
+{- | The first row a serialized export carries under a section header, or an
+empty list when the section is absent. The writer joins with CRLF, so the
+carriage returns come off before anything is compared.
+-}
+firstRowUnder :: BS.ByteString -> Text -> [Text]
+firstRowUnder out header =
+    take 1 (takeWhile (not . T.null) (drop 1 (dropWhile (/= header) ls)))
+  where
+    ls :: [Text]
+    ls = map (T.dropWhileEnd (== '\r')) (T.lines (TE.decodeUtf8 out))
 
 -- ---------------------------------------------------------------------------
 -- Allocation round-trip fixture

@@ -385,9 +385,9 @@ process) @Emissions to soil@ — and the registry-only @Raw materials@ /
 @Airborne emissions@ / @Waterborne emissions@ — introduce the substance
 registry, a @name;unit;cas;comment@ list of every substance with its CAS.
 The trailer's @Final waste flows@ block collides too but is deliberately left
-to its process-section reading: its substances are waste flows, not biosphere
-flows, so it has no CAS to contribute (and its productless block is discarded
-as before).
+to its process-section reading: every one of its rows leaves the CAS column
+blank, so it has nothing to contribute to the registry (and its productless
+block is discarded as before).
 -}
 classifyHeader :: Bool -> BS.ByteString -> Maybe SectionType
 classifyHeader inProcess line
@@ -1063,8 +1063,10 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
         [] -> Nothing
 
     -- Convert each section's rows to (exchange, flow, unit) triples in one pass.
-    -- 'Final waste flows' route to WasteExchange so the cross-DB linker doesn't
-    -- tally them as missing suppliers (they're end-of-life markers, not demands).
+    -- 'Final waste flows' are elementary: nothing treats them, so nothing
+    -- produces them, and a method characterizes them under the medium the
+    -- section is named after. Waste sent to treatment is 'pbWasteToTreatment',
+    -- which goes to the technosphere with the rest.
     (avoidedExs, avoidedFlows, avoidedUnits) =
         unzip3 (productToExchange unitCfg env AvoidedProduct <$> pbAvoidedProducts)
     (techMaybeExs, techFlows, techUnits) =
@@ -1075,19 +1077,20 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
                 ++ (bioRowToExchange unitCfg env False "air" <$> pbEmissionsAir)
                 ++ (bioRowToExchange unitCfg env False "water" <$> pbEmissionsWater)
                 ++ (bioRowToExchange unitCfg env False "soil" <$> pbEmissionsSoil)
-    (wasteExs, wasteFlows, wasteUnits) =
-        unzip3 (wasteRowToExchange unitCfg env <$> pbFinalWaste)
+                ++ (bioRowToExchange unitCfg env False wasteMedium <$> pbFinalWaste)
 
     -- Exchanges/flows/units the block's products share. They are written once,
     -- unscaled: "Database.Allocation" splits the block into one process per
     -- product and scales them by each product's declared share.
     -- Tech rows with a zero amount yield no exchange but still contribute a flow.
-    sharedExchanges = avoidedExs ++ catMaybes techMaybeExs ++ bioExs ++ wasteExs
+    sharedExchanges = avoidedExs ++ catMaybes techMaybeExs ++ bioExs
     sharedTechFlows = avoidedFlows ++ techFlows
     sharedBioFlows = bioFlows
-    sharedWasteFlows = wasteFlows
+    -- The format has no waste axis: its two waste sections are elementary
+    -- ('Final waste flows') and technosphere ('Waste to treatment').
+    sharedWasteFlows = []
     sharedUnitNames =
-        S.toList . S.fromList $ unitName <$> (avoidedUnits ++ techUnits ++ bioUnits ++ wasteUnits)
+        S.toList . S.fromList $ unitName <$> (avoidedUnits ++ techUnits ++ bioUnits)
 
     descriptionLines = maybeToList (nonEmptyText pbComment)
     nativeType = SimaProProcessType <$> nonEmptyText pbType
@@ -1344,6 +1347,11 @@ techRowToExchange unitCfg env TechExchangeRow{..} =
 {- | Convert biosphere row to exchange, flow, and unit in one pass
 The compartment parameter is the section-level compartment ("air", "water", "soil", "resource", "waste")
 and berCompartment is the row-level sub-compartment ("high. pop.", "river", etc. or empty)
+
+The "waste" case is @Final waste flows@: waste that leaves the system with no
+treatment modelled for it, hence elementary. That spelling of the medium is
+also the one the flow's UUID is hashed from, and the one a method writes in
+its compartment column, so the two sides of a CF match meet on it.
 -}
 bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
@@ -1391,51 +1399,6 @@ bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
                     if T.null compartment && isNothing subcomp
                         then Nothing
                         else Just (Compartment compartment subcomp)
-                }
-        unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
-     in
-        (exchange, flow, unit)
-
-{- | Convert a SimaPro 'Final waste flows' row into a WasteExchange. Mirrors
-'bioRowToExchange' for the same row shape but routes to the third flow
-kind so the cross-DB linker doesn't try to find a producer (these are
-end-of-life markers, not technosphere demands). Modelled as an output
-(waIsInput = False) -- the activity generates the waste.
--}
-wasteRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> BioExchangeRow -> (Exchange, WasteFlow, Unit)
-wasteRowToExchange unitCfg env BioExchangeRow{..} =
-    let
-        cleanName = berName
-        -- Compartment "waste" keeps the UUID generation aligned with
-        -- whatever historical biosphere-side hashing the SimaPro path used
-        -- for these flows before they were reclassified -- so impact methods
-        -- that match by the (name, "waste") combination keep matching.
-        (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment "waste" berCompartment)
-        unitUUID = generateUnitUUID effUnitName
-        (pedigree, cleanedComment) = parsePedigreePrefix berComment
-        exchange =
-            WasteExchange
-                { waFlowId = flowUUID
-                , waAmount = amount
-                , waUnitId = unitUUID
-                , -- SimaPro Final waste flows are outputs (the activity throws
-                  -- the waste away with no modelled treatment in the dataset).
-                  waIsInput = False
-                , waActivityLinkId = UUID.nil
-                , waProcessLinkId = Nothing
-                , waLocation = ""
-                , waComment = cleanedComment
-                , waPedigree = pedigree
-                }
-        flow =
-            WasteFlow
-                { wfId = flowUUID
-                , wfName = cleanName
-                , wfUnitId = unitUUID
-                , wfSynonyms = M.empty
-                , wfCAS = Nothing
-                , wfSubstanceId = Nothing
                 }
         unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in
@@ -1688,8 +1651,8 @@ parseSimaProCSV unitCfg path = do
         allUnits = concatMap (\(_, _, _, _, u) -> u) converted
 
     -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
-    -- by construction (tech flows hash with empty compartment, bio flows hash
-    -- with their compartment, waste flows hash with "waste" compartment).
+    -- by construction: a technosphere flow hashes with an empty compartment, an
+    -- elementary one with the compartment of the section it came from.
     let unitDB = M.fromList [(unitId u, u) | u <- allUnits]
         unitNames = M.map unitName unitDB
         indexed = do

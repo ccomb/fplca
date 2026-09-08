@@ -21,7 +21,7 @@ import Data.Int (Int32)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
-import Data.Maybe (listToMaybe)
+import Data.Maybe (isJust, listToMaybe)
 import qualified Data.Set as S
 import Data.Store (Size (..), Store (..))
 import Data.Text (Text)
@@ -112,6 +112,17 @@ lowercased and stripped, as sources vary in spacing and case.
 -}
 inventoryIndicatorMedium :: Text
 inventoryIndicatorMedium = "inventory indicator"
+
+{- | The medium of a final waste flow: waste that leaves the system with no
+treatment modelled for it, so no activity produces or consumes it. SimaPro
+files these in their own section and a method characterizes them under this
+name (the compartment column of an ecofactor for landfilled waste reads
+@Waste@), which is why they are elementary flows rather than a demand on the
+technosphere. Waste that IS sent to treatment keeps its producer and stays on
+the technosphere side. Compared lowercased and stripped.
+-}
+wasteMedium :: Text
+wasteMedium = "waste"
 
 {- | Direction of a biosphere exchange. Mirrors the @TechRole@ sum so the
 biosphere side also gets named variants instead of a load-bearing 'Bool'.
@@ -331,7 +342,8 @@ data Exchange
         , waUnitId :: !UUID -- Unit of measurement
         , waIsInput :: !Bool
         {- ^ True when consumed by a treatment activity; False when generated
-        by the activity (the typical SimaPro 'Final waste flows' case).
+        by it. Waste with no treatment modelled at all is not on this axis:
+        it is an elementary flow of medium 'wasteMedium'.
         -}
         , waActivityLinkId :: !UUID -- Target treatment activity (UUID.nil if orphan)
         , waProcessLinkId :: !(Maybe ProcessId) -- Target process ID (matches techProcessLinkId)
@@ -470,6 +482,16 @@ isWasteExchange :: Exchange -> Bool
 isWasteExchange TechnosphereExchange{} = False
 isWasteExchange BiosphereExchange{} = False
 isWasteExchange WasteExchange{} = True
+
+{- | A waste exchange that names the treatment it goes to, by process link or
+by activity link. It is the question a writer choosing where to put such a row
+has to answer: a named treatment makes it technosphere, and with none nothing
+treats it, which is what a final waste flow is.
+-}
+linkedWaste :: Exchange -> Bool
+linkedWaste ex =
+    isWasteExchange ex
+        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
 
 {- | Activity's reference-product amount used to normalize its matrix column.
 Net output = sum of reference outputs minus self-loop consumption; falls back

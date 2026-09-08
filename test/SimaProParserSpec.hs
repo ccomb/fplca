@@ -39,8 +39,10 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
 import Types (
     Activity (..),
+    BioDirection (..),
     BioFlowDB,
     BiosphereFlow (..),
+    Compartment (..),
     DeclaredShare (..),
     Exchange (..),
     LocationSource (..),
@@ -1225,19 +1227,23 @@ spec = do
             let bio = [e | e@BiosphereExchange{} <- exchanges (head activities)]
             length bio `shouldBe` 1
 
-        it "parses Final waste flows as WasteExchange (third flow kind)" $ do
-            (activities, _, _, _, _) <-
+        it "parses Final waste flows as an elementary flow of medium waste" $ do
+            (activities, _, bioFlows, wasteFlows, _) <-
                 parseSectionCSV
                     [ "Final waste flows"
-                    , "Inert waste, for final disposal;kg;0.5;Undefined;;;;;;"
+                    , -- name;subcompartment;unit;amount;…, as in every other
+                      -- elementary section
+                      "Inert waste, for final disposal;;kg;0.5;Undefined;;;;;;"
                     ]
-            -- Regression: these used to land in biosphere with compartment="waste".
-            -- Now they get the dedicated WasteExchange variant so the cross-DB
-            -- linker doesn't tally them as missing suppliers.
+            -- Nothing treats these, so nothing produces them: they are
+            -- elementary, and a method characterizes them under this medium.
             let wastes = [e | e@WasteExchange{} <- exchanges (head activities)]
                 bios = [e | e@BiosphereExchange{} <- exchanges (head activities)]
-            length wastes `shouldBe` 1
-            length bios `shouldBe` 0
+            length wastes `shouldBe` 0
+            map bioDirection bios `shouldBe` [Emission]
+            map bfCompartment (M.elems bioFlows)
+                `shouldBe` [Just (Compartment "waste" Nothing)]
+            M.size wasteFlows `shouldBe` 0
 
         it "parses location from process name {XX} pattern" $ do
             (activities, _, _, _, _) <- parseNamedCSV "Widget {FR} U" []
