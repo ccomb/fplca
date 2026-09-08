@@ -1318,7 +1318,11 @@ appears that a client must know about /before/ calling it. Adding a route
 does not exempt a change from the bump: an absent route answers 404, and so
 does a request naming a database the engine has not loaded, so a client
 cannot tell "this engine is too old" from "you asked for the wrong thing"
-(revision 22: the @nativeId@ an activity carries, the identifier its source
+(revision 23: the @supplierActivity@ a technosphere exchange carries, the
+supplier activity its source named apart from the product, and the
+@supplierAmbiguities@ a database setup report carries, the inputs several
+activities of one dependency answered equally well;
+revision 22: the @nativeId@ an activity carries, the identifier its source
 file gave the dataset block it was read from;
 revision 21: the @block@ an activity summary carries, and the
 @blockProducts@ beside it, so a listing can gather the coproducts of one
@@ -1360,7 +1364,7 @@ the whole filtered set).
 Clients compare it to decide compatibility and to gate such capabilities.
 -}
 currentWireVersion :: Int
-currentWireVersion = 22
+currentWireVersion = 23
 
 getVersion :: AppM Value
 getVersion = do
