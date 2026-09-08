@@ -24,7 +24,7 @@ import qualified Data.UUID as UUID
 import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFForFlow, mtCasCF, mtRegionalCasCF, projectRegionalResourceFlows)
-import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), Medium (..), MethodCF (..))
+import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
 import SubstanceRegistry (CASNumber (..))
 import SynonymDB (emptySynonymDB)
 import Types (
@@ -140,8 +140,8 @@ spec = describe "CAS bridge ambiguity guard" $ do
                     projectRegionalResourceFlows emptySynonymDB bioFlows mappings
 
         it "the projected copies veto both CAS bridges" $ do
-            M.lookup (CASNumber "7732-18-5", Medium "resource") (mtCasCF tables) `shouldBe` Nothing
-            M.lookup (CASNumber "7732-18-5", Medium "resource") (mtRegionalCasCF tables) `shouldBe` Nothing
+            M.lookup (CASNumber "7732-18-5", Just NaturalResource) (mtCasCF tables) `shouldBe` Nothing
+            M.lookup (CASNumber "7732-18-5", Just NaturalResource) (mtRegionalCasCF tables) `shouldBe` Nothing
 
         it "a deliberately excluded flow stays uncharacterized" $ do
             let turbine = mkFlow 99 "Water, turbine use" water

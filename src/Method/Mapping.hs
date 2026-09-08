@@ -146,7 +146,7 @@ import Progress (ProgressLevel (..), reportProgress)
 import SubstanceRegistry (nonEmptyCAS, normalizeCAS)
 import qualified SubstanceRegistry as SR
 import SynonymDB
-import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), FlowClosure (..), ProcessId, SparseTriple (..), Unit (..), UnitDB, ownFlowClosure)
+import Types (Activity (..), BioFlowDB, BiosphereFlow (..), Database (..), FlowClosure (..), Medium (..), ProcessId, SparseTriple (..), Unit (..), UnitDB, ownFlowClosure, parseMedium)
 import qualified Types as VT
 import UnitConversion (UnitConfig, convertUnit, isKnownUnit, normalizeToCanonical, normalizeUnit, unitsCompatible)
 
@@ -364,27 +364,33 @@ selectsFlow cf = \f -> prefix `T.isPrefixOf` T.toCaseFold (bfName f) && casFits 
     compFits f = case mcfCompartment cf of
         Nothing -> True
         Just (Compartment med sub _) ->
-            maybe False (\c -> mediumEq med (VT.mediumText (VT.compartmentName c)) && subFits sub c) (bfCompartment f)
+            maybe False (\c -> mediumEq med (VT.compartmentName c) && subFits sub c) (bfCompartment f)
     subFits sub c = subcompartmentFits sub (fromMaybe "" (VT.compartmentSub c))
-    mediumEq = sameMedium
+    -- The stated word against the flow's own value: a statement this reader
+    -- cannot place names no medium the flow could be filed under.
+    mediumEq :: Text -> Medium -> Bool
+    mediumEq stated actual = parseMedium stated == Right actual
 
-{- | Two spellings of one medium. Folded in case and put through
-'normalizeMedium', so a method writing "Natural resource" meets a flow filed
-under "resource".
+{- | The medium axis of a lookup key: the medium a source stated, or 'Nothing'
+where it stated none. A flow whose file gave it no compartment keys on
+'Nothing' and meets no factor, which is also what a factor without one gets:
+'cfMediumSub' leaves such a factor out of these tables rather than filing it
+under a medium it never claimed.
 -}
-sameMedium :: Text -> Text -> Bool
-sameMedium a b = normalizeMedium (T.toCaseFold a) == normalizeMedium (T.toCaseFold b)
+type MediumKey = Maybe Medium
 
 {- | Does a flow's medium satisfy the one a method row states? Equal after
-normalization, as the scoring tables key it: 'buildMethodTables' indexes a
+the same value, as the scoring tables key it: 'buildMethodTables' indexes a
 factor under the row's normalized medium and 'flowMediumSub' files a flow
 under its own, so a match judged any looser here promises a factor the read
 side never serves. "air" against "emissions to air" is a vocabulary gap that
 only a compartment rule bridges, not a widening. An empty statement
 constrains nothing.
 -}
-mediumFits :: Text -> Text -> Bool
-mediumFits stated actual = T.null stated || sameMedium stated actual
+mediumFits :: Text -> MediumKey -> Bool
+mediumFits stated actual
+    | T.null stated = True
+    | otherwise = either (const False) (\m -> actual == Just m) (parseMedium stated)
 
 {- | Does a flow's subcompartment satisfy the one a method row states? A
 statement that names no particular subcompartment constrains only the medium,
@@ -510,21 +516,30 @@ compartmentGapWarning cmap flowsByName mappings
                 <> " factor(s) name a flow this database files under another compartment (method: "
                 <> quoted (S.fromList (map fst gaps))
                 <> "; database: "
-                <> quoted (S.unions (map snd gaps))
+                <> quoted (S.map VT.mediumText (S.unions (map snd gaps)))
                 <> "). Declare a [[compartment-mappings]] table bridging them."
   where
-    mediumOf :: BiosphereFlow -> Text
-    mediumOf fl = let (Medium m, _) = flowMediumSub cmap fl in m
-    databaseMedia :: S.Set Text
-    databaseMedia = S.fromList (map mediumOf (concat (M.elems flowsByName)))
-    gaps :: [(Text, S.Set Text)]
+    -- The gap is between vocabularies, so the method's side stays the word the
+    -- method wrote: the ones worth reporting are precisely those this reader
+    -- cannot place, and a value would have nothing left to print.
+    statedMedium :: MethodCF -> Maybe Text
+    statedMedium cf = do
+        comp <- mcfCompartment cf
+        let Compartment med _ _ = normalizeCompartment cmap comp
+        pure med
+    databaseMedia :: S.Set Medium
+    databaseMedia =
+        S.fromList (mapMaybe (fst . flowMediumSub cmap) (concat (M.elems flowsByName)))
+    speaks :: Text -> Bool
+    speaks med = either (const False) (`S.member` databaseMedia) (parseMedium med)
+    gaps :: [(Text, S.Set Medium)]
     gaps =
         [ (stated, seen)
         | (cf, Nothing) <- mappings
-        , Just (Medium stated, _) <- [cfMediumSub cmap cf]
-        , stated `S.notMember` databaseMedia
+        , Just stated <- [statedMedium cf]
+        , not (speaks stated)
         , Just flows <- [M.lookup (normalizeName (mcfFlowName cf)) flowsByName]
-        , let seen = S.fromList (map mediumOf flows)
+        , let seen = S.fromList (mapMaybe (fst . flowMediumSub cmap) flows)
         , not (S.null seen)
         ]
     quoted :: S.Set Text -> Text
@@ -683,7 +698,7 @@ pickByCompartment cmap flows (Just stated) =
     flowSub :: BiosphereFlow -> Text
     flowSub = unSub . snd . flowMediumSub cmap
     inMedium :: BiosphereFlow -> Bool
-    inMedium fl = let (Medium m, _) = flowMediumSub cmap fl in mediumFits statedMed m
+    inMedium fl = mediumFits statedMed (fst (flowMediumSub cmap fl))
     exactMatch :: BiosphereFlow -> Bool
     exactMatch fl = inMedium fl && subcompartmentFits statedSub (flowSub fl)
     catchAllSub :: BiosphereFlow -> Bool
@@ -754,7 +769,7 @@ should be computed once per method and reused across inventories.
 data MethodTables = MethodTables
     { mtUuidCF :: !(M.Map UUID TableEntry)
     -- ^ UUID-matched CFs: exact flow id → CF
-    , mtUnitVariantCF :: !(M.Map (SR.NormName, Medium) TableEntry)
+    , mtUnitVariantCF :: !(M.Map (SR.NormName, MediumKey) TableEntry)
     {- ^ (unit-suffix-preserving normalized name, medium) → CF, holding only
     rows whose name carries a SimaPro unit suffix (@"Gas, natural\/m3"@).
     'normalizeName' strips that suffix, so a method's own per-unit rows
@@ -766,11 +781,11 @@ data MethodTables = MethodTables
     declared in its own unit. Consulted before the collapsed-name tables;
     same-key rows that disagree are dropped ('agreedValue' — never guess).
     -}
-    , mtExactCF :: !(M.Map (SR.NormName, Medium, Subcompartment) TableEntry)
+    , mtExactCF :: !(M.Map (SR.NormName, MediumKey, Subcompartment) TableEntry)
     -- ^ (normalized name, medium, subcompartment) → CF
-    , mtFallbackCF :: !(M.Map (SR.NormName, Medium) TableEntry)
+    , mtFallbackCF :: !(M.Map (SR.NormName, MediumKey) TableEntry)
     -- ^ (normalized name, medium) → CF for entries with unspecified subcompartment
-    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, Medium) TableEntry)
+    , mtLongTermFallbackCF :: !(M.Map (SR.NormName, MediumKey) TableEntry)
     {- ^ (normalized name, medium) → CF for entries with the long-term
     UNSPECIFIED subcompartment ("unspecified (long-term)"). A long-term flow at an
     uncovered specific subcompartment ("groundwater, long-term") inherits this —
@@ -778,7 +793,7 @@ data MethodTables = MethodTables
     immediate-emission 'mtFallbackCF', so JRC scores delayed emissions with the
     method's own long-term factor rather than the immediate one.
     -}
-    , mtSubBlindCF :: !(M.Map (SR.NormName, Medium) TableEntry)
+    , mtSubBlindCF :: !(M.Map (SR.NormName, MediumKey) TableEntry)
     {- ^ (normalized name, medium) → CF, but only where the substance's
     factor is the SAME across every subcompartment — i.e. the subcompartment
     genuinely doesn't change it (mineral/metal extraction: "Cadmium, in ground"
@@ -786,7 +801,7 @@ data MethodTables = MethodTables
     unspecified fallback still resolve, without guessing for a substance whose
     factor DOES vary by sub (water by source), which is omitted as ambiguous.
     -}
-    , mtCasCF :: !(M.Map (SR.CASNumber, Medium) TableEntry)
+    , mtCasCF :: !(M.Map (SR.CASNumber, MediumKey) TableEntry)
     {- ^ (CAS, normalized medium) → CF, from non-regionalized CFs.
     Read-path fallback after UUID and name. Without it, a CF resolves to a
     single database flow at build time, so when many flows share one CAS in a
@@ -799,7 +814,7 @@ data MethodTables = MethodTables
     (minerals are reachable only through this bridge). Empty for methods whose
     CFs carry no CAS.
     -}
-    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, Medium) (M.Map Location CF))
+    , mtRegionalCasCF :: !(M.Map (SR.CASNumber, MediumKey) (M.Map Location CF))
     {- ^ (CAS, normalized medium) → (location → CF), from regionalized
     CFs. The regionalized analogue of 'mtCasCF': lets the regionalized build
     characterize every same-CAS flow per location, not just the one a CF
@@ -906,16 +921,16 @@ the suggester is opt-in and only consulted on the small uncharacterized tail.
 
 * 'miCFs' — all CFs in source order; vector-indexed for cheap parallel arrays.
 * 'miCFTokens' — parallel to 'miCFs', each CF's normalized-name tokens.
-* 'miByMedium' — lowercase normalized medium → indices into 'miCFs', for
-  short-circuiting candidate scans to the same compartment medium.
-  Empty key holds CFs without compartment metadata.
+* 'miByMedium' — medium → indices into 'miCFs', for short-circuiting
+  candidate scans to the same compartment medium. The 'Nothing' key holds the
+  CFs whose compartment metadata names no medium this reader can place.
 * 'miByCAS' — normalized CAS → indices into 'miCFs'. Multiple CFs can share a
   CAS (same substance in different compartments); caller picks the best.
 -}
 data MethodIndex = MethodIndex
     { miCFs :: !(V.Vector MethodCF)
     , miCFTokens :: !(V.Vector (S.Set Text))
-    , miByMedium :: !(M.Map Text [Int])
+    , miByMedium :: !(M.Map MediumKey [Int])
     , miByCAS :: !(M.Map Text [Int])
     }
 
@@ -1037,10 +1052,10 @@ buildMethodIndex method =
     cfTokens :: MethodCF -> S.Set Text
     cfTokens = S.fromList . T.words . normalizeName . mcfFlowName
 
-    cfMedium :: MethodCF -> Text
-    cfMedium cf = case mcfCompartment cf of
-        Nothing -> ""
-        Just (Compartment med _ _) -> normalizeMedium (T.toLower med)
+    cfMedium :: MethodCF -> MediumKey
+    cfMedium cf = do
+        Compartment med _ _ <- mcfCompartment cf
+        either (const Nothing) Just (parseMedium med)
 
 {- | Build 'MethodTables' from raw mappings and a 'CompartmentMap'.
 
@@ -1161,10 +1176,12 @@ projectRegionalResourceFlows ::
 projectRegionalResourceFlows synDB bioFlows mappings =
     mappings ++ projected
   where
-    flowMedium = normalizeMedium . VT.bfCompartmentName
-    cfMedium cf = case mcfCompartment cf of
-        Just (Compartment m _ _) -> normalizeMedium (T.toLower m)
-        Nothing -> ""
+    flowMedium :: BiosphereFlow -> MediumKey
+    flowMedium = fmap VT.compartmentName . VT.bfCompartment
+    cfMedium :: MethodCF -> MediumKey
+    cfMedium cf = do
+        Compartment m _ _ <- mcfCompartment cf
+        either (const Nothing) Just (parseMedium m)
     -- A projection key (group/name, medium, region) drops the subcompartment, so
     -- two located CFs of the same substance can land on one key. 'M.fromList' would
     -- then keep whichever came last in 'mappings' — order-dependent and silent.
@@ -1176,7 +1193,7 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- the output view, so an input-only bridge (@"river water"@ → @"Water,
     -- river"@) never lets a release flow inherit a withdrawal CF. On untyped data
     -- both views coincide, so this preserves today's grouping.
-    dirView med = viewFor (if med == "water" then Output else Input) synDB
+    dirView med = viewFor (if med == Just Water then Output else Input) synDB
     -- CFs reached two ways: by the matched flow's synonym GROUP — a CF whose
     -- name is bridged to the flow (withdrawal @"river water"@ → @"Water,
     -- river"@) — and by the CF's own NAME — a CF whose name equals the flow's
@@ -1184,7 +1201,7 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- Keyed by 'Maybe' region: 'Just' entries are the located factors,
     -- 'Nothing' the method's own location-less (world-average) ones — the
     -- last step of the fallback chain.
-    byGroup :: M.Map (Int, Text, Maybe Text) MethodCF
+    byGroup :: M.Map (Int, MediumKey, Maybe Text) MethodCF
     byGroup =
         M.fromListWith
             preferHigherCF
@@ -1193,7 +1210,7 @@ projectRegionalResourceFlows synDB bioFlows mappings =
             , let med = flowMedium flow
             , Just grp <- [lookupSynonymGroup (dirView med) (bfName flow)]
             ]
-    byName :: M.Map (Text, Text, Maybe Text) MethodCF
+    byName :: M.Map (Text, MediumKey, Maybe Text) MethodCF
     byName =
         M.fromListWith
             preferHigherCF
@@ -1209,7 +1226,7 @@ projectRegionalResourceFlows synDB bioFlows mappings =
     -- carry located CFs too, but they must stay GLOBAL to match an unregionalized
     -- reference, so projecting their region-tagged flows would wrongly regionalize
     -- them.
-    isWaterMedium med = med == "resource" || med == "water"
+    isWaterMedium med = med == Just NaturalResource || med == Just Water
     -- The walk runs only for a method with located CFs in the water media: a
     -- location on an air/soil CF alone must not open the water fallback, and a
     -- method whose CFs are all unlocated (the name-regionalized SimaPro
@@ -1358,11 +1375,12 @@ foldSub (Subcompartment s) = Subcompartment (T.toLower (T.strip s))
 unSub :: Subcompartment -> Text
 unSub (Subcompartment s) = s
 
-cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (Medium, Subcompartment)
+cfMediumSub :: CompartmentMap -> MethodCF -> Maybe (MediumKey, Subcompartment)
 cfMediumSub cmap cf = do
     comp <- mcfCompartment cf
     let Compartment normMedRaw normSub _ = normalizeCompartment cmap comp
-    pure (Medium (normalizeMedium (T.toLower normMedRaw)), Subcompartment normSub)
+    medium <- either (const Nothing) Just (parseMedium normMedRaw)
+    pure (Just medium, Subcompartment normSub)
 
 buildMethodTables :: CFFamily -> CompartmentMap -> EnergyDensityMap -> [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> MethodTables
 buildMethodTables methodFamily cmap energyDensities mappings =
@@ -2507,8 +2525,7 @@ cascadeTrail tables flowDB fid =
         -- stays unresolved. Self-scoping and last in the cascade: 'resourceCF'
         -- returns Nothing when the base element has no CF in the method.
         oreGradeOutcome
-            | Medium med <- baseMed
-            , med == "resource"
+            | baseMed == Just NaturalResource
             , "%" `T.isInfixOf` bfName flow
             , (base, rest) <- T.breakOn "," (bfName flow)
             , not (T.null rest) =
@@ -2526,12 +2543,6 @@ lookupCascadeEntry tables flowDB fid =
 
 lookupCascadeCF :: MethodTables -> BioFlowDB -> UUID -> Maybe CF
 lookupCascadeCF tables flowDB fid = teCF . snd <$> lookupCascadeEntry tables flowDB fid
-
--- | Normalize medium names between method CFs and database flows.
-normalizeMedium :: Text -> Text
-normalizeMedium m
-    | m == "natural resource" = "resource"
-    | otherwise = m
 
 {- | A subcompartment that names no specific subcompartment — empty, or either
 spelling of unspecified. Such a CF is the medium-level default: it
@@ -2670,19 +2681,13 @@ compartment normalization. Shared by the name/CAS read path
 same way. Subcomp resolution prefers the explicit 'compartmentSub' field,
 falling back to the tail of a @"medium/sub"@ category name.
 -}
-flowMediumSub :: CompartmentMap -> BiosphereFlow -> (Medium, Subcompartment)
+flowMediumSub :: CompartmentMap -> BiosphereFlow -> (MediumKey, Subcompartment)
 flowMediumSub cmap flow =
-    let rawCategory = T.toLower (VT.bfCompartmentName flow)
-        (rawMed, rawSubFromCat) = case T.breakOn "/" rawCategory of
-            (m, rest)
-                | T.null rest -> (m, T.empty)
-                | otherwise -> (m, T.drop 1 rest)
-        rawSub =
-            let s = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
-             in if T.null s then rawSubFromCat else s
+    let rawMed = VT.bfCompartmentName flow
+        rawSub = T.toLower (fromMaybe T.empty (VT.bfCompartmentSub flow))
         Compartment normMedRaw normSub _ =
             normalizeCompartment cmap (Compartment rawMed rawSub T.empty)
-     in (Medium (normalizeMedium normMedRaw), Subcompartment normSub)
+     in (either (const Nothing) Just (parseMedium normMedRaw), Subcompartment normSub)
 
 {- | Flow→CF conversion factor for @qty@ units of flow, applying the
 energy-density bridge when it is needed and available.
@@ -3241,7 +3246,7 @@ findSimilarCFs syns idx flow maxN
     | otherwise =
         let flowName' = bfName flow
             flowCAS' = bfCAS flow
-            flowMedium = normalizeMedium (VT.bfCompartmentName flow)
+            flowMedium = VT.compartmentName <$> VT.bfCompartment flow
 
             flowRawTokens = S.fromList (T.words (normalizeName flowName'))
             flowExpTokens = expandedTokens syns flowName'
