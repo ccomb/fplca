@@ -190,7 +190,6 @@ data ParseState = ParseState
     , psExchanges :: ![Exchange]
     , psTechFlows :: ![TechnosphereFlow]
     , psBioFlows :: ![BiosphereFlow]
-    , psWasteFlows :: ![WasteFlow]
     , psUnits :: ![Unit]
     , psPath :: ![BS.ByteString]
     , psContext :: !ElementContext
@@ -214,7 +213,6 @@ initialParseState =
         , psExchanges = []
         , psTechFlows = []
         , psBioFlows = []
-        , psWasteFlows = []
         , psUnits = []
         , psPath = []
         , psContext = Other
@@ -481,15 +479,13 @@ closeExchange state = case psContext state of
                 TechnosphereExchange{} -> psSupplierLinks state
                 BiosphereExchange{} -> psSupplierLinks state
                 WasteExchange{} -> psSupplierLinks state
-            (techs, bios, wastes) = case parsedFlow of
-                ParsedTech tf -> (tf : psTechFlows state, psBioFlows state, psWasteFlows state)
-                ParsedBio bf -> (psTechFlows state, bf : psBioFlows state, psWasteFlows state)
-                ParsedWaste wf -> (psTechFlows state, psBioFlows state, wf : psWasteFlows state)
+            (techs, bios) = case parsedFlow of
+                ParsedTech tf -> (tf : psTechFlows state, psBioFlows state)
+                ParsedBio bf -> (psTechFlows state, bf : psBioFlows state)
          in (popElement state)
                 { psExchanges = exchange : psExchanges state
                 , psTechFlows = techs
                 , psBioFlows = bios
-                , psWasteFlows = wastes
                 , psUnits = unit : psUnits state
                 , psSupplierLinks = supplierLinks
                 , psContext = Other
@@ -524,7 +520,6 @@ resetDataset state =
         , psExchanges = []
         , psTechFlows = []
         , psBioFlows = []
-        , psWasteFlows = []
         , psUnits = []
         , psContext = Other
         , psTextAccum = []
@@ -700,7 +695,10 @@ buildResult st =
             ( act
             , reverse (psTechFlows st)
             , reverse (psBioFlows st)
-            , reverse (psWasteFlows st)
+            , -- This format has no waste axis. Waste sent to treatment is a
+              -- technosphere input like any other, and waste with none is an
+              -- elementary flow, so nothing here builds a waste flow.
+              []
             , reverse (psUnits st)
             , psDatasetNumber st
             , psSupplierLinks st
