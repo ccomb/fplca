@@ -21,7 +21,7 @@ import Data.Int (Int32)
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
-import Data.Maybe (listToMaybe)
+import Data.Maybe (isJust, listToMaybe)
 import qualified Data.Set as S
 import Data.Store (Size (..), Store (..))
 import Data.Text (Text)
@@ -472,6 +472,16 @@ isWasteExchange :: Exchange -> Bool
 isWasteExchange TechnosphereExchange{} = False
 isWasteExchange BiosphereExchange{} = False
 isWasteExchange WasteExchange{} = True
+
+{- | A waste exchange that names the treatment it goes to, by process link or
+by activity link. It is the question a writer choosing where to put such a row
+has to answer: a named treatment makes it technosphere, and with none nothing
+treats it, which is what a final waste flow is.
+-}
+linkedWaste :: Exchange -> Bool
+linkedWaste ex =
+    isWasteExchange ex
+        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
 
 {- | Activity's reference-product amount used to normalize its matrix column.
 Net output = sum of reference outputs minus self-loop consumption; falls back

@@ -168,19 +168,6 @@ Databases whose exchanges all resolve, carry no linked waste, keep every resourc
 direction recoverable, and whose amounts all re-parse pass unchanged.
 -}
 
-{- | A waste exchange that resolves to a producer in the technosphere matrix.
-'Database.MatrixBuild.findProducer' locates a producer via the process link or a
-non-nil activity link, and 'techTriple' then emits a signed triple — with the
-negative sign of a waste /output/ ('exchangeIsInput' is 'False'). Re-imported, the
-technosphere row 'exchangeRow' writes is read back as a positive 'Input',
-inverting that sign. So a linked waste exchange cannot be best-efforted as
-technosphere; 'checkBrightwayExportable' rejects it.
--}
-linkedWaste :: Exchange -> Bool
-linkedWaste ex =
-    isWasteExchange ex
-        && (isJust (exchangeProcessLinkId ex) || isJust (exchangeActivityLinkId ex))
-
 {- | A waste exchange with no producer link: matrix-invisible, so 'exchangeRow'
 rewrites it as a technosphere flow (best-effort) rather than rejecting it.
 -}

@@ -1649,8 +1649,8 @@ parseSimaProCSV unitCfg path = do
         allUnits = concatMap (\(_, _, _, _, u) -> u) converted
 
     -- Build deduplicated maps — UUID disjointness across kinds is guaranteed
-    -- by construction (tech flows hash with empty compartment, bio flows hash
-    -- with their compartment, waste flows hash with "waste" compartment).
+    -- by construction: a technosphere flow hashes with an empty compartment, an
+    -- elementary one with the compartment of the section it came from.
     let unitDB = M.fromList [(unitId u, u) | u <- allUnits]
         unitNames = M.map unitName unitDB
         indexed = do

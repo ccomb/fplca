@@ -18,7 +18,10 @@
   they are, being nothing of the kind. On a database read from those formats
   these rows now appear as inventory flows rather than waste exchanges, so a
   waste-flow search no longer returns them and a cut-off report no longer
-  counts them. Caches built before this are rebuilt on the next load.
+  counts them. One export loses out: ILCD has no category that reads back as
+  this medium, so a database carrying such flows is now refused at that export
+  rather than written in a shape the reader turns into something else. Caches
+  built before this are rebuilt on the next load.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though

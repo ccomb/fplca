@@ -82,7 +82,7 @@ module SimaPro.Writer (
 
 import qualified Data.ByteString as BS
 import Data.Either (lefts)
-import Data.List (sortOn)
+import Data.List (partition, sortOn)
 import qualified Data.Map.Strict as M
 
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
@@ -749,7 +749,12 @@ serializeActivity cats act@Activity{..} =
             , Just sec <- [bioSection cats ex]
             , Just l <- [bioLine cats ex]
             ]
-        wasteLines = mapMaybe (wasteLine cats) unscaledExchanges
+        -- A waste row goes to the section that says what the format will
+        -- read back: a named treatment makes it an input from that treatment,
+        -- and with none nothing treats it, which is a final waste flow.
+        (treatedWaste, finalWaste) = partition linkedWaste unscaledExchanges
+        treatmentLines = mapMaybe (wasteLine cats) treatedWaste
+        wasteLines = mapMaybe (wasteLine cats) finalWaste
      in concat
             [ ["Process", ""]
             , concatMap (uncurry meta) (activityMetaLines act)
@@ -764,12 +769,14 @@ serializeActivity cats act@Activity{..} =
             , withBlank (avoidedHeader (productLines isAvoidedProduct cats category unscaledExchanges))
             , -- Inputs.
               withBlank (section "Materials/fuels" techRowText techLines)
+            , withBlank (section "Waste to treatment" techRowText treatmentLines)
             , withBlank (section "Resources" bioRowText (bioByName SecRes))
             , withBlank (section "Emissions to air" bioRowText (bioByName SecAir))
             , withBlank (section "Emissions to water" bioRowText (bioByName SecWater))
             , withBlank (section "Emissions to soil" bioRowText (bioByName SecSoil))
-            , -- Both kinds of final waste flow: the waste axis, and the inventory
-              -- indicators the biosphere axis carries ('bioSection').
+            , -- Both readings of a final waste flow: the elementary one every
+              -- source but this format's own waste axis produces
+              -- ('bioSection'), and a waste exchange that names no treatment.
               withBlank (section "Final waste flows" bioRowText (bioByName SecWaste ++ wasteLines))
             , ["End", ""]
             ]
