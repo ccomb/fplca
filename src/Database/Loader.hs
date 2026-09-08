@@ -1580,10 +1580,15 @@ Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
 'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
 completeness below 100% for a perfectly solvable database. Waste *outputs* are
 generated, not demanded; only waste/technosphere *inputs* remain.
+
+An input of zero demands nothing either: the matrix builder emits no entry for
+it, so no producer is ever looked up, and counting it as an unmet demand would
+report a gap that no solve can encounter.
 -}
 isSupplierDemand :: Exchange -> Bool
 isSupplierDemand ex =
-    not (isBiosphereExchange ex)
+    exchangeAmount ex /= 0
+        && not (isBiosphereExchange ex)
         && exchangeIsInput ex
         && not (exchangeIsReference ex)
 
