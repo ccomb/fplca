@@ -59,6 +59,7 @@ import Types (
     WasteFlowDB,
     activityDeclaredShares,
     activityReferenceShare,
+    exchangeAmount,
     exchangeComment,
     exchangeFlowId,
     exchangeIsInput,
@@ -459,6 +460,47 @@ parseSummedAmountCSV = withSystemTempFile "summed-amount-test.csv" $ \path handl
     hClose handle
     parseOrFail defaultUnitConfig path
 
+{- | A block with one input at zero and one above it, plus an emission at zero:
+the two sides of the file that used to be read by two different rules.
+-}
+zeroAmountTestCSV :: BS.ByteString
+zeroAmountTestCSV =
+    BS.intercalate
+        "\r\n"
+        [ "{SimaPro 9.6.0.1}"
+        , "{CSV separator: semicolon}"
+        , "{Decimal separator: ,}"
+        , ""
+        , "Process"
+        , ""
+        , "Category type"
+        , "material"
+        , ""
+        , "Process name"
+        , "Blend with a disabled input"
+        , ""
+        , "Type"
+        , "Unit process"
+        , ""
+        , "Products"
+        , "Blend {GLO} U;kg;1;100;not defined;material;"
+        , ""
+        , "Materials/fuels"
+        , "Filler {GLO} U;kg;0,4;Undefined;;;;;;"
+        , "Additive, switched off {GLO} U;kg;0;Undefined;;;;;;"
+        , ""
+        , "Emissions to air"
+        , "Carbon dioxide;;kg;0;Undefined;;;;"
+        , ""
+        , "End"
+        ]
+
+parseZeroAmountCSV :: IO ([Activity], M.Map UUID TechnosphereFlow, M.Map UUID BiosphereFlow, M.Map UUID WasteFlow, M.Map UUID Unit)
+parseZeroAmountCSV = withSystemTempFile "zero-amount-test.csv" $ \path handle -> do
+    BS.hPut handle zeroAmountTestCSV
+    hClose handle
+    parseOrFail defaultUnitConfig path
+
 -- Helper: get all tech input amounts
 techInputAmounts :: Activity -> [Double]
 techInputAmounts act =
@@ -805,6 +847,21 @@ spec = do
             let mix = head activities
             refProductAmount mix `shouldBe` Just 1.0
             sum (techInputAmounts mix) `shouldSatisfy` (\x -> abs (x - 1.0) < 1e-9)
+
+    describe "SimaPro rows with a zero amount" $ do
+        it "keeps an input the author switched off" $ do
+            (activities, _, _, _, _) <- parseZeroAmountCSV
+            let blend = findByName "Blend with a disabled input" activities
+            techInputAmounts blend `shouldMatchList` [0.4, 0.0]
+
+        it "reads an input at zero by the same rule as an emission at zero" $ do
+            (activities, _, _, _, _) <- parseZeroAmountCSV
+            let blend = findByName "Blend with a disabled input" activities
+                zeroed = [e | e <- exchanges blend, exchangeAmount e == 0]
+            -- One switched-off input and one emission at zero. The parser used
+            -- to drop the first and keep the second, reading one file by two
+            -- rules and losing what the author wrote.
+            length zeroed `shouldBe` 2
 
     describe "SimaPro database-level parameters" $ do
         it "resolves database input params in exchange amounts" $ do
