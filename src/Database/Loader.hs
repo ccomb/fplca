@@ -1584,9 +1584,24 @@ Biosphere flows need no supplier. Reference exchanges sit on the diagonal of
 'ReferenceInput' is a self-edge, not a supplier demand — counting it would drag
 completeness below 100% for a perfectly solvable database. Waste *outputs* are
 generated, not demanded; only waste/technosphere *inputs* remain.
+
+An input of zero demands nothing either. It reaches no matrix: the builders drop
+a zero triple ('Database.MatrixBuild.triplesFor' and 'buildBioTriples'), and
+'missingActivityWarning' does not warn about one, so counting it as an unmet
+demand would report a gap no solve can encounter.
+
+Whether a row should be *linked* is the other question, and 'namesASupplier'
+answers it. A disabled input still points at a producer, and the author who
+re-enables it expects the link to be there.
 -}
 isSupplierDemand :: Exchange -> Bool
-isSupplierDemand ex =
+isSupplierDemand ex = namesASupplier ex && exchangeAmount ex /= 0
+
+{- | An input that names a supplier, whatever it asks of it. The linker's
+question, where 'isSupplierDemand' is the completeness report's.
+-}
+namesASupplier :: Exchange -> Bool
+namesASupplier ex =
     not (isBiosphereExchange ex)
         && exchangeIsInput ex
         && not (exchangeIsReference ex)
@@ -2063,7 +2078,7 @@ findExchangeCrossDBLink ::
     Exchange ->
     CrossDBLinkingStats
 findExchangeCrossDBLink LinkScan{lsCtx = ctx, lsOwnKeys = ownKeys, lsTechFlows = techFlowDb, lsUnits = unitDb} consumerActUUID consumerProdUUID ex@TechnosphereExchange{techFlowId = fid, techAmount = amt, techActivityLinkId = linkId, techLocation = loc}
-    | isSupplierDemand ex && not resolvesInternally =
+    | namesASupplier ex && not resolvesInternally =
         maybe mempty resolveTechInput (M.lookup fid techFlowDb)
     | otherwise = mempty
   where
