@@ -15,10 +15,13 @@ __canonical and deterministic__:
     dataset's number, a linked technosphere input carries its supplier's, and
     every other exchange carries a number assigned once per distinct flow.
     That makes the writer's output __self-stable for every exchange except a
-    linked technosphere input__: reference products, co-products, biosphere and
-    waste exchanges, and /unlinked/ inputs all reproduce the same flow UUIDs on
+    linked technosphere input__: reference products, co-products, biosphere
+    exchanges and /unlinked/ inputs all reproduce the same flow UUIDs on
     a write→parse→write cycle, and one substance stays one flow across the
-    re-imported export. This is fixed-point stability of the writer's own
+    re-imported export. A waste exchange is the one row that changes axis by
+    design: EcoSpold1 has no third flow class, so it is written as the
+    technosphere or biosphere row the mapping below names, and it is that shape
+    which is stable from then on. This is fixed-point stability of the writer's own
     canonical form, __not__ reproduction of the UUIDs of an arbitrary parsed
     source file — that source carried its own numbering, which the writer does
     not preserve;
@@ -48,17 +51,32 @@ The mapping mirrors 'EcoSpold.Parser1.buildExchange' exactly:
     (parser treats any non-empty inputGroup as a tech input)
   * biosphere 'Resource'                 → @\<inputGroup\>4\</inputGroup\>@
   * biosphere 'Emission'                 → @\<outputGroup\>4\</outputGroup\>@
-  * waste output (waIsInput=False)       → @\<outputGroup\>1\</outputGroup\>@,
-    category="Final waste flows"
   * waste input  (waIsInput=True)        → @\<inputGroup\>5\</inputGroup\>@,
-    category="Final waste flows"
+    written as a technosphere input, carrying its supplier's dataset number
+    when the treatment it names is exported too
+  * waste output, unlinked                → @\<outputGroup\>4\</outputGroup\>@,
+    category=@"waste"@, written as a biosphere emission
+  * waste output naming a treatment       → rejected by
+    'checkEcoSpold1Exportable'
+
+One rule shapes those three: EcoSpold1 can name a supplier only from an
+input's @number@ attribute. A waste input is therefore the only waste row the
+format can carry with its link intact, and an output that names a treatment
+has to be refused rather than written with the link dropped. An output that
+names none is what a final waste flow is, and the parser reads it back as the
+elementary flow of medium 'wasteMedium' that it is.
+
+The SimaPro writer partitions on the link alone, so it sends an /unlinked/
+waste input to its own final-waste section, where this writer sends it to the
+technosphere. The matrix agrees with this one: an unlinked input is a demand
+of +1 still waiting for a supplier, and a technosphere input keeps it.
 
 Flow names, categories, CAS numbers and units are not stored on the
 'Exchange'; they live on the flow / unit tables and are resolved by UUID.
 A biosphere flow's @category@ / @subCategory@ come from its 'Compartment';
 technosphere flows carry no category (the parser only used it to seed the
-UUID), and waste flows always re-emit @category="Final waste flows"@ so the
-parser's waste-routing rule fires again.
+UUID), and a waste flow borrows whichever of the two shapes its row was
+written in.
 -}
 module EcoSpold.Writer1 (
     -- * Options
@@ -239,10 +257,15 @@ emit silently wrong data:
     the writer would emit @outputGroup 0@ and the parser would read it back as
     a reference product — a direction flip.
 
-  * __Waste-marker collision.__ A biosphere flow whose compartment name is the
-    waste-routing category @"Final waste flows"@ would re-import as a waste
-    exchange, because the parser tests that category before the biosphere group
-    — a silent biosphere → waste kind flip. Rejected.
+  * __Waste outputs naming a treatment.__ The format names a supplier only
+    from an input's @number@ attribute, so the link of a waste /output/ cannot
+    be written. Emitting the row anyway would re-import it as waste nothing
+    treats, silently deleting the treatment it named.
+
+  * __Waste-marker collision.__ A biosphere flow whose compartment name is
+    @"Final waste flows"@ would re-import under compartment @"waste"@, because
+    the parser reads that category as the marker of a final waste flow — a
+    silent change of the compartment a method characterizes it under. Rejected.
 
   * __Missing flows / units.__ An exchange whose flow or unit is absent from
     the tables would be written with a blank name and re-parse as a different
@@ -259,7 +282,7 @@ Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold1Exportable db =
-    case lefts [checkLinks, checkRefInputs, checkWasteSentinel, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
+    case lefts [checkLinks, checkRefInputs, checkLinkedWasteOutputs, checkWasteSentinel, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
         [] -> Right ()
         violations -> Left (T.intercalate "\n\n" violations)
   where
@@ -283,6 +306,16 @@ checkEcoSpold1Exportable db =
                         <> "\": the format has no marker for it, so the writer would emit"
                         <> " outputGroup 0 and the parser would read it back as a reference"
                         <> " product — a direction flip from input to output."
+    checkLinkedWasteOutputs =
+        case linkedWasteOutputs of
+            [] -> Right ()
+            (producer : _) ->
+                Left $
+                    "EcoSpold1 export cannot encode the treatment named by a waste output in \""
+                        <> producer
+                        <> "\": the format names a supplier only from an input's number"
+                        <> " attribute, so the writer would have to drop the link and the"
+                        <> " parser would read the row back as waste nothing treats."
     checkWasteSentinel =
         case wasteSentinelOffenders of
             [] -> Right ()
@@ -292,9 +325,11 @@ checkEcoSpold1Exportable db =
                         <> consumer
                         <> "\": a biosphere flow's compartment is \""
                         <> finalWasteFlowsCategory
-                        <> "\", which 'EcoSpold.Parser1' reads as the waste-routing marker —"
-                        <> " the flow would re-import as a waste exchange, not a biosphere one"
-                        <> " (a silent biosphere → waste kind flip)."
+                        <> "\", which 'EcoSpold.Parser1' reads as the marker of a final waste"
+                        <> " flow — the flow would re-import under compartment \""
+                        <> wasteMedium
+                        <> "\", so a method would characterize it as waste rather than under"
+                        <> " the compartment it was written with."
     checkFlows =
         case flowOffenders of
             [] -> Right ()
@@ -338,9 +373,27 @@ checkEcoSpold1Exportable db =
     danglingLinks =
         [ (activityName act, link)
         | act <- M.elems (sdbActivities db)
-        , TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid} <- exchanges act
-        , link /= UUID.nil
+        , ex <- exchanges act
+        , (link, fid) <- namedSupplier ex
         , not (M.member (link, fid) index)
+        ]
+    -- The rows whose number names a supplier: a technosphere input, and a
+    -- waste input, which the writer emits as one. An output names none, on
+    -- either axis.
+    namedSupplier :: Exchange -> [(UUID, UUID)]
+    namedSupplier ex = case ex of
+        TechnosphereExchange{techRole = Input, techActivityLinkId = link, techFlowId = fid}
+            | link /= UUID.nil -> [(link, fid)]
+        TechnosphereExchange{} -> []
+        BiosphereExchange{} -> []
+        WasteExchange{waIsInput = True, waActivityLinkId = link, waFlowId = fid}
+            | link /= UUID.nil -> [(link, fid)]
+        WasteExchange{} -> []
+    linkedWasteOutputs =
+        [ activityName act
+        | act <- M.elems (sdbActivities db)
+        , ex <- exchanges act
+        , linkedWaste ex && not (exchangeIsInput ex)
         ]
     amountOffenders =
         [ (activityName act, amt)
@@ -480,9 +533,10 @@ A reference product carries its own dataset's number, which is what every
 EcoSpold1 export observed here does and what lets a consumer name its supplier.
 A technosphere input the loader resolved carries its supplier's dataset number
 ('EcoSpold.Parser1.closeExchange' reads it back as the supplier link), so the
-two agree on one number for one product. Everything else — co-products,
-biosphere, waste, and unlinked inputs — carries the number its flow was given
-once for the whole export ('flowNumberIndex').
+two agree on one number for one product; a resolved waste input does the same,
+being written as a technosphere input. Everything else — co-products,
+biosphere, waste outputs, and unlinked inputs — carries the number its flow was
+given once for the whole export ('flowNumberIndex').
 
 'checkEcoSpold1Exportable' guarantees any resolved link's (activity, product)
 pair is present in the supplier index before export, so that fallback is
@@ -498,6 +552,11 @@ exchangeNumber res datasetNum ex
                 M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
         TechnosphereExchange{} -> flowNum
         BiosphereExchange{} -> flowNum
+        -- A waste input is written as a technosphere input, so it names its
+        -- treatment the same way. An output carries no link to name.
+        WasteExchange{waIsInput = True, waActivityLinkId = link, waFlowId = fid}
+            | link /= UUID.nil ->
+                M.findWithDefault flowNum (link, fid) (rSupplierNumbers res)
         WasteExchange{} -> flowNum
   where
     flowNum = M.findWithDefault datasetNum (exchangeFlowId ex) (rFlowNumbers res)
@@ -545,8 +604,12 @@ groupElement ex = case ex of
     BiosphereExchange{bioDirection = dir} -> case dir of
         Resource -> wrapIn "4"
         Emission -> wrapOut "4"
+    -- An input is the only side of the format that can name a supplier, so a
+    -- waste input goes where a technosphere input goes. An output cannot name
+    -- one; the linked case is refused before it gets here, and the unlinked
+    -- case is an elementary flow.
     WasteExchange{waIsInput = isInput} ->
-        if isInput then wrapIn "5" else wrapOut "1"
+        if isInput then wrapIn "5" else wrapOut "4"
   where
     wrapIn g = "<inputGroup>" <> g <> "</inputGroup>"
     wrapOut g = "<outputGroup>" <> g <> "</outputGroup>"
@@ -555,13 +618,13 @@ groupElement ex = case ex of
 -- Flow-field resolution (name / category / subCategory / CAS by UUID)
 -- ----------------------------------------------------------------------------
 
-{- | The category label EcoSpold1 exports use for SimaPro's third flow class.
-'EcoSpold.Parser1.buildExchange' routes any exchange carrying this category to a
-'WasteExchange' — and it checks that /before/ the biosphere and technosphere
-groups. So the writer emits it for every waste flow, and
-'checkEcoSpold1Exportable' rejects any /non-waste/ flow whose category would
-collide with it (the only such flow is a biosphere one whose compartment name
-happens to be this string), which would otherwise re-import as a waste exchange.
+{- | The category label an EcoSpold1 export files waste with no modelled
+treatment under. 'EcoSpold.Parser1.buildExchange' reads any exchange carrying
+it as an elementary flow of medium 'wasteMedium', whatever group it is on and
+before the groups are consulted. The writer no longer emits it — it writes the
+medium itself, which re-imports unchanged — so this is now only what
+'checkEcoSpold1Exportable' compares a biosphere compartment against, to reject
+a flow that would come back under a compartment it was not written with.
 -}
 finalWasteFlowsCategory :: Text
 finalWasteFlowsCategory = "Final waste flows"
@@ -572,10 +635,11 @@ name, category, subCategory, CAS. Positional — always consumed as a whole.
 data FlowFields = FlowFields !Text !Text !Text !(Maybe Text)
 
 {- | Resolve a flow's serialised fields from the matching table. A biosphere
-flow's compartment becomes category/subCategory; a waste flow always carries
-@category="Final waste flows"@ so the parser re-routes it to the waste
-bucket; a technosphere flow has no category. A UUID absent from its table
-yields empty/Nothing — never a crash.
+flow's compartment becomes category/subCategory; a technosphere flow has no
+category; a waste flow takes the shape of the row it is written in, blank for
+an input (a technosphere row) and 'wasteMedium' for an output (a biosphere
+row, which is the compartment the parser reads back). A UUID absent from its
+table yields empty/Nothing — never a crash.
 -}
 flowFields :: Resolvers -> Exchange -> FlowFields
 flowFields res ex = case ex of
@@ -592,10 +656,11 @@ flowFields res ex = case ex of
                     (fromMaybe "" (bfCompartmentSub bf))
                     (bfCAS bf)
             Nothing -> FlowFields "" "" "" Nothing
-    WasteExchange{waFlowId = fid} ->
-        case M.lookup fid (rWaste res) of
-            Just wf -> FlowFields (wfName wf) finalWasteFlowsCategory "" (wfCAS wf)
-            Nothing -> FlowFields "" finalWasteFlowsCategory "" Nothing
+    WasteExchange{waFlowId = fid, waIsInput = isInput} ->
+        let category = if isInput then "" else wasteMedium
+         in case M.lookup fid (rWaste res) of
+                Just wf -> FlowFields (wfName wf) category "" (wfCAS wf)
+                Nothing -> FlowFields "" category "" Nothing
 
 {- | Resolve a unit UUID to its name. The parser stored both unit name and
 symbol as the source unit string, so the name field is the faithful echo.
