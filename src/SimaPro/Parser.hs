@@ -846,9 +846,10 @@ silently dropped.
 Normalization rules:
 
 * lower-case + trim both inputs
-* map @raw@ / @resources@ → @resource@ (SimaPro method CSVs use \"Raw\" as
-  the section header for elementary resource inputs, while the inventory
-  parser already passes the canonical @resource@)
+* put the medium through 'parseMedium', so the SimaPro method CSVs' \"Raw\"
+  section header and the inventory side's own word reach one spelling. A
+  medium the reader cannot place is kept as written: this is a hash input, and
+  refusing it here would leave the flow with no identity at all
 * collapse the SimaPro placeholder sub @(unspecified)@ to empty so a CF
   carrying an explicit @(unspecified)@ subcompartment lands on the same
   UUID as an inventory row whose sub column is blank
@@ -856,10 +857,7 @@ Normalization rules:
 -}
 normalizeSimaProCompartment :: Text -> Text -> Text
 normalizeSimaProCompartment comp sub =
-    let lcComp = case T.toLower (T.strip comp) of
-            "raw" -> "resource"
-            "resources" -> "resource"
-            c -> c
+    let lcComp = either id mediumText (parseMedium comp)
         lcSub = T.toLower (T.strip sub)
         normSub
             | T.null lcSub || lcSub == "(unspecified)" = T.empty
@@ -1073,11 +1071,11 @@ processBlockToActivity unitCfg gp pb@ProcessBlock{..} =
         unzip3 (techRowToExchange unitCfg env <$> (pbMaterials ++ pbElectricity ++ pbWasteToTreatment))
     (bioExs, bioFlows, bioUnits) =
         unzip3 $
-            (bioRowToExchange unitCfg env True "resource" <$> pbResources)
-                ++ (bioRowToExchange unitCfg env False "air" <$> pbEmissionsAir)
-                ++ (bioRowToExchange unitCfg env False "water" <$> pbEmissionsWater)
-                ++ (bioRowToExchange unitCfg env False "soil" <$> pbEmissionsSoil)
-                ++ (bioRowToExchange unitCfg env False wasteMedium <$> pbFinalWaste)
+            (bioRowToExchange unitCfg env True NaturalResource <$> pbResources)
+                ++ (bioRowToExchange unitCfg env False Air <$> pbEmissionsAir)
+                ++ (bioRowToExchange unitCfg env False Water <$> pbEmissionsWater)
+                ++ (bioRowToExchange unitCfg env False Soil <$> pbEmissionsSoil)
+                ++ (bioRowToExchange unitCfg env False Waste <$> pbFinalWaste)
 
     -- Exchanges/flows/units the block's products share. They are written once,
     -- unscaled: "Database.Allocation" splits the block into one process per
@@ -1353,7 +1351,7 @@ treatment modelled for it, hence elementary. That spelling of the medium is
 also the one the flow's UUID is hashed from, and the one a method writes in
 its compartment column, so the two sides of a CF match meet on it.
 -}
-bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Text -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
+bioRowToExchange :: UnitConversion.UnitConfig -> M.Map Text Double -> Bool -> Medium -> BioExchangeRow -> (Exchange, BiosphereFlow, Unit)
 bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
     let
         -- Keep SimaPro's per-region flow variants (`Nitrogen dioxide, FR`,
@@ -1369,7 +1367,7 @@ bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
         -- compartment case or the SimaPro CF placeholder '(unspecified)'
         -- (which inventory rows leave blank in the same medium).
         (effUnitName, amount) = canonicalRow unitCfg berUnit (resolveAmount env berAmountRaw berAmount)
-        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment compartment berCompartment)
+        flowUUID = generateFlowUUID cleanName (normalizeSimaProCompartment (mediumText compartment) berCompartment)
         unitUUID = generateUnitUUID effUnitName
         subcomp = if T.null berCompartment then Nothing else Just berCompartment
         (pedigree, cleanedComment) = parsePedigreePrefix berComment
@@ -1391,14 +1389,7 @@ bioRowToExchange unitCfg env isInput compartment BioExchangeRow{..} =
                 , bfSynonyms = M.empty
                 , bfCAS = Nothing
                 , bfSubstanceId = Nothing
-                , -- SimaPro section header always supplies a non-empty
-                  -- medium ("air", "water", "raw", …); guard against an
-                  -- accidentally-empty value so the wire shape never
-                  -- carries a bogus 'Compartment "" Nothing'.
-                  bfCompartment =
-                    if T.null compartment && isNothing subcomp
-                        then Nothing
-                        else Just (Compartment compartment subcomp)
+                , bfCompartment = Just (Compartment compartment subcomp)
                 }
         unit = Unit{unitId = unitUUID, unitName = effUnitName, unitSymbol = effUnitName, unitComment = ""}
      in

@@ -474,8 +474,8 @@ renderCategories :: Maybe Compartment -> Text
 renderCategories = \case
     Nothing -> ""
     Just (Compartment comp sub) -> case sub of
-        Just s | not (T.null (T.strip s)) -> comp <> "::" <> s
-        _ -> comp
+        Just s | not (T.null (T.strip s)) -> mediumText comp <> "::" <> s
+        _ -> mediumText comp
 
 -- ---------------------------------------------------------------------------
 -- Lookups (pure)

@@ -865,9 +865,13 @@ parseWithXeno xmlContent processId = do
                     let (finalInputGroup, finalOutputGroup) = resolveGroups (edInputGroup edata) (edOutputGroup edata) state
                         -- A missing compartment becomes 'Nothing', not an empty 'Compartment ""'
                         -- sentinel — the latter used to silently collide with method-side empty mediums.
-                        mCompName = case edCompartments edata of
-                            (c : _) | not (T.null c) -> Just c
+                        -- A medium the reader cannot place is reported and the
+                        -- compartment dropped, rather than carried as a string
+                        -- nothing downstream can bucket.
+                        mediumReading = case edCompartments edata of
+                            (c : _) | not (T.null c) -> Just (parseMedium c)
                             _ -> Nothing
+                        mCompName = mediumReading >>= either (const Nothing) Just
                         subCompartment = case edSubcompartments edata of
                             (s : _) | not (T.null s) -> Just s
                             _ -> Nothing
@@ -887,15 +891,17 @@ parseWithXeno xmlContent processId = do
                             | isInventoryIndicator = Emission
                             | not (T.null finalInputGroup) = Resource
                             | not (T.null finalOutputGroup) = Emission
-                            | otherwise = case edCompartments edata of
-                                (comp : _) | T.toLower comp == "natural resource" -> Resource
-                                _ -> Emission
-                        isInventoryIndicator =
-                            maybe False ((== inventoryIndicatorMedium) . T.toLower . T.strip) mCompName
+                            | mCompName == Just NaturalResource = Resource
+                            | otherwise = Emission
+                        isInventoryIndicator = mCompName == Just InventoryIndicator
                         (flowUUID, flowWarn) = parseUUID (edFlowId edata)
                         (unitUUID, unitWarn) = parseUUID (edUnitId edata)
+                        mediumWarn = case mediumReading of
+                            Just (Left got) -> Just (unknownMedium got)
+                            Just (Right _) -> Nothing
+                            Nothing -> Nothing
                         warns =
-                            catMaybes [flowWarn, unitWarn]
+                            catMaybes [flowWarn, unitWarn, mediumWarn]
                                 ++ missingUnitWarning "elementary" (edFlowId edata) (edUnitName edata)
                         resolvedFlowName = nonBlankOr (edFlowId edata) (edFlowName edata)
                         unit = mkUnit unitUUID (edUnitName edata)

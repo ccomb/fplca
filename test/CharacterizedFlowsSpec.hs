@@ -16,7 +16,11 @@ import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), MethodTables, buildMethodTables, characterizedFlowIds)
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
-import Types (BioFlowDB, BiosphereFlow (..))
+import Types (
+    BioFlowDB,
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -46,7 +50,7 @@ mkFlow i name sub =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "air" sub)
+        , bfCompartment = Just (VT.Compartment Air sub)
         }
 
 -- The database side: ammonia in two subcompartments, methane in one.

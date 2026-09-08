@@ -27,7 +27,10 @@ import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFF
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), Medium (..), MethodCF (..))
 import SubstanceRegistry (CASNumber (..))
 import SynonymDB (emptySynonymDB)
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -55,7 +58,7 @@ mkFlow i name cas =
         , bfSynonyms = M.empty
         , bfCAS = cas
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "resource" Nothing)
+        , bfCompartment = Just (VT.Compartment NaturalResource Nothing)
         }
 
 water :: Maybe Text

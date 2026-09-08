@@ -326,9 +326,7 @@ compartment. Now type-restricted to BiosphereFlow — technosphere can't reach
 this code path at compile time.
 -}
 isResourceExtraction :: BiosphereFlow -> Bool
-isResourceExtraction flow =
-    let cat = T.toLower (bfCompartmentName flow)
-     in "natural resource" `T.isPrefixOf` cat || "resource" `T.isPrefixOf` cat
+isResourceExtraction flow = (compartmentName <$> bfCompartment flow) == Just NaturalResource
 
 -- | Get activity inventory as rich InventoryExport (same as API)
 getActivityInventory :: Database -> Text -> IO (Either ServiceError Value)

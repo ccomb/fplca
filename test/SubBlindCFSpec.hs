@@ -10,7 +10,10 @@ import Test.Hspec
 
 import Method.Mapping (MatchStrategy (..), buildMethodTables, cfValue, lookupCFForFlow)
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -39,7 +42,7 @@ mkFlow i name sub =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "resource" sub)
+        , bfCompartment = Just (VT.Compartment NaturalResource sub)
         }
 
 score :: [(MethodCF, Maybe (BiosphereFlow, MatchStrategy))] -> BiosphereFlow -> Maybe Double

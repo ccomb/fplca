@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | EcoSpold1 export writer — the canonical re-emitter for "EcoSpold.Parser1".
@@ -64,7 +65,7 @@ input's @number@ attribute. A waste input is therefore the only waste row the
 format can carry with its link intact, and an output that names a treatment
 has to be refused rather than written with the link dropped. An output that
 names none is what a final waste flow is, and the parser reads it back as the
-elementary flow of medium 'wasteMedium' that it is.
+elementary flow of medium 'Waste' that it is.
 
 The SimaPro writer partitions on the link alone, so it sends an /unlinked/
 waste input to its own final-waste section, where this writer sends it to the
@@ -282,7 +283,7 @@ Databases free of all of these pass unchanged.
 -}
 checkEcoSpold1Exportable :: SimpleDatabase -> Either Text ()
 checkEcoSpold1Exportable db =
-    case lefts [checkLinks, checkRefInputs, checkLinkedWasteOutputs, checkWasteSentinel, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
+    case lefts [checkLinks, checkRefInputs, checkLinkedWasteOutputs, checkFlows, checkUnits, checkAmounts, checkAmountRoundTrip] of
         [] -> Right ()
         violations -> Left (T.intercalate "\n\n" violations)
   where
@@ -316,20 +317,6 @@ checkEcoSpold1Exportable db =
                         <> "\": the format names a supplier only from an input's number"
                         <> " attribute, so the writer would have to drop the link and the"
                         <> " parser would read the row back as waste nothing treats."
-    checkWasteSentinel =
-        case wasteSentinelOffenders of
-            [] -> Right ()
-            (consumer : _) ->
-                Left $
-                    "EcoSpold1 export cannot represent activity \""
-                        <> consumer
-                        <> "\": a biosphere flow's compartment is \""
-                        <> finalWasteFlowsCategory
-                        <> "\", which 'EcoSpold.Parser1' reads as the marker of a final waste"
-                        <> " flow — the flow would re-import under compartment \""
-                        <> wasteMedium
-                        <> "\", so a method would characterize it as waste rather than under"
-                        <> " the compartment it was written with."
     checkFlows =
         case flowOffenders of
             [] -> Right ()
@@ -418,18 +405,6 @@ checkEcoSpold1Exportable db =
         [ activityName act
         | act <- M.elems (sdbActivities db)
         , TechnosphereExchange{techRole = ReferenceInput} <- exchanges act
-        ]
-    -- A biosphere flow is serialised with @category = bfCompartmentName@. If that
-    -- equals the final-waste marker, the parser (which tests the category before
-    -- the groups) re-imports it under the "waste" compartment instead, so a method
-    -- scores it as waste. A missing flow is caught by 'checkFlows', so only
-    -- resolvable biosphere flows are inspected here.
-    wasteSentinelOffenders =
-        [ activityName act
-        | act <- M.elems (sdbActivities db)
-        , BiosphereExchange{bioFlowId = fid} <- exchanges act
-        , Just bf <- [M.lookup fid (sdbBioFlows db)]
-        , bfCompartmentName bf == finalWasteFlowsCategory
         ]
     flowOffenders =
         [ activityName act
@@ -621,7 +596,7 @@ groupElement ex = case ex of
 
 {- | The category label an EcoSpold1 export files waste with no modelled
 treatment under. 'EcoSpold.Parser1.buildExchange' reads any exchange carrying
-it as an elementary flow of medium 'wasteMedium', whatever group it is on and
+it as an elementary flow of medium 'Waste', whatever group it is on and
 before the groups are consulted. The writer no longer emits it — it writes the
 medium itself, which re-imports unchanged — so this is now only what
 'checkEcoSpold1Exportable' compares a biosphere compartment against, to reject
@@ -638,7 +613,7 @@ data FlowFields = FlowFields !Text !Text !Text !(Maybe Text)
 {- | Resolve a flow's serialised fields from the matching table. A biosphere
 flow's compartment becomes category/subCategory; a technosphere flow has no
 category; a waste flow takes the shape of the row it is written in, blank for
-an input (a technosphere row) and 'wasteMedium' for an output (a biosphere
+an input (a technosphere row) and 'Waste' for an output (a biosphere
 row, which is the compartment the parser reads back). A UUID absent from its
 table yields empty/Nothing — never a crash.
 -}
@@ -653,15 +628,33 @@ flowFields res ex = case ex of
             Just bf ->
                 FlowFields
                     (bfName bf)
-                    (bfCompartmentName bf)
+                    (maybe "" (categoryText . compartmentName) (bfCompartment bf))
                     (fromMaybe "" (bfCompartmentSub bf))
                     (bfCAS bf)
             Nothing -> FlowFields "" "" "" Nothing
     WasteExchange{waFlowId = fid, waIsInput = isInput} ->
-        let category = if isInput then "" else wasteMedium
+        let category = if isInput then "" else mediumText Waste
          in case M.lookup fid (rWaste res) of
                 Just wf -> FlowFields (wfName wf) category "" (wfCAS wf)
                 Nothing -> FlowFields "" category "" Nothing
+
+{- | A medium as EcoSpold 1 spells it in @category@.
+
+The format writes @resource@ where EcoSpold 2 and ILCD write @natural
+resource@, and 'EcoSpold.Parser1' hashes this attribute into the flow's
+identity. Emitting anything but the format's own word would give our export a
+different identity from the file it came from, and make writing it twice
+produce two different files.
+-}
+categoryText :: Medium -> Text
+categoryText = \case
+    NaturalResource -> "resource"
+    Air -> mediumText Air
+    Water -> mediumText Water
+    Soil -> mediumText Soil
+    InventoryIndicator -> mediumText InventoryIndicator
+    Economic -> mediumText Economic
+    Waste -> mediumText Waste
 
 {- | Resolve a unit UUID to its name. The parser stored both unit name and
 symbol as the source unit string, so the name field is the faithful echo.

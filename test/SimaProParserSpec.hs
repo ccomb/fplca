@@ -46,6 +46,7 @@ import Types (
     DeclaredShare (..),
     Exchange (..),
     LocationSource (..),
+    Medium (..),
     NativeActivityType (..),
     Pedigree (..),
     SimpleDatabase (..),
@@ -1299,7 +1300,7 @@ spec = do
             length wastes `shouldBe` 0
             map bioDirection bios `shouldBe` [Emission]
             map bfCompartment (M.elems bioFlows)
-                `shouldBe` [Just (Compartment "waste" Nothing)]
+                `shouldBe` [Just (Compartment Waste Nothing)]
             M.size wasteFlows `shouldBe` 0
 
         it "parses location from process name {XX} pattern" $ do

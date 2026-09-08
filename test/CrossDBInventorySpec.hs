@@ -179,7 +179,7 @@ spec = do
                     M.empty
                     Nothing
                     Nothing
-                    (Just (Compartment "air" (Just "low. pop.")))
+                    (Just (Compartment Air (Just "low. pop.")))
             flowDep =
                 BiosphereFlow
                     uuidDep
@@ -188,7 +188,7 @@ spec = do
                     M.empty
                     Nothing
                     Nothing
-                    (Just (Compartment "air" (Just "low. pop.")))
+                    (Just (Compartment Air (Just "low. pop.")))
 
             rootOnlyFlowDB = M.singleton uuidRoot flowRoot
             mergedFlowDB = M.fromList [(uuidRoot, flowRoot), (uuidDep, flowDep)]

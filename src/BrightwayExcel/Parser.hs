@@ -480,7 +480,9 @@ biosphereRowOut cfg actName f
             , bfSynonyms = M.empty
             , bfCAS = Nothing
             , bfSubstanceId = Nothing
-            , bfCompartment = Just (Compartment comp (if T.null sub then Nothing else Just sub))
+            , bfCompartment = case parseMedium comp of
+                Right medium -> Just (Compartment medium (if T.null sub then Nothing else Just sub))
+                Left _ -> Nothing
             }
     unit = Unit unitUUID unitName' unitName' ""
 

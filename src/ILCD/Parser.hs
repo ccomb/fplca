@@ -296,9 +296,13 @@ buildFlowAndUnitDB flowInfoMap fpMap ugMap = (techFlows, bioFlows, wasteFlows, a
             , wfSubstanceId = Nothing
             }
 
+    -- The method-side reader still carries the medium as text; a medium it
+    -- read that names no known medium leaves the flow without a compartment
+    -- rather than with one nothing can bucket.
     toCompartment Nothing = Nothing
-    toCompartment (Just (MT.Compartment m sc _)) =
-        Just $ Compartment m (if T.null sc then Nothing else Just sc)
+    toCompartment (Just (MT.Compartment m sc _)) = case parseMedium m of
+        Right medium -> Just (Compartment medium (if T.null sc then Nothing else Just sc))
+        Left _ -> Nothing
 
     resolveUnit info =
         Data.Maybe.fromMaybe UUID.nil $

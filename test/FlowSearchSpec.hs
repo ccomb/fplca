@@ -23,6 +23,7 @@ import Types (
     ExchangeKind (..),
     FlowKind (..),
     KindFilter (..),
+    Medium (..),
     TechnosphereFlow (..),
     UUID,
     WasteFlow (..),
@@ -240,16 +241,16 @@ them — deliberately not the order they should come out in.
 -}
 deltamethrins :: [FlowKind]
 deltamethrins =
-    [ bioFlow 1 "soil" Nothing
-    , bioFlow 2 "water" (Just "groundwater")
-    , bioFlow 3 "air" (Just "low. pop.")
-    , bioFlow 4 "soil" (Just "agricultural")
-    , bioFlow 5 "soil" (Just "forestry")
-    , bioFlow 6 "water" (Just "river")
-    , bioFlow 7 "air" (Just "low. pop., long-term")
+    [ bioFlow 1 Soil Nothing
+    , bioFlow 2 Water (Just "groundwater")
+    , bioFlow 3 Air (Just "low. pop.")
+    , bioFlow 4 Soil (Just "agricultural")
+    , bioFlow 5 Soil (Just "forestry")
+    , bioFlow 6 Water (Just "river")
+    , bioFlow 7 Air (Just "low. pop., long-term")
     ]
 
-bioFlow :: Int -> Text -> Maybe Text -> FlowKind
+bioFlow :: Int -> Medium -> Maybe Text -> FlowKind
 bioFlow n medium sub =
     BioKind (biosphere n "Deltamethrin" []){bfCompartment = Just (Compartment medium sub)}
 

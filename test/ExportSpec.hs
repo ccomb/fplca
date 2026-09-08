@@ -29,14 +29,14 @@ import UnitConversion (defaultUnitConfig)
 spec :: Spec
 spec = describe "Database.Export dispatcher" $ do
     it "serializes a simple database to every writable format" $ do
-        db <- buildFixture (Compartment "air" (Just "unspecified"))
+        db <- buildFixture (Compartment Air (Just "unspecified"))
         forM_ [SimaProCSV, EcoSpold1, EcoSpold2, ILCDProcess, BrightwayExcel] $ \fmt ->
             case serializeDatabase fmt db of
                 Left err -> expectationFailure (show fmt <> ": " <> T.unpack err)
                 Right (bytes, _warnings) -> BL.null bytes `shouldBe` False
 
     it "fails loudly for formats with no writer (never a silent empty file)" $ do
-        db <- buildFixture (Compartment "air" (Just "unspecified"))
+        db <- buildFixture (Compartment Air (Just "unspecified"))
         serializeDatabase OpenLcaJsonLd db `shouldSatisfy` isLeft
         serializeDatabase UnknownFormat db `shouldSatisfy` isLeft
 
@@ -78,7 +78,7 @@ spec = describe "Database.Export dispatcher" $ do
         -- A "raw" emission compartment has no faithful SimaPro section, so the
         -- SimaPro writer's own guard rejects it; the dispatcher must surface that
         -- Left rather than emit a corrupt file.
-        db <- buildFixture (Compartment "raw" Nothing)
+        db <- buildFixture (Compartment NaturalResource Nothing)
         serializeDatabase SimaProCSV db `shouldSatisfy` isLeft
 
 {- | One activity: a reference product and a single biosphere emission whose

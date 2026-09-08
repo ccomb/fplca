@@ -84,6 +84,7 @@ import Types (
     Compartment (..),
     Database (..),
     Exchange (..),
+    Medium (..),
     ProcessId,
     ProcessRef (..),
     TechRole (..),
@@ -96,6 +97,7 @@ import Types (
     exchangeIsReference,
     findProcessIdByActivityUUID,
     getUnitNameForExchange,
+    mediumText,
     noProperties,
     parseProcessRef,
  )
@@ -139,7 +141,7 @@ instead, which for SimaPro is the name and the compartment alone.
 -}
 authoredBioFlowUUID :: Text -> Compartment -> Text -> UUID
 authoredBioFlowUUID name comp unit =
-    mintAuthored ["flow", name, compartmentName comp, fromMaybe "" (compartmentSub comp), unit]
+    mintAuthored ["flow", name, mediumText (compartmentName comp), fromMaybe "" (compartmentSub comp), unit]
 
 -- ---------------------------------------------------------------------------
 -- What an author writes
@@ -1054,8 +1056,7 @@ findBioFlowsByName ctx name comp = case matchesIn True (acDb ctx) of
     wantedCompartment = compartmentKey comp
     matchesIn local db =
         [ (flow, dbUnits db, local)
-        | not (T.null (fst wantedCompartment))
-        , flow <- M.elems (dbBioFlows db)
+        | flow <- M.elems (dbBioFlows db)
         , foldName (bfName flow) == wantedName
         , Just flowComp <- [bfCompartment flow]
         , compartmentKey flowComp == wantedCompartment
@@ -1065,11 +1066,11 @@ findBioFlowsByName ctx name comp = case matchesIn True (acDb ctx) of
 foldName :: Text -> Text
 foldName = T.toLower . T.unwords . T.words
 
-compartmentKey :: Compartment -> (Text, Text)
-compartmentKey comp = (foldName (compartmentName comp), foldName (fromMaybe "" (compartmentSub comp)))
+compartmentKey :: Compartment -> (Medium, Text)
+compartmentKey comp = (compartmentName comp, foldName (fromMaybe "" (compartmentSub comp)))
 
 renderCompartment :: Compartment -> Text
-renderCompartment comp = compartmentName comp <> maybe "" ("/" <>) (compartmentSub comp)
+renderCompartment comp = mediumText (compartmentName comp) <> maybe "" ("/" <>) (compartmentSub comp)
 
 {- | Find a biosphere flow, with the unit table that can name its unit and
 whether it lives in the edited database itself.

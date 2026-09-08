@@ -33,6 +33,7 @@ import Types (
     BiosphereFlow (..),
     Compartment (..),
     Exchange (..),
+    Medium (..),
     SimpleDatabase (..),
     TechRole (..),
     TechnosphereFlow (..),
@@ -104,9 +105,9 @@ spec = describe "BrightwayExcel.Parser" $ do
                 Left err -> expectationFailure (T.unpack err)
                 Right (acts, _, bioDB, _, _) -> do
                     co2 <- requireBioFlow bioDB "Carbon dioxide, fossil"
-                    bfCompartment co2 `shouldBe` Just (Compartment "air" Nothing)
+                    bfCompartment co2 `shouldBe` Just (Compartment Air Nothing)
                     water <- requireBioFlow bioDB "Water"
-                    bfCompartment water `shouldBe` Just (Compartment "natural resource" (Just "in water"))
+                    bfCompartment water `shouldBe` Just (Compartment NaturalResource (Just "in water"))
                     directionOf bioDB acts "Carbon dioxide, fossil" `shouldBe` Just Emission
                     directionOf bioDB acts "Water" `shouldBe` Just Resource
 

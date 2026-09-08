@@ -20,7 +20,10 @@ import Method.Mapping (
  )
 import Method.Types (CFFamily (..), Compartment (..), FlowDirection (..), MethodCF (..))
 import qualified SubstanceRegistry as SR
-import Types (BiosphereFlow (..))
+import Types (
+    BiosphereFlow (..),
+    Medium (..),
+ )
 import qualified Types as VT
 
 mkUUID :: Integer -> UUID
@@ -49,7 +52,7 @@ mkFlow i name cas =
         , bfSynonyms = M.empty
         , bfCAS = cas
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "water" Nothing)
+        , bfCompartment = Just (VT.Compartment Water Nothing)
         }
 
 nameKey :: Text -> SR.SubstanceKey

@@ -13,6 +13,7 @@ import API.JsonOptions (Stripped (..))
 import Control.Lens ((&), (.~), (?~))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
+import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import Data.Either (partitionEithers)
@@ -34,7 +35,28 @@ import Database.Author (
  )
 import GHC.Generics
 import Servant.API.ContentTypes (MimeRender (..), MimeUnrender (..), OctetStream)
-import Types (BioDirection (..), BiosphereFlow (..), Compartment (..), DocSection (..), Exchange, ExchangeKind (..), FlowKind (..), NativeActivityType (..), NativeProcessId (..), Pedigree, Severity, TechnosphereFlow (..), UUID, Unit, WasteFlow (..), WasteRole (..), exchangeKindName)
+import Types (
+    BioDirection (..),
+    BiosphereFlow (..),
+    Compartment (..),
+    DocSection (..),
+    Exchange,
+    ExchangeKind (..),
+    FlowKind (..),
+    Medium,
+    NativeActivityType (..),
+    NativeProcessId (..),
+    Pedigree,
+    Severity,
+    TechnosphereFlow (..),
+    UUID,
+    Unit,
+    WasteFlow (..),
+    WasteRole (..),
+    exchangeKindName,
+    parseMedium,
+    unknownMedium,
+ )
 
 {- | Tagged wire representation of either side of the flow split.
 
@@ -2060,11 +2082,12 @@ bioFlowRef be = case (beFlow be, beName be) of
         -- new one (see 'Database.Author.authoredBioFlowUUID'), so it cannot be
         -- defaulted.
         (_, Nothing) -> Left ("biosphere flow \"" <> name <> "\" needs a unit")
-        (Just medium, Just unit) ->
+        (Just medium, Just unit) -> do
+            reading <- first (T.pack . unknownMedium) (parseMedium medium)
             Right $
                 FlowByName
                     name
-                    Compartment{compartmentName = medium, compartmentSub = beSubCompartment be}
+                    Compartment{compartmentName = reading, compartmentSub = beSubCompartment be}
                     unit
 
 {- | A name written into the identifier field is the common mistake, so the

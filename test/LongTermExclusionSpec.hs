@@ -30,7 +30,13 @@ import Test.Hspec
 import Matrix (Inventory)
 import Method.Mapping
 import Method.Types (Compartment (..), FlowDirection (..), MethodCF (..))
-import Types (BioFlowDB, BiosphereFlow (..), Unit (..), UnitDB)
+import Types (
+    BioFlowDB,
+    BiosphereFlow (..),
+    Medium (..),
+    Unit (..),
+    UnitDB,
+ )
 import qualified Types as VT
 import UnitConversion (UnitConfig, buildFromCSV, defaultUnitConfig)
 
@@ -69,7 +75,7 @@ bioFlow fid sub =
         , bfSynonyms = M.empty
         , bfCAS = Nothing
         , bfSubstanceId = Nothing
-        , bfCompartment = Just (VT.Compartment "water" sub)
+        , bfCompartment = Just (VT.Compartment Water sub)
         }
 
 ltFlow, stFlow :: BiosphereFlow
