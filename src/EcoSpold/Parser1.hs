@@ -538,27 +538,34 @@ resetDataset state =
 EcoSpold1 groups:
   Input:  1-3 = technosphere, 4 = resource (biosphere)
   Output: 0 = reference product, 1-3 = byproduct/co-product, 4 = emission (biosphere)
+
+A row filed under @category="Final waste flows"@ is an elementary flow of
+medium 'wasteMedium' whatever group it carries, so it is read as biosphere
+before the groups are consulted. Waste that does have a treatment is not
+written that way and stays on the technosphere side.
 -}
 buildExchange :: Maybe Text -> ExchangeData -> (Exchange, ParsedFlow, Unit)
 buildExchange activityLoc edata
-    | isWasteFlow = (wasteEx, ParsedWaste wasteFlow, unit)
     | isBiosphere = (bioEx, ParsedBio bioFlow, unit)
     | otherwise = (techEx, ParsedTech techFlow, unit)
   where
-    flowId = generateFlowUUID (exNumber edata) (exName edata) (exCategory edata) (exSubCategory edata) (exUnit edata)
+    flowId = generateFlowUUID (exNumber edata) (exName edata) category (exSubCategory edata) (exUnit edata)
     unitId = generateUnitUUID (exUnit edata)
     unit = Unit unitId (exUnit edata) (exUnit edata) ""
 
     inputGroup = exInputGroup edata
     outputGroup = exOutputGroup edata
-    isBiosphere = inputGroup == "4" || outputGroup == "4"
+    isBiosphere = inputGroup == "4" || outputGroup == "4" || isFinalWaste
     isInput = not (T.null inputGroup)
     isReferenceProduct = outputGroup == "0"
-    -- SimaPro's third flow class ('Final waste flows'). EcoSpold1 exports
-    -- surface them on inputGroup=5 to fit the 4-type input/output model, but
-    -- the category attribute survives. Routed to WasteExchange so they bypass
-    -- cross-DB technosphere linking (orphan outputs, not demands).
-    isWasteFlow = exCategory edata == "Final waste flows"
+    -- Waste with no treatment modelled for it, which an EcoSpold1 export files
+    -- under this category. It surfaces on inputGroup=5, the export's way of
+    -- fitting a fifth flow class into a 4-type input/output model, but nothing
+    -- treats it, so nothing produces it: it is an elementary flow, and reading
+    -- it as an input would ask for a supplier no database can provide.
+    isFinalWaste = exCategory edata == "Final waste flows"
+    -- The medium a method characterizes it under, and what the flow stores.
+    category = if isFinalWaste then wasteMedium else exCategory edata
 
     -- Technosphere: leave empty if unspecified so the Loader can do name-only
     -- lookup. Biosphere: fall back to the activity location (no supplier link).
@@ -575,29 +582,11 @@ buildExchange activityLoc edata
         | isInput = Input
         | otherwise = Coproduct
 
-    -- activityLinkId stays nil; the Loader resolves it later via
-    -- (flowName, exchangeLocation) against supplier activities.
-    wasteFlow = WasteFlow flowId (exName edata) unitId M.empty cas Nothing
-    wasteEx =
-        WasteExchange
-            { waFlowId = flowId
-            , waAmount = exMeanValue edata
-            , waUnitId = unitId
-            , -- Mirror isInput: final waste flows surface on inputGroup=5
-              -- (consumer's POV: input from a hypothetical treatment service).
-              waIsInput = isInput
-            , waActivityLinkId = UUID.nil
-            , waProcessLinkId = Nothing
-            , waLocation = exchangeLocation
-            , waComment = nonEmptyText (exComment edata)
-            , waPedigree = Nothing
-            }
-
     subCat = if T.null (exSubCategory edata) then Nothing else Just (exSubCategory edata)
     compartment =
-        if T.null (exCategory edata) && isNothing subCat
+        if T.null category && isNothing subCat
             then Nothing
-            else Just (Compartment (exCategory edata) subCat)
+            else Just (Compartment category subCat)
     bioFlow = BiosphereFlow flowId (exName edata) unitId M.empty cas Nothing compartment
     bioEx =
         BiosphereExchange

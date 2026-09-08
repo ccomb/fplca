@@ -312,6 +312,10 @@ History of manual bumps:
      "waste", not a waste exchange. Nothing changes type, so a cache written
      just before this would pass the fingerprint and keep those flows on an
      axis no method reads.
+- 27: the same row read from an EcoSpold 1 file is an elementary flow too, and
+     an export writes it as one. Nothing changes type, so a cache written just
+     before this would pass the fingerprint and keep those flows on the waste
+     axis, still counted as demands the gap report can never close.
 
 The signature is stored inside the cache file and checked on load.
 If it doesn't match, the cache is automatically invalidated and rebuilt.
@@ -319,7 +323,7 @@ If it doesn't match, the cache is automatically invalidated and rebuilt.
 schemaSignature :: Word64
 schemaSignature =
     let Fingerprint hi lo = typeRepFingerprint (typeRep (Proxy :: Proxy Database))
-     in hi `xor` lo `xor` 26
+     in hi `xor` lo `xor` 27
 
 {- |
 Helper function to parse UUID from Text with deterministic UUID generation fallback.
