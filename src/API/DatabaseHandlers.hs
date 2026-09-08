@@ -736,7 +736,13 @@ encodeExportWarnings warnings = encode (kept ++ [omitted | not (null dropped)])
     dropped = drop (length kept) warnings
 
     omitted :: Text
-    omitted = "and " <> T.pack (show (length dropped)) <> " further warnings, too many to carry in a header"
+    omitted = "and " <> T.pack (show n) <> plural <> ", too many to carry in a header"
+      where
+        n :: Int
+        n = length dropped
+
+        plural :: Text
+        plural = if n == 1 then " further warning" else " further warnings"
 
     -- The longest prefix whose encoding stays inside the budget, measured warning by
     -- warning so the header always ends on a whole one.
