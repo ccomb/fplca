@@ -113,6 +113,14 @@
   this medium, so a database carrying such flows is now refused at that export
   rather than written in a shape the reader turns into something else. Caches
   built before this are rebuilt on the next load.
+- A waste treatment is published in the universal matrix format with the sign
+  the format uses. That format is unnormalised: a coefficient is positive when
+  the activity produces and negative when it consumes. A treatment records the
+  waste it treats as its reference product with a negative amount, and the
+  engine's own coefficients are normalised by that reference, so the whole
+  column came out reversed while only its diagonal was corrected. A solver
+  reading the export saw an activity that consumed waste on the diagonal and
+  produced its own inputs everywhere else.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though

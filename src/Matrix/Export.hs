@@ -312,14 +312,13 @@ own inputs everywhere else, which no solver can read.
 referenceSigns :: Database -> U.Vector Double
 referenceSigns db = U.generate (fromIntegral (dbActivityCount db)) columnSign
   where
-    acts :: ActivityDB
-    acts = dbActivities db
-
+    -- The very quantity the triples were divided by, so the export undoes the
+    -- normalisation it is undoing rather than a rule that resembles it: a
+    -- treatment whose reference is a negative *input* normalises on its
+    -- absolute value and is not flipped at all, and reading the raw amount
+    -- would reverse its whole column for nothing.
     columnSign :: Int -> Double
-    columnSign i = if any negativeReference (exchanges (acts V.! i)) then -1.0 else 1.0
-
-    negativeReference :: Exchange -> Bool
-    negativeReference ex = exchangeIsReference ex && exchangeAmount ex < 0
+    columnSign i = signum (activityNormFactor (dbActivities db V.! i) (dbProcessIdTable db V.! i))
 
 -- | Export A_public.csv (Technosphere Matrix)
 exportAMatrix :: FilePath -> Database -> IO ()
