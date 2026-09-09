@@ -35,6 +35,7 @@ module API.DatabaseHandlers (
     editExchangesHandler,
     exportDatabaseHandler,
     exportMethodHandler,
+    encodeExportWarnings,
     uploadDatabaseHandler,
     uploadMethodHandler,
     deleteMethodHandler,
@@ -714,9 +715,52 @@ exportMethodHandler name req = do
 
 {- | Join export warnings for the response header, percent-encoded because
 flow and activity names are arbitrary Unicode.
+
+A header is not a log. An ILCD export of a full database names every activity it
+approximated, which on a twenty-thousand-activity database runs to hundreds of kilobytes,
+and a header that long is refused by every proxy and HTTP client on the way back: the
+archive itself is lost along with the warnings. So the header carries as many whole
+warnings as fit in 'warningHeaderBudget' and then says how many it left out, which is the
+one thing a caller cannot work out for itself.
 -}
 encodeExportWarnings :: [Text] -> Text
-encodeExportWarnings = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.intercalate "\n"
+encodeExportWarnings warnings = encode (kept ++ [omitted | not (null dropped)])
+  where
+    encode :: [Text] -> Text
+    encode = T.decodeUtf8 . urlEncode False . T.encodeUtf8 . T.intercalate "\n"
+
+    kept :: [Text]
+    kept = fitting warningHeaderBudget warnings
+
+    dropped :: [Text]
+    dropped = drop (length kept) warnings
+
+    omitted :: Text
+    omitted = "and " <> T.pack (show n) <> plural <> ", too many to carry in a header"
+      where
+        n :: Int
+        n = length dropped
+
+        plural :: Text
+        plural = if n == 1 then " further warning" else " further warnings"
+
+    -- The longest prefix whose encoding stays inside the budget, measured warning by
+    -- warning so the header always ends on a whole one.
+    fitting :: Int -> [Text] -> [Text]
+    fitting _ [] = []
+    fitting left (w : rest)
+        | cost > left = []
+        | otherwise = w : fitting (left - cost) rest
+      where
+        cost :: Int
+        cost = T.length (encode [w]) + 3 -- the encoded newline that joins it
+
+{- | How much encoded text the warning header may hold. Well under the 4 kB a reverse
+proxy typically allows one response header, which is itself well under what an HTTP
+client will read.
+-}
+warningHeaderBudget :: Int
+warningHeaderBudget = 3000
 
 exportErr :: ServerError -> Text -> AppM a
 exportErr status msg = throwError status{errBody = BSL.fromStrict (T.encodeUtf8 msg)}

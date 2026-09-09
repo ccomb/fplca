@@ -121,6 +121,12 @@
   column came out reversed while only its diagonal was corrected. A solver
   reading the export saw an activity that consumed waste on the diagonal and
   produced its own inputs everywhere else.
+- An export of a large database reaches the client again. The warnings an
+  export collects travel in a response header, one line per warning, and a
+  database with thousands of multi-output activities produced a header longer
+  than an HTTP client will read: the request died on the header and the archive,
+  complete on the server, never arrived. The header now carries as many
+  warnings as fit and ends with a line saying how many more there were.
 - A Brightway Excel export can now be opened by the tools it is written for.
   The `.xlsx` was missing the manifest a spreadsheet reader looks up before
   anything else, so openpyxl, bw2io and Excel all refused the file even though
