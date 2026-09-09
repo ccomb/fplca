@@ -299,32 +299,45 @@ exportEEIndex filePath db = do
     TIO.writeFile filePath content
     reportProgress Info $ "ee_index: " ++ show (length rows) ++ " biosphere flows → " ++ filePath
 
+{- | The sign the published convention gives each activity's whole column.
+
+A waste treatment records the waste it treats as its reference product, with a negative
+amount, and our triples are normalised by that reference, so its column comes out with
+every sign reversed against the universal matrix format, where a coefficient is simply
+positive when the activity produces and negative when it consumes. One sign per column
+puts it back, and the diagonal takes the same sign as the rest of the column: signing the
+diagonal alone publishes an activity that consumes waste on the diagonal and produces its
+own inputs everywhere else, which no solver can read.
+-}
+referenceSigns :: Database -> U.Vector Double
+referenceSigns db = U.generate (fromIntegral (dbActivityCount db)) columnSign
+  where
+    -- The very quantity the triples were divided by, so the export undoes the
+    -- normalisation it is undoing rather than a rule that resembles it: a
+    -- treatment whose reference is a negative *input* normalises on its
+    -- absolute value and is not flipped at all, and reading the raw amount
+    -- would reverse its whole column for nothing.
+    columnSign :: Int -> Double
+    columnSign i = signum (activityNormFactor (dbActivities db V.! i) (dbProcessIdTable db V.! i))
+
 -- | Export A_public.csv (Technosphere Matrix)
 exportAMatrix :: FilePath -> Database -> IO ()
 exportAMatrix filePath db = do
     let techTriples = dbTechnosphereTriples db
         activityCount = dbActivityCount db
-        activities = dbActivities db
-
-        -- Waste activities have their reference product stored as outputGroup=0 with a
-        -- NEGATIVE amount (e.g., hard coal ash = -1.0 kg). These use -1.0 on the diagonal
-        -- in the (I-A) convention. Production activities use 1.0.
-        diagValue i =
-            let act = activities V.! i
-             in if any (\ex -> exchangeIsReference ex && exchangeAmount ex < 0) (exchanges act)
-                    then "-1.0"
-                    else "1.0"
+        signs = referenceSigns db
 
         diagonalEntries =
-            [ T.pack (show i ++ ";" ++ show i ++ ";" ++ diagValue i) <> emptyCsvUncertainty
+            [ T.pack (show i ++ ";" ++ show i ++ ";" ++ show (signs U.! i)) <> emptyCsvUncertainty
             | i <- [0 .. fromIntegral activityCount - 1 :: Int]
             ]
 
         offDiagonalRows =
             U.foldr
                 ( \(SparseTriple row col value) acc ->
-                    let rowStr =
-                            T.pack (show row ++ ";" ++ show col ++ ";" ++ show (-value))
+                    let coefficient = negate value * (signs U.! fromIntegral col)
+                        rowStr =
+                            T.pack (show row ++ ";" ++ show col ++ ";" ++ show coefficient)
                                 <> emptyCsvUncertainty
                      in rowStr : acc
                 )
@@ -348,12 +361,14 @@ exportAMatrix filePath db = do
 exportBMatrix :: FilePath -> Database -> IO ()
 exportBMatrix filePath db = do
     let bioTriples = dbBiosphereTriples db
+        signs = referenceSigns db
 
         rows =
             U.foldr
                 ( \(SparseTriple row col value) acc ->
-                    let rowStr =
-                            T.pack (show row ++ ";" ++ show col ++ ";" ++ show value)
+                    let coefficient = value * (signs U.! fromIntegral col)
+                        rowStr =
+                            T.pack (show row ++ ";" ++ show col ++ ";" ++ show coefficient)
                                 <> emptyCsvUncertainty
                      in rowStr : acc
                 )
