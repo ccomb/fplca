@@ -24,7 +24,7 @@ import Text.Read (readMaybe)
 
 -- VoLCA imports
 import API.Auth (authMiddleware)
-import App.Idle (IdleState (..), idleTrackingMiddleware, idleWatchdog, newIdleState, stampIdle)
+import App.Idle (IdleState (..), idleTrackingMiddleware, idleWatchdog, newIdleState, stampIdle, whileWorking)
 import CLI.Client (executeRemoteCommand, resolveRemoteConfig)
 import CLI.Command (executeCommand)
 import CLI.Parser (cliParserInfo)
@@ -41,7 +41,7 @@ import Progress
 
 import API.DatabaseHandlers (uploadBodyCeiling)
 import API.Licenses (licensesResponse)
-import API.MCP (mcpApp, toolDefinitions)
+import API.MCP (WhileWorking, mcpApp, toolDefinitions)
 import API.Routes (lcaAPI, lcaServer, volcaOpenApi)
 import App.Env (AppEnv (..))
 import Data.Aeson (encode, object, (.=))
@@ -286,7 +286,7 @@ runServerWithConfig cliConfig serverOpts mCfgFile = do
             staticDir
             (serverDesktopMode serverOpts)
             (scName (cfgServer config))
-            (stampIdle idle)
+            (whileWorking idle)
     let finalApp =
             uploadSizeLimitMiddleware (cfgHosting config) $
                 wrapWithMiddleware password (cfgHosting config) idle baseApp
@@ -402,15 +402,15 @@ logRequest req = do
     hFlush stdout
 
 -- | Create a Wai application over a ready environment.
-createServerApp :: AppEnv -> FilePath -> Bool -> Maybe ServerName -> IO () -> IO Application
-createServerApp env staticDir desktopMode serverName markActivity = do
+createServerApp :: AppEnv -> FilePath -> Bool -> Maybe ServerName -> WhileWorking -> IO Application
+createServerApp env staticDir desktopMode serverName whileCalling = do
     -- The MCP @web_url@ deep links point at Elm SPA routes served from
     -- 'staticDir'. When the SPA is not bundled (backend-only image), those
     -- URLs would 404, so we omit 'web_url' from MCP responses entirely.
     hasFrontend <- doesFileExist (staticDir </> "index.html")
     unless (desktopMode || hasFrontend) $
         reportProgress Info "Frontend not bundled. MCP responses will omit 'web_url'"
-    mcp <- mcpApp (aeDbManager env) (aeClassificationPresets env) hasFrontend (aeHostingConfig env) serverName markActivity
+    mcp <- mcpApp (aeDbManager env) (aeClassificationPresets env) hasFrontend (aeHostingConfig env) serverName whileCalling
     let apiApp = serve lcaAPI (lcaServer env)
     pure $ \req respond -> do
         unless desktopMode (logRequest req)

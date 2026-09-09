@@ -14,6 +14,9 @@ module App.Idle (
     IdleState (..),
     newIdleState,
     stampIdle,
+    whileWorking,
+    Bearing (..),
+    bearingOf,
     idleTrackingMiddleware,
     idleWatchdog,
 ) where
@@ -21,6 +24,7 @@ module App.Idle (
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_)
 import Control.Monad (when)
+import Data.ByteString (ByteString)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Network.Wai (Application, rawPathInfo)
@@ -44,22 +48,57 @@ newIdleState = IdleState <$> (newIORef =<< getCurrentTime) <*> newIORef 0 <*> ne
 stampIdle :: IdleState -> IO ()
 stampIdle idle = getCurrentTime >>= writeIORef (idleLastRequest idle)
 
-{- | WAI middleware that records that a request is happening, and while it runs.
+-- | What a request on a given path says about the server being in use.
+data Bearing
+    = {- | The ordinary answer: someone asked, and the server is in use until
+      they have their reply, however long that takes.
+      -}
+      Counted
+    | {- | Someone asked, and how long the answer takes says nothing. A log
+      stream stays open for as long as a reader leaves a terminal open;
+      counting that would keep the server alive, and billing, for ever.
+      -}
+      Stamped
+    | {- | It says nothing at all, because that endpoint answers the question
+      itself: a connected assistant polls @\/mcp@ on its own initiative, and
+      counting those would keep an idle server alive with nobody there.
+      -}
+      Ignored
+    deriving (Eq, Show)
 
-@\/mcp@ is exempt: a connected assistant polls it on its own initiative, so
-counting those requests would keep an idle server alive with nobody at the
-other end. That endpoint marks activity itself, for the calls that are someone
-asking a question ('API.MCP.mcpCountsAsActivity').
+bearingOf :: ByteString -> Bearing
+bearingOf path = case path of
+    "/mcp" -> Ignored
+    "/api/v1/logs/stream" -> Stamped
+    _ -> Counted
+
+{- | Count the server as in use for as long as an action runs.
+
+Both stamps carry their weight. The one before the count rises closes the
+window where a watchdog tick lands after the request arrived and before it was
+counted; the one before the count falls closes the same window at the other
+end.
 -}
-idleTrackingMiddleware :: IdleState -> Application -> Application
-idleTrackingMiddleware idle app req respond
-    | rawPathInfo req == "/mcp" = app req respond
-    | otherwise = do
-        stampIdle idle
-        bracket_ (bump 1) (bump (-1) >> stampIdle idle) (app req respond)
+whileWorking :: IdleState -> IO a -> IO a
+whileWorking idle action = do
+    stampIdle idle
+    bracket_ (bump 1) (stampIdle idle >> bump (-1)) action
   where
     bump :: Int -> IO ()
     bump delta = atomicModifyIORef' (idleInFlight idle) (\n -> (n + delta, ()))
+
+{- | WAI middleware that records that a request is happening, and while it runs.
+
+The timestamp alone said when a request /arrived/, which is not when the server
+was last in use: a load that reads a gigabyte of source and builds its matrices
+can outlast the whole timeout, and the watchdog would then shut the process down
+under the caller, who sees a closed socket and no answer.
+-}
+idleTrackingMiddleware :: IdleState -> Application -> Application
+idleTrackingMiddleware idle app req respond = case bearingOf (rawPathInfo req) of
+    Counted -> whileWorking idle (app req respond)
+    Stamped -> stampIdle idle >> app req respond
+    Ignored -> app req respond
 
 {- | Watch until the server has gone unused for @timeoutSecs@, then run
 @onIdle@ - the process exits in production, and a test records that it would
