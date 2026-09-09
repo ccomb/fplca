@@ -28,6 +28,14 @@
   before this are rebuilt on the next load. Wire revision 23.
 
 ### Fixed
+- A SimaPro export now writes a substitution once. The `Materials/fuels` section
+  holds inputs, but the line that built it excluded only the reference product, so
+  a coproduct and an avoided product were written there as well as under the header
+  each already has. On re-import the duplicated credit met an equal input and
+  cancelled, so an activity that exists to record an avoided burden recorded
+  nothing, and every chain standing on it read heavier. A round trip of a large
+  database moved amounts on more than half of a sample of twenty inventories, by up
+  to a factor of three.
 - A Brightway Excel inventory now links to the supplier activity its rows name.
   A workbook of that format names each supplier on two columns, the activity
   and the product it makes, and only the product was kept. In a released
