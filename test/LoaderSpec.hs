@@ -219,6 +219,37 @@ spec = do
             tfName (mergeTechFlows a b) `shouldBe` "flow-a"
 
     -- -----------------------------------------------------------------------
+    -- Which row wins a duplicate key. The answer is not one rule but two
+    -- facing opposite ways, and a load reads both: the files one reader
+    -- harvested are folded into a table with 'fromListWith', several readers'
+    -- tables are then merged with 'unionsWith'. Written down here because
+    -- 'mergeTechFlows' above says what merging two flows does and nothing says
+    -- which of the two is handed to it first.
+    -- -----------------------------------------------------------------------
+    describe "duplicate keys inside a harvest and between harvests" $ do
+        it "keeps the last dataset read, inside one reader's share" $ do
+            let a = (minimalFlow flowUUID1 "flow-a"){tfCAS = Just "7732-18-5"}
+                b = minimalFlow flowUUID1 "flow-b"
+                table = M.fromListWith mergeTechFlows [(tfId f, f) | f <- [a, b]]
+            fmap tfName (M.lookup flowUUID1 table) `shouldBe` Just "flow-b"
+            -- The loser is not lost entirely: its CAS fills the gap.
+            fmap tfCAS (M.lookup flowUUID1 table) `shouldBe` Just (Just "7732-18-5")
+
+        it "keeps the first reader's, when two shares meet" $ do
+            let a = minimalFlow flowUUID1 "flow-a"
+                b = (minimalFlow flowUUID1 "flow-b"){tfCAS = Just "7732-18-5"}
+                merged = M.unionsWith mergeTechFlows [M.singleton flowUUID1 a, M.singleton flowUUID1 b]
+            fmap tfName (M.lookup flowUUID1 merged) `shouldBe` Just "flow-a"
+            fmap tfCAS (M.lookup flowUUID1 merged) `shouldBe` Just (Just "7732-18-5")
+
+        it "keeps the first reader's activity, when two shares meet" $ do
+            let key = (actUUID1, flowUUID1)
+                a = minimalActivity "activity-a" "GLO" []
+                b = minimalActivity "activity-b" "GLO" []
+                merged = M.unions [M.singleton key a, M.singleton key b]
+            fmap activityName (M.lookup key merged) `shouldBe` Just "activity-a"
+
+    -- -----------------------------------------------------------------------
     describe "indexActivities" $ do
         it "names the two spellings a case fold brings together, and keeps the last read" $ do
             let acts =
